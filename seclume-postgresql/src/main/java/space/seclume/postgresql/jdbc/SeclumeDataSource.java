@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import space.seclume.postgresql.PgSession;
 import space.seclume.internal.jdbc.HostList;
 import space.seclume.internal.jdbc.ResultLimit;
+import space.seclume.internal.jdbc.TlsMode;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretProviders;
 
@@ -146,6 +147,23 @@ public final class SeclumeDataSource implements DataSource {
         this.maxResultRows = settings.resultLimit().maxRows();
     }
 
+    /**
+     * How much encryption the connection asks for; {@code prefer} by default.
+     *
+     * <p>Named rather than a boolean, because „encrypted" and „authenticated"
+     * are two different promises: only {@code verify-full} checks who is at the
+     * other end. See {@link TlsMode}.
+     */
+    private TlsMode tls = TlsMode.PREFER;
+
+    public void setTls(String mode) throws SQLException {
+        this.tls = TlsMode.of(mode);
+    }
+
+    public String getTls() {
+        return tls.name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+    }
+
     @Override
     public Connection getConnection() throws SQLException {
         if (database == null || database.isBlank()) {
@@ -158,7 +176,7 @@ public final class SeclumeDataSource implements DataSource {
         PgSession.Settings settings = new PgSession.Settings(host, port, database, user,
                 provider, applicationName, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
-                ResultLimit.of(maxResultBytes, maxResultRows));
+                ResultLimit.of(maxResultBytes, maxResultRows), tls);
         PgSession session = PgSession.open(settings);
         // Off only for whoever asks: it decides whether a syntax error shows
         // up at prepareStatement or at the first execution. See

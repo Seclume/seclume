@@ -11,3 +11,4 @@ target/
 # Weitergabelizenz noch nicht geklaert. Bezug und Pruefsumme stehen in
 # seclume-tcp-core/README.md.
 seclume-tcp-core/native/
+.local-pgtls-password

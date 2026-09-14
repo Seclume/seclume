@@ -15,6 +15,7 @@ import space.seclume.postgresql.auth.ScramSha256;
 import space.seclume.postgresql.wire.PgChannel;
 import space.seclume.internal.WireBuffer;
 import space.seclume.internal.jdbc.HostList;
+import space.seclume.internal.jdbc.TlsMode;
 import space.seclume.internal.jdbc.ResultLimit;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
@@ -42,14 +43,23 @@ public final class PgSession implements AutoCloseable {
     /** Connection settings. Deliberately not the password, only its source. */
     public record Settings(String host, int port, String database, String user,
                            SecretProvider secret, String applicationName,
-                           int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit) {
+                           int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
+                           TlsMode tls) {
 
         /** Without a result limit - what a URL without the option means. */
         public Settings(String host, int port, String database, String user,
                         SecretProvider secret, String applicationName,
                         int connectTimeoutMillis, HostList hosts) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    hosts, ResultLimit.NONE);
+                    hosts, ResultLimit.NONE, TlsMode.PREFER);
+        }
+
+        /** With a result limit but the default TLS mode. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    hosts, resultLimit, TlsMode.PREFER);
         }
 
         public Settings(String host, int port, String database, String user, SecretProvider secret) {
@@ -67,7 +77,7 @@ public final class PgSession implements AutoCloseable {
         /** The same settings pointed at another server of the list. */
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
-                    applicationName, connectTimeoutMillis, hosts, resultLimit);
+                    applicationName, connectTimeoutMillis, hosts, resultLimit, tls);
         }
     }
 
@@ -173,12 +183,47 @@ public final class PgSession implements AutoCloseable {
         PgSession session = new PgSession(channel);
         session.setResultLimit(settings.resultLimit());
         try {
+            session.negotiateTls(channel, settings);
             session.startup(settings);
             return session;
         } catch (SQLException | RuntimeException e) {
             channel.close();
             throw e;
         }
+    }
+
+    /**
+     * Asks for TLS before anything else happens on the connection.
+     *
+     * <p>The order is not ours to choose: the login has to travel inside TLS,
+     * so the switch happens before the startup message and after nothing.
+     */
+    private void negotiateTls(PgChannel channel, Settings settings) throws SQLException {
+        TlsMode mode = settings.tls();
+        if (mode == TlsMode.OFF) {
+            return;
+        }
+        try {
+            if (!channel.requestTls()) {
+                if (mode.demands()) {
+                    throw new SQLNonTransientConnectionException(
+                            "the server at " + settings.host() + ":" + settings.port()
+                            + " does not offer TLS, and tls=" + mode.name().toLowerCase()
+                            + " was asked for", "08001");
+                }
+                return;
+            }
+            channel.startTls(settings.host(), settings.port(), mode.verifies());
+        } catch (IOException e) {
+            throw new SQLNonTransientConnectionException(
+                    "TLS to " + settings.host() + ":" + settings.port() + " failed: "
+                    + e.getMessage(), "08001", e);
+        }
+    }
+
+    /** What TLS this connection uses, or {@code null} without it. */
+    public String tlsDescription() {
+        return channel.tlsDescription();
     }
 
     private void startup(Settings settings) throws SQLException {

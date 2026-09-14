@@ -25,6 +25,16 @@ public final class PgChannel implements AutoCloseable {
     private static final int DEFAULT_BUFFER = 32 * 1024;
 
     private final SocketChannel channel;
+
+    /**
+     * The TLS layer once the server agreed to it, or {@code null}.
+     *
+     * <p>PostgreSQL switches the whole connection over after a negotiation of
+     * nine bytes in the clear: from then on every message travels inside TLS
+     * records, and the two places that touch the socket are the only ones that
+     * have to know.
+     */
+    private space.seclume.internal.TlsChannel tls;
     private final WireBuffer out = new WireBuffer(8 * 1024);
     private WireBuffer in = new WireBuffer(DEFAULT_BUFFER);
 
@@ -51,6 +61,64 @@ public final class PgChannel implements AutoCloseable {
             channel.close();
             throw e;
         }
+    }
+
+    /**
+     * Asks the server for TLS and reads its one-byte answer.
+     *
+     * <p>The message is eight bytes and has no type tag: a length of 8 and the
+     * number 80877103, which is not a protocol version but a marker chosen so
+     * that no real version can collide with it. The answer is a single byte —
+     * {@code S} yes, {@code N} no — and nothing else; only after a yes does
+     * anything look like TLS on this socket.
+     *
+     * @return whether the server agreed
+     */
+    public boolean requestTls() throws IOException {
+        out.clear();
+        out.putInt(8);
+        out.putInt(80877103);
+        ByteBuffer request = out.view();
+        request.clear().position(0).limit(out.position());
+        while (request.hasRemaining()) {
+            channel.write(request);
+        }
+        out.clear();
+
+        ByteBuffer answer = ByteBuffer.allocateDirect(1);
+        while (answer.hasRemaining()) {
+            if (channel.read(answer) < 0) {
+                throw new IOException("the server closed the connection while asked for TLS");
+            }
+        }
+        answer.flip();
+        byte reply = answer.get();
+        if (reply == 'S') {
+            return true;
+        }
+        if (reply == 'N') {
+            return false;
+        }
+        // An 'E' would be an error message in the old format; anything else is
+        // not a PostgreSQL server. Either way, guessing on would be worse.
+        throw new IOException("the server answered the TLS request with 0x"
+                + Integer.toHexString(reply & 0xff) + ", which is neither yes nor no");
+    }
+
+    /**
+     * Switches the connection to TLS. The server has already agreed at this
+     * point; what follows is the ordinary handshake.
+     */
+    public void startTls(String host, int port, boolean verify) throws IOException {
+        space.seclume.internal.TlsChannel started =
+                space.seclume.internal.TlsChannel.create(channel, host, port, verify);
+        started.handshake();
+        this.tls = started;
+    }
+
+    /** What TLS is in use, for the preflight report; {@code null} without it. */
+    public String tlsDescription() {
+        return tls == null ? null : tls.protocol() + " / " + tls.cipherSuite();
     }
 
     /** For tests: an already connected channel. */
@@ -151,8 +219,12 @@ public final class PgChannel implements AutoCloseable {
         roundTrips++;
         ByteBuffer view = out.view();
         view.clear().position(0).limit(out.position());
-        while (view.hasRemaining()) {
-            channel.write(view);
+        if (tls != null) {
+            tls.write(view);
+        } else {
+            while (view.hasRemaining()) {
+                channel.write(view);
+            }
         }
         // The send buffer was carrying the password a moment ago.
         out.clear();
@@ -210,7 +282,7 @@ public final class PgChannel implements AutoCloseable {
             in.ensureCapacity(Math.max(filled + needed, in.capacity()));
             ByteBuffer view = in.view();
             view.clear().position(filled).limit(in.capacity());
-            int read = channel.read(view);
+            int read = tls != null ? tls.read(view) : channel.read(view);
             if (read < 0) {
                 throw new IOException("the server closed the connection");
             }

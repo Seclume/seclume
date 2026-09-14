@@ -63,7 +63,9 @@ final class SeclumeUrl {
                     secret, parsed.option("applicationName", "seclume"),
                     parsed.number("connectTimeout", 10_000), parsed.hosts(),
                     ResultLimit.of(parsed.size("maxResultBytes", 0),
-                            parsed.size("maxResultRows", 0)));
+                            parsed.size("maxResultRows", 0)),
+                    space.seclume.internal.jdbc.TlsMode.of(
+                            parsed.option("tls", null)));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

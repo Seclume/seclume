@@ -36,8 +36,7 @@ fallback for everything that is not in a domain.
 
 ### And one limitation that belongs here, not in a footnote
 
-**Today only the SQL Server driver speaks TLS.** PostgreSQL, MySQL and Oracle connect in the
-clear.
+**PostgreSQL and SQL Server speak TLS; MySQL and Oracle do not yet** and connect in the clear.
 
 What that does and does not mean:
 
@@ -46,12 +45,29 @@ What that does and does not mean:
   protocols' doing, not ours, and it holds without TLS.
 - The **payload** does travel in the clear: statements, parameters, result rows. On an untrusted
   network that is the wrong trade, whatever the heap dump looks like.
-- SQL Server is the exception because it has to be: its password obfuscation is reversible
-  without a key, so the driver insists on `ENCRYPT_ON`. See
+- SQL Server has always had to encrypt: its password obfuscation is reversible without a key,
+  so the driver insists on `ENCRYPT_ON`. See
   [`docs/protocol/sqlserver.md`](docs/protocol/sqlserver.md).
 
-Until the other three have TLS, use this on a trusted network — or wait. Saying so is cheaper
-than being asked later.
+**On PostgreSQL the mode is a setting**, named the way the ecosystem names it:
+
+```properties
+jdbc:seclume:postgresql://db:5432/app?user=app&tls=require
+```
+
+| `tls` | What it does |
+|---|---|
+| `off` | no encryption |
+| `prefer` *(default)* | encrypt if the server offers it, carry on if not — stops a listener, not a man in the middle |
+| `require` | encrypt or refuse to connect; still no certificate check |
+| `verify-full` | encrypt **and** check the certificate against the trust store and against the host that was dialled |
+
+Only `verify-full` authenticates the server. A driver that offers the first three and calls the
+result „secure" is lying by omission, which is why all four are here and the difference is
+written down rather than implied.
+
+Until MySQL and Oracle follow, use those two on a trusted network — or wait. Saying so is
+cheaper than being asked later.
 
 ---
 
@@ -196,8 +212,8 @@ precision and scale, server errors with SQLState. A `password=` in the URL is re
 reason rather than quietly used. And the heap dump test **through the JDBC route** — six
 connections through `DriverManager`, one held open, dump — **no hit**.
 
-Still missing: **TLS** (and with it channel binding, `SSLRequest`, SCRAM-SHA-256-PLUS), binary
-formats and type decoding, `COPY`, `CancelRequest` — and with it `setQueryTimeout`, which throws
+Still missing: channel binding (SCRAM-SHA-256-PLUS), binary formats and type decoding, `COPY`,
+`CancelRequest` — and with it `setQueryTimeout`, which throws
 rather than pretending — `NOTIFY`, and the Testcontainers suite against two server versions.
 
 Block cursors (`setFetchSize`), generated keys and savepoints **do** work; an older version of
