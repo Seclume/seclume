@@ -60,7 +60,9 @@ final class MyUrl {
                     parsed.number("connectTimeout", 10_000),
                     parsed.flag("allowPublicKeyRetrieval", false), parsed.hosts(),
                     ResultLimit.of(parsed.size("maxResultBytes", 0),
-                            parsed.size("maxResultRows", 0)));
+                            parsed.size("maxResultRows", 0)),
+                    space.seclume.internal.jdbc.TlsMode.of(
+                            parsed.option("tls", null)));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

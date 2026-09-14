@@ -12,6 +12,7 @@ import javax.sql.DataSource;
 
 import space.seclume.internal.jdbc.HostList;
 import space.seclume.internal.jdbc.ResultLimit;
+import space.seclume.internal.jdbc.TlsMode;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretProviders;
 import space.seclume.oracle.OracleSession;
@@ -127,6 +128,22 @@ public final class OraDataSource implements DataSource {
         this.hosts = settings.hosts();
     }
 
+    /**
+     * Whether the listener is a TCPS one; {@code off} by default.
+     *
+     * <p>Oracle decides this by the endpoint and not by a negotiation, so
+     * {@code prefer} means the same as {@code off} here. See {@link TlsMode}.
+     */
+    private TlsMode tls = TlsMode.OFF;
+
+    public void setTls(String mode) throws SQLException {
+        this.tls = TlsMode.of(mode);
+    }
+
+    public String getTls() {
+        return tls.name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+    }
+
     @Override
     public Connection getConnection() throws SQLException {
         if (user == null || user.isBlank()) {
@@ -139,7 +156,7 @@ public final class OraDataSource implements DataSource {
         OracleSession.Settings settings = new OracleSession.Settings(host, port, service,
                 user, provider, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
-                ResultLimit.of(maxResultBytes, maxResultRows));
+                ResultLimit.of(maxResultBytes, maxResultRows), tls);
         return new OraConnection(OracleSession.open(settings),
                 OraUrl.PREFIX + "//" + host + ":" + port + "/" + service);
     }

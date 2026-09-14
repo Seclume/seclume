@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.sql.SQLNonTransientConnectionException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.RsaPublicKey;
@@ -18,6 +19,7 @@ import space.seclume.mysql.wire.MyChannel;
 import space.seclume.mysql.wire.MyPackets;
 import space.seclume.internal.jdbc.HostList;
 import space.seclume.internal.jdbc.ResultLimit;
+import space.seclume.internal.jdbc.TlsMode;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
 
@@ -77,7 +79,7 @@ public final class MySession implements AutoCloseable {
     public record Settings(String host, int port, String database, String user,
                            SecretProvider secret, String applicationName,
                            int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
-                           HostList hosts, ResultLimit resultLimit) {
+                           HostList hosts, ResultLimit resultLimit, TlsMode tls) {
 
         /** Without a result limit - what a URL without the option means. */
         public Settings(String host, int port, String database, String user,
@@ -85,7 +87,16 @@ public final class MySession implements AutoCloseable {
                         int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
                         HostList hosts) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    allowPublicKeyRetrieval, hosts, ResultLimit.NONE);
+                    allowPublicKeyRetrieval, hosts, ResultLimit.NONE, TlsMode.PREFER);
+        }
+
+        /** With a result limit but the default TLS mode. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, TlsMode.PREFER);
         }
 
         public Settings(String host, int port, String database, String user,
@@ -105,7 +116,7 @@ public final class MySession implements AutoCloseable {
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
-                    resultLimit);
+                    resultLimit, tls);
         }
     }
 
@@ -207,6 +218,10 @@ public final class MySession implements AutoCloseable {
                 clientCapabilities |= MyCapabilities.CONNECT_WITH_DB;
             }
 
+            // TLS before the login answer, not after it: the password is in
+            // that answer, so anything later would be too late.
+            clientCapabilities = negotiateTls(channel, settings, clientCapabilities, greeting);
+
             String plugin = greeting.plugin();
             writeHandshakeResponse(channel, settings, clientCapabilities, plugin, scramble);
 
@@ -219,6 +234,56 @@ public final class MySession implements AutoCloseable {
             // The send buffer was carrying the login answer.
             channel.clearSendBuffer();
         }
+    }
+
+    /**
+     * Switches the connection to TLS, if it is wanted and offered.
+     *
+     * <p>MySQL does it with a packet of its own: the <b>first 32 bytes</b> of
+     * the login answer - capabilities, packet size, character set, filler - and
+     * nothing more. The server reads the SSL bit in them and starts the
+     * handshake; the real login answer then goes out again in full, encrypted.
+     * It is the same sequence of packets, so the sequence number keeps running
+     * and is not touched here.
+     *
+     * @return the capabilities, with the SSL bit when TLS was switched on
+     */
+    private static int negotiateTls(MyChannel channel, Settings settings, int capabilities,
+                                    Handshake greeting) throws SQLException {
+        TlsMode mode = settings.tls();
+        if (mode == TlsMode.OFF) {
+            return capabilities;
+        }
+        if (!MyCapabilities.has(greeting.capabilities(), MyCapabilities.SSL)) {
+            if (mode.demands()) {
+                throw new SQLNonTransientConnectionException(
+                        "the server at " + settings.host() + ":" + settings.port()
+                        + " does not offer TLS, and tls=" + mode.name().toLowerCase(Locale.ROOT)
+                        + " was asked for", "08001");
+            }
+            return capabilities;
+        }
+        int withSsl = capabilities | MyCapabilities.SSL;
+        try {
+            WireBuffer out = channel.beginPacket();
+            out.putIntLe(withSsl);
+            out.putIntLe(MyPackets.MAX_PAYLOAD);
+            out.putByte(CHARSET_UTF8MB4);
+            out.putZeroes(23);                     // filler, as the protocol wants it
+            channel.end();
+            channel.flush();
+            channel.startTls(settings.host(), settings.port(), mode.verifies());
+        } catch (IOException e) {
+            throw new SQLNonTransientConnectionException(
+                    "TLS to " + settings.host() + ":" + settings.port() + " failed: "
+                    + e.getMessage(), "08001", e);
+        }
+        return withSsl;
+    }
+
+    /** What TLS this connection uses, or {@code null} without it. */
+    public String tlsDescription() {
+        return channel.tlsDescription();
     }
 
     /** What the greeting packet holds - the scramble sits beside it, off-heap. */
@@ -295,7 +360,8 @@ public final class MySession implements AutoCloseable {
 
             int lengthAt = out.position();
             out.putByte((byte) 0);                 // Platzhalter fuer die Laenge
-            int written = writeAuthResponse(settings, plugin, scramble, out);
+            int written = writeAuthResponse(settings, plugin, scramble, out,
+                    channel.isEncrypted());
             if (written > 250) {
                 throw new SQLException(
                         "the authentication response is " + written + " bytes; seclume writes "
@@ -322,10 +388,11 @@ public final class MySession implements AutoCloseable {
 
     /** Computes the answer of the respective plugin - in the buffer, not beside it. */
     private static int writeAuthResponse(Settings settings, String plugin,
-                                         MemorySegment scramble, WireBuffer out)
+                                         MemorySegment scramble, WireBuffer out,
+                                         boolean encrypted)
             throws SQLException {
         int at = out.position();
-        out.putZeroes(64);
+        out.putZeroes(256);      // room for a hash or, inside TLS, the password itself
         out.position(at);
         try (SecretScope password = SecretScope.fromProvider(settings.secret())) {
             int written = switch (plugin) {
@@ -336,13 +403,19 @@ public final class MySession implements AutoCloseable {
                         password.secret(), 0, password.length(), scramble, 0,
                         out.segment(), at);
                 case "sha256_password" ->
-                        // Without TLS only the request for the key can stand
-                        // here; the real answer follows in the exchange.
-                        0;
-                case "mysql_clear_password" -> throw new SQLException(
-                        "the server asked for mysql_clear_password, which sends the password "
-                        + "in the clear - seclume refuses that on an unencrypted connection",
-                        "28000");
+                        // Inside TLS this plugin wants the password itself;
+                        // without TLS only the request for the key can stand
+                        // here and the real answer follows in the exchange.
+                        encrypted ? writeClearPassword(password, out, at) : 0;
+                case "mysql_clear_password" -> {
+                    if (!encrypted) {
+                        throw new SQLException(
+                                "the server asked for mysql_clear_password, which sends the "
+                                + "password in the clear - seclume refuses that on an "
+                                + "unencrypted connection. Use tls=require.", "28000");
+                    }
+                    yield writeClearPassword(password, out, at);
+                }
                 default -> throw new SQLException(
                         "the server asked for the authentication plugin '" + plugin
                         + "', which seclume does not implement", "08004");
@@ -350,6 +423,20 @@ public final class MySession implements AutoCloseable {
             out.position(at + written);
             return written;
         }
+    }
+
+    /**
+     * The password itself, NUL-terminated - what every plugin falls back to
+     * once the line is encrypted.
+     *
+     * <p>Callers have to have checked that it <b>is</b> encrypted. The bytes go
+     * from the secret straight into the send buffer, which is zeroed after the
+     * login like every other path here.
+     */
+    private static int writeClearPassword(SecretScope password, WireBuffer out, int at) {
+        MemorySegment.copy(password.secret(), 0, out.segment(), at, password.length());
+        out.putByteAt(at + password.length(), (byte) 0);
+        return password.length() + 1;
     }
 
     /**
@@ -417,6 +504,14 @@ public final class MySession implements AutoCloseable {
         }
         if (marker == CachingSha2Password.FULL_AUTH_REQUIRED && in.remaining() == 1) {
             channel.endPacket();
+            if (channel.isEncrypted()) {
+                // Inside TLS the password travels as it is - that is what the
+                // encryption is for, and it is what every other client does
+                // here. The RSA detour below exists only for the unencrypted
+                // case.
+                sendClearPassword(settings);
+                return plugin;
+            }
             if (!settings.allowPublicKeyRetrieval()) {
                 throw new SQLException(
                         "the server needs the password itself (caching_sha2_password full "
@@ -439,6 +534,19 @@ public final class MySession implements AutoCloseable {
             sendEncryptedPassword(settings, key, scramble, arena);
         }
         return plugin;
+    }
+
+    /** The password itself in a packet of its own - only ever inside TLS. */
+    private void sendClearPassword(Settings settings) throws IOException {
+        WireBuffer out = channel.beginPacket();
+        int at = out.position();
+        out.putZeroes(512);
+        out.position(at);
+        try (SecretScope password = SecretScope.fromProvider(settings.secret())) {
+            out.position(at + writeClearPassword(password, out, at));
+        }
+        channel.end();
+        channel.flush();
     }
 
     private void requestPublicKey(String plugin) throws IOException {
@@ -471,7 +579,7 @@ public final class MySession implements AutoCloseable {
             throws SQLException, IOException {
         WireBuffer out = channel.beginPacket();
         int at = out.position();
-        out.putZeroes(64);
+        out.putZeroes(256);      // room for a hash or, inside TLS, the password itself
         out.position(at);
         try (SecretScope password = SecretScope.fromProvider(settings.secret())) {
             int written = switch (plugin) {
@@ -479,7 +587,12 @@ public final class MySession implements AutoCloseable {
                         password.secret(), 0, password.length(), scramble, 0, out.segment(), at);
                 case "caching_sha2_password" -> CachingSha2Password.response(
                         password.secret(), 0, password.length(), scramble, 0, out.segment(), at);
-                case "sha256_password" -> 0;
+                case "sha256_password", "mysql_clear_password" -> {
+                    if (!channel.isEncrypted()) {
+                        yield 0;     // the key exchange follows, see handleAuthMoreData
+                    }
+                    yield writeClearPassword(password, out, at);
+                }
                 default -> throw new SQLException(
                         "the server switched to the authentication plugin '" + plugin
                         + "', which seclume does not implement", "08004");

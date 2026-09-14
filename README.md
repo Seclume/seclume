@@ -34,22 +34,9 @@ fallback for everything that is not in a domain.
 
 `/heapdump` may stay exposed, by the way. That is the point.
 
-### And one limitation that belongs here, not in a footnote
+### Encryption on the wire
 
-**PostgreSQL and SQL Server speak TLS; MySQL and Oracle do not yet** and connect in the clear.
-
-What that does and does not mean:
-
-- The **password** never travels the wire in the clear even so — SCRAM-SHA-256 on PostgreSQL,
-  `caching_sha2_password` on MySQL, an AES-encrypted `AUTH_PASSWORD` on Oracle. That is the
-  protocols' doing, not ours, and it holds without TLS.
-- The **payload** does travel in the clear: statements, parameters, result rows. On an untrusted
-  network that is the wrong trade, whatever the heap dump looks like.
-- SQL Server has always had to encrypt: its password obfuscation is reversible without a key,
-  so the driver insists on `ENCRYPT_ON`. See
-  [`docs/protocol/sqlserver.md`](docs/protocol/sqlserver.md).
-
-**On PostgreSQL the mode is a setting**, named the way the ecosystem names it:
+**All four drivers speak TLS**, and the mode is a setting named the way the ecosystem names it:
 
 ```properties
 jdbc:seclume:postgresql://db:5432/app?user=app&tls=require
@@ -58,7 +45,7 @@ jdbc:seclume:postgresql://db:5432/app?user=app&tls=require
 | `tls` | What it does |
 |---|---|
 | `off` | no encryption |
-| `prefer` *(default)* | encrypt if the server offers it, carry on if not — stops a listener, not a man in the middle |
+| `prefer` | encrypt if the server offers it, carry on if not — stops a listener, not a man in the middle |
 | `require` | encrypt or refuse to connect; still no certificate check |
 | `verify-full` | encrypt **and** check the certificate against the trust store and against the host that was dialled |
 
@@ -66,8 +53,41 @@ Only `verify-full` authenticates the server. A driver that offers the first thre
 result „secure" is lying by omission, which is why all four are here and the difference is
 written down rather than implied.
 
-Until MySQL and Oracle follow, use those two on a trusted network — or wait. Saying so is
-cheaper than being asked later.
+**The default differs per database, because the protocols differ:**
+
+| | Default | How it is switched on |
+|---|---|---|
+| PostgreSQL | `prefer` | `SSLRequest` before the startup message — one byte of answer decides |
+| MySQL | `prefer` | the SSL capability bit plus a 32-byte `SSLRequest` packet before the login |
+| SQL Server | always on | the handshake runs *inside* TDS packets; see below |
+| Oracle | `off` | a property of the endpoint: a TCPS listener speaks TLS from the first byte, usually on port 2484 |
+
+Oracle is the odd one out and deliberately so: there is nothing to negotiate, so `prefer` — „try
+it and fall back" — cannot mean anything there. `require` and a TCPS port, or nothing.
+
+Two things that follow from this and are worth saying plainly:
+
+- **Inside TLS the MySQL login gets simpler**, not just safer. MySQL 8 wants the password itself
+  for a user's first connection, and unencrypted that costs an RSA key the client has to ask an
+  unauthenticated server for (`allowPublicKeyRetrieval` — which a man in the middle would answer
+  just as happily). With TLS that whole exchange falls away.
+- The **password** never travelled the wire in the clear even without TLS — SCRAM-SHA-256 on
+  PostgreSQL, `caching_sha2_password` on MySQL, an AES-encrypted `AUTH_PASSWORD` on Oracle. That
+  is the protocols' doing, not ours. What TLS adds is the **payload**: statements, parameters,
+  result rows, which without it travel in the clear.
+- SQL Server has always had to encrypt: its password obfuscation is reversible without a key, so
+  the driver insists on `ENCRYPT_ON`. See
+  [`docs/protocol/sqlserver.md`](docs/protocol/sqlserver.md).
+
+How each of the three negotiates it, and what is checked against what, is in
+[`docs/protocol/tls.md`](docs/protocol/tls.md).
+
+**One gap, named rather than glossed over:** the Oracle path is checked against a TLS endpoint in
+front of a real listener — handshake first, the whole NS and TTC protocol inside it, login and
+queries — but not against Oracle's own TCPS listener, because the slim Free image carries no PKI
+to serve a certificate with. The client half is exercised end to end; whether Oracle minds
+anything about our `(PROTOCOL=TCPS)` description stays unproven until somebody runs it against a
+configured listener.
 
 ---
 
@@ -252,8 +272,11 @@ the JDBC layer. Plus the heap dump test: six logins from a JVM of its own, dump 
 while the counter-check (a payload value from the same query) **is found** in the same dump;
 without that counter-check the empty result would be worthless.
 
-Missing: **TLS**, the plugins `sha256_password` (the RSA part stands, the flow is untested),
-`mysql_clear_password`, MariaDB `ed25519` and `parsec`, multi-resultset, and the reassembly of
+`sha256_password` and `mysql_clear_password` work **inside TLS**, where both amount to sending
+the password itself; without TLS the first needs the RSA exchange, whose flow is still untested,
+and the second is refused on purpose.
+
+Missing: MariaDB `ed25519` and `parsec`, multi-resultset, and the reassembly of
 payloads over 16 MB. `LOAD DATA LOCAL` is refused on purpose, not missing — see the capability
 bits above.
 

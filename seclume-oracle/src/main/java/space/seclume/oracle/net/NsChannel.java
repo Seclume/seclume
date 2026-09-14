@@ -111,6 +111,17 @@ public final class NsChannel implements AutoCloseable {
     private int packetType;
     private int dataFlags;
 
+    /**
+     * TLS, when the connection runs over it - see {@link #connect}.
+     *
+     * <p>Unlike PostgreSQL and MySQL there is nothing to negotiate here: with
+     * Oracle the encryption is a property of the endpoint. A TCPS listener
+     * expects the handshake as the <b>first</b> thing on the socket and never
+     * speaks NS in the clear; a TCP listener never speaks TLS. So this is
+     * decided before the first packet and not afterwards.
+     */
+    private space.seclume.internal.TlsChannel tls;
+
     private NsChannel(SocketChannel channel) {
         this.channel = channel;
     }
@@ -127,6 +138,28 @@ public final class NsChannel implements AutoCloseable {
             channel.close();
             throw e;
         }
+    }
+
+    /**
+     * Switches the connection to TLS - before the first NS packet.
+     *
+     * <p>A step of its own and not part of {@link #connect}, so that a failed
+     * handshake can be told apart from an unreachable listener. They are
+     * different faults and they need different answers: one is a certificate,
+     * the other is a network.
+     *
+     * @param verify whether the certificate and the host name are checked
+     */
+    public void startTls(String host, int port, boolean verify) throws IOException {
+        space.seclume.internal.TlsChannel started =
+                space.seclume.internal.TlsChannel.create(channel, host, port, verify);
+        started.handshake();
+        this.tls = started;
+    }
+
+    /** What TLS this connection uses, or {@code null} without it. */
+    public String tlsDescription() {
+        return tls == null ? null : tls.protocol() + " / " + tls.cipherSuite();
     }
 
     /**
@@ -309,8 +342,12 @@ public final class NsChannel implements AutoCloseable {
         }
         ByteBuffer view = out.view();
         view.clear().position(from).limit(from + length);
-        while (view.hasRemaining()) {
-            channel.write(view);
+        if (tls != null) {
+            tls.write(view);
+        } else {
+            while (view.hasRemaining()) {
+                channel.write(view);
+            }
         }
     }
 
@@ -452,7 +489,7 @@ public final class NsChannel implements AutoCloseable {
             in.ensureCapacity(Math.max(needed, in.capacity()));
             ByteBuffer view = in.view();
             view.clear().position(filled).limit(in.capacity());
-            int read = channel.read(view);
+            int read = tls != null ? tls.read(view) : channel.read(view);
             if (read < 0) {
                 throw new IOException("the server closed the connection");
             }

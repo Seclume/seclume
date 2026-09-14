@@ -64,7 +64,15 @@ final class OraUrl {
                     parsed.database(), user, secret,
                     parsed.number("connectTimeout", 10_000), parsed.hosts(),
                     ResultLimit.of(parsed.size("maxResultBytes", 0),
-                            parsed.size("maxResultRows", 0)));
+                            parsed.size("maxResultRows", 0)),
+                    // Oracle has no negotiation: a TCPS listener speaks TLS
+                    // from the first byte and a TCP one never does. So the
+                    // default is off, and prefer - which means „try it" on the
+                    // other drivers - can only mean off here too. Whoever
+                    // wants encryption says require and points at the TCPS
+                    // port, usually 2484.
+                    space.seclume.internal.jdbc.TlsMode.of(
+                            parsed.option("tls", "off")));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

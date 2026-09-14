@@ -19,6 +19,7 @@ import space.seclume.oracle.net.TtcQuery;
 import space.seclume.oracle.net.TtcResult;
 import space.seclume.internal.jdbc.HostList;
 import space.seclume.internal.jdbc.ResultLimit;
+import space.seclume.internal.jdbc.TlsMode;
 import space.seclume.secret.SecretProvider;
 
 /**
@@ -44,13 +45,21 @@ public final class OracleSession implements AutoCloseable {
     /** Connection settings. Not the password, only its source. */
     public record Settings(String host, int port, String service, String user,
                            SecretProvider secret, int connectTimeoutMillis, HostList hosts,
-                           ResultLimit resultLimit) {
+                           ResultLimit resultLimit, TlsMode tls) {
 
         /** Without a result limit - what a URL without the option means. */
         public Settings(String host, int port, String service, String user,
                         SecretProvider secret, int connectTimeoutMillis, HostList hosts) {
             this(host, port, service, user, secret, connectTimeoutMillis, hosts,
-                    ResultLimit.NONE);
+                    ResultLimit.NONE, TlsMode.OFF);
+        }
+
+        /** With a result limit but without encryption - see the tls component. */
+        public Settings(String host, int port, String service, String user,
+                        SecretProvider secret, int connectTimeoutMillis, HostList hosts,
+                        ResultLimit resultLimit) {
+            this(host, port, service, user, secret, connectTimeoutMillis, hosts,
+                    resultLimit, TlsMode.OFF);
         }
 
         public Settings(String host, int port, String service, String user,
@@ -68,12 +77,13 @@ public final class OracleSession implements AutoCloseable {
         /** The same settings pointed at another listener of the list. */
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), service, user, secret,
-                    connectTimeoutMillis, hosts, resultLimit);
+                    connectTimeoutMillis, hosts, resultLimit, tls);
         }
 
         /** The {@code (DESCRIPTION=...)} the listener wants. */
         String connectString() {
-            return "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=" + host + ")(PORT=" + port
+            return "(DESCRIPTION=(ADDRESS=(PROTOCOL=" + (tls.demands() ? "TCPS" : "TCP")
+                    + ")(HOST=" + host + ")(PORT=" + port
                     + "))(CONNECT_DATA=(SERVICE_NAME=" + service
                     + ")(CID=(PROGRAM=seclume)(HOST=seclume)(USER=seclume))))";
         }
@@ -102,6 +112,11 @@ public final class OracleSession implements AutoCloseable {
         this.channel = channel;
     }
 
+    /** What TLS this connection uses, or {@code null} without it. */
+    public String tlsDescription() {
+        return channel.tlsDescription();
+    }
+
     /** Connects, opens and logs in - three steps that the server ties together. */
     public static OracleSession open(Settings settings) throws SQLException {
         // One listener: a plain connect. Several: the next one when a listener
@@ -117,6 +132,16 @@ public final class OracleSession implements AutoCloseable {
         } catch (IOException e) {
             throw new SQLNonTransientConnectionException(
                     "cannot reach " + settings.host() + ":" + settings.port(), "08001", e);
+        }
+        if (settings.tls().demands()) {
+            try {
+                channel.startTls(settings.host(), settings.port(), settings.tls().verifies());
+            } catch (IOException e) {
+                channel.close();
+                throw new SQLNonTransientConnectionException(
+                        "TLS to " + settings.host() + ":" + settings.port() + " failed: "
+                        + e.getMessage(), "08001", e);
+            }
         }
         try {
             int type = channel.sendConnect(settings.connectString());

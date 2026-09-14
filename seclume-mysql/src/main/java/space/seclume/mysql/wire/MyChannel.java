@@ -32,6 +32,16 @@ public final class MyChannel implements AutoCloseable {
     private static final int HEADER = 4;
 
     private final SocketChannel channel;
+
+    /**
+     * TLS, once it has been switched on - see {@link #startTls}.
+     *
+     * <p>Deliberately not final and deliberately nullable: on MySQL the
+     * negotiation runs in the clear, and only the packet after it is
+     * encrypted. Everything from that point flows through here.
+     */
+    private space.seclume.internal.TlsChannel tls;
+
     private final WireBuffer out = new WireBuffer(8 * 1024);
     private final WireBuffer in = new WireBuffer(DEFAULT_BUFFER);
 
@@ -58,6 +68,32 @@ public final class MyChannel implements AutoCloseable {
             channel.close();
             throw e;
         }
+    }
+
+    /**
+     * Switches the connection to TLS.
+     *
+     * <p>Must be called directly after the {@code SSLRequest} packet has gone
+     * out and before the login answer is written: the server is waiting for
+     * the handshake at that moment and for nothing else.
+     *
+     * @param verify whether the certificate and the host name are checked
+     */
+    public void startTls(String host, int port, boolean verify) throws IOException {
+        space.seclume.internal.TlsChannel started =
+                space.seclume.internal.TlsChannel.create(channel, host, port, verify);
+        started.handshake();
+        this.tls = started;
+    }
+
+    /** What TLS this connection uses, or {@code null} without it. */
+    public String tlsDescription() {
+        return tls == null ? null : tls.protocol() + " / " + tls.cipherSuite();
+    }
+
+    /** Whether the line is encrypted - some authentication paths depend on it. */
+    public boolean isEncrypted() {
+        return tls != null;
     }
 
     /** For tests: an already connected channel. */
@@ -124,8 +160,12 @@ public final class MyChannel implements AutoCloseable {
         roundTrips++;
         ByteBuffer view = out.view();
         view.clear().position(0).limit(out.position());
-        while (view.hasRemaining()) {
-            channel.write(view);
+        if (tls != null) {
+            tls.write(view);
+        } else {
+            while (view.hasRemaining()) {
+                channel.write(view);
+            }
         }
         // The send buffer was carrying the password a moment ago.
         out.clear();
@@ -197,7 +237,7 @@ public final class MyChannel implements AutoCloseable {
             in.ensureCapacity(Math.max(filled + needed, in.capacity()));
             ByteBuffer view = in.view();
             view.clear().position(filled).limit(in.capacity());
-            int read = channel.read(view);
+            int read = tls != null ? tls.read(view) : channel.read(view);
             if (read < 0) {
                 throw new IOException("the server closed the connection");
             }
@@ -228,6 +268,9 @@ public final class MyChannel implements AutoCloseable {
     @Override
     public void close() {
         try {
+            if (tls != null) {
+                tls.close();
+            }
             channel.close();
         } catch (IOException ignored) {
             // On close an error has no consequences.

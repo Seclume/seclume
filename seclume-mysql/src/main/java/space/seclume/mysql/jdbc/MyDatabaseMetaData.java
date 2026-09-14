@@ -648,9 +648,28 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
         return false;
     }
 
+    /**
+     * True whenever the server keeps a name as it was written - which on Linux
+     * ({@code lower_case_table_names=0}) is also the case where
+     * {@link #supportsMixedCaseIdentifiers()} is true.
+     *
+     * <p><b>Read strictly, that pair is a contradiction</b>: the specification
+     * says {@code supports} means „stored mixed and compared case
+     * sensitively" and {@code stores} means „stored mixed and compared case
+     * <em>in</em>sensitively". Answering only the first, which is what the
+     * letter demands, is what this method did — and it breaks Hibernate: with
+     * all three {@code stores*} answers false, Hibernate falls back to the SQL
+     * default and looks for {@code ZL_CUSTOMER}, which on Linux does not
+     * exist. The result is „Schema validation: missing table" for a table that
+     * is plainly there.
+     *
+     * <p>MySQL Connector/J answers the same pair the same way, and every
+     * framework is calibrated against that. So this follows the ecosystem
+     * rather than the letter, on purpose, and says why.
+     */
     @Override
     public boolean storesMixedCaseIdentifiers() {
-        return lowerCaseTableNames() == 2;
+        return lowerCaseTableNames() != 1;
     }
 
     @Override
