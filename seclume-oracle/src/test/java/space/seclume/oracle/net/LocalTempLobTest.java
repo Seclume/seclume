@@ -12,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.util.List;
 
 import org.junit.jupiter.api.Assumptions;
@@ -109,6 +111,60 @@ class LocalTempLobTest {
             } finally {
                 locator.close();
             }
+        }
+    }
+
+    /**
+     * The whole point: a temporary LOB handed to a statement as a bind value.
+     *
+     * <p>Create it, fill it, bind it, read the row back. If the descriptor or
+     * the value were wrong, Oracle would not say so — it would take the row and
+     * put something else in it, or go quiet. So the check is the content, not
+     * the absence of an error.
+     */
+    @Test
+    void bindsATemporaryClobIntoAStatement() throws Exception {
+        String text = "durch einen Locator geschrieben";
+        try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setAutoCommit(false);
+            OracleSession session = connection.unwrap(OracleSession.class);
+            try (Statement statement = connection.createStatement()) {
+                try {
+                    statement.execute("drop table zl_templob purge");
+                } catch (java.sql.SQLException gone) {
+                    // was not there
+                }
+                statement.execute("create table zl_templob (id number, c clob)");
+            }
+
+            try (WireBuffer locator = session.createTemporaryLob(true);
+                 WireBuffer data = new WireBuffer(256)) {
+                for (int i = 0; i < text.length(); i++) {
+                    data.putByte((byte) (text.charAt(i) >> 8));
+                    data.putByte((byte) text.charAt(i));
+                }
+                session.writeLob(locator, 0, locator.position(), 1, data, data.position());
+
+                space.seclume.oracle.net.TtcBinds binds =
+                        new space.seclume.oracle.net.TtcBinds();
+                binds.set(1, new space.seclume.oracle.net.TtcBinds.Locator(
+                        locator, 0, locator.position(), true));
+                session.query("insert into zl_templob values (1, :1)", binds, null, 0, 1,
+                        null, java.util.List.of(), false);
+                connection.commit();
+                session.freeTemporaryLob(locator, 0, locator.position());
+            }
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery("select c from zl_templob")) {
+                assertTrue(rows.next());
+                assertEquals(text, rows.getString(1), "the locator did not carry the value");
+            }
+
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("drop table zl_templob purge");
+            }
+            connection.commit();
         }
     }
 

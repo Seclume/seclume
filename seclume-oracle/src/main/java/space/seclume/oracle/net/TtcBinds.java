@@ -49,6 +49,31 @@ public final class TtcBinds {
 
     private final List<Object> values = new ArrayList<>();
 
+    /**
+     * A LOB handed over as a locator rather than as a value.
+     *
+     * <p>The descriptor and the value were both measured, for a CLOB and for a
+     * BLOB; they differ only in the type and in the character set, which a BLOB
+     * leaves at zero. The value carries the same „two bytes plus the locator"
+     * shape that the LOB calls use.
+     *
+     * @param buffer where the locator lies
+     * @param at     its first byte
+     * @param length how long it is — 38 for a temporary LOB, 112 for a
+     *               persistent one; never assumed
+     */
+    public record Locator(WireBuffer buffer, int at, int length, boolean character) {
+    }
+
+    /**
+     * The buffer size the server is told for a locator: 112, whatever the
+     * locator itself is long. Measured, and the same for both kinds.
+     */
+    private static final long LOCATOR_BUFFER = 112;
+
+    /** Measured in both recorded locator binds; not decoded further. */
+    private static final long LOCATOR_CONTINUATION = 0x02000000L;
+
     /** A fresh, empty list of bind variables. */
     public TtcBinds() {
     }
@@ -132,10 +157,12 @@ public final class TtcBinds {
             TtcParameters.putNumber(out, value == OUTPUT ? NUMBER_SIZE
                     : (sizes == null ? bufferSizeOf(value, type) : sizes[index]));
             TtcParameters.putNumber(out, 0);           // largest number of array elements
-            TtcParameters.putNumber(out, 0);           // continuation flags
+            TtcParameters.putNumber(out, value instanceof Locator
+                    ? LOCATOR_CONTINUATION : 0);       // continuation flags
             out.putByte((byte) 0);                     // object id
             TtcParameters.putNumber(out, 0);           // version
-            boolean text = type == OracleColumn.TYPE_VARCHAR;
+            boolean text = type == OracleColumn.TYPE_VARCHAR
+                    || (value instanceof Locator lob && lob.character());
             TtcParameters.putNumber(out, text ? CHARSET : 0);
             out.putByte((byte) (text ? CSFRM_IMPLICIT : 0));
             TtcParameters.putNumber(out, 0);           // largest character count
@@ -173,6 +200,7 @@ public final class TtcBinds {
             case Double number -> OracleNumber.encodeText(out,
                     BigDecimal.valueOf(number).toPlainString());
             case BigDecimal number -> OracleNumber.encodeText(out, number.toPlainString());
+            case Locator lob -> putLocator(out, lob);
             case String text -> putText(out, text);
             case byte[] bytes -> putBytes(out, bytes);
             case LocalDate date -> putDate(out, date.atStartOfDay());
@@ -207,6 +235,8 @@ public final class TtcBinds {
             case Float ignored -> OracleColumn.TYPE_NUMBER;
             case Double ignored -> OracleColumn.TYPE_NUMBER;
             case BigDecimal ignored -> OracleColumn.TYPE_NUMBER;
+            case Locator lob -> lob.character()
+                    ? OracleColumn.TYPE_CLOB : OracleColumn.TYPE_BLOB;
             case String ignored -> OracleColumn.TYPE_VARCHAR;
             case byte[] ignored -> OracleColumn.TYPE_RAW;
             case LocalDate ignored -> OracleColumn.TYPE_DATE;
@@ -226,6 +256,9 @@ public final class TtcBinds {
      * to the first value would have to be renegotiated every time.
      */
     private static long bufferSizeOf(Object value, int type) {
+        if (value instanceof Locator) {
+            return LOCATOR_BUFFER;
+        }
         return switch (type) {
             case OracleColumn.TYPE_NUMBER -> NUMBER_SIZE;
             case OracleColumn.TYPE_DATE -> DATE_SIZE;
@@ -233,6 +266,22 @@ public final class TtcBinds {
             default -> value == null ? NULL_SIZE
                     : Math.max(((String) value).length() * BYTES_PER_CHARACTER, 1);
         };
+    }
+
+    /**
+     * A locator as a bind value.
+     *
+     * <p>Measured: the size as a number, the same size as a single byte, then
+     * two bytes naming the locator's own length, then the locator. The two
+     * extra bytes are the same ones the LOB calls put in front of a locator.
+     */
+    private static void putLocator(WireBuffer out, Locator lob) {
+        int descriptor = lob.length() + 2;
+        TtcParameters.putNumber(out, descriptor);
+        out.putByte((byte) descriptor);
+        out.putByte((byte) 0);
+        out.putByte((byte) lob.length());
+        out.putBytes(lob.buffer().segment(), lob.at(), lob.length());
     }
 
     private static void putText(WireBuffer out, String text) {

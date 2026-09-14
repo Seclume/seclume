@@ -45,7 +45,7 @@ final class OracleTestSchema {
                      + "where table_name in ('ZL_ARRAY', 'ZL_BIND', 'ZL_COMMIT', "
                      + "                     'ZL_JDBC', 'ZL_KEYS', 'ZL_LOB', "
                      + "                     'ZL_LOB_SAMPLE', 'ZL_PREPARED', "
-                     + "                     'ZL_PROBE', 'ZL_T4') "
+                     + "                     'ZL_PROBE', 'ZL_T4', 'ZL_TEMPLOB') "
                      + "   or substr(table_name, 1, 3) = 'XA_'")) {
             while (rows.next()) {
                 tables.add(rows.getString(1));
