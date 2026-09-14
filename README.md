@@ -101,7 +101,7 @@ convenience:
 - **HTTP secret endpoints through `java.net.http.HttpClient`** — its response handlers return
   strings. Such a provider presupposes an off-heap HTTP parser of its own and is therefore not
   part of what ships.
-- **Binding as `char[]` by Spring Boot.** See `docs/spring-binding.md` (ships with the starter):
+- **Binding as `char[]` by Spring Boot.** Still to be written:
   the `char[]` arrives at the end of a pure string chain and is itself heap.
 
 ---
