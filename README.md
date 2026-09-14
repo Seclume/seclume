@@ -1,236 +1,229 @@
 # seclume
 
-JDBC-Treiber und Connection-Pool für PostgreSQL, MySQL/MariaDB, Microsoft SQL Server und
-Oracle, deren Kerneigenschaft ist: **Datenbank-Passwörter erscheinen zu keinem Zeitpunkt
-als `String` oder `char[]` auf dem Java-Heap und sind daher in einem hprof-Heapdump nicht
-auffindbar.**
+JDBC drivers and a connection pool for PostgreSQL, MySQL/MariaDB, Microsoft SQL Server and
+Oracle, whose core property is: **database passwords never appear as a `String` or `char[]` on
+the Java heap and are therefore not findable in an hprof heap dump.**
 
-Java 25, Spring Boot 4.x / Spring Framework 7.x. Keine Fremdabhängigkeiten zur Laufzeit
-außer JDK und Spring. Kein Hersteller-Treiber wird verwendet, gewrappt oder delegiert.
-
----
-
-## Bedrohungsmodell
-
-**IN SCOPE** — dagegen schützt die Bibliothek:
-
-- Ein hprof-Heapdump (`jmap`, `-XX:+HeapDumpOnOutOfMemoryError`, JFR, Actuator-`/heapdump`,
-  Support-Upload) fällt einem Angreifer in die Hände, Minuten bis Jahre nach dem Connect.
-- Der Dump wird sowohl über den Objektgraphen (MAT/OQL) als auch roh (`strings | grep`)
-  durchsucht — beides muss ergebnislos bleiben.
-
-**OUT OF SCOPE** — das löst seclume nicht und versucht es auch nicht:
-
-- Angreifer mit Live-Prozesszugriff (ptrace, gcore, Debugger). Der benutzt ohnehin die
-  offenen Connections des Pools.
-- Kernel-/Hypervisor-Kompromittierung.
-- Das Zeitfenster von wenigen Mikrosekunden während des Handshakes selbst.
-
-Daraus folgt eine Empfehlung, die den ganzen Aufwand überflüssig macht, wo sie umsetzbar
-ist: **betriebssystemintegrierte Authentifizierung** (SSPI/Kerberos, PostgreSQL `gss`/`sspi`,
-SQL Server Integrated Security, Oracle NTS). Dort gibt es kein Geheimnis im Prozess, das man
-verlieren könnte — nicht einmal für die Mikrosekunden des Handshakes. Passwort-Auth ist der
-Notnagel für alles, was nicht in einer Domäne steht.
-
-`/heapdump` darf übrigens exponiert bleiben. Das ist der Punkt.
+Java 25, Spring Boot 4.x / Spring Framework 7.x. No runtime dependencies beyond the JDK and
+Spring. No vendor driver is used, wrapped or delegated to.
 
 ---
 
-## Weitere Datenbanken
+## Threat model
 
-Zwei Punkte stehen über den Auftrag hinaus auf dem Plan, in dieser Reihenfolge:
+**IN SCOPE** — what the library protects against:
 
-**CockroachDB und YugabyteDB** sprechen das PostgreSQL-Wireprotokoll. Hier ist
-wahrscheinlich **kein neuer Treiber nötig** — nur der Nachweis, dass der vorhandene sie
-bedient. Das kostet einen CI-Lauf, und genau dort ist es eingetragen. Ein Beleg ist es
-allerdings erst, wenn er grün ist; bis dahin ist es eine Vermutung.
+- An hprof heap dump (`jmap`, `-XX:+HeapDumpOnOutOfMemoryError`, JFR, the Actuator's
+  `/heapdump`, a support upload) falls into an attacker's hands, minutes or years after the
+  connect.
+- The dump is searched both through the object graph (MAT/OQL) and raw (`strings | grep`) —
+  both have to come up empty.
 
-**DB2 / IBM i** ist der einzige Kandidat, für den sich ein *neuer* Treiber lohnt — und
-zwar erst, wenn die vier bestehenden fertig sind. Die Begründung ist nicht technisch,
-sondern liegt im Umfeld: Banken, Versicherungen und Behörden, also genau die Stellen mit
-statischen Datenbankpasswörtern per Vorgabe und mit Speicherauszügen, die an Hersteller
-gehen. Das Protokoll (DRDA) ist offen dokumentiert, es wäre also TDS-Klasse an Aufwand,
-nicht Oracle-Klasse.
+**OUT OF SCOPE** — what seclume does not solve and does not try to:
 
-Bewusst **nicht** auf dem Plan: H2 und HSQLDB (eingebettet — die Datenbank liegt selbst im
-Heap, die Kerneigenschaft trägt dort nicht), SAP HANA (proprietäres Protokoll ohne
-Spezifikation, Oracle-Klasse an Aufwand bei kleinerem Nutzen), und alles ohne JDBC.
+- An attacker with live process access (ptrace, gcore, a debugger). They will use the pool's
+  open connections anyway.
+- A compromised kernel or hypervisor.
+- The window of a few microseconds during the handshake itself.
 
-## Verhältnis zu Vault, IAM und Rotation
+From which follows a recommendation that makes the whole effort unnecessary wherever it can be
+followed: **operating-system integrated authentication** (SSPI/Kerberos, PostgreSQL `gss`/`sspi`,
+SQL Server Integrated Security, Oracle NTS). There is no secret in the process there that could
+be lost — not even for the microseconds of the handshake. Password authentication is the
+fallback for everything that is not in a domain.
 
-Die naheliegende Frage: macht seclume einen Tresor überflüssig — oder ist es umgekehrt
-der Tresor, der seclume überflüssig macht? Weder noch, und die Unterscheidung lohnt sich.
+`/heapdump` may stay exposed, by the way. That is the point.
 
-**Gegen einen Tresor mit statischem Passwort** — also den Fall, der in der Praxis
-überwiegt: ein Secret-Store, dessen Inhalt jährlich rotiert wird, wenn überhaupt — ist
-„gemountete Datei + seclume" nicht schlechter, sondern in einem Punkt besser:
+---
 
-| | Vault mit statischem Passwort | Datei + seclume |
+## Further databases
+
+Two items beyond the brief are on the plan, in this order:
+
+**CockroachDB and YugabyteDB** speak the PostgreSQL wire protocol. Probably **no new driver is
+needed** here — only proof that the existing one serves them. That costs a CI run, and that is
+exactly where it is entered. It is evidence only once it is green, though; until then it is a
+guess.
+
+**DB2 / IBM i** is the only candidate worth a *new* driver — and only once the four existing
+ones are finished. The reason is not technical but environmental: banks, insurers and public
+authorities, that is, exactly the places with static database passwords by policy and with
+memory dumps that go to vendors. The protocol (DRDA) is openly documented, so it would be
+TDS-class effort, not Oracle-class.
+
+Deliberately **not** on the plan: H2 and HSQLDB (embedded — the database itself sits in the
+heap, where the core property does not carry), SAP HANA (proprietary protocol without a
+specification, Oracle-class effort for a smaller benefit), and anything without JDBC.
+
+## Relationship to Vault, IAM and rotation
+
+The obvious question: does seclume make a vault unnecessary — or is it the vault that makes
+seclume unnecessary? Neither, and the distinction is worth drawing.
+
+**Against a vault holding a static password** — the case that dominates in practice: a secret
+store whose content is rotated yearly, if at all — „mounted file + seclume" is not worse but
+better in one respect:
+
+| | Vault with a static password | File + seclume |
 |---|---|---|
-| Nicht in Image, Env, Properties | ✅ | ✅ (`/run/secrets/...`) |
-| Nicht im JVM-Heap | ❌ | ✅ |
-| Prüfprotokoll, zentrale Richtlinie | ✅ | ❌ |
-| Zusätzliche Komponente im Startpfad | ja (Sidecar, Token-Renewal, Unsealing) | nein |
+| Not in image, env, properties | ✅ | ✅ (`/run/secrets/...`) |
+| Not in the JVM heap | ❌ | ✅ |
+| Audit trail, central policy | ✅ | ❌ |
+| Extra component in the startup path | yes (sidecar, token renewal, unsealing) | no |
 
-Der Tresor verliert die zweite Zeile, und zwar unvermeidlich: sobald die Java-Anwendung
-das Geheimnis abruft, ist es ein `String` im Heap und bleibt dort, bis der GC ihn zufällig
-überschreibt. Vault schützt den Weg *zum* Prozess, nicht den Zustand *im* Prozess.
+The vault loses the second row, and unavoidably so: the moment the Java application fetches the
+secret, it is a `String` in the heap and stays there until the GC happens to overwrite it. Vault
+protects the road *to* the process, not the state *inside* it.
 
-**Gegen kurzlebige Anmeldedaten** — Vaults Datenbank-Engine, IAM-Auth bei RDS oder
-Cloud SQL — verliert seclume dagegen klar. Wer Anmeldedaten benutzt, die nach Minuten
-verfallen, begrenzt das *Zeitfenster* und nicht nur die Angriffsfläche. Das ist stärker
-als jeder Schutz im Ruhezustand, und wer es haben kann, sollte es nehmen.
+**Against short-lived credentials** — Vault's database engine, IAM auth on RDS or Cloud SQL —
+seclume clearly loses. Whoever uses credentials that expire after minutes limits the *window*
+and not merely the attack surface. That is stronger than any protection at rest, and whoever can
+have it should take it.
 
-**Beides zusammen ist das Beste.** `secret.provider: bean` ist genau dafür da: der Tresor
-liefert, seclume sorgt dafür, dass das Gelieferte den Heap nicht sieht.
+**Both together is best.** `secret.provider: bean` exists for exactly that: the vault delivers,
+seclume makes sure what was delivered never sees the heap.
 
-**Und die Grenze:** seclume verschiebt den schwachen Punkt auf die Quelle. Wer den
-Dateibaum des Containers lesen kann oder einen Core-Dump zieht, hat das Geheimnis — das
-steht oben im Bedrohungsmodell ausdrücklich als *out of scope*. Geschlossen wird der eine
-Weg, der heute offen ist und den kein Tresor schließt: der Heapdump.
+**And the limit:** seclume moves the weak point to the source. Whoever can read the container's
+file tree or take a core dump has the secret — which the threat model above names explicitly as
+*out of scope*. What is closed is the one road that is open today and that no vault closes: the
+heap dump.
 
-## Nicht darstellbare Geheimnisquellen
+## Secret sources that cannot be supported
 
-Diese Quellen sind mit seclume **nicht** unterstützbar, und zwar grundsätzlich, nicht aus
-Bequemlichkeit:
+These sources are **not** supportable with seclume, and fundamentally so, not out of
+convenience:
 
-- **Umgebungsvariablen.** `ProcessEnvironment` wird beim JVM-Start als `Map<String,String>`
-  befüllt und nie freigegeben; der String existiert, bevor Bibliothekscode läuft.
-  `DB_PASSWORD=…` ist damit nicht absicherbar.
-- **Kommandozeilen-Argumente.** Zusätzlich prozessextern lesbar über `/proc/<pid>/cmdline`
-  bzw. `Win32_Process.CommandLine`.
-- **HTTP-Secret-Endpunkte über `java.net.http.HttpClient`** — dessen Response-Handler liefern
-  Strings. Ein solcher Provider setzt einen eigenen Off-Heap-HTTP-Parser voraus und ist
-  deshalb nicht Teil des Lieferumfangs.
-- **Binding als `char[]` durch Spring Boot.** Siehe `docs/spring-binding.md` (folgt mit dem
-  Starter): das `char[]` entsteht am Ende einer reinen String-Kette und ist selbst Heap.
+- **Environment variables.** `ProcessEnvironment` is filled as a `Map<String,String>` at JVM
+  startup and never released; the string exists before library code runs. `DB_PASSWORD=…` is
+  therefore not securable.
+- **Command line arguments.** Readable from outside the process as well, through
+  `/proc/<pid>/cmdline` or `Win32_Process.CommandLine`.
+- **HTTP secret endpoints through `java.net.http.HttpClient`** — its response handlers return
+  strings. Such a provider presupposes an off-heap HTTP parser of its own and is therefore not
+  part of what ships.
+- **Binding as `char[]` by Spring Boot.** See `docs/spring-binding.md` (ships with the starter):
+  the `char[]` arrives at the end of a pure string chain and is itself heap.
 
 ---
 
-## Stand
+## State
 
-Der Aufbau folgt den Meilensteinen aus dem Auftrag; jede Stufe wird lauffähig und getestet
-abgeschlossen, bevor die nächste beginnt.
+The build follows the milestones of the brief; every stage is finished, running and tested,
+before the next one starts.
 
-| Stufe | Inhalt | Stand |
-|-------|--------|-------|
-| 1 | `seclume-core`: `SecretProvider`, `SecretScope`, Off-Heap-Krypto | **fertig** |
-| 2 | hprof-Parser und Heapdump-Test-Harness inkl. Negativkontrolle | **fertig** |
-| 3 | PostgreSQL-Treiber | **fertig** (Protokoll, SCRAM, erweitertes Protokoll, JDBC-Oberfläche, Blockcursor, generierte Schlüssel) |
-| 4 | MySQL/MariaDB | **fertig** (Protokoll, Anmeldung, JDBC-Oberfläche; Integrationssuite gegen MySQL 8.4 grün) |
-| 5 | Microsoft SQL Server | **fertig** (Anmeldung, Abfragen, JDBC-Oberfläche; Integrationslauf gegen SQL Server 2022 grün) |
-| 6 | Oracle | **fertig** (Anmeldung, Abfragen, Bindevariablen, DDL/DML, **Transaktionen**, **Array-Stapel**, Cursor-Wiederverwendung, JDBC-Oberfläche; Integrationslauf gegen Oracle Free 23ai grün; **LOBs** vollständig: lesen und schreiben, `Clob`/`Blob`, Ströme, Ausschnitt in einer Rundreise, `createClob`/`createBlob` — offen: server-seitige temporäre LOBs) |
-| 7 | Connection-Pool | **fertig** — inkl. Micrometer, Health-Indicator, Statement-Cache, Leckerkennung und einer Timeout-Meldung, die die ältesten Halter nennt |
-| 8 | Spring-Boot-Starter | **fertig** |
-| 9 | README, Threat-Model, Migrationsleitfaden | teilweise (dieses Dokument) |
-| — | **Verteilte Transaktionen (XA)** in allen vier Treibern, standardmäßig aus | **fertig** — gegen echte Server geprüft, siehe [`docs/xa.md`](docs/xa.md) |
-| — | **Cursor in Blöcken** (`setFetchSize`) | **fertig** in allen vier (SQL Server ohne Bindewerte) |
-| — | **Ausfallsicherheit Stufe 1**: Hostliste und Failover beim Verbinden | **fertig**, siehe [`docs/resilience.md`](docs/resilience.md) |
-| — | **Pipeline-Block**: ein Roundtrip für einen ganzen Arbeitsschritt | **fertig** (PostgreSQL und MySQL bündeln) |
-| — | **NS-Mitschnitt** (`-Dseclume.oracle.trace=true`): jedes Oracle-Paket in beiden Richtungen, **nur Rahmen, nie Inhalte** | **fertig** — das Werkzeug, mit dem drei Protokollfehler gefunden wurden |
-| — | **`seclume-verify`**: Vorflug-Bericht über Server, Geheimnisquelle, Fähigkeiten und Roundtrips | **fertig** |
-| — | **`seclume-heapcheck`**: beweist für *jeden* laufenden Java-Prozess, ob ein Geheimnis im Heap steht | **fertig** |
-| — | **`RdsIamSecretProvider`**: AWS-RDS-IAM-Token signiert statt geholt, nie ein `String` | **fertig** |
-| — | **`seclume-spring-test`**: Spring Data, Hibernate und Flyway auf seclume | **fertig** gegen PostgreSQL, MySQL/Oracle vorbereitet |
-| 10 | PostgreSQL-Familie belegen: CockroachDB, YugabyteDB | offen (nur CI, kein Treiber) |
-| — | `seclume-bench`: JMH gegen die Herstellertreiber und HikariCP | **steht** — und liefert den ersten klaren Vorsprung: **Faktor 15 gegen MySQL Connector/J** bei einem Stapel über echte Netzstrecke. Zahlen und Herleitung in `docs/performance.md` |
-| 11 | DB2 / IBM i (DRDA) | offen, nach den vier bestehenden |
-| **Z** | **`seclume-tcp-core`** — portabler Transportkern im Userspace (TUN/utun/Wintun), damit eine laufende Verbindung zwischen **Linux, Windows und macOS** umziehen kann; JDBC ist der erste Adapter, nicht der Zweck | **erklärtes Ziel**, eigenes Projekt, noch nicht begonnen — Architektur und Reihenfolge in [`docs/mobility.md`](docs/mobility.md) |
+| Stage | Content | State |
+|-------|---------|-------|
+| 1 | `seclume-core`: `SecretProvider`, `SecretScope`, off-heap crypto | **done** |
+| 2 | hprof parser and heap dump test harness including the negative control | **done** |
+| 3 | PostgreSQL driver | **done** (protocol, SCRAM, extended protocol, JDBC surface, block cursors, generated keys) |
+| 4 | MySQL/MariaDB | **done** (protocol, login, JDBC surface; integration suite against MySQL 8.4 green) |
+| 5 | Microsoft SQL Server | **done** (login, queries, JDBC surface; integration run against SQL Server 2022 green) |
+| 6 | Oracle | **done** (login, queries, bind variables, DDL/DML, **transactions**, **array batches**, cursor reuse, JDBC surface; integration run against Oracle Free 23ai green; **LOBs** complete: read and write, `Clob`/`Blob`, streams, a slice in one round trip, `createClob`/`createBlob` — open: server-side temporary LOBs) |
+| 7 | Connection pool | **done** — including Micrometer, health indicator, statement cache, leak detection and a timeout message that names the oldest holders |
+| 8 | Spring Boot starter | **done** |
+| 9 | README, threat model, migration guide | partly (this document) |
+| — | **Distributed transactions (XA)** in all four drivers, off by default | **done** — checked against real servers, see [`docs/xa.md`](docs/xa.md) |
+| — | **Cursors in blocks** (`setFetchSize`) | **done** in all four (SQL Server without bind values) |
+| — | **Resilience stage 1**: host list and failover on connect | **done**, see [`docs/resilience.md`](docs/resilience.md) |
+| — | **Pipelined block**: one round trip for a whole unit of work | **done** (PostgreSQL and MySQL bundle) |
+| — | **NS trace** (`-Dseclume.oracle.trace=true`): every Oracle packet in both directions, **framing only, never contents** | **done** — the tool that found three protocol faults |
+| — | **`seclume-verify`**: preflight report on server, secret source, capabilities and round trips | **done** |
+| — | **`seclume-heapcheck`**: proves for *any* running Java process whether a secret is in its heap | **done** |
+| — | **`RdsIamSecretProvider`**: AWS RDS IAM token signed rather than fetched, never a `String` | **done** |
+| — | **`seclume-spring-test`**: Spring Data, Hibernate and Flyway on seclume | **done** against PostgreSQL and Oracle, MySQL prepared |
+| 10 | Prove the PostgreSQL family: CockroachDB, YugabyteDB | open (CI only, no driver) |
+| — | `seclume-bench`: JMH against the vendor drivers and HikariCP | **standing** — and it delivers the first clear lead: **a factor of 15 against MySQL Connector/J** on a batch over a real network. Numbers and reasoning in `docs/performance.md` |
+| 11 | DB2 / IBM i (DRDA) | open, after the four existing ones |
+| **Z** | **`seclume-tcp-core`** — a portable userspace transport core (TUN/utun/Wintun) so a live connection can move between **Linux, Windows and macOS**; JDBC is the first adapter, not the purpose | **a declared goal**, own project, packet I/O on Windows proven — architecture and order in [`docs/mobility.md`](docs/mobility.md) |
 
-### Was von Stufe 3 steht
+### What stage 3 consists of
 
-Modul `seclume-postgresql` - Protokoll 3.0, eigener Wire-Code, kein `org.postgresql`:
+Module `seclume-postgresql` — protocol 3.0, wire code of its own, no `org.postgresql`:
 
-- `WireBuffer`/`PgChannel` — Sende- und Empfangspuffer im nativen Speicher, blockweises
-  Lesen, Nachrichten werden **an Ort und Stelle** ausgewertet.
-- `ScramSha256` — SCRAM-SHA-256 vollständig off-heap, geprüft gegen den Vektor aus RFC 7677
-  und gegen eine unabhängige Nachrechnung mit der JCA für den Fall, den PostgreSQL wirklich
-  geht (leeres `n=`, UTF-8-Passwort).
-- `Md5Password` — das alte Verfahren, für Bestandsserver, ebenfalls off-heap.
-- `PgSession` — Startup, Auth-Verzweigung, Simple Query, `ErrorResponse` mit SQLState,
+- `WireBuffer`/`PgChannel` — send and receive buffers in native memory, block-wise reading,
+  messages evaluated **in place**.
+- `ScramSha256` — SCRAM-SHA-256 entirely off-heap, checked against the vector from RFC 7677 and
+  against an independent recomputation with the JCA for the case PostgreSQL actually takes
+  (empty `n=`, UTF-8 password).
+- `Md5Password` — the old method, for legacy servers, also off-heap.
+- `PgSession` — startup, auth branching, simple query, `ErrorResponse` with SQLState,
   `ParameterStatus`, `BackendKeyData`.
-- `Row` — Fenster auf den Empfangspuffer statt Kopie; `getLong` kommt ohne `String` aus.
-- Erweitertes Protokoll — `Parse`/`Bind`/`Describe`/`Execute`/`Sync`; ein benannter Plan
-  bleibt bis zum Schließen der Anweisung im Server stehen.
-- `PgParameters` — Parameter gehen im Textformat als **Parameter** über die Leitung, nie
-  als Text im SQL. SQL-Injektion ist damit keine abgewehrte Gefahr, sondern eine, die es
-  in dieser Bauart nicht gibt.
-- JDBC-Oberfläche — `SeclumeDriver` (über `META-INF/services` und `provides` gefunden),
-  `PgConnection`, `PgStatement`, `PgPreparedStatement`, `PgResultSet`,
-  `PgResultSetMetaData`, `PgDatabaseMetaData`, `SeclumeDataSource`.
-- `ResultBlock` — die Zeilen eines Ergebnisses liegen in **einem** nativen Block plus einem
-  `int[]` mit Anfang und Länge je Zelle. Ein Java-Objekt entsteht erst bei `getString`,
-  bei `getLong` gar keines. Übliche Treiber legen hier ein `Object[]` je Zeile und einen
-  `String` je Zelle an.
-- `PgSqlRewriter` — `?` wird zu `$1`, `$2`, … und zwar durch echtes Lesen: Textliterale,
-  Bezeichner, Dollarzitate, geschachtelte Blockkommentare und die `jsonb`-Operatoren
-  `?|`, `?&`, `??` bleiben unangetastet.
+- `Row` — a window onto the receive buffer instead of a copy; `getLong` manages without a
+  `String`.
+- Extended protocol — `Parse`/`Bind`/`Describe`/`Execute`/`Sync`; a named plan stays in the
+  server until the statement is closed.
+- `PgParameters` — parameters travel in text format as **parameters**, never as text inside the
+  SQL. SQL injection is therefore not a danger that is fended off but one that does not exist in
+  this construction.
+- JDBC surface — `SeclumeDriver` (found through `META-INF/services` and `provides`),
+  `PgConnection`, `PgStatement`, `PgPreparedStatement`, `PgResultSet`, `PgResultSetMetaData`,
+  `PgDatabaseMetaData`, `SeclumeDataSource`.
+- `ResultBlock` — the rows of a result live in **one** native block plus an `int[]` with start
+  and length per cell. A Java object appears only at `getString`, and at `getLong` none at all.
+  Usual drivers put an `Object[]` per row and a `String` per cell here.
+- `PgSqlRewriter` — `?` becomes `$1`, `$2`, … and by actually reading: text literals,
+  identifiers, dollar quoting, nested block comments and the `jsonb` operators `?|`, `?&`, `??`
+  are left untouched.
 
-Nachgewiesen gegen einen **echten Server** (lokale PostgreSQL 15.1, Rolle mit
-`scram-sha-256`): Anmeldung, `select`, 1.000 Zeilen, NULL und Umlaute, DDL/DML,
-Serverfehler mit SQLState `42P01`, falsches Passwort mit `28P01`. Und der Heapdump-Test
-mit echter Verbindung: sechs Anmeldungen, eine offene Verbindung, Dump — **kein Treffer**.
+Proven against a **real server** (a local PostgreSQL 15.1, role with `scram-sha-256`): login,
+`select`, 1,000 rows, NULL and umlauts, DDL/DML, a server error with SQLState `42P01`, a wrong
+password with `28P01`. And the heap dump test with a real connection: six logins, one open
+connection, dump — **no hit**.
 
-Auf JDBC-Ebene geprüft, ebenfalls gegen den echten Server: `DriverManager.getConnection`
-mit der seclume-URL, `PreparedStatement` mit `uuid`/`numeric`/`bytea`/`timestamp`,
-Batch, Rollback, `DatabaseMetaData.getTables`/`getColumns`/`getPrimaryKeys`,
-`ResultSetMetaData` mit Präzision und Skalierung, Serverfehler mit SQLState. Ein
-`password=` in der URL wird mit Begründung abgelehnt statt heimlich benutzt. Und der
-Heapdump-Test **über den JDBC-Weg** — sechs Verbindungen über den `DriverManager`, eine
-offen gehalten, Dump — **kein Treffer**.
+Checked at the JDBC level, again against the real server: `DriverManager.getConnection` with
+the seclume URL, `PreparedStatement` with `uuid`/`numeric`/`bytea`/`timestamp`, batch,
+rollback, `DatabaseMetaData.getTables`/`getColumns`/`getPrimaryKeys`, `ResultSetMetaData` with
+precision and scale, server errors with SQLState. A `password=` in the URL is rejected with a
+reason rather than quietly used. And the heap dump test **through the JDBC route** — six
+connections through `DriverManager`, one held open, dump — **no hit**.
 
-Es fehlt noch: Binärformate und Typdekodierung, TLS mit Kanalbindung (`SSLRequest`,
-SCRAM-SHA-256-PLUS), `COPY`, `CancelRequest` (und damit `setQueryTimeout`), Portale in
-Häppchen (`setFetchSize` wird gemerkt, wirkt aber nicht), generierte Schlüssel,
-Savepoints, `NOTIFY` und die Testcontainers-Suite gegen zwei Serverstände.
+Still missing: binary formats and type decoding, TLS with channel binding (`SSLRequest`,
+SCRAM-SHA-256-PLUS), `COPY`, `CancelRequest` (and with it `setQueryTimeout`), portals in
+portions (`setFetchSize` is remembered but has no effect), generated keys, savepoints, `NOTIFY`
+and the Testcontainers suite against two server versions.
 
-### Was von Stufe 4 steht
+### What stage 4 consists of
 
-Modul `seclume-mysql` — Protokoll 4.1, eigener Wire-Code, kein `com.mysql`:
+Module `seclume-mysql` — protocol 4.1, wire code of its own, no `com.mysql`:
 
-- `MyChannel` — Paketrahmen mit Folgenummern. Die Folgenummer ist der Unterschied zu
-  PostgreSQL: der Server prüft sie, und sie wird an genau einer Stelle geführt.
-- `NativePassword` — `mysql_native_password`, drei SHA-1-Runden und ein XOR, vollständig
-  off-heap. Ein `byte[20]` mit `SHA1(passwort)` wäre so gut wie das Passwort selbst.
-- `CachingSha2Password` — der Standard seit MySQL 8: schneller Weg (SHA-256), voller Weg
-  über RSA-OAEP mit dem Serverschlüssel, Klartext-Weg für TLS. Die Exponentiation läuft
-  auf einem nativen Wortarray, nicht auf `BigInteger`.
-- `ServerPublicKey` — PEM aus dem Serverpaket, off-heap dekodiert.
-- `MySession` — Handshake v10, Capability-Aushandlung, Auth-Plugin-Switch, `COM_QUERY`,
-  `COM_STMT_PREPARE`/`EXECUTE`/`CLOSE`/`RESET`, `COM_PING`, `COM_RESET_CONNECTION`,
-  Fehlerpakete mit Nummer und SQLState.
-- `MyRow`/`BinaryValues` — Text- **und** Binärzeilen, letztere mit der Nullbitmaske und
-  ihren zwei Bit Vorlauf und den längenvariablen Zeitstrukturen.
-- JDBC-Oberfläche — `MyDriver`, `MyConnection` (inklusive Savepoints und
-  `getGeneratedKeys`, beides kann MySQL im Gegensatz zu PostgreSQL ohne Zusatzabfrage),
-  `MyStatement`, `MyPreparedStatement`, `MyResultSet`, `MyDatabaseMetaData`,
-  `MyDataSource`.
+- `MyChannel` — packet framing with sequence numbers. The sequence number is the difference to
+  PostgreSQL: the server checks it, and it is kept in exactly one place.
+- `NativePassword` — `mysql_native_password`, three SHA-1 rounds and an XOR, entirely off-heap.
+  A `byte[20]` holding `SHA1(password)` would be as good as the password itself.
+- `CachingSha2Password` — the default since MySQL 8: the fast path (SHA-256), the full path
+  through RSA-OAEP with the server key, the cleartext path for TLS. The exponentiation runs on a
+  native word array, not on `BigInteger`.
+- `ServerPublicKey` — PEM out of the server packet, decoded off-heap.
+- `MySession` — handshake v10, capability negotiation, auth plugin switch, `COM_QUERY`,
+  `COM_STMT_PREPARE`/`EXECUTE`/`CLOSE`/`RESET`, `COM_PING`, `COM_RESET_CONNECTION`, error
+  packets with number and SQLState.
+- `MyRow`/`BinaryValues` — text **and** binary rows, the latter with the null bitmap and its two
+  bits of lead-in and the length-variable time structures.
+- JDBC surface — `MyDriver`, `MyConnection` (including savepoints and `getGeneratedKeys`, both
+  of which MySQL can do without an extra query, unlike PostgreSQL), `MyStatement`,
+  `MyPreparedStatement`, `MyResultSet`, `MyDatabaseMetaData`, `MyDataSource`.
 
-Bewusst **nicht** gesetzte Fähigkeitsbits: `CLIENT_LOCAL_FILES` — damit dürfte der
-*Server* den Client auffordern, eine beliebige lokale Datei zu schicken — und
-`CLIENT_MULTI_STATEMENTS`, der Weg, auf dem aus einer SQL-Injektion ein zweiter Befehl
-wird. `caching_sha2_password` über eine unverschlüsselte Verbindung verlangt
-`allowPublicKeyRetrieval=true`, weil ein Mann in der Mitte die Frage nach dem
-öffentlichen Schlüssel ebenso beantworten würde.
+Capability bits deliberately **not** set: `CLIENT_LOCAL_FILES` — with it the *server* could ask
+the client to send an arbitrary local file — and `CLIENT_MULTI_STATEMENTS`, the road on which an
+SQL injection becomes a second command. `caching_sha2_password` over an unencrypted connection
+requires `allowPublicKeyRetrieval=true`, because a man in the middle would answer the question
+for the public key just as readily.
 
-Geprüft ist das gegen einen **Testserver, der echte MySQL-Pakete spricht** und die
-Anmeldeantwort selbst mit der JCA nachrechnet — Handshake, Rahmen, Text- und
-Binärergebnisse, Fehlerpakete, die JDBC-Schicht. Dazu der Heapdump-Test: sechs
-Anmeldungen aus einer eigenen JVM, Dump — **kein Treffer**, während die Gegenprobe (ein
-Nutzdatenwert aus derselben Abfrage) im selben Dump **gefunden** wird; ohne diese
-Gegenprobe wäre das leere Ergebnis wertlos.
+That is checked against a **test server that speaks real MySQL packets** and recomputes the
+login answer itself with the JCA — handshake, framing, text and binary results, error packets,
+the JDBC layer. Plus the heap dump test: six logins from a JVM of its own, dump — **no hit**,
+while the counter-check (a payload value from the same query) **is found** in the same dump;
+without that counter-check the empty result would be worthless.
 
-Es fehlt: die Integrationssuite gegen einen echten MySQL- und MariaDB-Server (auf diesem
-Rechner läuft keiner, und Docker ist aus), TLS, die Plugins `sha256_password` (der
-RSA-Teil steht, der Ablauf ist ungetestet), `mysql_clear_password`, MariaDB `ed25519` und
-`parsec`, `LOAD DATA LOCAL`, Multi-Resultset, Cursor in Häppchen und das
-Zusammensetzen von Nutzlasten über 16 MB.
+Missing: TLS, the plugins `sha256_password` (the RSA part stands, the flow is untested),
+`mysql_clear_password`, MariaDB `ed25519` and `parsec`, `LOAD DATA LOCAL`, multi-resultset,
+cursors in portions and the reassembly of payloads over 16 MB.
 
-### Was Stufe 8 enthält — das Zielbild ist erreicht
+### What stage 8 contains — the target picture is reached
 
-Modul `seclume-spring-boot-starter`. Abhängigkeit einbinden, `application.properties`
-ausfüllen, fertig — in den Tests steht keine einzige `@Bean`-Methode für eine
-`DataSource` und kein Aufruf eines Treibers:
+Module `seclume-spring-boot-starter`. Add the dependency, fill in `application.properties`,
+done — the tests contain not a single `@Bean` method for a `DataSource` and no call into a
+driver:
 
 ```yaml
 seclume:
@@ -246,240 +239,229 @@ seclume:
         warmup: true
 ```
 
-Daraus entsteht je Eintrag eine gepoolte `DataSource`-Bean (`dataSource` bei einer,
-`<name>DataSource` bei mehreren, `seclume.primary` entscheidet). Alles, was Spring an
-eine `DataSource` hängt — `JdbcClient`, `JdbcTemplate`, `DataSourceTransactionManager`,
-JPA, Actuator — findet sie wie jede andere.
+Out of that comes one pooled `DataSource` bean per entry (`dataSource` for one,
+`<name>DataSource` for several, `seclume.primary` decides). Everything Spring hangs on a
+`DataSource` — `JdbcClient`, `JdbcTemplate`, `DataSourceTransactionManager`, JPA, Actuator —
+finds it like any other.
 
-- `provider: bean` löst eine eigene `SecretProvider`-Bean auf (Vault, KMS, HSM).
-- `provider: dpapi` und `credential-manager` brechen auf Nicht-Windows mit klarer Meldung
-  ab, statt still auf etwas anderes auszuweichen.
-- `provider: integrated` wird erkannt und lehnt vorerst ehrlich ab — Kerberos/SSPI gehört
-  zum SQL-Server-Treiber, der noch offen ist.
-- Die Treibermodule sind **optionale** Abhängigkeiten; jeder liegt hinter einer eigenen
-  inneren Klasse, damit die JVM den nicht eingebundenen nie lädt. Fehlt er, sagt die
-  Meldung, welches Artefakt nachzutragen ist.
+- `provider: bean` resolves a `SecretProvider` bean of your own (Vault, KMS, HSM).
+- `provider: dpapi` and `credential-manager` abort on non-Windows with a clear message instead
+  of quietly falling back to something else.
+- `provider: integrated` is recognised and honestly declined for now — Kerberos/SSPI belongs to
+  the SQL Server driver.
+- The driver modules are **optional** dependencies; each sits behind an inner class of its own
+  so the JVM never loads one that is not on the classpath. If it is missing, the message says
+  which artefact to add.
 
-**`spring.datasource.password` bricht den Start ab** — ebenso ein `password` unter
-`seclume.datasources.*`. Das ist der Kern: ein Passwort in der Konfiguration ist ein
-`String` im `Environment`, für die Lebensdauer der Anwendung, sichtbar in jedem Heapdump
-und im `/env`-Endpunkt des Actuators. Still darüber hinwegzugehen hieße, die
-Kerneigenschaft unbemerkt auszuhebeln.
+**`spring.datasource.password` aborts the startup** — and so does a `password` under
+`seclume.datasources.*`. That is the crux: a password in the configuration is a `String` in the
+`Environment`, for the lifetime of the application, visible in every heap dump and in the
+Actuator's `/env` endpoint. Passing over it quietly would mean disabling the core property
+unnoticed.
 
-Geprüft mit 11 Tests gegen die echte lokale PostgreSQL: eine und mehrere Datenquellen,
-Pool-Einstellungen inklusive Warmup, eigene `SecretProvider`-Bean, der Eintrag in
-`AutoConfiguration.imports`, und fünf Fälle, die laut scheitern sollen.
+Checked with 11 tests against the real local PostgreSQL: one and several data sources, pool
+settings including warmup, a `SecretProvider` bean of your own, the entry in
+`AutoConfiguration.imports`, and five cases that are supposed to fail loudly.
 
-### Wo Stufe 5 (SQL Server) steht
+### Where stage 5 (SQL Server) stands
 
-Modul `seclume-sqlserver`. Der Gegensatz zu Oracle ist auffällig: TDS ist als `MS-TDS`
-**offen spezifiziert**, und der erste Austausch lief auf Anhieb — bei Oracle brauchte es
-vier Anläufe und einen Mitschnitt.
+Module `seclume-sqlserver`. The contrast with Oracle is striking: TDS is **openly specified**
+as `MS-TDS`, and the first exchange worked straight away — with Oracle it took four attempts and
+a packet capture.
 
-Fertig und gegen SQL Server 2022 geprüft (`version=16.0.4265`):
+Done and checked against SQL Server 2022 (`version=16.0.4265`):
 
-- `TdsChannel` — Paketschicht mit Zusammensetzen mehrteiliger Nachrichten. Die Falle: die
-  Länge im Paketkopf ist **big-endian**, als einziges Feld in ganz TDS.
-- `PreLogin` — Optionstabelle aus Kennung, Versatz und Länge; der Server meldet Version
-  und Verschlüsselungswunsch.
-- `TdsPassword` — UTF-16LE, Halbbytes tauschen, XOR `0xA5`, **vollständig off-heap**. Der
-  naheliegende Einzeiler `getBytes(UTF_16LE)` würde das Passwort auf den Heap legen; dafür
-  hat der Kern eine eigene UTF-16-Umkodierung.
+- `TdsChannel` — the packet layer with reassembly of multi-part messages. The trap: the length
+  in the packet header is **big-endian**, the only field in all of TDS that is.
+- `PreLogin` — an option table of token, offset and length; the server reports version and its
+  encryption wish.
+- `TdsPassword` — UTF-16LE, swap nibbles, XOR `0xA5`, **entirely off-heap**. The obvious
+  one-liner `getBytes(UTF_16LE)` would put the password on the heap; for that the core has a
+  UTF-16 transcoding of its own.
 
-**Ein Befund, der im Code steht und dort hingehört:** diese Kodierung ist keine
-Verschlüsselung, sondern ohne Schlüssel umkehrbar — ein Test führt das ausdrücklich vor.
-Deshalb ist TLS bei SQL Server nicht optional, und der Server sagt das auch: seine Antwort
-`ENCRYPT_OFF` heißt in TDS nicht „unverschlüsselt", sondern *„Verschlüsselung nur für die
-Anmeldung"*. Der Treiber verlangt deshalb `ENCRYPT_ON`.
+**A finding that is in the code and belongs there:** this encoding is not encryption but
+reversible without a key — a test demonstrates it explicitly. That is why TLS is not optional
+with SQL Server, and the server says so too: its answer `ENCRYPT_OFF` does not mean
+„unencrypted" in TDS but *„encryption for the login only"*. The driver therefore insists on
+`ENCRYPT_ON`.
 
-Die **Anmeldung ist vollständig** und gegen SQL Server 2022 geprüft: PRELOGIN,
-TLS-Handshake **innerhalb** von TDS-Paketen, LOGIN7 mit off-heap verschleiertem Passwort,
-Tokenstrom mit `LOGINACK`/`ENVCHANGE`/`ERROR`. Ergebnis:
-`TLSv1.2 / TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`, `server=Microsoft SQL Server,
-database=master, packetSize=4096`; ein falsches Passwort wird mit 18456/28000 abgelehnt.
+The **login is complete** and checked against SQL Server 2022: PRELOGIN, the TLS handshake
+**inside** TDS packets, LOGIN7 with an off-heap obfuscated password, a token stream of
+`LOGINACK`/`ENVCHANGE`/`ERROR`. Result: `TLSv1.2 /
+TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`, `server=Microsoft SQL Server, database=master,
+packetSize=4096`; a wrong password is refused with 18456/28000.
 
-Zwei Fallen, die erst der echte Server gezeigt hat: **TLS 1.2, nicht neuer** (1.3 sprengt
-die Verschachtelung), und **eine TLS-Flugstrecke gehört in ein TDS-Paket** — einzeln
-verpackt legt der Server wortlos auf. Dazu eine aus der Spezifikation: die Feldlängen in
-LOGIN7 zählen **Zeichen**, die Versätze daneben **Bytes** — auch beim Passwort. Wer das
-verwechselt, bekommt „Login failed for user", was wie ein falsches Passwort aussieht.
+Two traps only the real server revealed: **TLS 1.2, not newer** (1.3 breaks the nesting), and **a
+TLS flight belongs in one TDS packet** — wrapped individually, the server hangs up without a
+word. Plus one from the specification: the field lengths in LOGIN7 count **characters**, the
+offsets next to them **bytes** — for the password too. Confusing the two yields „Login failed for
+user", which looks like a wrong password.
 
-Die **Abfrageschicht steht** — bisher gegen synthetische Tokenströme geprüft, nicht gegen
-einen Server, weil der Testcontainer abgebaut ist:
+The **query layer stands**:
 
-- `ColumnMetadata`, `TdsRow`, `TdsValues` — Spaltenbeschreibung, Zeilen (auch `NBCROW`
-  mit NULL-Bitmaske und `MAX` in Blöcken), Werte einschließlich `decimal` **ohne
-  `BigInteger`**.
-- `TokenStream` — der Tokenstrom. Ein Fehler beendet ihn nicht: er wird gemerkt, der Rest
-  zu Ende gelesen, erst danach geworfen — sonst blieben ungelesene Bytes auf der
-  Verbindung.
-- `TdsSession` — `SQL_BATCH` mit den 22 Byte `ALL_HEADERS` und `sp_executesql` als RPC.
+- `ColumnMetadata`, `TdsRow`, `TdsValues` — column description, rows (including `NBCROW` with a
+  null bitmap and `MAX` in chunks), values including `decimal` **without `BigInteger`**.
+- `TokenStream` — the token stream. An error does not end it: it is remembered, the rest is read
+  to the end, and only then is it thrown — otherwise unread bytes would be left on the
+  connection.
+- `TdsSession` — `SQL_BATCH` with the 22 bytes of `ALL_HEADERS` and `sp_executesql` as an RPC.
 
-Darauf die **JDBC-Oberfläche**: `TdsConnection`, `TdsStatement`, `TdsPreparedStatement`,
-`TdsResultSet` (Zeilen off-heap, kein Objekt pro Zelle), `TdsDatabaseMetaData`,
-`TdsDriver`, `TdsDataSource`. `?` wird zu `@P0` — gelesen, nicht ersetzt, denn in T-SQL
-schachteln Blockkommentare.
+On top of it the **JDBC surface**: `TdsConnection`, `TdsStatement`, `TdsPreparedStatement`,
+`TdsResultSet` (rows off-heap, no object per cell), `TdsDatabaseMetaData`, `TdsDriver`,
+`TdsDataSource`. `?` becomes `@P0` — by reading, not by replacing, because block comments nest in
+T-SQL.
 
-Offen: ein Lauf gegen einen echten Server, Cursor in Blöcken, mehrere Ergebnisse aus einem
-Batch, `ATTENTION` für `cancel()`.
+Open: cursors in blocks, several results out of one batch, `ATTENTION` for `cancel()`.
 
-### Was von Stufe 6 (Oracle) steht
+### What stage 6 (Oracle) consists of
 
-Oracle ist das einzige der vier Protokolle **ohne öffentliche Spezifikation**. Deshalb
-liegt hier neben dem Modul ein Dokument: `docs/protocol/oracle.md` hält fest, was belegt
-ist, aus welcher Quelle (mit Lizenz, wie die Aufgabe es verlangt) und was offen ist.
+Oracle is the only one of the four protocols **without a public specification**. That is why a
+document sits next to the module: `docs/protocol/oracle.md` records what is established, from
+which source (with its licence, as the brief demands) and what is open.
 
-Es läuft gegen einen echten Server (Oracle Free 23ai):
+It runs against a real server (Oracle Free 23ai):
 
-- **Anmeldung** über den 12c-Pfad: PBKDF2-SHA512, AES-256-CBC, der 32-Byte-Sitzungs-
-  schlüssel aus beiden Hälften als Hextext. Nicht geraten, sondern **gemessen** — an
-  einem aufgezeichneten Handschlag, dessen Passwort lokal bekannt war, ließ sich die
-  richtige Ableitung identifizieren statt vermuten. Alles off-heap.
-- **Abfragen** über TTC-Funktion 94: Spaltenbeschreibung, Zeilenblöcke, Bitvektor,
-  Fetch-Schleife, Fehlerbehandlung.
-- **Bindevariablen** und **DDL/DML** mit der Zahl der geänderten Zeilen.
-- **Typen**: `NUMBER` (eigenes Basis-100-Format, ohne `BigDecimal` auf dem Weg),
+- **Login** through the 12c path: PBKDF2-SHA512, AES-256-CBC, the 32-byte session key from both
+  halves as hex text. Not guessed but **measured** — against a recorded handshake whose password
+  was known locally, the right derivation could be identified rather than assumed. All off-heap.
+- **Queries** through TTC function 94: column description, row blocks, bit vector, fetch loop,
+  error handling.
+- **Bind variables** and **DDL/DML** with the number of changed rows.
+- **Types**: `NUMBER` (a base-100 format of its own, with no `BigDecimal` on the way),
   `VARCHAR2`, `CHAR`, `DATE`, `TIMESTAMP`, `RAW`, `LONG`.
-- **JDBC-Oberfläche**: `Driver`, `DataSource`, `Connection`, `Statement`,
-  `PreparedStatement` mit Stapel, `ResultSet`, `DatabaseMetaData`.
+- **LOBs**: read and write, `Clob`/`Blob`, streams, `createClob`/`createBlob`. A slice costs one
+  round trip and brings the slice — 4096 characters out of 200,000, the rest stays on the
+  server. Details in [`docs/protocol/oracle-lob.md`](docs/protocol/oracle-lob.md).
+- **JDBC surface**: `Driver`, `DataSource`, `Connection`, `Statement`, `PreparedStatement` with
+  batches, `ResultSet`, `DatabaseMetaData`.
 
-Wie das gefunden wurde, ist der interessantere Teil und steht ausführlich in
-`docs/protocol/oracle.md`: nicht durch Raten, sondern durch Aufnahmen. Die
-lehrreichste Regel daraus — **eine Aufnahme, in der jedes Feld null und einbytig ist,
-belegt gar nichts**: drei verschiedene falsche Lesarten der Spaltenbeschreibung passten
-gleich gut auf dieselben Bytes, und erst eine Abfrage über `NUMBER(9,2)`, `VARCHAR2(40)`
-und `DATE` nebeneinander hat entschieden.
+How that was found is the more interesting part and is written out in
+`docs/protocol/oracle.md`: not by guessing but from recordings. The most instructive
+rule out of it — **a recording in which every field is zero and one byte wide establishes
+nothing**: three different wrong readings of the column description fitted the same bytes
+equally well, and only a query over `NUMBER(9,2)`, `VARCHAR2(40)` and `DATE` side by side
+decided it.
 
-Offen und ausdrücklich **nicht** geraten: LOBs (`CLOB`/`BLOB`), Array-Binds als eine
-Nachricht, NTS/Kerberos.
+Open and explicitly **not** guessed: server-side temporary LOBs, NTS/Kerberos.
 
-### Was Stufe 7 enthält
+### What stage 7 contains
 
-Modul `seclume-pool` — hängt nur an `javax.sql.DataSource`, nicht an einem Treiber, und
-hat keine Fremdabhängigkeit:
+Module `seclume-pool` — depends only on `javax.sql.DataSource`, not on a driver, and has no
+third-party dependency:
 
-- `SeclumePool` — min/max, Connection-, Idle-, Lifetime- und Keepalive-Timeout, Warmup,
-  Leck-Erkennung mit dem Stacktrace der Ausleihe.
-- **Der Ausleihpfad fasst kein Schloss und keinen gemeinsamen Zähler an.** Die freien
-  Verbindungen liegen als Slots in einem Array, jeder Thread startet an seinem eigenen
-  Slot (Hash der Thread-ID, ausdrücklich **kein `ThreadLocal`** — das taugt bei
-  Millionen virtueller Threads nichts). Gemessen: von 64 µs auf **0,27 µs** je
-  Ausleihe. HikariCP liegt bei 0,10 µs und damit weiter vorn — sein schneller Pfad ist ein
-  `ThreadLocal`, was bei acht Plattform-Threads unschlagbar und bei einer Million
-  virtueller Threads unbrauchbar ist. Sobald eine Abfrage dazwischenliegt, ist der
-  Unterschied Rauschen.
-- **Validierung nur nach Ruhezeit.** Eine Verbindung, die gerade zurückkam, wird ohne
-  Nachfrage beim Server wieder ausgegeben; erst nach `validation-bypass-window`
-  (Vorgabe 500 ms Ruhe) wird geprüft. Der Unterschied ist keine Feinheit: eine Prüfung je
-  Ausleihe ist ein **kompletter Roundtrip**, und genau daran hing der Pool in der ersten
-  Messung — 64 µs je Ausleihe gegen 0,4 µs bei HikariCP. Wer die paranoide Variante will,
-  setzt das Fenster auf null.
-- `PooledConnection` — `close()` gibt zurück statt zu schließen; davor wird eine offene
-  Transaktion zurückgerollt und `autoCommit`/`readOnly`/Isolationsstufe auf den
-  Ausgangswert gesetzt. Sonst erbt der nächste Anwender einen Zustand, den er nie gesetzt
-  hat. Scheitert das Aufräumen, wird die Verbindung geschlossen statt zurückgelegt.
-- Ein Fehler aus dem SQLState-Bereich `08` (Verbindung) wirft die Verbindung weg, ein
-  Syntaxfehler nicht.
+- `SeclumePool` — min/max, connection, idle, lifetime and keepalive timeouts, warmup, leak
+  detection with the stack trace of the checkout.
+- **The checkout path touches no lock and no shared counter.** The free connections lie as slots
+  in an array, each thread starts at its own slot (hash of the thread id, explicitly **not a
+  `ThreadLocal`** — that is useless with millions of virtual threads). Measured: from 64 µs down
+  to **0.27 µs** per checkout. HikariCP is at 0.10 µs and thus still ahead — its fast path is a
+  `ThreadLocal`, which is unbeatable with eight platform threads and unusable with a million
+  virtual ones. As soon as a query sits in between, the difference is noise.
+- **Validation only after an idle period.** A connection that just came back is handed out again
+  without asking the server; only after `validation-bypass-window` (500 ms of quiet by default)
+  is it checked. The difference is not a nicety: a check per checkout is a **whole round trip**,
+  and that is exactly what the pool hung on in the first measurement — 64 µs per checkout against
+  0.4 µs for HikariCP. Whoever wants the paranoid variant sets the window to zero.
+- `PooledConnection` — `close()` returns instead of closing; before that an open transaction is
+  rolled back and `autoCommit`/`readOnly`/isolation level are set back to their starting values.
+  Otherwise the next user inherits a state they never set. If the cleanup fails, the connection
+  is closed rather than put back.
+- An error from SQLState class `08` (connection) discards the connection, a syntax error does
+  not.
 
-**Der Pool hält kein Geheimnis** — er sieht keines. Ein Neuaufbau ist schlicht ein
-weiterer `getConnection()` an der darunterliegenden `DataSource`, und die fragt den
-`SecretProvider` erneut. Scheitert der, scheitert der Aufbau; einen gecachten Ausweg gibt
-es nicht, denn das wäre ein Passwort im Heap. `getConnection(user, password)` wirft mit
-Begründung, und `toString()`/`PoolStatistics` enthalten ausschließlich Zahlen.
+**The pool holds no secret** — it never sees one. A rebuild is simply another `getConnection()`
+on the underlying `DataSource`, and that asks the `SecretProvider` again. If that fails, the
+build fails; there is no cached way around it, because that would be a password in the heap.
+`getConnection(user, password)` throws with a reason, and `toString()`/`PoolStatistics` contain
+numbers only.
 
-**Virtual-Thread-tauglich**, und das ist kein Etikett:
+**Fit for virtual threads**, and that is not a label:
 
-- kein `synchronized` um blockierende Aufrufe (ein virtueller Thread, der in einem Monitor
-  blockiert, nimmt seinen Trägerthread mit),
-- kein `ThreadLocal`-Zwischenspeicher für zuletzt benutzte Verbindungen — bei Millionen
-  virtueller Threads ist das ein Speicherleck mit Trefferquote nahe null,
-- Vergabe über `Semaphore` und `ConcurrentLinkedDeque`, beide ohne Monitor.
+- no `synchronized` around blocking calls (a virtual thread that blocks in a monitor takes its
+  carrier thread with it),
+- no `ThreadLocal` cache of recently used connections — with millions of virtual threads that is
+  a memory leak with a hit rate near zero,
+- handing out through `Semaphore` and `ConcurrentLinkedDeque`, both without a monitor.
 
-Geprüft mit 13 Tests ohne Datenbank (Stub-`DataSource`: Größe, Wiederverwendung, Timeout,
-Zustandsrücksetzung, kaputte Verbindungen, doppeltes `close()`, 500 virtuelle Threads) und
-6 Tests gegen die echte lokale PostgreSQL — dort unter anderem: 200 virtuelle Threads
-teilen sich nachweislich höchstens acht `pg_backend_pid()`, und nach `close()` steht keine
-der Sitzungen mehr in `pg_stat_activity`.
+Checked with 13 tests without a database (a stub `DataSource`: size, reuse, timeout, state
+reset, broken connections, double `close()`, 500 virtual threads) and 6 tests against the real
+local PostgreSQL — among them: 200 virtual threads demonstrably share at most eight
+`pg_backend_pid()`, and after `close()` none of the sessions is left in `pg_stat_activity`.
 
-Dieser Test hat einen **echten Fehler im Treiber** gefunden: `WireBuffer` benutzte
-`Arena.ofConfined()`, also einen Speicherbereich, der an den erzeugenden Thread gebunden
-ist. Eine Verbindung, die auf einem anderen virtuellen Thread zurückgegeben wird, ließ sich
-damit nicht schließen (`WrongThreadException`) — genau der Fall, für den es einen Pool
-gibt. Jetzt ist es eine geteilte Arena; das kostet beim Schließen etwas, einmal je
-Verbindung.
+That test found a **real fault in the driver**: `WireBuffer` used `Arena.ofConfined()`, a memory
+region bound to the creating thread. A connection returned on a different virtual thread could
+then not be closed (`WrongThreadException`) — exactly the case a pool exists for. It is a shared
+arena now; that costs a little on close, once per connection.
 
-Offen: die Micrometer-Anbindung (optional, nur wenn im Classpath) und ein JMH-Vergleich
-gegen HikariCP.
+### Shared plumbing
 
-### Gemeinsames Geschirr
+With the second driver, what both need was pulled together — otherwise it would stand there four
+times by the fourth:
 
-Mit dem zweiten Treiber ist zusammengezogen, was beide brauchen — sonst stünde es
-spätestens beim vierten viermal da:
+- `internal.WireBuffer` — the native buffer, now with both byte orders.
+- `internal.JdbcUrl` — the URL parsing, so that `provider=file` means the same everywhere and a
+  `password=` is refused the same way everywhere.
+- `internal.jdbc.ReadOnlyResultSet` — the skeleton of a forward-only, read-only `ResultSet`: the
+  nearly 190 methods that do not exist stand there once. `PgResultSet` shrank from 1246 to 165
+  lines because of it.
+- `internal.jdbc.ParameterSetters` — the forty `set...` methods as an interface with default
+  methods (not a superclass: a `PreparedStatement` is always also its driver's `Statement`, and
+  Java has only one superclass).
 
-- `internal.WireBuffer` — der native Puffer, jetzt mit beiden Byteordnungen.
-- `internal.JdbcUrl` — das Zerlegen der URLs, damit `provider=file` überall dasselbe
-  heißt und ein `password=` überall gleich abgelehnt wird.
-- `internal.jdbc.ReadOnlyResultSet` — das Gerüst eines vorwärtsgerichteten, nur lesenden
-  `ResultSet`: die knapp 190 Methoden, die es nicht gibt, stehen einmal da. `PgResultSet`
-  ist dadurch von 1246 auf 165 Zeilen geschrumpft.
-- `internal.jdbc.ParameterSetters` — die vierzig `set...`-Methoden als Schnittstelle mit
-  Standardmethoden (keine Oberklasse: ein `PreparedStatement` ist immer auch das
-  `Statement` seines Treibers, und Java kennt nur eine Oberklasse).
+### What stage 2 contains
 
-### Was Stufe 2 enthält
+`seclume-tck` — the proof mechanism, built **before** the first driver:
 
-`seclume-tck` — der Beweismechanismus, gebaut **vor** dem ersten Treiber:
+- `HprofParser` — reads a heap dump and reports every `byte[]` and `char[]`. Unknown record types
+  abort rather than guess on: a silent misstep would mean the test finds nothing and turns green
+  — the worst conceivable outcome.
+- `HeapDumpScanner` — searches raw across the whole file (`strings | grep`) **and** structurally
+  across all primitive arrays (MAT/OQL), each in UTF-8, UTF-16BE, UTF-16LE and Base64. A hit
+  names kind, place and length, never the content.
+- `SecretHolderProbe` — a JVM of its own that uses a random password the way a driver would and
+  then writes out its heap (`live=false`, so including dead objects). The password comes in
+  through a file, never through an argument.
+- `StaticSecretProvider` — the negative control: deliberately holds the password as a `String`
+  and a `byte[]`.
 
-- `HprofParser` — liest einen Heapdump und meldet jedes `byte[]` und `char[]`. Unbekannte
-  Satzarten führen zum Abbruch statt zum Weiterraten: ein stiller Fehltritt hieße, dass der
-  Test nichts findet und grün wird — der schlimmste denkbare Ausgang.
-- `HeapDumpScanner` — sucht roh über die ganze Datei (`strings | grep`) **und** strukturiert
-  über alle primitiven Arrays (MAT/OQL), jeweils in UTF-8, UTF-16BE, UTF-16LE und Base64.
-  Ein Fund nennt Art, Ort und Länge, nie den Inhalt.
-- `SecretHolderProbe` — eine eigene JVM, die ein Zufallspasswort so benutzt wie ein Treiber
-  und danach ihren Heap ausschreibt (`live=false`, also inklusive toter Objekte). Das Passwort
-  kommt über eine Datei herein, nie über ein Argument.
-- `StaticSecretProvider` — die Negativkontrolle: hält das Passwort absichtlich als `String`
-  und `byte[]`.
+Measured on this machine, 5 cycles per run:
 
-Gemessen auf diesem Rechner, 5 Zyklen je Lauf:
-
-| Lauf | Dump | geparste Arrays | roher Scan | strukturierter Scan |
+| Run | Dump | Arrays parsed | Raw scan | Structural scan |
 |------|------|-----------------|-----------|---------------------|
-| off-heap | 5,1 MB | 9.897 | 0 Treffer | 0 Treffer |
-| off-heap, Scope **offen** während des Dumps | 5,1 MB | ~9.900 | 0 Treffer | 0 Treffer |
-| leckend (Kontrolle) | 5,0 MB | 9.894 | **2 Treffer** | **2 Treffer** |
+| off-heap | 5.1 MB | 9,897 | 0 hits | 0 hits |
+| off-heap, scope **open** during the dump | 5.1 MB | ~9,900 | 0 hits | 0 hits |
+| leaking (control) | 5.0 MB | 9,894 | **2 hits** | **2 hits** |
 
-### Was Stufe 1 enthält
+### What stage 1 contains
 
-**Geheimnisquellen** (`space.seclume.secret`)
+**Secret sources** (`space.seclume.secret`)
 
-| Provider | Quelle | Plattform |
-|----------|--------|-----------|
-| `FileSecretProvider` | Datei, gelesen per `FileChannel` in einen direkten Puffer | alle |
-| `EnvFileSecretProvider` | `.env`-Datei, Schlüsselsuche off-heap | alle |
-| `UnixSocketSecretProvider` | AF_UNIX-Socket (Vault-Agent, Sidecar) | Unix |
-| `ProcessSecretProvider` | Helfer schreibt in eine FIFO | Unix |
-| `CallbackSecretProvider` | eigene Lambda (Vault, KMS, HSM) | alle |
-| `DpapiSecretProvider` | DPAPI-Blob als Datei, `crypt32!CryptUnprotectData` | Windows |
-| `CredentialManagerSecretProvider` | `advapi32!CredReadW`, Generic Credential | Windows |
+| Provider | Source | Platform |
+|----------|--------|----------|
+| `FileSecretProvider` | a file, read through `FileChannel` into a direct buffer | all |
+| `EnvFileSecretProvider` | a `.env` file, key lookup off-heap | all |
+| `UnixSocketSecretProvider` | an AF_UNIX socket (Vault agent, sidecar) | Unix |
+| `ProcessSecretProvider` | a helper writes into a FIFO | Unix |
+| `CallbackSecretProvider` | a lambda of your own (Vault, KMS, HSM) | all |
+| `DpapiSecretProvider` | a DPAPI blob as a file, `crypt32!CryptUnprotectData` | Windows |
+| `CredentialManagerSecretProvider` | `advapi32!CredReadW`, generic credential | Windows |
 
-**Off-Heap-Krypto** (`space.seclume.crypto`) — MD5, SHA-1, SHA-256, SHA-512, HMAC
-darüber, PBKDF2-HMAC, AES-128/192/256 in CBC und CFB, RSA (PKCS#1 v1.5 und OAEP) mit
-eigener Langzahlarithmetik, Konstantzeit-Vergleich. Alles auf `MemorySegment`, alle
-Zwischenzustände off-heap und genullt.
+**Off-heap crypto** (`space.seclume.crypto`) — MD5, SHA-1, SHA-256, SHA-512, HMAC over
+them, PBKDF2-HMAC, AES-128/192/256 in CBC and CFB, RSA (PKCS#1 v1.5 and OAEP) with big-number
+arithmetic of its own, constant-time comparison. All on `MemorySegment`, every intermediate state
+off-heap and wiped.
 
-Nachgewiesen durch 107 Tests: die offiziellen Vektoren (RFC 1321, FIPS 180-4, RFC 2202,
-RFC 4231, RFC 6070, FIPS 197, NIST SP 800-38A) **und** Kreuzvergleiche gegen die JCA über
-viele zufällige Längen — die Vektoren zeigen, dass das Verfahren stimmt, die Kreuzvergleiche
-finden die Fehler in Puffergrenzen und Padding.
+Proven by 107 tests: the official vectors (RFC 1321, FIPS 180-4, RFC 2202, RFC 4231, RFC 6070,
+FIPS 197, NIST SP 800-38A) **and** cross-checks against the JCA over many random lengths — the
+vectors show that the method is right, the cross-checks find the faults in buffer boundaries and
+padding.
 
 ---
 
-## Zielbild
+## The target picture
 
-Am Ende soll das hier reichen - Abhängigkeit einbinden, `application.properties` ausfüllen,
-fertig. Kein Treiber-Setup, kein Pool-Setup, keine Extraklasse:
+In the end this should be enough — add the dependency, fill in `application.properties`, done.
+No driver setup, no pool setup, no extra class:
 
 ```properties
 seclume.datasources.main.url=jdbc:seclume:postgresql://db:5432/app
@@ -489,18 +471,18 @@ seclume.datasources.main.secret.path=/run/secrets/db-password
 seclume.datasources.main.pool.maximum-pool-size=20
 ```
 
-Der einzige Unterschied zu `spring.datasource.*` ist die eine Zeile, die es nicht gibt:
-**das Passwort steht nicht in der Konfiguration**, sondern nur, woher es kommt. Alles
-andere - `DataSource`, `JdbcClient`, `DataSourceTransactionManager`, JPA,
-`SQLExceptionTranslator`, Actuator-Health - richtet der Starter selbst ein.
+The only difference to `spring.datasource.*` is the one line that is not there: **the password is
+not in the configuration**, only where it comes from. Everything else — `DataSource`,
+`JdbcClient`, `DataSourceTransactionManager`, JPA, `SQLExceptionTranslator`, Actuator health —
+the starter sets up itself.
 
-Wer `spring.datasource.password` setzt, bekommt beim Start einen Abbruch mit klarer
-Meldung statt einer stillen Aushebelung der Kerneigenschaft.
+Whoever sets `spring.datasource.password` gets an abort at startup with a clear message instead
+of a silent disabling of the core property.
 
-### Was davon heute schon geht
+### What of that works today
 
-**Das oben, und zwar für alle vier Datenbanken.** Der Starter kennt jedes Präfix und lädt
-den passenden Treiber - und nur den, denn die vier Module sind optionale Abhängigkeiten:
+**The above, and for all four databases.** The starter knows every prefix and loads the matching
+driver — and only that one, because the four modules are optional dependencies:
 
 ```properties
 seclume.datasources.main.url=jdbc:seclume:postgresql://db:5432/app
@@ -510,11 +492,11 @@ seclume.datasources.main.url=jdbc:seclume:sqlserver://db:1433/app
 seclume.datasources.main.url=jdbc:seclume:oracle://db:1521/FREEPDB1
 ```
 
-Bei Oracle steht an der Stelle der Datenbank der **Service**; sonst ist nichts anders.
-Steht ein Präfix ohne das zugehörige Modul in der Konfiguration, nennt der Abbruch die
-fehlende Abhängigkeit statt einen `NoClassDefFoundError` zu werfen.
+With Oracle the **service** stands where the database would; nothing else differs. If a prefix
+appears in the configuration without its module, the abort names the missing dependency instead
+of throwing a `NoClassDefFoundError`.
 
-Ohne Spring geht dasselbe über `DriverManager`:
+Without Spring the same works through `DriverManager`:
 
 ```java
 String url = "jdbc:seclume:postgresql://db:5432/app"
@@ -524,7 +506,7 @@ try (Connection connection = DriverManager.getConnection(url)) {
 }
 ```
 
-Oder über eine `DataSource`:
+Or through a `DataSource`:
 
 ```java
 SeclumeDataSource dataSource = new SeclumeDataSource();
@@ -535,106 +517,104 @@ dataSource.setProperty("provider", "file");
 dataSource.setProperty("path", "/run/secrets/db-password");
 ```
 
-Die Schlüssel hinter `provider` sind dieselben, die später in
-`seclume.datasources.*.secret.*` stehen - `SecretProviders` ist die eine Stelle, an der
-aus einem Namen eine Quelle wird, für URL und Starter gleichermaßen.
+The keys behind `provider` are the same ones that later stand in
+`seclume.datasources.*.secret.*` — `SecretProviders` is the one place where a name becomes a
+source, for the URL and the starter alike.
 
-`getConnection(user, password)` gibt es nicht: der Aufruf nimmt das Passwort als `String`,
-und damit wäre es für die Lebensdauer der Anwendung im Heap. Er wirft mit dieser
-Begründung.
+There is no `getConnection(user, password)`: the call takes the password as a `String`, and with
+that it would be in the heap for the lifetime of the application. It throws with that reason.
 
 ---
 
-## Prüfen gegen echte Datenbanken (CI)
+## Checking against real databases (CI)
 
-`.github/workflows/ci.yml` startet die Datenbanken als Service-Container und lässt die
-Tests dagegen laufen — PostgreSQL 15 **und** 18, MySQL 8.4 **und** MariaDB 11.4,
-Oracle Free 23ai, dazu ein bereitstehender SQL Server 2022.
+`.github/workflows/ci.yml` starts the databases as service containers and runs the tests against
+them — PostgreSQL 15 **and** 18, MySQL 8.4 **and** MariaDB 11.4, Oracle Free 23ai, plus a SQL
+Server 2022 standing ready.
 
-Das ist nicht Kosmetik, sondern der fehlende Baustein. Auf einem Entwicklungsrechner
-steht selten mehr als eine Datenbank, und ein selbstgebauter Testserver bestätigt nur die
-eigenen Annahmen. Erst hier wird aus „compiliert und wirkt plausibel" ein Nachweis — und
-zwei Serverstände je Produkt zeigen Protokollunterschiede, bevor ein Anwender sie findet.
+That is not cosmetics but the missing piece. A development machine rarely holds more than one
+database, and a home-made test server only confirms one's own assumptions. Only here does
+„compiles and looks plausible" become evidence — and two server versions per product show
+protocol differences before a user finds them.
 
-Das Passwort geht auch in der CI über eine **Datei** herein, also über den Weg, den die
-Bibliothek anbietet: kein `echo`, keine Umgebungsvariable im Log.
+The password comes in through a **file** in CI as well, that is, through the road the library
+offers: no `echo`, no environment variable in the log.
 
-**Ehrlich dazu:** die Jobs für MySQL und Oracle laufen heute nur gegen die vorhandenen
-Tests — Protokoll- und Krypto-Tests. Die eigentlichen Integrationssuiten gegen diese
-Server sind noch zu schreiben; sie stehen in der Liste der offenen Punkte. Der Job für
-SQL Server hält nur den Platz frei, weil Stufe 5 nicht begonnen ist.
+**Honestly said:** the workflow is prepared but **untested** — the directory only became a Git
+repository on 14.09.2026. The jobs for MySQL and Oracle today run against the existing protocol
+and crypto tests only; the integration suites against those servers are in the list of open
+points.
 
-### Warum sich das Projekt für Mitarbeit eignet
+### Why the project lends itself to contribution
 
-Der Kern dieser Bibliothek ist eine Zusage, die man versehentlich zerstören kann: eine
-einzige `new String(...)` an der falschen Stelle, und das Passwort steht wieder im Heap.
-Bei den meisten Sicherheitsbibliotheken müsste man darauf vertrauen, dass ein Beitrag das
-nicht tut. Hier nicht:
+The core of this library is a promise one can destroy by accident: a single `new String(...)` in
+the wrong place and the password is back in the heap. With most security libraries one would
+have to trust that a contribution does not do that. Not here:
 
-- `ForbiddenApiTest` liest den eigenen Quelltext und schlägt an, wenn jemand `new String`,
-  `getBytes`, `BigInteger`, `javax.crypto` oder `char[]` einführt, ohne es mit
-  `// seclume-allow: <grund>` zu begründen.
-- Der Heapdump-Test schreibt aus einer zweiten JVM einen echten Dump und durchsucht ihn —
-  **mit Gegenprobe**: ein Nutzdatenwert derselben Abfrage *muss* gefunden werden, sonst
-  wäre das leere Ergebnis fürs Passwort wertlos.
+- `ForbiddenApiTest` reads the project's own source and trips if somebody introduces
+  `new String`, `getBytes`, `BigInteger`, `javax.crypto` or `char[]` without justifying it with
+  `// seclume-allow: <reason>`.
+- The heap dump test writes a real dump from a second JVM and searches it — **with a
+  counter-check**: a payload value from the same query *must* be found, or the empty result for
+  the password would be worthless.
 
-Ein Beitrag, der die Kerneigenschaft bricht, wird also rot, ohne dass jemand ihn dafür
-lesen muss. Das ist für ein offenes Projekt mehr wert als jede Richtlinie im Wiki.
+A contribution that breaks the core property therefore turns red without anyone having to read
+it for that. For an open project that is worth more than any guideline in a wiki.
 
-## Bauen
+## Building
 
 ```
 ./mvnw clean test
 ```
 
-Der Windows-Plattformtest (DPAPI, Credential Manager) läuft automatisch mit, wenn er auf
-Windows ausgeführt wird, und wird sonst übersprungen.
+The Windows platform test (DPAPI, Credential Manager) runs along automatically when executed on
+Windows and is skipped otherwise.
 
 ---
 
-## Provisionierung unter Windows
+## Provisioning on Windows
 
-Ohne Vault-Infrastruktur ist der eingebaute Schlüsselspeicher der richtige Weg:
+Without a Vault infrastructure the built-in credential store is the right road:
 
 ```powershell
-# DPAPI, an den ausführenden Benutzer gebunden - für einen Dienst als das Dienstkonto ausführen
+# DPAPI, bound to the executing user - for a service, run as the service account
 Read-Host -AsSecureString | ConvertFrom-SecureString | Out-File -Encoding ascii C:\ProgramData\app\db.dpapi
 ```
 
 ```powershell
-# Credential Manager, generische Anmeldeinformation
+# Credential Manager, generic credential
 cmdkey /generic:seclume/reporting /user:app /pass
 ```
 
 ---
 
-## Geschwindigkeit
+## Speed
 
-Ziel ist nicht nur „schnell genug", sondern schneller als die etablierten Java-Treiber.
-Der Off-Heap-Aufbau hilft dabei; was das im Einzelnen bedeutet und wo es Grenzen hat, steht
-in [`docs/performance.md`](docs/performance.md).
+The goal is not merely „fast enough" but faster than the established Java drivers. The off-heap
+construction helps; what that means in detail and where it has limits is in
+[`docs/performance.md`](docs/performance.md).
 
-Die Kopfzahlen, alle nachgerechnet und mit Herleitung dort:
+The headline numbers, all recomputed and with their reasoning there:
 
-| Messung | seclume | Herstellertreiber |
+| Measurement | seclume | vendor driver |
 |---|---|---|
-| Stapel von 500 Zeilen, MySQL über LAN (604 µs RTT) | 18,7 ms | 278,6 ms (Connector/J) |
-| Ausleihen, Abfrage, Zurückgeben (8 Threads, lokal) | 62,4 µs | 70,9 µs (HikariCP + pgjdbc) |
-| dieselbe Form mit `PreparedStatement` und Statement-Cache | **58,9 µs** | — (111,4 µs ohne Cache) |
-| `@Transactional`-Methode mit einer Abfrage | **2 Rundreisen** | 7 |
-| Stapel von 200 Zeilen, SQL Server | **1 Rundreise** | 200 (vorher, eigener Treiber) |
+| batch of 500 rows, MySQL over LAN (604 µs RTT) | 18.7 ms | 278.6 ms (Connector/J) |
+| check out, query, return (8 threads, local) | 62.4 µs | 70.9 µs (HikariCP + pgjdbc) |
+| the same shape with `PreparedStatement` and a statement cache | **58.9 µs** | — (111.4 µs without a cache) |
+| a `@Transactional` method with one query | **2 round trips** | 7 |
+| batch of 200 rows, SQL Server | **1 round trip** | 200 (before, our own driver) |
 
-Zwei Befunde, die dabei herauskamen und mehr wert sind als die Zahlen selbst: das Schließen
-einer **shared Arena** kostete die Hälfte der Laufzeit unter Last (jetzt behoben), und
-Oracle brauchte für die zweite Ausführung eines Prepared Statements eine Rundreise zu viel,
-weil ein Feld im Aufruf auf null stand.
+Two findings that came out of it and are worth more than the numbers themselves: closing a
+**shared arena** cost half the runtime under load (fixed now), and Oracle needed one round trip
+too many for the second execution of a prepared statement, because one field in the call was set
+to zero.
 
 ---
 
-## Ehrlichkeitsregeln
+## Rules of honesty
 
-- Kein Platzhalter, der so tut, als funktioniere er. Nicht Implementiertes wirft.
-- Keine „vorläufige" Delegation an einen Herstellertreiber, auch nicht auskommentiert.
-- Ist ein Protokolldetail nicht sicher rekonstruierbar, steht das in `docs/protocol/<db>.md`
-  und das Feature gilt als nicht unterstützt, statt geraten zu werden.
-- Testergebnisse werden mit Ausgabe berichtet. „Sollte funktionieren" zählt nicht.
+- No placeholder that pretends to work. What is not implemented throws.
+- No „provisional" delegation to a vendor driver, not even commented out.
+- If a protocol detail cannot be reconstructed with certainty, that is recorded in
+  `docs/protocol/<db>.md` and the feature counts as unsupported rather than being guessed.
+- Test results are reported with their output. „Should work" does not count.
