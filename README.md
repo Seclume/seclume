@@ -132,7 +132,7 @@ before the next one starts.
 | — | **`RdsIamSecretProvider`**: AWS RDS IAM token signed rather than fetched, never a `String` | **done** |
 | — | **`seclume-spring-test`**: Spring Data, Hibernate and Flyway on seclume | **done** against PostgreSQL and Oracle, MySQL prepared |
 | 10 | Prove the PostgreSQL family: CockroachDB, YugabyteDB | open (CI only, no driver) |
-| — | `seclume-bench`: JMH against the vendor drivers and HikariCP | **standing** — and it delivers the first clear lead: **a factor of 15 against MySQL Connector/J** on a batch over a real network. Numbers and reasoning in `docs/performance.md` |
+| — | `seclume-bench`: JMH against the vendor drivers and HikariCP | **standing** — and it delivers the first clear lead: **a factor of 15 against MySQL Connector/J** on a batch over a real network. Numbers and reasoning in [`docs/performance.md`](docs/performance.md) |
 | 11 | DB2 / IBM i (DRDA) | open, after the four existing ones |
 | **Z** | **`seclume-tcp-core`** — a portable userspace transport core (TUN/utun/Wintun) so a live connection can move between **Linux, Windows and macOS**; JDBC is the first adapter, not the purpose | **a declared goal**, own project, packet I/O on Windows proven — architecture and order in [`docs/mobility.md`](docs/mobility.md) |
 
@@ -316,7 +316,7 @@ Open: cursors in blocks, several results out of one batch, `ATTENTION` for `canc
 ### What stage 6 (Oracle) consists of
 
 Oracle is the only one of the four protocols **without a public specification**. That is why a
-document sits next to the module: `docs/protocol/oracle.md` records what is established, from
+document sits next to the module: [`docs/protocol/oracle.md`](docs/protocol/oracle.md) records what is established, from
 which source (with its licence, as the brief demands) and what is open.
 
 It runs against a real server (Oracle Free 23ai):
@@ -336,7 +336,7 @@ It runs against a real server (Oracle Free 23ai):
   batches, `ResultSet`, `DatabaseMetaData`.
 
 How that was found is the more interesting part and is written out in
-`docs/protocol/oracle.md`: not by guessing but from recordings. The most instructive
+[`docs/protocol/oracle.md`](docs/protocol/oracle.md): not by guessing but from recordings. The most instructive
 rule out of it — **a recording in which every field is zero and one byte wide establishes
 nothing**: three different wrong readings of the column description fitted the same bytes
 equally well, and only a query over `NUMBER(9,2)`, `VARCHAR2(40)` and `DATE` side by side
