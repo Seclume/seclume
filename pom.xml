@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>space.seclume</groupId>
+  <artifactId>seclume-parent</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>seclume</name>
+  <description>
+    JDBC-Treiber und Connection-Pool, deren Datenbank-Passwoerter nie als String
+    oder char[] auf dem Java-Heap erscheinen.
+  </description>
+
+  <modules>
+    <module>seclume-bom</module>
+    <module>seclume-core</module>
+    <module>seclume-tck</module>
+    <module>seclume-postgresql</module>
+    <module>seclume-mysql</module>
+    <module>seclume-sqlserver</module>
+    <module>seclume-oracle</module>
+    <module>seclume-pool</module>
+    <module>seclume-spring-boot-starter</module>
+    <module>seclume-bench</module>
+    <module>seclume-verify</module>
+    <module>seclume-spring-test</module>
+    <module>seclume-heapcheck</module>
+  </modules>
+
+  <properties>
+    <!-- Zusaetzliche JVM-Argumente fuer Testlaeufe; siehe surefire unten. -->
+    <seclume.test.argLine></seclume.test.argLine>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+    <maven.compiler.release>25</maven.compiler.release>
+    <junit.version>5.11.4</junit.version>
+    <!-- Reproducible Builds: fester Zeitstempel in den Archiven. -->
+    <project.build.outputTimestamp>2026-01-01T00:00:00Z</project.build.outputTimestamp>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <!-- 3.13 bringt ein ASM mit, das Klassendateien von Java 25
+               (major 69) nicht liest und schon an module-info scheitert. -->
+          <version>3.16.0</version>
+          <configuration>
+            <compilerArgs>
+              <!-- "restricted" trifft jeden FFM-Downcall; das ist hier der
+                   Normalfall und keine Warnung wert. Alles andere ist ein
+                   Fehler. -->
+              <arg>-Xlint:all,-restricted</arg>
+              <arg>-Werror</arg>
+            </compilerArgs>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.5.2</version>
+          <configuration>
+            <!-- Tests laufen auf dem Klassenpfad; die Module bleiben trotzdem
+                 echte JPMS-Module fuer die Anwender. -->
+            <useModulePath>false</useModulePath>
+            <!-- Der Zusatz ist leer, bis jemand ihn setzt. Damit laesst sich
+                 eine Systemeigenschaft in die Test-JVM reichen, ohne das POM
+                 anzufassen - etwa
+                 -Dseclume.test.argLine=-Dseclume.oracle.trace=true -->
+            <argLine>--enable-native-access=ALL-UNNAMED ${seclume.test.argLine}</argLine>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>3.4.2</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>

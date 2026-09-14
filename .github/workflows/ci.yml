@@ -1,0 +1,177 @@
+name: CI
+
+# Der eigentliche Gewinn dieser Datei: hier laufen die Tests gegen *echte*
+# Datenbanken. Auf einem Entwicklungsrechner steht selten mehr als eine, und
+# ein selbstgebauter Testserver bestaetigt nur die eigenen Annahmen. Erst hier
+# wird aus "compiliert und wirkt plausibel" ein Nachweis.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Alles, was ohne Datenbank pruefbar ist: Krypto gegen die offiziellen
+  # Vektoren, der Heapdump-Nachweis samt Negativkontrolle, die Poolmechanik,
+  # und die Regel, dass kein verbotener API-Aufruf hereinrutscht.
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool -am test
+
+  postgresql:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Zwei Staende, damit ein Protokollunterschied auffaellt und nicht
+        # erst beim Anwender.
+        image: postgres:${{ matrix.version }}
+        env:
+          POSTGRES_USER: seclume_test
+          POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+          POSTGRES_DB: seclume_test
+          # scram-sha-256 ist der Weg, den der Treiber koennen muss.
+          POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['15', '18']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      # Das Passwort geht ueber eine Datei herein - genau den Weg, den die
+      # Bibliothek anbietet. Kein echo, keine Umgebungsvariable im Log.
+      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
+      - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter -am test
+      - if: always()
+        run: rm -f .local-pg-password
+
+  mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+          MYSQL_DATABASE: seclume_test
+          MYSQL_USER: seclume_test
+          MYSQL_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # MySQL 8 benutzt caching_sha2_password, MariaDB mysql_native_password -
+        # beide Wege muessen laufen.
+        image: ['mysql:8.4', 'mariadb:11.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
+      - run: ./mvnw -B -pl seclume-mysql -am test
+      - if: always()
+        run: rm -f .local-mysql-password
+
+  # Die PostgreSQL-Familie: CockroachDB und YugabyteDB sprechen dasselbe
+  # Wireprotokoll. Hier wird nicht ein neuer Treiber geprueft, sondern die
+  # Behauptung, dass der vorhandene sie bedient - das kostet einen Testlauf
+  # statt eines Treibers.
+  postgres-compatible:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cockroachdb
+            image: cockroachdb/cockroach:latest-v24.1
+            command: start-single-node --insecure
+            port: 26257
+          - name: yugabytedb
+            image: yugabytedb/yugabyte:latest
+            command: bin/yugabyted start --daemon=false
+            port: 5433
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - name: ${{ matrix.name }} starten
+        run: |
+          docker run -d --name ${{ matrix.name }} -p ${{ matrix.port }}:${{ matrix.port }}             ${{ matrix.image }} ${{ matrix.command }}
+          sleep 45
+      # Diese Server sind unverschluesselt und ohne Passwort erreichbar; der
+      # Punkt ist das Protokoll, nicht die Anmeldung.
+      - run: ./mvnw -B -pl seclume-postgresql -am test
+        env:
+          SECLUME_PG_PORT: ${{ matrix.port }}
+      - if: always()
+        run: docker rm -f ${{ matrix.name }}
+
+  # Oracle Free deckt den 12C-Anmeldeweg ab, also den, den neuere Instanzen
+  # benutzen. Das Abbild braucht laenger zum Hochfahren als die anderen.
+  oracle:
+    runs-on: ubuntu-latest
+    services:
+      oracle:
+        image: gvenzl/oracle-free:23-slim
+        env:
+          ORACLE_PASSWORD: ${{ secrets.ORA_TEST_PASSWORD || 'seclume-ci-password' }}
+          APP_USER: seclume_test
+          APP_USER_PASSWORD: ${{ secrets.ORA_TEST_PASSWORD || 'seclume-ci-password' }}
+        ports: ['1521:1521']
+        options: >-
+          --health-cmd healthcheck.sh --health-interval 20s
+          --health-timeout 10s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - run: printf '%s' "${{ secrets.ORA_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-oracle-password
+      - run: ./mvnw -B -pl seclume-oracle -am test
+      - if: always()
+        run: rm -f .local-oracle-password
+
+  sqlserver:
+    runs-on: ubuntu-latest
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
+        ports: ['1433:1433']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      # Stufe 5 ist noch nicht begonnen; der Auftrag steht schon, damit der
+      # Server bereitsteht, sobald der Treiber es ist.
+      - run: echo "the SQL Server driver is still open - see README, stage 5"

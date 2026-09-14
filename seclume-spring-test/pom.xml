@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-spring-test</artifactId>
+  <name>seclume Spring Data compatibility</name>
+  <description>
+    Der Beleg fuer das Endziel: eine kleine Spring-Boot-Anwendung mit Entitaeten,
+    Repositories und Flyway, die gegen die seclume-Treiber laeuft. Nicht
+    veroeffentlicht - das hier ist der Nachweis, nicht das Werkstueck.
+  </description>
+
+  <properties>
+    <spring.boot.version>4.1.1</spring.boot.version>
+    <!-- Spring Boot 4 bringt seine eigene JUnit-Version mit, und die muss hier
+         gewinnen: die des Elternprojekts ist aelter, und der Unterschied
+         aeussert sich als NoSuchMethodError mitten im Testlauf. -->
+    <junit.version>6.0.1</junit.version>
+    <!-- Nirgendwo hin. -->
+    <maven.deploy.skip>true</maven.deploy.skip>
+    <maven.install.skip>true</maven.install.skip>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-spring-boot-starter</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-postgresql</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mysql</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-oracle</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+      <version>${spring.boot.version}</version>
+    </dependency>
+    <!-- Spring Boot 4 hat die Flyway-Autokonfiguration in ein eigenes Modul
+         gezogen; flyway-core allein auf dem Klassenpfad genuegt nicht mehr. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-flyway</artifactId>
+      <version>${spring.boot.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+      <version>11.13.3</version>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-mysql</artifactId>
+      <version>11.13.3</version>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-oracle</artifactId>
+      <version>11.13.3</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <version>${spring.boot.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <!-- Hibernate und Spring erzeugen Warnungen, die dieses Projekt sonst
+               als Fehler behandelt; das hier ist der Nachweis, nicht das
+               Werkstueck. -->
+          <compilerArgs combine.self="override">
+            <arg>-Xlint:none</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

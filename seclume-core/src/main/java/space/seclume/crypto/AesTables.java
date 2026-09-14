@@ -1,0 +1,81 @@
+package space.seclume.crypto;
+
+/**
+ * The S-box, inverse S-box and Rcon of AES - computed rather than typed out.
+ *
+ * <p>The tables appear in FIPS-197 as 512 hex numbers. Typed out they are a
+ * source of error that no test vector reliably catches, because a single wrong
+ * entry only affects certain inputs. Generated from the definition -
+ * multiplicative inverse in GF(2^8) plus the affine map - they cannot be wrong
+ * in the first place.
+ *
+ * <p>Public constants, not a secret: they may therefore live on the heap as
+ * {@code byte[]}.
+ */
+final class AesTables {
+
+    static final byte[] SBOX = new byte[256];
+    static final byte[] INV_SBOX = new byte[256];
+    static final int[] RCON = new int[15];
+
+    static {
+        int p = 1;
+        int q = 1;
+        do {
+            // p = p * 3 in GF(2^8)
+            p = (p ^ (p << 1) ^ (((p & 0x80) != 0) ? 0x11b : 0)) & 0xff;
+            // q = q / 3 in GF(2^8)
+            q ^= q << 1;
+            q ^= q << 2;
+            q ^= q << 4;
+            q &= 0xff;
+            if ((q & 0x80) != 0) {
+                q ^= 0x09;
+            }
+            int transformed = q ^ rotl8(q, 1) ^ rotl8(q, 2) ^ rotl8(q, 3) ^ rotl8(q, 4);
+            SBOX[p] = (byte) ((transformed ^ 0x63) & 0xff);
+        } while (p != 1);
+        SBOX[0] = 0x63;
+
+        for (int i = 0; i < 256; i++) {
+            INV_SBOX[SBOX[i] & 0xff] = (byte) i;
+        }
+
+        int rcon = 1;
+        for (int i = 1; i < RCON.length; i++) {
+            RCON[i] = rcon << 24;
+            rcon = xtime(rcon);
+        }
+    }
+
+    private AesTables() {
+    }
+
+    private static int rotl8(int value, int shift) {
+        return ((value << shift) | (value >>> (8 - shift))) & 0xff;
+    }
+
+    /** Multiplication by x in GF(2^8) using the AES polynomial. */
+    static int xtime(int value) {
+        int shifted = value << 1;
+        if ((shifted & 0x100) != 0) {
+            shifted ^= 0x11b;
+        }
+        return shifted & 0xff;
+    }
+
+    /** Multiplication of two values in GF(2^8). */
+    static int multiply(int a, int b) {
+        int result = 0;
+        int x = a & 0xff;
+        int y = b & 0xff;
+        while (y != 0) {
+            if ((y & 1) != 0) {
+                result ^= x;
+            }
+            x = xtime(x);
+            y >>>= 1;
+        }
+        return result & 0xff;
+    }
+}

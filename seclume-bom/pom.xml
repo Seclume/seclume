@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-bom</artifactId>
+  <packaging>pom</packaging>
+  <name>seclume BOM</name>
+
+  <description>
+    Eine Zeile im Projekt, und alle seclume-Versionen passen zusammen. Hier
+    stehen alle Module, die jemand einbinden kann - was fehlt, bekommt der
+    Anwender naemlich nicht zu sehen, sondern schreibt eine Version von Hand
+    hin und merkt den Fehler beim naechsten Update. Ein Test haelt die Liste
+    vollstaendig.
+  </description>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-postgresql</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-mysql</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-sqlserver</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-oracle</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-pool</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-spring-boot-starter</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-tck</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-verify</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-heapcheck</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>

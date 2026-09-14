@@ -1,0 +1,13 @@
+*.hprof
+.local-mssql-password
+.local-mysql-password
+.local-oracle-password
+.local-pg-password
+.mssql-env.tmp
+.oracle-env.tmp
+target/
+
+# Wintun kommt von wintun.net und wird nicht mitgeliefert: fremdes Binaerpaket,
+# Weitergabelizenz noch nicht geklaert. Bezug und Pruefsumme stehen in
+# seclume-tcp-core/README.md.
+seclume-tcp-core/native/
