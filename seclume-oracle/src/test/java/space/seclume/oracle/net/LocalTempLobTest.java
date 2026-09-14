@@ -168,6 +168,32 @@ class LocalTempLobTest {
         }
     }
 
+    /**
+     * A payload larger than one chunk, and larger than one packet.
+     *
+     * <p>200 000 characters are 400 000 bytes, so thirteen chunks of 32767 and
+     * some fifty NS packets. Two mechanisms have to hold at once here: the
+     * chunk chain inside the message and the packet splitting underneath it.
+     */
+    @Test
+    void writesAChunkedPayloadIntoATemporaryClob() throws Exception {
+        int characters = 200_000;
+        try (Connection connection = DriverManager.getConnection(url)) {
+            OracleSession session = connection.unwrap(OracleSession.class);
+            try (WireBuffer locator = session.createTemporaryLob(true);
+                 WireBuffer data = new WireBuffer(2 * characters)) {
+                for (int i = 0; i < characters; i++) {
+                    data.putByte((byte) 0);
+                    data.putByte((byte) 'A');
+                }
+                session.writeLob(locator, 0, locator.position(), 1, data, data.position());
+                assertEquals(characters, session.lobLength(locator, 0, locator.position()),
+                        "the chunked write did not arrive whole");
+                session.freeTemporaryLob(locator, 0, locator.position());
+            }
+        }
+    }
+
     @Test
     void createsAnEmptyTemporaryBlob() throws Exception {
         try (Connection connection = DriverManager.getConnection(url)) {

@@ -118,7 +118,7 @@ before the next one starts.
 | 3 | PostgreSQL driver | **done** (protocol, SCRAM, extended protocol, JDBC surface, block cursors, generated keys) |
 | 4 | MySQL/MariaDB | **done** (protocol, login, JDBC surface; integration suite against MySQL 8.4 green) |
 | 5 | Microsoft SQL Server | **done** (login, queries, JDBC surface; integration run against SQL Server 2022 green) |
-| 6 | Oracle | **done** (login, queries, bind variables, DDL/DML, **transactions**, **array batches**, cursor reuse, JDBC surface; integration run against Oracle Free 23ai green; **LOBs** complete: read and write, `Clob`/`Blob`, streams, a slice in one round trip, `createClob`/`createBlob` — open: server-side temporary LOBs) |
+| 6 | Oracle | **done** (login, queries, bind variables, DDL/DML, **transactions**, **array batches**, cursor reuse, JDBC surface; integration run against Oracle Free 23ai green; **LOBs** complete: read and write, `Clob`/`Blob`, streams, a slice in one round trip, `createClob`/`createBlob`, server-side temporary LOBs including locator binds) |
 | 7 | Connection pool | **done** — including Micrometer, health indicator, statement cache, leak detection and a timeout message that names the oldest holders |
 | 8 | Spring Boot starter | **done** |
 | 9 | README, threat model, migration guide | partly (this document) |
@@ -329,9 +329,10 @@ It runs against a real server (Oracle Free 23ai):
 - **Bind variables** and **DDL/DML** with the number of changed rows.
 - **Types**: `NUMBER` (a base-100 format of its own, with no `BigDecimal` on the way),
   `VARCHAR2`, `CHAR`, `DATE`, `TIMESTAMP`, `RAW`, `LONG`.
-- **LOBs**: read and write, `Clob`/`Blob`, streams, `createClob`/`createBlob`. A slice costs one
-  round trip and brings the slice — 4096 characters out of 200,000, the rest stays on the
-  server. Details in [`docs/protocol/oracle-lob.md`](docs/protocol/oracle-lob.md).
+- **LOBs**: read and write, `Clob`/`Blob`, streams, `createClob`/`createBlob`, and server-side
+  temporary LOBs (create, write, length, free, and binding a locator into a statement). A slice
+  costs one round trip and brings the slice — 4096 characters out of 200,000, the rest stays on
+  the server. Details in [`docs/protocol/oracle-lob.md`](docs/protocol/oracle-lob.md).
 - **JDBC surface**: `Driver`, `DataSource`, `Connection`, `Statement`, `PreparedStatement` with
   batches, `ResultSet`, `DatabaseMetaData`.
 
@@ -342,7 +343,7 @@ nothing**: three different wrong readings of the column description fitted the s
 equally well, and only a query over `NUMBER(9,2)`, `VARCHAR2(40)` and `DATE` side by side
 decided it.
 
-Open and explicitly **not** guessed: server-side temporary LOBs, NTS/Kerberos.
+Open and explicitly **not** guessed: NTS/Kerberos.
 
 ### What stage 7 contains
 

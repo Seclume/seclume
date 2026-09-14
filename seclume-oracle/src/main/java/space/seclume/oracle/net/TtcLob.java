@@ -154,24 +154,41 @@ public final class TtcLob {
      * for a BLOB, while the payload itself is bytes either way (UTF-16BE for a
      * CLOB).
      *
-     * <p>Only a payload that announces its length in a single byte is built
-     * here. Anything longer needs the chunked form, which is recorded but not
-     * yet transcribed — and it does not get guessed.
+     * <p>A short payload announces its length in one byte; anything longer goes
+     * as a chain of chunks of 32767 bytes, closed by a zero length. Both forms
+     * were measured — and the chunked one is exactly what the driver already
+     * writes for a long bind value, which is a good sign rather than a
+     * coincidence: it is the same convention throughout this protocol.
+     *
+     * <p>A chunk is larger than a packet. That it still arrives is the work of
+     * {@code NsChannel.sendSplit}; without it the server would close the
+     * connection here.
      */
     public static void sendWrite(NsChannel channel, int sequence, WireBuffer source, int at,
                                  int locatorLength, long offset, WireBuffer data, int length)
             throws IOException {
-        if (length > SHORT_LENGTH) {
-            throw new IOException("writing " + length + " bytes into a LOB in one message is "
-                    + "not built yet; the chunked form is recorded but not transcribed");
-        }
         WireBuffer out = channel.beginData();
         put(out, sequence, OP_WRITE, source, at, locatorLength, offset, 0, false);
         out.putByte((byte) TtcMessage.TYPE_LOB_DATA);
-        out.putByte((byte) length);
-        out.putBytes(data.segment(), 0, length);
+        if (length <= SHORT_LENGTH) {
+            out.putByte((byte) length);
+            out.putBytes(data.segment(), 0, length);
+        } else {
+            out.putByte((byte) CHUNKED);
+            int written = 0;
+            while (written < length) {
+                int chunk = Math.min(CHUNK_SIZE, length - written);
+                TtcParameters.putNumber(out, chunk);
+                out.putBytes(data.segment(), written, chunk);
+                written += chunk;
+            }
+            TtcParameters.putNumber(out, 0);
+        }
         channel.sendData();
     }
+
+    /** How much goes into one chunk - measured as 0x7fff in the recording. */
+    private static final int CHUNK_SIZE = 32767;
 
     /** The largest payload length that fits in a single length byte. */
     private static final int SHORT_LENGTH = 252;
