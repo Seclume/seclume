@@ -1,6 +1,7 @@
 package space.seclume.oracle.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -64,6 +65,49 @@ class LocalTempLobTest {
                 System.err.println("[temp] CLOB locator " + locator.position() + " bytes");
                 assertEquals(0, session.lobLength(locator, 0, locator.position()),
                         "a fresh temporary LOB is empty");
+            }
+        }
+    }
+
+    /** Create, write, ask again - the shape a temporary LOB exists for. */
+    @Test
+    void writesIntoATemporaryClob() throws Exception {
+        String text = "hallo temporaeres clob";
+        try (Connection connection = DriverManager.getConnection(url)) {
+            OracleSession session = connection.unwrap(OracleSession.class);
+            try (WireBuffer locator = session.createTemporaryLob(true);
+                 WireBuffer data = new WireBuffer(256)) {
+                for (int i = 0; i < text.length(); i++) {
+                    data.putByte((byte) (text.charAt(i) >> 8));
+                    data.putByte((byte) text.charAt(i));
+                }
+                session.writeLob(locator, 0, locator.position(), 1, data, data.position());
+                assertEquals(text.length(), session.lobLength(locator, 0, locator.position()),
+                        "the LOB did not take the characters");
+            }
+        }
+    }
+
+    /**
+     * Freeing, and the proof that it happened.
+     *
+     * <p>A freed locator has to be refused afterwards. Without that check the
+     * call could do nothing at all and still look successful.
+     */
+    @Test
+    void freesATemporaryLob() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            OracleSession session = connection.unwrap(OracleSession.class);
+            WireBuffer locator = session.createTemporaryLob(true);
+            try {
+                assertEquals(0, session.lobLength(locator, 0, locator.position()));
+                session.freeTemporaryLob(locator, 0, locator.position());
+                java.sql.SQLException refused = assertThrows(java.sql.SQLException.class,
+                        () -> session.lobLength(locator, 0, locator.position()),
+                        "a freed locator has to be refused");
+                System.err.println("[temp] nach dem Freigeben: " + refused.getMessage());
+            } finally {
+                locator.close();
             }
         }
     }

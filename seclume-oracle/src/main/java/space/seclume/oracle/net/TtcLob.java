@@ -39,6 +39,16 @@ public final class TtcLob {
     public static final int OP_READ = 0x0002;
 
     /**
+     * Write into a LOB.
+     *
+     * <p>The same frame as a read, with two differences that were measured
+     * rather than reasoned: the byte that says „an amount follows" is zero, and
+     * behind the locator sits a {@code LOB_DATA} message — the very message
+     * type in which a read answer arrives. It travels both ways.
+     */
+    public static final int OP_WRITE = 0x0040;
+
+    /**
      * Ask how long a LOB is.
      *
      * <p>The same message as a read, with the code changed and offset and
@@ -134,14 +144,67 @@ public final class TtcLob {
     /** Asks for the length - see {@link #OP_GET_LENGTH}. */
     public static void sendLength(NsChannel channel, int sequence, WireBuffer source, int at,
                                   int locatorLength) throws IOException {
-        put(channel.beginData(), sequence, OP_GET_LENGTH, source, at, locatorLength, 0, 0);
+        put(channel.beginData(), sequence, OP_GET_LENGTH, source, at, locatorLength, 0, 0, true);
+        channel.sendData();
+    }
+
+    /**
+     * Writes {@code length} bytes from {@code data} into the LOB, starting at
+     * {@code offset} — counted from 1, in characters for a CLOB and in bytes
+     * for a BLOB, while the payload itself is bytes either way (UTF-16BE for a
+     * CLOB).
+     *
+     * <p>Only a payload that announces its length in a single byte is built
+     * here. Anything longer needs the chunked form, which is recorded but not
+     * yet transcribed — and it does not get guessed.
+     */
+    public static void sendWrite(NsChannel channel, int sequence, WireBuffer source, int at,
+                                 int locatorLength, long offset, WireBuffer data, int length)
+            throws IOException {
+        if (length > SHORT_LENGTH) {
+            throw new IOException("writing " + length + " bytes into a LOB in one message is "
+                    + "not built yet; the chunked form is recorded but not transcribed");
+        }
+        WireBuffer out = channel.beginData();
+        put(out, sequence, OP_WRITE, source, at, locatorLength, offset, 0, false);
+        out.putByte((byte) TtcMessage.TYPE_LOB_DATA);
+        out.putByte((byte) length);
+        out.putBytes(data.segment(), 0, length);
+        channel.sendData();
+    }
+
+    /** The largest payload length that fits in a single length byte. */
+    private static final int SHORT_LENGTH = 252;
+
+    /**
+     * Free a temporary LOB.
+     *
+     * <p>Five bytes wide in the recording, `04 00 08 01 11` — the code 0x0111
+     * with something in the upper half that is not decoded and therefore
+     * written as it was seen.
+     */
+    public static final int OP_FREE_TEMPORARY = 0x00080111;
+
+    /**
+     * Frees a temporary LOB on the server.
+     *
+     * <p>In the recording this rides as a <b>piggyback</b> (message type 17) on
+     * the next request, which costs no round trip. Sent on its own it is a
+     * plain function message — the frame is identical, only the type differs.
+     * That it works standalone is not an assumption: the test asks the server
+     * afterwards, and a freed locator is refused.
+     */
+    public static void sendFreeTemporary(NsChannel channel, int sequence, WireBuffer source,
+                                         int at, int locatorLength) throws IOException {
+        put(channel.beginData(), sequence, OP_FREE_TEMPORARY, source, at, locatorLength,
+                0, 0, false);
         channel.sendData();
     }
 
     /** The message itself - separate so that it can be compared against a recording. */
     public static void putRead(WireBuffer out, int sequence, WireBuffer source, int at,
                                int locatorLength, long offset, long amount) {
-        put(out, sequence, OP_READ, source, at, locatorLength, offset, amount);
+        put(out, sequence, OP_READ, source, at, locatorLength, offset, amount, true);
     }
 
     /**
@@ -152,7 +215,8 @@ public final class TtcLob {
      *                      LOB blew up.
      */
     private static void put(WireBuffer out, int sequence, int operation, WireBuffer source,
-                            int at, int locatorLength, long offset, long amount) {
+                            int at, int locatorLength, long offset, long amount,
+                            boolean withAmount) {
         out.putByte((byte) TtcMessage.TYPE_FUNCTION);
         out.putByte((byte) FUNCTION);
         out.putByte((byte) sequence);
@@ -165,13 +229,15 @@ public final class TtcLob {
         out.putZeroes(2);
         TtcParameters.putNumber(out, offset);
         out.putByte((byte) 0);
-        out.putByte((byte) 1);                            // an amount follows
+        out.putByte((byte) (withAmount ? 1 : 0));         // whether an amount follows
         out.putZeroes(7);
 
         out.putByte((byte) locatorLength);
         out.putBytes(source.segment(), at, locatorLength);
 
-        TtcParameters.putNumber(out, amount);
+        if (withAmount) {
+            TtcParameters.putNumber(out, amount);
+        }
     }
 
     /**

@@ -343,6 +343,33 @@ public final class OracleSession implements AutoCloseable {
     }
 
     /**
+     * Frees a temporary LOB on the server.
+     *
+     * <p>Without this it stays in the temporary tablespace until the session
+     * ends — which for a pooled connection can be a very long time.
+     */
+    public void freeTemporaryLob(WireBuffer locator, int at, int locatorLength)
+            throws SQLException {
+        try (WireBuffer nothing = new WireBuffer(16)) {
+            exchangeLob(() -> TtcLob.sendFreeTemporary(channel, sequence++, locator, at,
+                    locatorLength), nothing);
+        }
+    }
+
+    /**
+     * Writes bytes into a LOB, at an offset counted from 1.
+     *
+     * <p>The payload is bytes either way: UTF-16BE for a CLOB, raw for a BLOB.
+     */
+    public void writeLob(WireBuffer locator, int at, int locatorLength, long offset,
+                         WireBuffer data, int length) throws SQLException {
+        try (WireBuffer nothing = new WireBuffer(16)) {
+            exchangeLob(() -> TtcLob.sendWrite(channel, sequence++, locator, at, locatorLength,
+                    offset, data, length), nothing);
+        }
+    }
+
+    /**
      * Fetches the contents of a LOB into {@code sink}.
      *
      * <p>One call, however large the value: the answer may run over fifty
@@ -421,7 +448,7 @@ public final class OracleSession implements AutoCloseable {
                 TtcLob.Answer result = TtcLob.read(answer, 0, answer.position(), sink);
                 if (result.tail().isFailure()
                         && result.tail().errorNumber() != TtcResult.ORA_NO_DATA_FOUND) {
-                    throw new SQLException("reading the LOB failed (ORA-"
+                    throw new SQLException("the LOB call failed (ORA-"
                             + String.format("%05d", result.tail().errorNumber()) + "): "
                             + result.tail().errorText(), "22000");
                 }
