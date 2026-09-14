@@ -14,6 +14,7 @@ public enum HashAlgorithm {
     MD5(16, 64),
     SHA_1(20, 64),
     SHA_256(32, 64),
+    SHA_384(48, 128),
     SHA_512(64, 128);
 
     private final int digestLength;
@@ -38,6 +39,7 @@ public enum HashAlgorithm {
             case MD5 -> new Md5Digest();
             case SHA_1 -> new Sha1Digest();
             case SHA_256 -> new Sha256Digest();
+            case SHA_384 -> new Sha384Digest();
             case SHA_512 -> new Sha512Digest();
         };
     }

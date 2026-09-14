@@ -96,6 +96,63 @@ class LocalTlsTest {
     }
 
     /**
+     * SCRAM-SHA-256-PLUS: the login is bound to this connection.
+     *
+     * <p>The check that matters is not „no exception" - a login with a wrong
+     * binding fails, but so does a login with a wrong password, and both say
+     * the same thing. What is asserted is that the client actually chose the
+     * bound mechanism, because a client that quietly fell back to plain SCRAM
+     * would pass a „did it connect" test every time.
+     *
+     * <p>That the binding is <b>right</b> is the server's verdict: PostgreSQL
+     * recomputes the fingerprint from its own certificate and compares. A
+     * wrong hash or a wrong GS2 header ends the login here, not later.
+     */
+    @Test
+    void bindsTheLoginToTheConnection() throws Exception {
+        Path secret = null;
+        for (Path candidate : List.of(Path.of(".local-pgtls-password"),
+                Path.of("..", ".local-pgtls-password"))) {
+            if (Files.exists(candidate)) {
+                secret = candidate.toAbsolutePath().normalize();
+            }
+        }
+        Assumptions.assumeTrue(secret != null, "no TLS server configured");
+        String host = System.getProperty("seclume.pgtls.host", "db.example.invalid");
+        int port = Integer.getInteger("seclume.pgtls.port", 5433);
+
+        PgSession.Settings require = new PgSession.Settings(host, port, "seclume_test",
+                "seclume_test",
+                SecretProviders.of(java.util.Map.of("provider", "file", "path",
+                        secret.toString())),
+                "seclume", 5_000,
+                space.seclume.internal.jdbc.HostList.of(host, port),
+                space.seclume.internal.jdbc.ResultLimit.NONE, TlsMode.REQUIRE);
+
+        try (PgSession session = PgSession.open(require)) {
+            System.err.println("[binding] " + session.channelBinding());
+            assertTrue("used".equals(session.channelBinding()),
+                    "the client did not bind the login: " + session.channelBinding());
+            session.execute("select 1");
+        }
+    }
+
+    /**
+     * Without TLS the client says {@code n} - it could not bind even if it
+     * wanted to, and claiming otherwise would be the one lie the GS2 header
+     * exists to prevent.
+     */
+    @Test
+    void saysItCannotBindWithoutTls() throws Exception {
+        try (PgSession session = PgSession.open(settings(TlsMode.OFF))) {
+            Assumptions.assumeTrue(session.tlsDescription() == null);
+            System.err.println("[binding] without tls -> " + session.channelBinding());
+            assertTrue("not-possible".equals(session.channelBinding()),
+                    session.channelBinding());
+        }
+    }
+
+    /**
      * And the other half of the promise: verify-full refuses a certificate
      * nobody vouches for. The container's is self-signed, so this has to fail -
      * a mode that authenticates and still accepts anything would be worse than

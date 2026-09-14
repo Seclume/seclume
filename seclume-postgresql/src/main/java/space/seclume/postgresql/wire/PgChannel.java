@@ -116,6 +116,11 @@ public final class PgChannel implements AutoCloseable {
         this.tls = started;
     }
 
+    /** The server's certificate, or {@code null} without TLS - for channel binding. */
+    public java.security.cert.X509Certificate peerCertificate() throws IOException {
+        return tls == null ? null : tls.peerCertificate();
+    }
+
     /** What TLS is in use, for the preflight report; {@code null} without it. */
     public String tlsDescription() {
         return tls == null ? null : tls.protocol() + " / " + tls.cipherSuite();

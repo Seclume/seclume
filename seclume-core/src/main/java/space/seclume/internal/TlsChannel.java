@@ -211,6 +211,25 @@ public final class TlsChannel implements AutoCloseable {
         }
     }
 
+    /**
+     * The server's certificate - for channel binding, not for checking.
+     *
+     * <p>Available whatever the TLS mode: with {@code require} the
+     * certificate is not verified, but it is still the certificate of this
+     * connection, and that is all a binding needs.
+     */
+    public java.security.cert.X509Certificate peerCertificate() throws IOException {
+        try {
+            java.security.cert.Certificate[] chain = engine.getSession().getPeerCertificates();
+            if (chain.length == 0 || !(chain[0] instanceof java.security.cert.X509Certificate x)) {
+                throw new IOException("the server sent no X.509 certificate");
+            }
+            return x;
+        } catch (javax.net.ssl.SSLPeerUnverifiedException e) {
+            throw new IOException("the server sent no certificate: " + e.getMessage(), e);
+        }
+    }
+
     public String protocol() {
         return engine.getSession().getProtocol();
     }

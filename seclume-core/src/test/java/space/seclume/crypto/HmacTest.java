@@ -126,6 +126,7 @@ class HmacTest {
             case MD5 -> "HmacMD5";
             case SHA_1 -> "HmacSHA1";
             case SHA_256 -> "HmacSHA256";
+            case SHA_384 -> "HmacSHA384";
             case SHA_512 -> "HmacSHA512";
         };
     }

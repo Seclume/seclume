@@ -3,12 +3,19 @@ package space.seclume.crypto;
 import java.lang.foreign.MemorySegment;
 
 /**
- * SHA-512 (FIPS 180-4) off-heap.
+ * SHA-512 and SHA-384 (FIPS 180-4) off-heap.
  *
  * <p>Needed for Oracle's 12c verifier (PBKDF2 + SHA-512) and for
  * SCRAM-SHA-512 where servers offer it.
+ *
+ * <p>SHA-384 is the same function with different starting values and the
+ * result cut to 48 bytes - which is why it lives here and not in a file of its
+ * own. It is needed for TLS channel binding: the hash is chosen by the
+ * certificate's signature algorithm, and a certificate signed with SHA-384 is
+ * ordinary enough that refusing it would be a gap, while hashing it with
+ * something else would be a silent wrong answer.
  */
-final class Sha512Digest extends BlockDigest {
+sealed class Sha512Digest extends BlockDigest permits Sha384Digest {
 
     private static final long[] K = {
         0x428a2f98d728ae22L, 0x7137449123ef65cdL, 0xb5c0fbcfec4d3b2fL, 0xe9b5dba58189dbbcL,
@@ -46,12 +53,17 @@ final class Sha512Digest extends BlockDigest {
         return 64;
     }
 
-    @Override
-    void initState() {
-        long[] h = {
+    /** The starting values; SHA-384 differs only in these. */
+    long[] initialHash() {
+        return new long[] {
             0x6a09e667f3bcc908L, 0xbb67ae8584caa73bL, 0x3c6ef372fe94f82bL, 0xa54ff53a5f1d36f1L,
             0x510e527fade682d1L, 0x9b05688c2b3e6c1fL, 0x1f83d9abfb41bd6bL, 0x5be0cd19137e2179L,
         };
+    }
+
+    @Override
+    void initState() {
+        long[] h = initialHash();
         for (int i = 0; i < 8; i++) {
             state.set(BE_LONG, H_OFFSET + i * 8L, h[i]);
         }
@@ -114,6 +126,6 @@ final class Sha512Digest extends BlockDigest {
 
     @Override
     void writeResult(MemorySegment out, long offset) {
-        MemorySegment.copy(state, H_OFFSET, out, offset, 64);
+        MemorySegment.copy(state, H_OFFSET, out, offset, digestLength());
     }
 }

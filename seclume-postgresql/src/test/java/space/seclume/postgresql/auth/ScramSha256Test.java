@@ -147,6 +147,91 @@ class ScramSha256Test {
         }
     }
 
+    /**
+     * SCRAM-SHA-256-PLUS, computed a second time independently.
+     *
+     * <p>Two things have to be right and both are silent when they are not:
+     * the GS2 header has to carry the {@code p=} form <b>and</b> the same
+     * bytes have to reappear base64-encoded in {@code c=} with the certificate
+     * fingerprint behind them. Get either wrong and the server answers with an
+     * authentication failure that looks exactly like a wrong password.
+     */
+    @Test
+    void channelBindingMatchesAnIndependentComputation() throws Exception {
+        String password = "pencil";
+        String serverNonce = CLIENT_NONCE + "ServerPartOfTheNonce";
+        String salt = Base64.getEncoder().encodeToString("some salt bytes!".getBytes(
+                StandardCharsets.US_ASCII));
+        String serverFirst = "r=" + serverNonce + ",s=" + salt + ",i=4096";
+
+        // Stands in for the certificate hash - the length is what a SHA-256
+        // fingerprint has, the content does not matter to the arithmetic.
+        byte[] fingerprint = MessageDigest.getInstance("SHA-256")
+                .digest("a certificate".getBytes(StandardCharsets.US_ASCII));
+        String header = "p=tls-server-end-point,,";
+        byte[] headerBytes = header.getBytes(StandardCharsets.US_ASCII);
+        byte[] bound = new byte[headerBytes.length + fingerprint.length];
+        System.arraycopy(headerBytes, 0, bound, 0, headerBytes.length);
+        System.arraycopy(fingerprint, 0, bound, headerBytes.length, fingerprint.length);
+
+        String clientFirstBare = "n=,r=" + CLIENT_NONCE;
+        String clientFinalWithoutProof =
+                "c=" + Base64.getEncoder().encodeToString(bound) + ",r=" + serverNonce;
+        String authMessage = clientFirstBare + "," + serverFirst + "," + clientFinalWithoutProof;
+
+        byte[] saltedPassword = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+                .generateSecret(new PBEKeySpec(password.toCharArray(),
+                        Base64.getDecoder().decode(salt), 4096, 256)).getEncoded();
+        byte[] clientKey = hmac(saltedPassword, "Client Key");
+        byte[] storedKey = MessageDigest.getInstance("SHA-256").digest(clientKey);
+        byte[] clientSignature = hmac(storedKey, authMessage);
+        byte[] proof = new byte[clientKey.length];
+        for (int i = 0; i < proof.length; i++) {
+            proof[i] = (byte) (clientKey[i] ^ clientSignature[i]);
+        }
+        String expected = clientFinalWithoutProof + ",p="
+                + Base64.getEncoder().encodeToString(proof);
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment nonce = ascii(arena, CLIENT_NONCE);
+            try (ScramSha256 scram = new ScramSha256(nonce, CLIENT_NONCE.length())) {
+                MemorySegment data = arena.allocate(fingerprint.length);
+                MemorySegment.copy(MemorySegment.ofArray(fingerprint), 0, data, 0,
+                        fingerprint.length);
+                scram.useChannelBinding(data, fingerprint.length);
+
+                MemorySegment out = arena.allocate(512);
+                int firstLength = scram.clientFirst(out);
+                assertEquals(header + clientFirstBare, text(out, firstLength));
+
+                MemorySegment first = ascii(arena, serverFirst);
+                scram.serverFirst(first, 0, serverFirst.length());
+                int length = scram.clientFinal(out, ascii(arena, password));
+                assertEquals(expected, text(out, length));
+            }
+        }
+    }
+
+    /**
+     * The {@code y} header - „I can bind, you did not offer it".
+     *
+     * <p>Worth a test of its own because it is the one case where the client
+     * says something about a capability it is <b>not</b> using, and the whole
+     * downgrade protection rests on it being sent.
+     */
+    @Test
+    void saysYWhenTheServerDidNotOfferBinding() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment nonce = ascii(arena, CLIENT_NONCE);
+            try (ScramSha256 scram = new ScramSha256(nonce, CLIENT_NONCE.length())) {
+                scram.channelBindingNotOffered();
+                MemorySegment out = arena.allocate(256);
+                int length = scram.clientFirst(out);
+                assertEquals("y,,n=,r=" + CLIENT_NONCE, text(out, length));
+            }
+        }
+    }
+
     private static byte[] hmac(byte[] key, String message) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(key, "HmacSHA256"));

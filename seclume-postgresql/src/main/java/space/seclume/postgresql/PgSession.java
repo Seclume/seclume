@@ -294,10 +294,10 @@ public final class PgSession implements AutoCloseable {
                         channel.endMessage();
                     }
                     case PgProtocol.AUTH_SASL -> {
-                        authenticationMethod = "scram-sha-256";
-                        requireScramOffered(in);
+                        String mechanism = chooseMechanism(in, scram);
+                        authenticationMethod = mechanism.toLowerCase(java.util.Locale.ROOT);
                         channel.endMessage();
-                        startScram(scram);
+                        startScram(scram, mechanism);
                         scramStarted = true;
                     }
                     case PgProtocol.AUTH_SASL_CONTINUE -> {
@@ -353,8 +353,25 @@ public final class PgSession implements AutoCloseable {
         }
     }
 
-    /** Checks that the server offers SCRAM-SHA-256 - anything else we refuse. */
-    private void requireScramOffered(WireBuffer in) throws SQLException {
+    /**
+     * Picks the mechanism and tells the exchange what to say about channel
+     * binding.
+     *
+     * <p>Three cases, and the middle one is the interesting one:
+     *
+     * <ul>
+     *   <li>encrypted and PLUS offered - bind to this connection's
+     *       certificate;</li>
+     *   <li>encrypted and PLUS <b>not</b> offered - plain SCRAM, but the GS2
+     *       header says {@code y}: „I can do this, you did not offer it". A
+     *       server that can do it sees the contradiction and refuses, which is
+     *       what catches somebody who stripped the PLUS from the list on the
+     *       way;</li>
+     *   <li>not encrypted - {@code n}, because there is nothing to bind
+     *       to.</li>
+     * </ul>
+     */
+    private String chooseMechanism(WireBuffer in, ScramSha256 scram) throws SQLException {
         List<String> mechanisms = new ArrayList<>();
         while (channel.messageRemaining() > 0) {
             int length = in.cStringLength();
@@ -363,19 +380,53 @@ public final class PgSession implements AutoCloseable {
             }
             mechanisms.add(in.readCString());
         }
-        if (!mechanisms.contains("SCRAM-SHA-256")) {
+        if (!mechanisms.contains("SCRAM-SHA-256")
+                && !mechanisms.contains("SCRAM-SHA-256-PLUS")) {
             throw new SQLException(
-                    "the server offers " + mechanisms + ", but seclume speaks SCRAM-SHA-256; "
-                    + "SCRAM-SHA-256-PLUS follows with the TLS support", "28000");
+                    "the server offers " + mechanisms + ", but seclume speaks SCRAM-SHA-256 "
+                    + "and SCRAM-SHA-256-PLUS", "28000");
+        }
+        if (channel.tlsDescription() == null) {
+            return "SCRAM-SHA-256";
+        }
+        if (!mechanisms.contains("SCRAM-SHA-256-PLUS")) {
+            scram.channelBindingNotOffered();
+            return "SCRAM-SHA-256";
+        }
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment fingerprint =
+                    arena.allocate(space.seclume.internal.ChannelBinding.MAX_LENGTH);
+            int length = space.seclume.internal.ChannelBinding.endPoint(
+                    channel.peerCertificate(), fingerprint);
+            scram.useChannelBinding(fingerprint, length);
+            return "SCRAM-SHA-256-PLUS";
+        } catch (IOException | IllegalArgumentException e) {
+            throw new SQLException(
+                    "the server offers channel binding, but seclume cannot compute it for "
+                    + "this connection: " + e.getMessage(), "28000", e);
         }
     }
 
-    private void startScram(ScramSha256 scram) throws IOException {
+    /**
+     * What the login said about channel binding - {@code used},
+     * {@code supported-not-offered} or {@code not-possible}.
+     *
+     * <p>A name and not the enum, because the enum lives in a package this
+     * module does not export and the answer belongs in a log line anyway.
+     */
+    public String channelBinding() {
+        return channelBinding.name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
+    }
+
+    private ScramSha256.Binding channelBinding = ScramSha256.Binding.NOT_POSSIBLE;
+
+    private void startScram(ScramSha256 scram, String mechanism) throws IOException {
         try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
             MemorySegment first = arena.allocate(256);
             int length = scram.clientFirst(first);
+            this.channelBinding = scram.binding();
             WireBuffer out = channel.begin(PgProtocol.PASSWORD);
-            out.putCString("SCRAM-SHA-256");
+            out.putCString(mechanism);
             out.putInt(length);
             out.putBytes(first, 0, length);
             channel.end();

@@ -79,7 +79,15 @@ Two things that follow from this and are worth saying plainly:
   the driver insists on `ENCRYPT_ON`. See
   [`docs/protocol/sqlserver.md`](docs/protocol/sqlserver.md).
 
-How each of the three negotiates it, and what is checked against what, is in
+**On PostgreSQL the login is bound to the connection** (SCRAM-SHA-256-PLUS). SCRAM alone proves
+that both sides know the password and says nothing about which connection the proof came in on —
+channel binding mixes a fingerprint of this connection's certificate into it, so a proof relayed
+over a second connection does not fit. It works with `require` too: the client need not know
+*who* the server is to notice that the answer came from somewhere else. And when the server
+offers no binding, the client says so explicitly rather than staying silent, which is what
+catches a stripped mechanism list.
+
+How each of the four negotiates TLS, and what is checked against what, is in
 [`docs/protocol/tls.md`](docs/protocol/tls.md).
 
 **One gap, named rather than glossed over:** the Oracle path is checked against a TLS endpoint in
@@ -232,8 +240,7 @@ precision and scale, server errors with SQLState. A `password=` in the URL is re
 reason rather than quietly used. And the heap dump test **through the JDBC route** — six
 connections through `DriverManager`, one held open, dump — **no hit**.
 
-Still missing: channel binding (SCRAM-SHA-256-PLUS), binary formats and type decoding, `COPY`,
-`CancelRequest` — and with it `setQueryTimeout`, which throws
+Still missing: binary formats and type decoding, `COPY`, `CancelRequest` — and with it `setQueryTimeout`, which throws
 rather than pretending — `NOTIFY`, and the Testcontainers suite against two server versions.
 
 Block cursors (`setFetchSize`), generated keys and savepoints **do** work; an older version of

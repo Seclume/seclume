@@ -41,6 +41,13 @@ class DigestTest {
         "SHA_256,abc,ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         "SHA_256,abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq,"
             + "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+        // FIPS 180-4 (SHA-384)
+        "SHA_384,abc,cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed"
+            + "8086072ba1e7cc2358baeca134c825a7",
+        "SHA_384,abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmno"
+            + "ijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu,"
+            + "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712"
+            + "fcc7c71a557e2db966c3e9fa91746039",
         // FIPS 180-4 (SHA-512)
         "SHA_512,abc,ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a"
             + "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
@@ -172,6 +179,7 @@ class DigestTest {
             case MD5 -> "MD5";
             case SHA_1 -> "SHA-1";
             case SHA_256 -> "SHA-256";
+            case SHA_384 -> "SHA-384";
             case SHA_512 -> "SHA-512";
         };
     }

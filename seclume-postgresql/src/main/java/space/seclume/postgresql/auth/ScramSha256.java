@@ -21,9 +21,10 @@ import space.seclume.internal.Entropy;
  * password, client key, proof - lives in an {@link Arena} that is zeroed on
  * close.
  *
- * <p>Not included: SCRAM-SHA-256-PLUS. Channel binding needs the connection's
- * TLS certificate; it arrives with the TLS part, and until then this client
- * does not offer it rather than pretend.
+ * <p>Channel binding (SCRAM-SHA-256-PLUS) is included, see {@link Binding}.
+ * It is what makes the login safe against somebody relaying it over a second
+ * connection - SCRAM alone proves knowledge of the password and says nothing
+ * about which connection the proof arrived on.
  *
  * <p>Also not included: SASLprep. PostgreSQL applies it server-side to the
  * stored password; a password made of printable ASCII is unaffected by it. For
@@ -32,6 +33,45 @@ import space.seclume.internal.Entropy;
  * here.
  */
 public final class ScramSha256 implements AutoCloseable {
+
+    /**
+     * What the client says about channel binding - the first character of the
+     * GS2 header, and one of the few places where a protocol makes a client
+     * state what it is <em>able</em> to do rather than what it is doing.
+     */
+    public enum Binding {
+
+        /**
+         * {@code n}: not used and not possible. Without TLS there is nothing
+         * to bind to.
+         */
+        NOT_POSSIBLE("n,,"),
+
+        /**
+         * {@code y}: this client can do it, and the server did not offer it.
+         *
+         * <p>This is the downgrade protection and the reason the letter
+         * exists. A server that <b>does</b> support channel binding sees the
+         * {@code y} and knows its own offer was tampered with on the way -
+         * because it would have offered PLUS - and refuses. Sending
+         * {@code n} instead would let a man in the middle strip the PLUS from
+         * the mechanism list unnoticed.
+         */
+        SUPPORTED_NOT_OFFERED("y,,"),
+
+        /** {@code p}: used, with the certificate of this very connection. */
+        USED("p=" + space.seclume.internal.ChannelBinding.TYPE + ",,");
+
+        private final String header;
+
+        Binding(String header) {
+            this.header = header;
+        }
+
+        String header() {
+            return header;
+        }
+    }
 
     /** Every value that falls out of SHA-256 is this long. */
     private static final int KEY_LENGTH = 32;
@@ -50,6 +90,15 @@ public final class ScramSha256 implements AutoCloseable {
     private int serverNonceLength;
     private MemorySegment expectedServerSignature;
     private boolean closed;
+
+    /** What the GS2 header says; see {@link Binding}. */
+    private Binding binding = Binding.NOT_POSSIBLE;
+    /** The certificate fingerprint, when {@link Binding#USED}. */
+    private MemorySegment bindingData;
+    private int bindingLength;
+    /** The GS2 header as bytes - it is sent once and hashed once. */
+    private MemorySegment gs2Header;
+    private int gs2Length;
 
     public ScramSha256() {
         this(24);
@@ -78,8 +127,39 @@ public final class ScramSha256 implements AutoCloseable {
     }
 
     /**
-     * Writes {@code n,,n=,r=<nonce>} and remembers the part without the GS2
-     * header - that one goes into the auth message later.
+     * Binds this exchange to the TLS connection it runs on.
+     *
+     * <p>Has to be called before {@link #clientFirst}, because the decision
+     * shows up in the first message already.
+     *
+     * @param fingerprint the certificate hash from
+     *        {@link space.seclume.internal.ChannelBinding}
+     */
+    public void useChannelBinding(MemorySegment fingerprint, int length) {
+        this.binding = Binding.USED;
+        this.bindingData = arena.allocate(length);
+        MemorySegment.copy(fingerprint, 0, bindingData, 0, length);
+        this.bindingLength = length;
+    }
+
+    /**
+     * Says that this client could do channel binding but was not offered it.
+     *
+     * <p>Only right when the connection <b>is</b> encrypted; without TLS the
+     * client could not have done it either, and then the answer is
+     * {@link Binding#NOT_POSSIBLE}, which is the default.
+     */
+    public void channelBindingNotOffered() {
+        this.binding = Binding.SUPPORTED_NOT_OFFERED;
+    }
+
+    public Binding binding() {
+        return binding;
+    }
+
+    /**
+     * Writes {@code <gs2-header>n=,r=<nonce>} and remembers the part without
+     * the GS2 header - that one goes into the auth message later.
      *
      * @return the length of the message written
      */
@@ -96,7 +176,12 @@ public final class ScramSha256 implements AutoCloseable {
      */
     public int clientFirst(MemorySegment target, String username) {
         int position = 0;
-        position = put(target, position, "n,,");
+        position = put(target, position, binding.header());
+        // The header is sent now and hashed later, into c=; keeping it saves
+        // assembling the same bytes twice from two places that could drift.
+        this.gs2Length = position;
+        this.gs2Header = arena.allocate(gs2Length);
+        MemorySegment.copy(target, 0, gs2Header, 0, gs2Length);
         int bareStart = position;
         position = put(target, position, "n=");
         position = putEscaped(target, position, username);
@@ -158,8 +243,14 @@ public final class ScramSha256 implements AutoCloseable {
     }
 
     /**
-     * Builds {@code c=biws,r=<nonce>,p=<proof>} and computes everything that
-     * touches the password along the way.
+     * Builds {@code c=<binding>,r=<nonce>,p=<proof>} and computes everything
+     * that touches the password along the way.
+     *
+     * <p>{@code c=} carries the GS2 header back, and with channel binding the
+     * certificate fingerprint behind it. Both are base64 of the raw bytes -
+     * {@code c=biws} in the ordinary case is nothing but base64 of
+     * {@code "n,,"}, which is why that value shows up in every capture and in
+     * no specification.
      *
      * @param password the password, off-heap
      * @return the length of the message written
@@ -170,8 +261,9 @@ public final class ScramSha256 implements AutoCloseable {
         MemorySegment storedKey = arena.allocate(KEY_LENGTH);
         MemorySegment signature = arena.allocate(KEY_LENGTH);
         try {
-            // c=biws is base64("n,,") - the GS2 header, sent back unchanged.
-            int position = put(target, 0, "c=biws,r=");
+            int position = put(target, 0, "c=");
+            position += writeBinding(target, position);
+            position = put(target, position, ",r=");
             MemorySegment.copy(serverNonce, 0, target, position, serverNonceLength);
             position += serverNonceLength;
 
@@ -256,6 +348,19 @@ public final class ScramSha256 implements AutoCloseable {
     }
 
     // ---- odds and ends ---------------------------------------------------
+
+    /**
+     * The {@code c=} value: base64 of the GS2 header plus, when bound, the
+     * certificate fingerprint.
+     */
+    private int writeBinding(MemorySegment target, int position) {
+        MemorySegment raw = arena.allocate(gs2Length + bindingLength);
+        MemorySegment.copy(gs2Header, 0, raw, 0, gs2Length);
+        if (bindingLength > 0) {
+            MemorySegment.copy(bindingData, 0, raw, gs2Length, bindingLength);
+        }
+        return Base64Off.encode(raw, 0, gs2Length + bindingLength, target, position);
+    }
 
     private void mac(MemorySegment key, String message, MemorySegment out) {
         try (Arena scratch = Arena.ofConfined();
