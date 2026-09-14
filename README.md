@@ -34,6 +34,25 @@ fallback for everything that is not in a domain.
 
 `/heapdump` may stay exposed, by the way. That is the point.
 
+### And one limitation that belongs here, not in a footnote
+
+**Today only the SQL Server driver speaks TLS.** PostgreSQL, MySQL and Oracle connect in the
+clear.
+
+What that does and does not mean:
+
+- The **password** never travels the wire in the clear even so — SCRAM-SHA-256 on PostgreSQL,
+  `caching_sha2_password` on MySQL, an AES-encrypted `AUTH_PASSWORD` on Oracle. That is the
+  protocols' doing, not ours, and it holds without TLS.
+- The **payload** does travel in the clear: statements, parameters, result rows. On an untrusted
+  network that is the wrong trade, whatever the heap dump looks like.
+- SQL Server is the exception because it has to be: its password obfuscation is reversible
+  without a key, so the driver insists on `ENCRYPT_ON`. See
+  [`docs/protocol/sqlserver.md`](docs/protocol/sqlserver.md).
+
+Until the other three have TLS, use this on a trusted network — or wait. Saying so is cheaper
+than being asked later.
+
 ---
 
 ## Further databases
@@ -177,10 +196,12 @@ precision and scale, server errors with SQLState. A `password=` in the URL is re
 reason rather than quietly used. And the heap dump test **through the JDBC route** — six
 connections through `DriverManager`, one held open, dump — **no hit**.
 
-Still missing: binary formats and type decoding, TLS with channel binding (`SSLRequest`,
-SCRAM-SHA-256-PLUS), `COPY`, `CancelRequest` (and with it `setQueryTimeout`), portals in
-portions (`setFetchSize` is remembered but has no effect), generated keys, savepoints, `NOTIFY`
-and the Testcontainers suite against two server versions.
+Still missing: **TLS** (and with it channel binding, `SSLRequest`, SCRAM-SHA-256-PLUS), binary
+formats and type decoding, `COPY`, `CancelRequest` — and with it `setQueryTimeout`, which throws
+rather than pretending — `NOTIFY`, and the Testcontainers suite against two server versions.
+
+Block cursors (`setFetchSize`), generated keys and savepoints **do** work; an older version of
+this list said otherwise.
 
 ### What stage 4 consists of
 
@@ -215,9 +236,10 @@ the JDBC layer. Plus the heap dump test: six logins from a JVM of its own, dump 
 while the counter-check (a payload value from the same query) **is found** in the same dump;
 without that counter-check the empty result would be worthless.
 
-Missing: TLS, the plugins `sha256_password` (the RSA part stands, the flow is untested),
-`mysql_clear_password`, MariaDB `ed25519` and `parsec`, `LOAD DATA LOCAL`, multi-resultset,
-cursors in portions and the reassembly of payloads over 16 MB.
+Missing: **TLS**, the plugins `sha256_password` (the RSA part stands, the flow is untested),
+`mysql_clear_password`, MariaDB `ed25519` and `parsec`, multi-resultset, and the reassembly of
+payloads over 16 MB. `LOAD DATA LOCAL` is refused on purpose, not missing — see the capability
+bits above.
 
 ### What stage 8 contains — the target picture is reached
 
