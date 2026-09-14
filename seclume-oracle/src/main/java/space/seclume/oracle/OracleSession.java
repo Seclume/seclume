@@ -314,11 +314,32 @@ public final class OracleSession implements AutoCloseable {
      * counted - correct, and needlessly expensive for a caller who only wanted
      * to know how much there is.
      */
-    public long lobLength(WireBuffer locator, int at) throws SQLException {
+    public long lobLength(WireBuffer locator, int at, int locatorLength) throws SQLException {
         try (WireBuffer nothing = new WireBuffer(16)) {
-            exchangeLob(() -> TtcLob.sendLength(channel, sequence++, locator, at), nothing);
+            exchangeLob(() -> TtcLob.sendLength(channel, sequence++, locator, at, locatorLength),
+                    nothing);
             return reportedLobValue;
         }
+    }
+
+    /**
+     * Creates a temporary LOB on the server and returns its locator.
+     *
+     * <p>The caller owns the buffer and closes it - and has to free the LOB on
+     * the server as well, or it stays in the temporary tablespace until the
+     * session ends.
+     */
+    public WireBuffer createTemporaryLob(boolean character) throws SQLException {
+        WireBuffer locator = new WireBuffer(64);
+        try (WireBuffer nothing = new WireBuffer(16)) {
+            exchangeLob(() -> TtcLob.sendCreateTemporary(channel, sequence++, character,
+                    space.seclume.oracle.net.TtcDataTypes.CHARSET_AL32UTF8),
+                    nothing, locator);
+        } catch (SQLException | RuntimeException e) {
+            locator.close();
+            throw e;
+        }
+        return locator;
     }
 
     /**
@@ -334,10 +355,11 @@ public final class OracleSession implements AutoCloseable {
      * @param offset  counted from 1, the way Oracle counts
      * @param amount  units to read, or {@link TtcLob#ALL}
      */
-    public void readLob(WireBuffer locator, int at, long offset, long amount, WireBuffer sink)
+    public void readLob(WireBuffer locator, int at, int locatorLength, long offset,
+                        long amount, WireBuffer sink)
             throws SQLException {
-        exchangeLob(() -> TtcLob.sendRead(channel, sequence++, locator, at, offset, amount),
-                sink);
+        exchangeLob(() -> TtcLob.sendRead(channel, sequence++, locator, at, locatorLength,
+                offset, amount), sink);
     }
 
     /** Sends a LOB call and reads its answer, however many packets it takes. */
@@ -346,6 +368,17 @@ public final class OracleSession implements AutoCloseable {
     }
 
     private void exchangeLob(Send send, WireBuffer sink) throws SQLException {
+        exchangeLob(send, sink, null);
+    }
+
+    /**
+     * @param locatorOut if given, the locator the server returned is copied
+     *                   into it - that is how a create gets its locator, and it
+     *                   is why nothing here assumes 112 bytes: a temporary one
+     *                   is 38.
+     */
+    private void exchangeLob(Send send, WireBuffer sink, WireBuffer locatorOut)
+            throws SQLException {
         try {
             reportedLobValue = -1;
             send.run();
@@ -393,6 +426,15 @@ public final class OracleSession implements AutoCloseable {
                             + result.tail().errorText(), "22000");
                 }
                 reportedLobValue = result.reported();
+                if (locatorOut != null) {
+                    if (result.locatorAt() < 0) {
+                        throw new SQLException("the server returned no LOB locator", "22000");
+                    }
+                    locatorOut.clear();
+                    locatorOut.ensureCapacity(result.locatorLength());
+                    locatorOut.putBytes(answer.segment(), result.locatorAt(),
+                            result.locatorLength());
+                }
             }
         } catch (IOException e) {
             close();

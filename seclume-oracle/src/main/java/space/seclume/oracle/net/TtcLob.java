@@ -56,12 +56,13 @@ public final class TtcLob {
     public static final int LOCATOR_LENGTH = 112;
 
     /**
-     * The locator plus the two bytes that announce it.
+     * How much longer the descriptor is than the locator it announces.
      *
-     * <p>The same 114 shows up three times in a recorded call - twice as a
-     * number, once as a plain byte - which is what identified it.
+     * <p>Two bytes. Visible in the recordings as 114 for a persistent locator
+     * of 112 and 40 for a temporary one of 38 - which is what identified both
+     * the constant and the fact that the locator length is not one.
      */
-    private static final int DESCRIPTOR_LENGTH = LOCATOR_LENGTH + 2;
+    private static final int DESCRIPTOR_EXTRA = 2;
 
     /** Read everything from the offset on. */
     public static final long ALL = 0xFFFFFFFFL;
@@ -84,8 +85,8 @@ public final class TtcLob {
      * @param at     its first byte within {@code source}
      */
     public static void sendRead(NsChannel channel, int sequence, WireBuffer source, int at,
-                                long offset, long amount) throws IOException {
-        putRead(channel.beginData(), sequence, source, at, offset, amount);
+                                int locatorLength, long offset, long amount) throws IOException {
+        putRead(channel.beginData(), sequence, source, at, locatorLength, offset, amount);
         channel.sendData();
     }
 
@@ -131,27 +132,34 @@ public final class TtcLob {
     };
 
     /** Asks for the length - see {@link #OP_GET_LENGTH}. */
-    public static void sendLength(NsChannel channel, int sequence, WireBuffer source, int at)
-            throws IOException {
-        put(channel.beginData(), sequence, OP_GET_LENGTH, source, at, 0, 0);
+    public static void sendLength(NsChannel channel, int sequence, WireBuffer source, int at,
+                                  int locatorLength) throws IOException {
+        put(channel.beginData(), sequence, OP_GET_LENGTH, source, at, locatorLength, 0, 0);
         channel.sendData();
     }
 
     /** The message itself - separate so that it can be compared against a recording. */
     public static void putRead(WireBuffer out, int sequence, WireBuffer source, int at,
-                               long offset, long amount) {
-        put(out, sequence, OP_READ, source, at, offset, amount);
+                               int locatorLength, long offset, long amount) {
+        put(out, sequence, OP_READ, source, at, locatorLength, offset, amount);
     }
 
+    /**
+     * @param locatorLength how long <em>this</em> locator is. Not a constant:
+     *                      a persistent one is 112 bytes, a temporary one 38,
+     *                      and the field in front of it carries that length
+     *                      plus two. Assuming 112 is how the first temporary
+     *                      LOB blew up.
+     */
     private static void put(WireBuffer out, int sequence, int operation, WireBuffer source,
-                            int at, long offset, long amount) {
+                            int at, int locatorLength, long offset, long amount) {
         out.putByte((byte) TtcMessage.TYPE_FUNCTION);
         out.putByte((byte) FUNCTION);
         out.putByte((byte) sequence);
 
         TtcParameters.putNumber(out, 0);                  // token number
         out.putByte((byte) 1);                            // a source locator follows
-        TtcParameters.putNumber(out, DESCRIPTOR_LENGTH);
+        TtcParameters.putNumber(out, locatorLength + DESCRIPTOR_EXTRA);
         out.putZeroes(7);                                 // no destination locator
         TtcParameters.putNumber(out, operation);
         out.putZeroes(2);
@@ -160,8 +168,8 @@ public final class TtcLob {
         out.putByte((byte) 1);                            // an amount follows
         out.putZeroes(7);
 
-        out.putByte((byte) LOCATOR_LENGTH);
-        out.putBytes(source.segment(), at, LOCATOR_LENGTH);
+        out.putByte((byte) locatorLength);
+        out.putBytes(source.segment(), at, locatorLength);
 
         TtcParameters.putNumber(out, amount);
     }

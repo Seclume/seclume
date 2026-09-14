@@ -113,8 +113,11 @@ public final class OraResultSet extends ReadOnlyResultSet {
             value.close();
             throw new SQLException("this result has no statement to read the LOB with", "HY000");
         }
-        owner.connection.session().readLob(block.data(), block.offset(column), 1,
-                TtcLob.ALL, value);
+        // The locator of a column is a persistent one, so 112 bytes. A
+        // temporary LOB is 38 - which is why the length is a parameter and not
+        // a constant inside the call.
+        owner.connection.session().readLob(block.data(), block.offset(column),
+                TtcLob.LOCATOR_LENGTH, 1, TtcLob.ALL, value);
         return value;
     }
 

@@ -71,7 +71,7 @@ final class OraLob implements AutoCloseable {
             throw new SQLException("this LOB has been freed", "HY000");
         }
         WireBuffer value = new WireBuffer(1024);
-        session.readLob(locator, 0, offset, amount, value);
+        session.readLob(locator, 0, TtcLob.LOCATOR_LENGTH, offset, amount, value);
         return value;
     }
 
@@ -119,7 +119,7 @@ final class OraLob implements AutoCloseable {
         if (freed) {
             throw new SQLException("this LOB has been freed", "HY000");
         }
-        return session.lobLength(locator, 0);
+        return session.lobLength(locator, 0, TtcLob.LOCATOR_LENGTH);
     }
 
     /** Reads in blocks, one round trip each, and stops when a block comes back empty. */

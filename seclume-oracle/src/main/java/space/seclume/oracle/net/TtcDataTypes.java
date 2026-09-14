@@ -45,8 +45,12 @@ public final class TtcDataTypes {
     public TtcDataTypes() {
     }
 
-    /** Oracle's identifier for AL32UTF8 - the character set this driver uses. */
-    private static final int CHARSET_AL32UTF8 = 873;
+    /**
+     * Oracle's identifier for AL32UTF8 - the character set this driver
+     * negotiates, and therefore the one a temporary LOB has to be created
+     * with; see {@link TtcLob}.
+     */
+    public static final int CHARSET_AL32UTF8 = 873;
     /** The flag byte between the character sets and the capabilities. */
     private static final int FLAGS = 3;
 

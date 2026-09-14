@@ -46,7 +46,7 @@ class RecordedLobReadTest {
                 locator.putByte(expected[locatorAt + i]);
             }
 
-            TtcLob.putRead(out, 0x0c, locator, 0, 1, TtcLob.ALL);
+            TtcLob.putRead(out, 0x0c, locator, 0, TtcLob.LOCATOR_LENGTH, 1, TtcLob.ALL);
 
             assertEquals(hex(expected), hex(out), "the call does not match the recording");
         }
