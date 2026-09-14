@@ -25,9 +25,24 @@ import space.seclume.secret.SecretScope;
  * checkable without a server - and it pins it down, because a single wrong byte
  * anywhere produces a completely different {@code AUTH_PASSWORD}.
  *
- * <p>The values below come from a throwaway instance that no longer exists.
- * They are session keys of a session that is over; the password is not among
- * them and never will be.
+ * <p>The values below come from a throwaway instance. They are session keys of
+ * a session that is over; the password is not among them and never will be.
+ *
+ * <p><b>Before this repository is ever made public, read this.</b> The password
+ * is not here, but everything needed to look for it offline is: the two session
+ * keys, the salt, and the encrypted {@code AUTH_PASSWORD}. The derivation is
+ * documented in {@code docs/protocol/oracle.md}, so anyone can try candidate
+ * passwords and see which one decrypts - which is exactly what the test below
+ * does with the local file. Against a dictionary that is an offline attack on
+ * the test container's password.
+ *
+ * <p>Inside a private repository that is a fair trade for a test that pins the
+ * derivation down. In a public one it is not. What has to happen first: change
+ * the password on that container, and replace these vectors with synthetic ones
+ * - and remember that they are in the history from 14.09.2026 on, so the
+ * history has to be rewritten with them. The blast radius is otherwise small,
+ * with one caveat nobody but the owner can check: <b>whether that password is
+ * used anywhere else.</b>
  */
 class RecordedLoginTest {
 
