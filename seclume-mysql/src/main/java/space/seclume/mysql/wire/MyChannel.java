@@ -55,9 +55,20 @@ public final class MyChannel implements AutoCloseable {
 
     public static MyChannel connect(String host, int port, int connectTimeoutMillis)
             throws IOException {
+        return connect(host, port, connectTimeoutMillis, null);
+    }
+
+    /**
+     * The same, with a say in which transport carries it.
+     *
+     * @param transport {@code socket}, {@code ffm}, {@code ffm-if-available},
+     *                  or null to take what the system property says
+     */
+    public static MyChannel connect(String host, int port, int connectTimeoutMillis,
+            String transport) throws IOException {
         // Blocking and TCP_NODELAY live in the transport now - they belong to
         // whoever owns the descriptor, not to whoever writes packets into it.
-        return new MyChannel(space.seclume.internal.SocketTransport.connect(host, port, connectTimeoutMillis));
+        return new MyChannel(space.seclume.internal.Transports.open(transport, host, port, connectTimeoutMillis));
     }
 
     /**

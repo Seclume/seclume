@@ -40,9 +40,20 @@ public final class TdsChannel implements AutoCloseable {
 
     public static TdsChannel connect(String host, int port, int connectTimeoutMillis)
             throws IOException {
+        return connect(host, port, connectTimeoutMillis, null);
+    }
+
+    /**
+     * The same, with a say in which transport carries it.
+     *
+     * @param transport {@code socket}, {@code ffm}, {@code ffm-if-available},
+     *                  or null to take what the system property says
+     */
+    public static TdsChannel connect(String host, int port, int connectTimeoutMillis,
+            String transport) throws IOException {
         // Blocking and TCP_NODELAY live in the transport now - they belong to
         // whoever owns the descriptor, not to whoever frames packets in it.
-        return new TdsChannel(space.seclume.internal.SocketTransport.connect(host, port, connectTimeoutMillis));
+        return new TdsChannel(space.seclume.internal.Transports.open(transport, host, port, connectTimeoutMillis));
     }
 
     /** The raw channel - only for the TLS handshake, which frames its own packets. */
