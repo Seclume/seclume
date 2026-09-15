@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,6 +13,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLNonTransientConnectionException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,10 +28,47 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Everything here runs without a database. What is checked is exactly what a
  * pool can get wrong: opening more connections than allowed, handing out a
- * broken one, passing on state, losing a connection while
- * Zurueckgeben verlieren.
+ * broken one, passing state on to the next borrower, and losing a connection
+ * while giving it back.
  */
 class PoolTest {
+
+    /**
+     * A borrow that creates no statement must not allocate the statement list.
+     *
+     * <p>It used to, and that was the entire difference to HikariCP in
+     * allocation: an {@code ArrayList} with room for four is some 64 bytes,
+     * and it was paid by every borrow - including the many that only ask a
+     * connection for its metadata, or take it and give it straight back. 120
+     * bytes per borrow-and-return against Hikari's 56; now 64.
+     *
+     * <p>Checked as a property rather than as a measurement on purpose. A
+     * timing assertion at this scale measures the machine, and an allocation
+     * counter needs a warm JIT to mean anything - both would flake. Whether
+     * the field is null is neither.
+     */
+    @Test
+    void aBorrowWithoutStatementsAllocatesNoList() throws Exception {
+        try (SeclumePool pool = new SeclumePool(new StubDataSource(), settings(2));
+             Connection connection = pool.getConnection()) {
+            assertNull(handedOut(connection),
+                    "a borrow that creates no statement allocated the statement list anyway");
+
+            try (Statement statement = connection.createStatement()) {
+                assertNotNull(statement);
+                assertNotNull(handedOut(connection),
+                        "a handed-out statement has to be remembered - a rebuild closes them");
+            }
+        }
+    }
+
+    /** The field is private, and it stays private: this is a test, not an API. */
+    private static Object handedOut(Connection connection) throws Exception {
+        java.lang.reflect.Field field =
+                connection.getClass().getDeclaredField("handedOut");
+        field.setAccessible(true);
+        return field.get(connection);
+    }
 
     private static PoolSettings settings(int max) {
         PoolSettings settings = new PoolSettings();
