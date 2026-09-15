@@ -125,6 +125,8 @@ public final class PgSession implements AutoCloseable {
     private char transactionStatus = 'I';
     /** Settings that ride along with the next statement - see runLater. */
     private final List<String> pending = new ArrayList<>();
+    /** Plans to be released with the next block - see writePendingCloses. */
+    private final List<String> pendingCloses = new ArrayList<>();
     /** A prepared plan announced but not yet parsed - see parseLater. */
     private String pendingParseName;
     private String pendingParseSql;
@@ -134,10 +136,9 @@ public final class PgSession implements AutoCloseable {
      * Whether settings and parses may ride along with the next statement.
      *
      * <p>On by default, because it is what makes the common shapes cheap. It
-     * changes two things one may not want, and both are about <b>when</b> an
-     * error appears: a statement with a syntax error is refused at its first
-     * execution instead of at {@code prepareStatement}, and a failing
-     * {@code deallocate} comes up at the next statement. Whoever needs the
+     * changes one thing one may not want, and it is about <b>when</b> an error
+     * appears: a statement with a syntax error is refused at its first
+     * execution instead of at {@code prepareStatement}. Whoever needs the
      * strict order sets {@code deferSessionState=false} and pays a round trip
      * for every setting.
      */
@@ -587,11 +588,23 @@ public final class PgSession implements AutoCloseable {
         out.putCString(pendingParseName);
         channel.end();
 
-        channel.begin(PgProtocol.SYNC);
-        channel.end();
+        // No Sync of its own. PostgreSQL flushes its output at every Sync, so
+        // a second one turns what the driver sends in a single write into two
+        // or three separate answers on the wire - measured as three socket
+        // reads for the first use of a statement where one is enough, some
+        // thirty microseconds on a loopback connection. The Sync that closes
+        // the caller's own block covers these answers too: ParseComplete,
+        // ParameterDescription and RowDescription all pass through
+        // runUntilReady on their way to it.
+        //
+        // It is also the better behaviour on failure. With two Syncs a broken
+        // statement is reported twice - once for the Parse, then again for a
+        // Bind against a statement that was never created. With one, the
+        // server skips to the Sync and the caller gets the one error that
+        // actually happened.
         pendingParseSql = null;
         pendingParseName = null;
-        return 1;
+        return 0;
     }
 
     /**
@@ -800,16 +813,23 @@ public final class PgSession implements AutoCloseable {
 
     /** Whether anything at all is waiting to ride along. */
     public boolean hasPending() {
-        return !pending.isEmpty();
+        return !pending.isEmpty() || !pendingCloses.isEmpty();
     }
 
     /** Sends what is waiting right now, for whoever cannot wait. */
     public void flushPending() throws SQLException {
-        if (pending.isEmpty()) {
+        if (pending.isEmpty() && pendingCloses.isEmpty()) {
             return;
         }
         try {
             int carried = writePending();
+            if (carried == 0) {
+                // Only Closes went out. They answer with CloseComplete, and
+                // nothing would collect that without a Sync to close the block.
+                channel.begin(PgProtocol.SYNC);
+                channel.end();
+                carried = 1;
+            }
             channel.flush();
             for (int i = 0; i < carried; i++) {
                 runUntilReady(null);
@@ -833,7 +853,34 @@ public final class PgSession implements AutoCloseable {
             channel.end();
         }
         pending.clear();
+        writePendingCloses();
         return carried;
+    }
+
+    /**
+     * Releases plans nobody needs any more - with the protocol's own Close.
+     *
+     * <p>Not with {@code deallocate}, which is what this used to send. The two
+     * are not interchangeable: {@code DEALLOCATE} on a name the server does not
+     * know is an error, while Close on an unknown name is explicitly not one.
+     * That difference was a real defect. A prepared statement whose deferred
+     * Parse had failed - a typo in the SQL is enough - was still deallocated
+     * when it was closed, and because that rides along with the next statement,
+     * the error surfaced on an innocent query some way away: {@code 26000,
+     * prepared statement "zl_1" does not exist}. To the pool that is a
+     * connection failing a health check for no reason anybody could see.
+     *
+     * <p>Close needs no Sync of its own; the CloseComplete travels with
+     * whatever answer the block is waiting for anyway.
+     */
+    private void writePendingCloses() {
+        for (String name : pendingCloses) {
+            WireBuffer out = channel.begin(PgProtocol.CLOSE);
+            out.putByte((byte) 'S');
+            out.putCString(name);
+            channel.end();
+        }
+        pendingCloses.clear();
     }
 
     /**
@@ -1271,7 +1318,15 @@ public final class PgSession implements AutoCloseable {
      * trip as the next statement.
      */
     public void closeStatementLater(String name) throws SQLException {
-        runLater("deallocate \"" + name.replace("\"", "\"\"") + "\"");
+        if (!defer) {
+            closeStatement(name);
+            return;
+        }
+        pendingCloses.add(name);
+        if (pendingCloses.size() > PENDING_LIMIT) {
+            // Somebody is only ever closing and never running.
+            flushPending();
+        }
     }
 
     /** Releases a prepared plan in the server again. */

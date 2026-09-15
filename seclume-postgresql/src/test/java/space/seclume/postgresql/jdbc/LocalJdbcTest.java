@@ -610,6 +610,37 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * A broken prepared statement reports what is wrong with it, once.
+     *
+     * <p>The Parse is deferred and travels with the first Bind and Execute, in
+     * one block closed by a single Sync. That is what makes this worth a test:
+     * the server rejects the Parse and then skips everything up to the Sync,
+     * so the Bind against a statement that was never created produces nothing
+     * of its own. What comes back is the syntax error, not a confusing "prepared
+     * statement does not exist" after it - and the connection stays usable.
+     */
+    @Test
+    void aBrokenPreparedStatementReportsItsOwnError() throws Exception {
+        try (Connection connection = connect()) {
+            try (PreparedStatement statement =
+                         connection.prepareStatement("select * from nope_not_here where x = ?")) {
+                statement.setInt(1, 1);
+                SQLException failure = assertThrows(SQLException.class, statement::executeQuery);
+                assertEquals("42P01", failure.getSQLState(),
+                        "the table error, not a follow-up about the statement: "
+                                + failure.getMessage());
+            }
+            assertTrue(connection.isValid(1), "the connection did not survive the error");
+            // And it still works afterwards - the session is not left mid-block.
+            try (PreparedStatement statement = connection.prepareStatement("select 7");
+                 ResultSet result = statement.executeQuery()) {
+                assertTrue(result.next());
+                assertEquals(7, result.getInt(1));
+            }
+        }
+    }
+
     /** What does not work says so - instead of quietly returning something wrong. */
     @Test
     void unsupportedThingsSayNo() throws Exception {
