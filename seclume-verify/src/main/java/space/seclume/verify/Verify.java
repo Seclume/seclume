@@ -88,6 +88,15 @@ public final class Verify {
             report.line("failed", "after " + millis(System.nanoTime() - started) + " ms");
             report.line("state", String.valueOf(e.getSQLState()));
             report.line("said", oneLine(e.getMessage()));
+            // The driver's own sentence is the summary; what actually went
+            // wrong is usually a line further down. A refused certificate
+            // arrives as "the login failed" with an SSLHandshakeException
+            // underneath, and without this line nobody would know to trust the
+            // server or fix its certificate.
+            String cause = rootCause(e);
+            if (cause != null) {
+                report.line("because", cause);
+            }
             for (Throwable other : e.getSuppressed()) {
                 report.line("also", oneLine(other.getMessage()));
             }
@@ -387,9 +396,51 @@ public final class Verify {
         return null;
     }
 
+    /**
+     * The deepest cause worth printing, or null when there is nothing below.
+     *
+     * <p>Named rather than the whole chain: a stack trace in a preflight report
+     * is noise, and the bottom link is where the answer usually is.
+     */
+    private static String rootCause(Throwable failure) {
+        Throwable cause = failure.getCause();
+        if (cause == null) {
+            return null;
+        }
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        String message = cause.getMessage();
+        String name = cause.getClass().getSimpleName();
+        return message == null || message.isBlank() ? name : name + ": " + oneLine(message);
+    }
+
+    /** Whether a TLS failure is anywhere in the chain. */
+    static boolean isTlsFailure(Throwable failure) {
+        for (Throwable link = failure; link != null && link.getCause() != link;
+                link = link.getCause()) {
+            if (link instanceof javax.net.ssl.SSLException
+                    || link instanceof java.security.cert.CertificateException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** What to try next - the part a stack trace never tells anybody. */
-    private static String advice(SQLException failure) {
+    static String advice(SQLException failure) {
         String state = failure.getSQLState() == null ? "" : failure.getSQLState();
+        // Before the state is read at all: a refused certificate is reported as
+        // a connection failure - state 08 - and the advice for that one sends
+        // the reader to check host, port and firewall, none of which is wrong.
+        // The server was reached; it was the certificate that was not accepted.
+        if (isTlsFailure(failure)) {
+            return "The server was reached and TLS failed - see the cause above. Either the "
+                    + "certificate is not signed by anything this JVM trusts (a container's "
+                    + "own certificate never is), or the name in it does not match the host in "
+                    + "the URL. Point the JVM at a truststore that has it, or say so "
+                    + "deliberately in the URL: sslmode/trustServerCertificate, per driver.";
+        }
         if (state.startsWith("28")) {
             return "The server refused the login. The password comes from the source named "
                     + "above - check that source, not the URL.";

@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.sql.SQLException;
+
 import org.junit.jupiter.api.Test;
 
 /**
@@ -51,5 +53,45 @@ class VerifyTest {
         String text = report.toString();
         assertTrue(text.contains("what to do"), text);
         assertTrue(text.contains("failed"), text);
+        assertFalse(text.contains("TLS failed"), "that was not a TLS problem:\n" + text);
+    }
+
+    /**
+     * A refused certificate is not an unreachable server.
+     *
+     * <p>Both arrive as SQLState 08, and the advice for 08 sends the reader to
+     * check host, port and firewall - none of which is the problem when the
+     * server answered and only its certificate was not accepted. That happened
+     * for real against a test container, and cost a while.
+     */
+    @Test
+    void aRefusedCertificateSaysSoInsteadOfBlamingTheNetwork() {
+        SQLException failure = new SQLException("the login to db.example failed", "08001",
+                new javax.net.ssl.SSLHandshakeException(
+                        "PKIX path building failed: unable to find valid certification path"));
+        assertTrue(Verify.isTlsFailure(failure));
+        String advice = Verify.advice(failure);
+        assertTrue(advice.contains("TLS failed"), advice);
+        assertTrue(advice.contains("certificate"), advice);
+        assertFalse(advice.contains("firewall"),
+                "that advice belongs to a server nobody reached: " + advice);
+    }
+
+    /** And the other way round: a plain connection failure keeps its own advice. */
+    @Test
+    void aConnectionFailureWithoutTlsKeepsTheNetworkAdvice() {
+        SQLException failure = new SQLException("cannot reach db.example:5432", "08001",
+                new java.net.ConnectException("Connection refused"));
+        assertFalse(Verify.isTlsFailure(failure));
+        assertTrue(Verify.advice(failure).contains("firewall"), Verify.advice(failure));
+    }
+
+    /** A TLS failure buried deeper than one level is still found. */
+    @Test
+    void theWholeChainIsSearched() {
+        SQLException failure = new SQLException("the login failed", "08001",
+                new java.io.IOException("handshake",
+                        new javax.net.ssl.SSLException("certificate unknown")));
+        assertTrue(Verify.isTlsFailure(failure));
     }
 }
