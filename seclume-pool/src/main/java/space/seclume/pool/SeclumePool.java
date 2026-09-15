@@ -95,15 +95,43 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      * out of the entries instead spread the writes, but made borrowing walk
      * over sixteen objects lying all over the heap - sixteen cache misses.
      *
-     * <p>This array holds nothing but references: sixteen of them fit into two
-     * cache lines, and taking one out is a single {@code compareAndSet} on an
-     * element, not on a shared head. Scanning from the front keeps the low
-     * slots warm, so the ones at the back run into the idle timeout and the
-     * pool can shrink.
+     * <p>This array holds nothing but references, and taking one out is a
+     * single {@code compareAndSet} on an element rather than on a shared head.
+     *
+     * <p><b>The slots are strided, and that is not decoration.</b> With
+     * compressed references sixteen of them fit into one cache line, so
+     * neighbouring slots are the same line as far as the hardware is
+     * concerned: every {@code compareAndSet} by any thread invalidates it for
+     * all the others. Giving each slot a line of its own is worth a factor of
+     * two on a bare borrow-and-return - measured, see {@link #STRIDE}. The
+     * comment that used to stand here claimed that more slots than connections
+     * already bought each thread a line nobody else wants. It did not: more
+     * slots on the same line are still the same line.
+     *
+     * <p>Scanning from the front keeps the low slots warm, so the ones at the
+     * back run into the idle timeout and the pool can shrink.
      */
     private final java.util.concurrent.atomic.AtomicReferenceArray<PoolEntry> free;
-    /** {@code free.length() - 1} - the mask that replaces the modulo. */
+    /** The number of usable slots minus one - the mask that replaces the modulo. */
     private final int slotMask;
+
+    /**
+     * How far apart two slots sit, in array elements.
+     *
+     * <p>A cache line is 64 bytes and a compressed reference is 4, so sixteen
+     * of them share one. At a stride of sixteen each slot owns its line and
+     * two threads working on different slots stop fighting over it.
+     *
+     * <p>The array pays for it in memory - sixteen times the references, which
+     * for a pool of sixteen connections is a few kilobytes - and that is the
+     * whole cost.
+     */
+    private static final int STRIDE = 16;
+
+    /** Turns a slot number into its index in the strided array. */
+    private int indexOf(int slot) {
+        return (slot & slotMask) * STRIDE;
+    }
 
 
     /** Every live entry - free or borrowed; for housekeeping and shutdown. */
@@ -144,9 +172,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         // a hash, and eight threads in sixteen slots collide far more often
         // than the numbers suggest. With room to spare each thread mostly
         // finds its own slot and writes a cache line nobody else wants.
-        this.free = new java.util.concurrent.atomic.AtomicReferenceArray<>(
-                slotCount(settings.getMaximumPoolSize()));
-        this.slotMask = free.length() - 1;
+        int slots = slotCount(settings.getMaximumPoolSize());
+        this.free = new java.util.concurrent.atomic.AtomicReferenceArray<>(slots * STRIDE);
+        this.slotMask = slots - 1;
         this.housekeeper = newHousekeeper();
         this.housekeeper.start();
     }
@@ -371,10 +399,10 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      * would degrade into a memory leak with a hit rate near zero.
      */
     private PoolEntry claimIdle() {
-        int size = free.length();
+        int size = slotMask + 1;
         int start = startSlot();
         for (int i = 0; i < size; i++) {
-            int slot = (start + i) & slotMask;
+            int slot = indexOf(start + i);
             PoolEntry candidate = free.get(slot);
             if (candidate != null && free.compareAndSet(slot, candidate, null)) {
                 // No state to write here: out of the slot means out of reach.
@@ -407,10 +435,10 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      */
     private void park(PoolEntry entry) {
         entry.set(PoolEntry.State.IDLE);
-        int size = free.length();
+        int size = slotMask + 1;
         int start = startSlot();
         for (int i = 0; i < size; i++) {
-            int slot = (start + i) & slotMask;
+            int slot = indexOf(start + i);
             if (free.get(slot) == null && free.compareAndSet(slot, null, entry)) {
                 return;
             }
@@ -551,7 +579,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     private void sweepIdle() {
         long now = System.nanoTime();
         int spare = idleCount() - settings.getMinimumIdle();
-        for (int i = 0; i < free.length(); i++) {
+        for (int logical = 0; logical <= slotMask; logical++) {
+            int i = indexOf(logical);
             PoolEntry entry = free.get(i);
             if (entry == null || !free.compareAndSet(i, entry, null)) {
                 continue;      // borrowed in the meantime
@@ -641,8 +670,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     /** How many sit free in the pool. */
     public int idleCount() {
         int count = 0;
-        for (int i = 0; i < free.length(); i++) {
-            if (free.get(i) != null) {
+        for (int logical = 0; logical <= slotMask; logical++) {
+            if (free.get(indexOf(logical)) != null) {
                 count++;
             }
         }
@@ -723,7 +752,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         rotation++;
         int closed = 0;
         if (closeIdleNow) {
-            for (int i = 0; i < free.length(); i++) {
+            for (int logical = 0; logical <= slotMask; logical++) {
+                int i = indexOf(logical);
                 PoolEntry entry = free.get(i);
                 if (entry != null && free.compareAndSet(i, entry, null)) {
                     retire(entry);

@@ -67,7 +67,7 @@ import space.seclume.pool.SeclumePool;
 public class TailBenchmark {
 
     /** Which pool over which driver - the same three as everywhere else. */
-    @Param({"hikari-vendor", "seclume-seclume"})
+    @Param({"hikari-vendor", "seclume-vendor", "seclume-seclume"})
     public String combination;
 
     /** How large the pool may grow. */
@@ -100,6 +100,21 @@ public class TailBenchmark {
     public void close() throws Exception {
         if (pool instanceof AutoCloseable closeable) {
             closeable.close();
+        }
+    }
+
+    /**
+     * Borrow and return, nothing else - the pool without the network.
+     *
+     * <p>With a query in it, a round trip of some eighty microseconds sits on
+     * top of everything and the pool's own tail is a ripple on it. Taking the
+     * database out leaves the handover between threads, which is the only
+     * thing a pool can actually get wrong.
+     */
+    @Benchmark
+    public void borrowAndReturn(Blackhole hole) throws SQLException {
+        try (Connection connection = pool.getConnection()) {
+            hole.consume(connection);
         }
     }
 
