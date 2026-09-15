@@ -33,6 +33,14 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
     private final String sql;
     private final int parameterCount;
     private final TdsParameters parameters = new TdsParameters();
+    /**
+     * The handle the server gave this statement, once it has one.
+     *
+     * <p>Kept for the statement's lifetime, not per batch: the first batch
+     * pays one round trip to compile, every batch after it sends handles only.
+     * Given back in {@link #close()}.
+     */
+    private final TdsSession.Prepared prepared = new TdsSession.Prepared();
     private List<Object[]> batch;
 
     TdsPreparedStatement(TdsConnection connection, String sql) throws SQLException {
@@ -155,7 +163,7 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
         List<Object[]> rows = batch;
         batch = null;
         TdsSession session = connection.session();
-        return session.rpcBatch(sql, parameters, rows.size(), row -> {
+        return session.rpcBatch(prepared, sql, parameters, rows.size(), row -> {
             Object[] values = rows.get(row);
             parameters.clear();
             for (int p = 0; p < values.length; p++) {
@@ -172,6 +180,28 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
             small[i] = (int) Math.min(counts[i], Integer.MAX_VALUE);
         }
         return small;
+    }
+
+    /**
+     * Closes the statement and gives its compiled handle back.
+     *
+     * <p>One round trip, and the alternative is worse: a pooled connection
+     * that prepares and never unprepares fills the server's plan cache with
+     * statements nobody will run again.
+     */
+    @Override
+    public void close() {
+        if (prepared.isPrepared()) {
+            try {
+                connection.session().unprepare(prepared.handle());
+            } catch (SQLException ignored) {
+                // A handle that cannot be given back is not worth failing a
+                // close over - the connection closing takes it with it. And
+                // close() does not throw here, because the one in TdsStatement
+                // does not either.
+            }
+        }
+        super.close();
     }
 
     @Override

@@ -257,6 +257,13 @@ class LocalSqlServerTest {
      * throughout. They do not - each call in a TDS batch carries its own
      * types, which is why every second row here passes a {@code null} where
      * the others pass text.
+     *
+     * <p>Since the statement is compiled once and then addressed by handle
+     * ({@code sp_prepexec} then {@code sp_execute}), the <b>first</b> batch
+     * costs two: one to compile, one for the rest. Every batch after it costs
+     * one. That is the trade - a round trip once per statement against the
+     * full statement text and parameter declaration on every single row,
+     * which is what {@code sp_executesql} carries.
      */
     @Test
     void aBatchOfTwoHundredRowsCostsOneRoundTrip() throws Exception {
@@ -286,21 +293,41 @@ class LocalSqlServerTest {
                     }
                     long before = RoundTrips.of(connection);
                     int[] counts = insert.executeBatch();
-                    assertEquals(1, RoundTrips.of(connection) - before,
-                            "two hundred rows have to fit in one message");
+                    assertEquals(2, RoundTrips.of(connection) - before,
+                            "the first batch compiles the statement, then sends the rest");
                     assertEquals(200, counts.length);
                     for (int count : counts) {
                         assertEquals(1, count, "every row reports its own count");
                     }
+
+                    // And the point of the handle: the SECOND batch on the
+                    // same statement needs no compile. Two hundred more rows,
+                    // one round trip - which is the invariant worth pinning,
+                    // because a driver that re-prepares every time would pass
+                    // the assertion above and fail this one.
+                    for (int i = 201; i <= 400; i++) {
+                        insert.setInt(1, i);
+                        if (i % 2 == 0) {
+                            insert.setNull(2, Types.NVARCHAR);
+                        } else {
+                            insert.setString(2, "row " + i);
+                        }
+                        insert.addBatch();
+                    }
+                    long beforeSecond = RoundTrips.of(connection);
+                    assertEquals(200, insert.executeBatch().length);
+                    assertEquals(1, RoundTrips.of(connection) - beforeSecond,
+                            "a prepared statement must not compile twice");
                 }
                 connection.commit();
                 try (Statement statement = connection.createStatement();
                      ResultSet rows = statement.executeQuery(
                              "select count(*), count(t), sum(cast(n as bigint)) from zl_batch")) {
                     assertTrue(rows.next());
-                    assertEquals(200, rows.getInt(1), "rows lost");
-                    assertEquals(100, rows.getInt(2), "the nulls did not stay null");
-                    assertEquals(20100L, rows.getLong(3), "the values changed");
+                    // Both batches: 400 rows, 1..400, every second one null.
+                    assertEquals(400, rows.getInt(1), "rows lost");
+                    assertEquals(200, rows.getInt(2), "the nulls did not stay null");
+                    assertEquals(80200L, rows.getLong(3), "the values changed");
                 }
             } finally {
                 connection.setAutoCommit(true);
