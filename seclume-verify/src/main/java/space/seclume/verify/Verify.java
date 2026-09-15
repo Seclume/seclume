@@ -254,6 +254,21 @@ public final class Verify {
                     RoundTrips.of(connection) - before));
 
             connection.setAutoCommit(true);
+            // The first use of a prepared statement, measured from the
+            // prepareStatement call rather than from the execution.
+            //
+            // This is the line that pays for itself. On PostgreSQL it stood at
+            // three where one is enough, and neither the mean nor a percentile
+            // showed it - one operation in a thousand is invisible in an
+            // average and looks like noise in a tail. A count does not average.
+            long beforeFirst = RoundTrips.of(connection);
+            try (PreparedStatement fresh = connection.prepareStatement(probe);
+                 ResultSet rows = fresh.executeQuery()) {
+                rows.next();
+            }
+            report.line("prepared, first run", String.valueOf(
+                    RoundTrips.of(connection) - beforeFirst));
+
             try (PreparedStatement prepared = connection.prepareStatement(probe)) {
                 try (ResultSet warmup = prepared.executeQuery()) {
                     warmup.next();

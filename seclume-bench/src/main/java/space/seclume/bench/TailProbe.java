@@ -29,6 +29,13 @@ public final class TailProbe {
 
         BenchDatabase database = BenchDatabase.fromSystemProperties();
         String sql = database.selectOne();
+        // The other side is a different driver on each database - name it.
+        String vendorName = switch (database.kind()) {
+            case POSTGRESQL -> "pgjdbc    ";
+            case MYSQL -> "mysql-j   ";
+            case SQLSERVER -> "mssql-jdbc";
+            case ORACLE -> "ojdbc     ";
+        };
 
         try (Connection own = database.seclume().getConnection();
              Connection vendor = java.sql.DriverManager.getConnection(
@@ -46,9 +53,32 @@ public final class TailProbe {
                 run(vendor, sql, vendorTimes, block * perBlock, perBlock);
             }
             System.out.println("prepare + execute, one connection, single threaded");
-            report("seclume", ownTimes);
-            report("pgjdbc  ", vendorTimes);
+            report("seclume  ", ownTimes);
+            report(vendorName, vendorTimes);
 
+            // The same again with the statement prepared once. What is left is
+            // the execution path - bind, send, read the answer - which is what
+            // a pool with a statement cache actually runs.
+            try (PreparedStatement ownStatement = own.prepareStatement(sql);
+                 PreparedStatement vendorStatement = vendor.prepareStatement(sql)) {
+                execute(ownStatement, new long[perBlock], 0, perBlock);
+                execute(vendorStatement, new long[perBlock], 0, perBlock);
+                for (int block = 0; block < blocks; block++) {
+                    execute(ownStatement, ownTimes, block * perBlock, perBlock);
+                    execute(vendorStatement, vendorTimes, block * perBlock, perBlock);
+                }
+            }
+            System.out.println("execute only, statement prepared once");
+            report("seclume  ", ownTimes);
+            report(vendorName, vendorTimes);
+
+            // The two control arms below are pgjdbc's own settings. They
+            // answer a PostgreSQL question and have no counterpart elsewhere,
+            // so on the other three databases the comparison stops here.
+            if (database.kind() != BenchDatabase.Kind.POSTGRESQL) {
+                return;
+            }
+            System.out.println("controls, PostgreSQL only");
             // pgjdbc, told to do what we do: prepare on the server from the
             // first execution instead of waiting for the fifth. If the gap
             // above is the server planning and storing a named plan, this
@@ -83,21 +113,6 @@ public final class TailProbe {
                 report("pgjdbc uncached", plainTimes);
             }
 
-            // The same again with the statement prepared once. What is left is
-            // the execution path - bind, send, read the answer - which is what
-            // a pool with a statement cache actually runs.
-            try (PreparedStatement ownStatement = own.prepareStatement(sql);
-                 PreparedStatement vendorStatement = vendor.prepareStatement(sql)) {
-                execute(ownStatement, new long[perBlock], 0, perBlock);
-                execute(vendorStatement, new long[perBlock], 0, perBlock);
-                for (int block = 0; block < blocks; block++) {
-                    execute(ownStatement, ownTimes, block * perBlock, perBlock);
-                    execute(vendorStatement, vendorTimes, block * perBlock, perBlock);
-                }
-            }
-            System.out.println("execute only, statement prepared once");
-            report("seclume", ownTimes);
-            report("pgjdbc  ", vendorTimes);
         }
     }
 
