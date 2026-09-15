@@ -47,7 +47,8 @@ public final class SeclumeDriver implements Driver {
             return null;
         }
         PgSession.Settings settings = SeclumeUrl.settings(url, properties);
-        return new PgConnection(PgSession.open(settings), url);
+        return new PgConnection(PgSession.open(settings), url,
+                SeclumeUrl.statementCacheSize(url, properties));
     }
 
     @Override

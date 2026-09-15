@@ -39,6 +39,7 @@ public final class SeclumeDataSource implements DataSource {
     private String user;
     private String applicationName = "seclume";
     private int connectTimeoutMillis = 10_000;
+    private int statementCacheSize = SeclumeUrl.DEFAULT_STATEMENT_CACHE;
     private boolean deferSessionState = true;
     private SecretProvider secret;
     private PrintWriter logWriter;
@@ -183,7 +184,29 @@ public final class SeclumeDataSource implements DataSource {
         // PgSession#setDeferSessionState.
         session.setDeferSessionState(deferSessionState);
         return new PgConnection(session,
-                SeclumeUrl.PREFIX + "//" + host + ":" + port + "/" + database);
+                SeclumeUrl.PREFIX + "//" + host + ":" + port + "/" + database,
+                statementCacheSize);
+    }
+
+    /**
+     * How many server-side plans a connection keeps for reuse; 0 switches it
+     * off.
+     *
+     * <p>On by default. Without it every {@code prepareStatement} parses and
+     * plans afresh on the server, which is what the prepare-run-close shape
+     * does all day. Switch it off for a connection that sees thousands of
+     * distinct statements and would only ever fill the cache.
+     */
+    public void setStatementCacheSize(int statementCacheSize) {
+        if (statementCacheSize < 0) {
+            throw new IllegalArgumentException(
+                    "the statement cache size cannot be negative: " + statementCacheSize);
+        }
+        this.statementCacheSize = statementCacheSize;
+    }
+
+    public int getStatementCacheSize() {
+        return statementCacheSize;
     }
 
     /**

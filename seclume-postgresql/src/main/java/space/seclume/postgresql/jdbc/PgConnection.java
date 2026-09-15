@@ -48,8 +48,71 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
     private int isolation = TRANSACTION_READ_COMMITTED;
 
     PgConnection(PgSession session, String url) {
+        this(session, url, SeclumeUrl.DEFAULT_STATEMENT_CACHE);
+    }
+
+    PgConnection(PgSession session, String url, int statementCacheSize) {
         this.session = session;
         this.url = url;
+        this.statementCacheSize = Math.max(statementCacheSize, 0);
+    }
+
+    // ---- the plan cache --------------------------------------------------
+
+    /**
+     * Plans this connection has parsed and nobody is using at the moment.
+     *
+     * <p>Without it every {@code prepareStatement} is a fresh plan on the
+     * server, parsed and planned and thrown away again - measured at eleven
+     * microseconds over a loopback connection against pgjdbc, which keeps such
+     * a cache and is otherwise level with us. Whoever uses the seclume pool
+     * never notices, because the pool caches the JDBC statements themselves;
+     * whoever uses the driver on its own pays it on every call.
+     *
+     * <p>A plan goes in when its statement is <b>closed</b>, not when it is
+     * created. That is what makes the whole thing safe: two live statements
+     * can never share a plan name, and with it the unnamed portal, so nothing
+     * can interleave. And only a plan that has run at least once successfully
+     * is kept - a statement whose Parse failed has no plan on the server, and
+     * caching that name would hand the next caller a Bind against nothing.
+     */
+    private final java.util.LinkedHashMap<String, Idle> idlePlans =
+            new java.util.LinkedHashMap<>(16, 0.75f, true);
+    private final int statementCacheSize;
+
+    /** A parsed plan, with what the server said its columns are. */
+    private record Idle(String name, List<PgSession.Field> described) {
+    }
+
+    /** Takes an idle plan for this SQL, or null when there is none. */
+    private Idle takePlan(String sql) {
+        return statementCacheSize == 0 ? null : idlePlans.remove(sql);
+    }
+
+    /**
+     * Gives a plan back, or releases it when the cache is full or off.
+     *
+     * @param described what the statement returns, or null when it never ran -
+     *                  in that case the plan is released rather than kept
+     */
+    void releasePlan(String sql, String name, List<PgSession.Field> described)
+            throws SQLException {
+        if (statementCacheSize == 0 || described == null) {
+            session.closeStatementLater(name);
+            return;
+        }
+        Idle previous = idlePlans.put(sql, new Idle(name, described));
+        if (previous != null) {
+            // Two statements on the same SQL were open at once; only one plan
+            // is worth keeping.
+            session.closeStatementLater(previous.name());
+        }
+        while (idlePlans.size() > statementCacheSize) {
+            var oldest = idlePlans.entrySet().iterator();
+            Idle evicted = oldest.next().getValue();
+            oldest.remove();
+            session.closeStatementLater(evicted.name());
+        }
     }
 
     /** A result block a closed statement left behind - see takeSpareBlock. */
@@ -113,8 +176,11 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public PreparedStatement prepareStatement(String sql) throws SQLException {
         checkOpen();
-        PgPreparedStatement statement = new PgPreparedStatement(this, sql,
-                "zl_" + statementCounter.incrementAndGet());
+        Idle idle = takePlan(sql);
+        PgPreparedStatement statement = idle == null
+                ? new PgPreparedStatement(this, sql,
+                        "zl_" + statementCounter.incrementAndGet(), null)
+                : new PgPreparedStatement(this, sql, idle.name(), idle.described());
         open.add(statement);
         return statement;
     }

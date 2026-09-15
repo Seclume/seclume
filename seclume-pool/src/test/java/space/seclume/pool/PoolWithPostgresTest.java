@@ -170,30 +170,51 @@ class PoolWithPostgresTest {
     }
 
     /**
-     * Switched off, nothing is kept - and it has to be switched off explicitly.
+     * There are two caches, and switching off the pool's leaves the driver's.
      *
-     * <p>This test used to rely on zero being the default. It is not any more:
-     * off meant no statement caching anywhere, because this driver has none of
-     * its own, while the HikariCP-plus-pgjdbc combination it gets compared
-     * against caches in the driver. That cost a factor of two on the shape
-     * every framework uses; see {@code PoolSettings#setStatementCacheSize}.
+     * <p>This test used to assert that nothing at all is kept once the pool's
+     * cache is off, and that was true while the driver had no cache of its own.
+     * It has one now, so the two are worth keeping apart: the pool reuses the
+     * <b>JDBC statement object</b> across borrows, the driver keeps the
+     * <b>server-side plan</b> on the connection. Turning off the pool's saves
+     * the wrapper; the plan survives, which is the whole point of the driver's.
      */
     @Test
-    void withoutTheCacheNothingStaysPrepared() throws Exception {
+    void withoutThePoolsCacheTheDriverStillKeepsThePlan() throws Exception {
         PoolSettings off = settings(1);
         off.setStatementCacheSize(0);
         try (SeclumePool pool = new SeclumePool(dataSource(), off)) {
-            String sql = "select 2 where 2 = ?";
-            try (Connection connection = pool.getConnection();
-                 PreparedStatement query = connection.prepareStatement(sql)) {
-                query.setInt(1, 2);
-                try (ResultSet rows = query.executeQuery()) {
-                    assertTrue(rows.next());
-                }
+            runOnce(pool, "select 2 where 2 = ?");
+            try (Connection connection = pool.getConnection()) {
+                assertEquals(1, preparedOnServer(connection),
+                        "the driver keeps the plan even when the pool keeps nothing");
             }
+        }
+    }
+
+    /** With both switched off, a closed statement takes its plan with it. */
+    @Test
+    void withNeitherCacheNothingStaysPrepared() throws Exception {
+        PoolSettings off = settings(1);
+        off.setStatementCacheSize(0);
+        SeclumeDataSource source = dataSource();
+        source.setStatementCacheSize(0);
+        try (SeclumePool pool = new SeclumePool(source, off)) {
+            runOnce(pool, "select 2 where 2 = ?");
             try (Connection connection = pool.getConnection()) {
                 assertEquals(0, preparedOnServer(connection),
                         "a closed statement should have taken its plan with it");
+            }
+        }
+    }
+
+    /** Borrows a connection, runs the statement once, gives everything back. */
+    private static void runOnce(SeclumePool pool, String sql) throws Exception {
+        try (Connection connection = pool.getConnection();
+             PreparedStatement query = connection.prepareStatement(sql)) {
+            query.setInt(1, 2);
+            try (ResultSet rows = query.executeQuery()) {
+                assertTrue(rows.next());
             }
         }
     }

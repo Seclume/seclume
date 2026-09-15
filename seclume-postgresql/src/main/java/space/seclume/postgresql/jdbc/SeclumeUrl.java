@@ -70,4 +70,25 @@ final class SeclumeUrl {
             throw new SQLException(e.getMessage(), "08001", e);
         }
     }
+
+    /**
+     * How many server-side plans one connection keeps for reuse; 0 switches it
+     * off.
+     *
+     * <p>Not part of {@link PgSession.Settings} on purpose: the session knows
+     * nothing about JDBC statements, and this is a JDBC-level concern.
+     */
+    static int statementCacheSize(String url, java.util.Properties properties) {
+        try {
+            return JdbcUrl.parse(url, properties, PREFIX, DEFAULT_PORT)
+                    .number("statementCacheSize", DEFAULT_STATEMENT_CACHE);
+        } catch (RuntimeException e) {
+            // The URL is parsed properly a line earlier and its errors reported
+            // there; a second failure here must not turn into a different one.
+            return DEFAULT_STATEMENT_CACHE;
+        }
+    }
+
+    /** Enough for the statements one request touches, small enough to forget. */
+    static final int DEFAULT_STATEMENT_CACHE = 32;
 }

@@ -41,6 +41,8 @@ import space.seclume.postgresql.PgSession;
 final class PgPreparedStatement extends PgStatement implements PreparedStatement {
 
     private final String sql;
+    /** As the caller wrote it - the key the connection caches the plan under. */
+    private final String originalSql;
     private final String name;
     private final PgParameters parameters;
     private final int expectedParameters;
@@ -49,14 +51,28 @@ final class PgPreparedStatement extends PgStatement implements PreparedStatement
     private boolean prepared;
     private boolean released;
 
-    PgPreparedStatement(PgConnection connection, String sql, String name) throws SQLException {
+    /**
+     * @param cached what the server already said about this plan, when the
+     *               connection handed back one it had parsed before - null for
+     *               a plan that does not exist on the server yet
+     */
+    PgPreparedStatement(PgConnection connection, String sql, String name,
+            List<PgSession.Field> cached) throws SQLException {
         super(connection);
         // PostgreSQL knows no question marks; $1, $2 ... are its placeholders.
         PgSqlRewriter.Rewritten rewritten = PgSqlRewriter.rewrite(sql);
+        this.originalSql = sql;
         this.sql = rewritten.sql();
         this.expectedParameters = rewritten.parameters();
         this.name = name;
         this.parameters = new PgParameters(Math.max(rewritten.parameters(), 8));
+        if (cached != null) {
+            // The plan is on the server and its shape is known. Nothing has to
+            // be announced and nothing has to be described - the first Bind can
+            // go straight out.
+            this.described = cached;
+            this.prepared = true;
+        }
     }
 
     /**
@@ -536,12 +552,16 @@ final class PgPreparedStatement extends PgStatement implements PreparedStatement
         if (!isClosed() && prepared && !released) {
             released = true;
             try {
-                // Rides along with the next statement. Nobody waits for the
-                // answer to a close - the method returns nothing - and if the
-                // connection ends first, the plan goes with it anyway. The
-                // answer is still read and still checked, just one round trip
-                // later.
-                connection.session().closeStatementLater(name);
+                // Back to the connection rather than to the server. It keeps
+                // the plan for the next caller who asks for the same SQL, or
+                // releases it when the cache is full or switched off - and
+                // releasing rides along with the next statement, so nobody
+                // waits for it either way.
+                //
+                // described is the condition, not a convenience: it is set once
+                // the statement has run, so a plan whose Parse failed is never
+                // offered to anybody.
+                connection.releasePlan(originalSql, name, described);
             } catch (SQLException ignored) {
                 // On close the server plan is the lesser problem; it goes
                 // away with the connection at the latest anyway.
