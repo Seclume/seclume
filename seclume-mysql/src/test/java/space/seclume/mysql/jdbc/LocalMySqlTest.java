@@ -424,6 +424,58 @@ class LocalMySqlTest {
         }
     }
 
+    /**
+     * A batch really runs inside the transaction - checked by rolling it back.
+     *
+     * <p>This is the test that was missing, and the gap it left cost a factor
+     * of forty. {@code setAutoCommit(false)} does not go to the server on its
+     * own: it is announced and rides along with the next statement, which saves
+     * a round trip. The batch path forgot to take it along, so five hundred
+     * rows ran with autocommit still <b>on</b> - each one its own durable
+     * transaction, each one an {@code fsync}, 1.9 ms per row.
+     *
+     * <p>Nothing about that was visible from the outside. The round trips were
+     * perfect (two for five hundred rows), every row was inserted, every count
+     * came back as 1, and the existing batch test passed - because it commits
+     * at the end, and a row that committed itself earlier looks exactly the
+     * same afterwards. Only a rollback can tell the two apart.
+     *
+     * <p>So: insert, roll back, and the table has to be empty. If autocommit
+     * is on, the rows survive and this test says so.
+     */
+    @Test
+    void aBatchRunsInsideTheTransactionAndRollsBackWithIt() throws Exception {
+        try (Connection connection = connect()) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("drop table if exists seclume_batch_tx");
+                statement.execute(
+                        "create table seclume_batch_tx (n int) engine=innodb");
+            }
+            connection.setAutoCommit(false);
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into seclume_batch_tx values (?)")) {
+                for (int i = 0; i < 20; i++) {
+                    insert.setInt(1, i);
+                    insert.addBatch();
+                }
+                assertEquals(20, insert.executeBatch().length);
+            }
+            connection.rollback();
+            connection.setAutoCommit(true);
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet result = statement.executeQuery(
+                         "select count(*) from seclume_batch_tx")) {
+                assertTrue(result.next());
+                assertEquals(0, result.getInt(1),
+                        "the batch ran with autocommit on - the rows survived a rollback");
+            }
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("drop table seclume_batch_tx");
+            }
+        }
+    }
+
     /** Logging in with {@code caching_sha2_password} - MySQL 8's default. */
     @Test
     void logsInAndAnswers() throws Exception {

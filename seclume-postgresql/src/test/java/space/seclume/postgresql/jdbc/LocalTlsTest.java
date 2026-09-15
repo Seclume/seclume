@@ -40,6 +40,23 @@ class LocalTlsTest {
         Assumptions.assumeTrue(password != null, "no .local-pg-password");
     }
 
+    /**
+     * A stopped container is a skip, not a failure.
+     *
+     * <p>The password file outliving the container is the normal case here -
+     * these are throwaway servers that get stopped between sessions. Checking
+     * only for the file turned that into a red build, which is what every
+     * other local test in this repository already avoids by dialling the port
+     * first.
+     */
+    private static void requireReachable(String host, int port) {
+        try (java.net.Socket socket = new java.net.Socket()) {
+            socket.connect(new java.net.InetSocketAddress(host, port), 2000);
+        } catch (java.io.IOException e) {
+            Assumptions.abort("no TLS server on " + host + ":" + port);
+        }
+    }
+
     private static PgSession.Settings settings(TlsMode mode) throws SQLException {
         return new PgSession.Settings(HOST, PORT, "seclume_test", "seclume_test",
                 SecretProviders.of(java.util.Map.of("provider", "file", "path", password.toString())), "seclume", 5_000,
@@ -76,6 +93,7 @@ class LocalTlsTest {
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
         String host = System.getProperty("seclume.pgtls.host", "db.example.invalid");
         int port = Integer.getInteger("seclume.pgtls.port", 5433);
+        requireReachable(host, port);
 
         PgSession.Settings require = new PgSession.Settings(host, port, "seclume_test",
                 "seclume_test",
@@ -120,6 +138,7 @@ class LocalTlsTest {
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
         String host = System.getProperty("seclume.pgtls.host", "db.example.invalid");
         int port = Integer.getInteger("seclume.pgtls.port", 5433);
+        requireReachable(host, port);
 
         PgSession.Settings require = new PgSession.Settings(host, port, "seclume_test",
                 "seclume_test",
@@ -170,6 +189,7 @@ class LocalTlsTest {
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
         String host = System.getProperty("seclume.pgtls.host", "db.example.invalid");
         int port = Integer.getInteger("seclume.pgtls.port", 5433);
+        requireReachable(host, port);
 
         PgSession.Settings verify = new PgSession.Settings(host, port, "seclume_test",
                 "seclume_test",

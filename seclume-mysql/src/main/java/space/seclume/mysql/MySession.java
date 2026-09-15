@@ -728,8 +728,8 @@ public final class MySession implements AutoCloseable {
             boolean carried = writePending();
             WireBuffer out = channel.beginCommand(COM_STMT_EXECUTE);
             out.putIntLe(statement.statementId());
-            out.putByte((byte) 0);                   // keine Cursor
-            out.putIntLe(1);                         // Wiederholungen, immer 1
+            out.putByte((byte) 0);                   // no cursor
+            out.putIntLe(1);                         // iterations, always 1
             parameters.write(out, statement.parameterCount());
             channel.end();
             channel.flush();
@@ -1058,6 +1058,17 @@ public final class MySession implements AutoCloseable {
         int at = 0;
         SQLException failure = null;
         try {
+            // The pending session setting goes FIRST, in the same flush.
+            //
+            // Leaving it out was a bug worth writing down: setAutoCommit(false)
+            // only announces itself and rides along with the next statement, so
+            // a batch that skipped it ran with autocommit still ON - and every
+            // one of five hundred rows became its own durable transaction. The
+            // round trips looked perfect (two for five hundred rows) while the
+            // server paid an fsync per row: 1.9 ms each, measured, which made
+            // the batch three times slower than Connector/J instead of faster.
+            // A counter that only counts round trips cannot see this.
+            boolean carried = writePending();
             while (at < count) {
                 int start = at;
                 int sent = 0;
@@ -1066,14 +1077,18 @@ public final class MySession implements AutoCloseable {
                     binder.bind(at);
                     WireBuffer out = channel.beginCommand(COM_STMT_EXECUTE);
                     out.putIntLe(statement.statementId());
-                    out.putByte((byte) 0);               // keine Cursor
-                    out.putIntLe(1);                     // Wiederholungen, immer 1
+                    out.putByte((byte) 0);               // no cursor
+                    out.putIntLe(1);                     // iterations, always 1
                     parameters.write(out, statement.parameterCount());
                     channel.end();
                     at++;
                     sent++;
                 }
                 channel.flush();
+                if (carried) {
+                    readOkOrError("the session setting");
+                    carried = false;
+                }
                 for (int i = 0; i < sent; i++) {
                     try {
                         readResult(null, true);
