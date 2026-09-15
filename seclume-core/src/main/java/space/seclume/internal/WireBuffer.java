@@ -184,6 +184,33 @@ public final class WireBuffer implements AutoCloseable {
      * {@code String} and therefore from the heap.
      */
     public WireBuffer putText(String text) {
+        // The fast path writes straight into native memory, one byte per
+        // character, and allocates nothing. That is worth a loop: protocol
+        // text is SQL, identifiers, portal names - ASCII almost always, and
+        // the empty string more often than anything else. The old version
+        // went through String.getBytes, which allocates a byte[] every time,
+        // including a zero-length one for "". Three of those per execution
+        // showed up in the allocation profile of a prepared statement.
+        int length = text.length();
+        ensureCapacity(position + length);
+        for (int i = 0; i < length; i++) {
+            char c = text.charAt(i);
+            if (c >= 0x80) {
+                return putTextUtf8(text);        // rare, and then done properly
+            }
+            segment.set(ValueLayout.JAVA_BYTE, position + i, (byte) c);
+        }
+        position += length;
+        return this;
+    }
+
+    /**
+     * The general case, for text that is not ASCII.
+     *
+     * <p>Nothing written by the fast path before it gave up is kept: the
+     * position has not moved, so these bytes land on top of it.
+     */
+    private WireBuffer putTextUtf8(String text) {
         byte[] bytes = text.getBytes(StandardCharsets.UTF_8); // seclume-allow: protocol text and identifiers, never a secret
         ensureCapacity(position + bytes.length);
         MemorySegment.copy(MemorySegment.ofArray(bytes), 0, segment, position, bytes.length);
