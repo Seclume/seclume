@@ -1,10 +1,7 @@
 package space.seclume.oracle.net;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
 
 import space.seclume.internal.WireBuffer;
 
@@ -86,7 +83,7 @@ public final class NsChannel implements AutoCloseable {
     private static final int CROSS_FACILITY = 0x0bb3;
     private static final int LARGE_SDU = 0x20000020;
 
-    private final SocketChannel channel;
+    private final space.seclume.internal.Transport channel;
     private final WireBuffer out = new WireBuffer(16 * 1024);
     private final WireBuffer in = new WireBuffer(32 * 1024);
 
@@ -122,22 +119,15 @@ public final class NsChannel implements AutoCloseable {
      */
     private space.seclume.internal.TlsChannel tls;
 
-    private NsChannel(SocketChannel channel) {
+    private NsChannel(space.seclume.internal.Transport channel) {
         this.channel = channel;
     }
 
     public static NsChannel connect(String host, int port, int connectTimeoutMillis)
             throws IOException {
-        SocketChannel channel = SocketChannel.open();
-        try {
-            channel.socket().connect(new InetSocketAddress(host, port), connectTimeoutMillis);
-            channel.configureBlocking(true);
-            channel.setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
-            return new NsChannel(channel);
-        } catch (IOException e) {
-            channel.close();
-            throw e;
-        }
+        // Blocking and TCP_NODELAY live in the transport now - they belong to
+        // whoever owns the descriptor, not to whoever writes packets into it.
+        return new NsChannel(space.seclume.internal.SocketTransport.connect(host, port, connectTimeoutMillis));
     }
 
     /**
@@ -521,11 +511,8 @@ public final class NsChannel implements AutoCloseable {
 
     @Override
     public void close() {
-        try {
-            channel.close();
-        } catch (IOException ignored) {
-            // While closing, a failure has no consequences.
-        }
+        // The transport swallows its own close error - see Transport#close.
+        channel.close();
         out.close();
         in.close();
     }

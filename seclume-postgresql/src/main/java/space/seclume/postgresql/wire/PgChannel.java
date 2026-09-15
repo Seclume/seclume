@@ -1,10 +1,7 @@
 package space.seclume.postgresql.wire;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
 
 import space.seclume.internal.WireBuffer;
 
@@ -24,7 +21,7 @@ public final class PgChannel implements AutoCloseable {
 
     private static final int DEFAULT_BUFFER = 32 * 1024;
 
-    private final SocketChannel channel;
+    private final space.seclume.internal.Transport channel;
 
     /**
      * The TLS layer once the server agreed to it, or {@code null}.
@@ -43,24 +40,16 @@ public final class PgChannel implements AutoCloseable {
     /** End of the message read last, within the receive buffer. */
     private int messageEnd;
 
-    private PgChannel(SocketChannel channel) {
+    private PgChannel(space.seclume.internal.Transport channel) {
         this.channel = channel;
     }
 
     public static PgChannel connect(String host, int port, int connectTimeoutMillis)
             throws IOException {
-        SocketChannel channel = SocketChannel.open();
-        try {
-            channel.socket().connect(new InetSocketAddress(host, port), connectTimeoutMillis);
-            channel.configureBlocking(true);
-            // A handshake consists of small messages that have to leave at
-            // once - with Nagle each one waits for the next.
-            channel.setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
-            return new PgChannel(channel);
-        } catch (IOException e) {
-            channel.close();
-            throw e;
-        }
+        // The socket options that used to stand here - blocking, TCP_NODELAY -
+        // live in the transport now, because they belong to whoever owns the
+        // descriptor and not to whoever writes messages into it.
+        return new PgChannel(space.seclume.internal.SocketTransport.connect(host, port, connectTimeoutMillis));
     }
 
     /**
@@ -126,9 +115,20 @@ public final class PgChannel implements AutoCloseable {
         return tls == null ? null : tls.protocol() + " / " + tls.cipherSuite();
     }
 
+    /**
+     * For tests: a channel over any transport at all.
+     *
+     * <p>The one that proves the seam is real. A test that only ever passes a
+     * SocketChannel through it would pass just as well if something below
+     * still cast back to one.
+     */
+    public static PgChannel over(space.seclume.internal.Transport transport) {
+        return new PgChannel(transport);
+    }
+
     /** For tests: an already connected channel. */
-    public static PgChannel wrap(SocketChannel channel) {
-        return new PgChannel(channel);
+    public static PgChannel wrap(java.nio.channels.SocketChannel channel) {
+        return new PgChannel(space.seclume.internal.SocketTransport.wrap(channel));
     }
 
     // ---- writing ---------------------------------------------------------
@@ -324,11 +324,8 @@ public final class PgChannel implements AutoCloseable {
 
     @Override
     public void close() {
-        try {
-            channel.close();
-        } catch (IOException ignored) {
-            // On close an error has no consequences.
-        }
+        // The transport swallows its own close error - see Transport#close.
+        channel.close();
         out.close();
         in.close();
     }

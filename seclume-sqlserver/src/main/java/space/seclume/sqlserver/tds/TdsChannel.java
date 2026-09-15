@@ -1,10 +1,7 @@
 package space.seclume.sqlserver.tds;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
 
 import space.seclume.internal.WireBuffer;
 
@@ -20,7 +17,7 @@ import space.seclume.internal.WireBuffer;
  */
 public final class TdsChannel implements AutoCloseable {
 
-    private final SocketChannel channel;
+    private final space.seclume.internal.Transport channel;
     private final WireBuffer out = new WireBuffer(16 * 1024);
     private final WireBuffer in = new WireBuffer(32 * 1024);
 
@@ -37,26 +34,19 @@ public final class TdsChannel implements AutoCloseable {
      */
     private TdsTls tls;
 
-    private TdsChannel(SocketChannel channel) {
+    private TdsChannel(space.seclume.internal.Transport channel) {
         this.channel = channel;
     }
 
     public static TdsChannel connect(String host, int port, int connectTimeoutMillis)
             throws IOException {
-        SocketChannel channel = SocketChannel.open();
-        try {
-            channel.socket().connect(new InetSocketAddress(host, port), connectTimeoutMillis);
-            channel.configureBlocking(true);
-            channel.setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
-            return new TdsChannel(channel);
-        } catch (IOException e) {
-            channel.close();
-            throw e;
-        }
+        // Blocking and TCP_NODELAY live in the transport now - they belong to
+        // whoever owns the descriptor, not to whoever frames packets in it.
+        return new TdsChannel(space.seclume.internal.SocketTransport.connect(host, port, connectTimeoutMillis));
     }
 
     /** The raw channel - only for the TLS handshake, which frames its own packets. */
-    SocketChannel raw() {
+    space.seclume.internal.Transport raw() {
         return channel;
     }
 
@@ -262,11 +252,8 @@ public final class TdsChannel implements AutoCloseable {
 
     @Override
     public void close() {
-        try {
-            channel.close();
-        } catch (IOException ignored) {
-            // While closing, a failure has no consequences.
-        }
+        // The transport swallows its own close error - see Transport#close.
+        channel.close();
         out.close();
         in.close();
     }

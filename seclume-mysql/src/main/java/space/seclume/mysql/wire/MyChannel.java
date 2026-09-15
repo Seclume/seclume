@@ -1,10 +1,7 @@
 package space.seclume.mysql.wire;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
 
 import space.seclume.internal.WireBuffer;
 
@@ -31,7 +28,7 @@ public final class MyChannel implements AutoCloseable {
     private static final int DEFAULT_BUFFER = 32 * 1024;
     private static final int HEADER = 4;
 
-    private final SocketChannel channel;
+    private final space.seclume.internal.Transport channel;
 
     /**
      * TLS, once it has been switched on - see {@link #startTls}.
@@ -52,22 +49,15 @@ public final class MyChannel implements AutoCloseable {
     private int messageEnd;
     private int filled;
 
-    private MyChannel(SocketChannel channel) {
+    private MyChannel(space.seclume.internal.Transport channel) {
         this.channel = channel;
     }
 
     public static MyChannel connect(String host, int port, int connectTimeoutMillis)
             throws IOException {
-        SocketChannel channel = SocketChannel.open();
-        try {
-            channel.socket().connect(new InetSocketAddress(host, port), connectTimeoutMillis);
-            channel.configureBlocking(true);
-            channel.setOption(StandardSocketOptions.TCP_NODELAY, Boolean.TRUE);
-            return new MyChannel(channel);
-        } catch (IOException e) {
-            channel.close();
-            throw e;
-        }
+        // Blocking and TCP_NODELAY live in the transport now - they belong to
+        // whoever owns the descriptor, not to whoever writes packets into it.
+        return new MyChannel(space.seclume.internal.SocketTransport.connect(host, port, connectTimeoutMillis));
     }
 
     /**
@@ -97,8 +87,8 @@ public final class MyChannel implements AutoCloseable {
     }
 
     /** For tests: an already connected channel. */
-    public static MyChannel wrap(SocketChannel channel) {
-        return new MyChannel(channel);
+    public static MyChannel wrap(java.nio.channels.SocketChannel channel) {
+        return new MyChannel(space.seclume.internal.SocketTransport.wrap(channel));
     }
 
     // ---- writing ---------------------------------------------------------
@@ -267,14 +257,12 @@ public final class MyChannel implements AutoCloseable {
 
     @Override
     public void close() {
-        try {
-            if (tls != null) {
-                tls.close();
-            }
-            channel.close();
-        } catch (IOException ignored) {
-            // On close an error has no consequences.
+        // Neither of the two throws any more - the transport swallows its own
+        // close error, see Transport#close.
+        if (tls != null) {
+            tls.close();
         }
+        channel.close();
         out.close();
         in.close();
     }

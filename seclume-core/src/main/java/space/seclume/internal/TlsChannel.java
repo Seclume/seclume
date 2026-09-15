@@ -3,7 +3,6 @@ package space.seclume.internal;
 import java.io.IOException;
 import java.net.Socket;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
@@ -39,13 +38,13 @@ public final class TlsChannel implements AutoCloseable {
     private static final ByteBuffer EMPTY = ByteBuffer.allocateDirect(0);
 
     private final SSLEngine engine;
-    private final SocketChannel channel;
+    private final Transport channel;
 
     private final ByteBuffer netOut;
     private final ByteBuffer netIn;
     private final ByteBuffer appIn;
 
-    private TlsChannel(SSLEngine engine, SocketChannel channel) {
+    private TlsChannel(SSLEngine engine, Transport channel) {
         this.engine = engine;
         this.channel = channel;
         SSLSession session = engine.getSession();
@@ -64,7 +63,7 @@ public final class TlsChannel implements AutoCloseable {
      *               stops a passive listener and not a man in the middle, and
      *               the caller has to have said so on purpose.
      */
-    public static TlsChannel create(SocketChannel channel, String host, int port, boolean verify)
+    public static TlsChannel create(Transport channel, String host, int port, boolean verify)
             throws IOException {
         try {
             SSLContext context;

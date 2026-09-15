@@ -2,7 +2,6 @@ package space.seclume.sqlserver.tds;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.X509Certificate;
@@ -36,7 +35,7 @@ import javax.net.ssl.X509TrustManager;
 public final class TdsTls {
 
     private final SSLEngine engine;
-    private final SocketChannel channel;
+    private final space.seclume.internal.Transport channel;
 
     private final ByteBuffer netOut;
     private final ByteBuffer netIn;
@@ -46,7 +45,7 @@ public final class TdsTls {
 
     private boolean handshakeDone;
 
-    private TdsTls(SSLEngine engine, SocketChannel channel) {
+    private TdsTls(SSLEngine engine, space.seclume.internal.Transport channel) {
         this.engine = engine;
         this.channel = channel;
         SSLSession session = engine.getSession();
@@ -71,7 +70,7 @@ public final class TdsTls {
      *        the middle - the name says so plainly, so that nobody switches it
      *        on by accident.
      */
-    public static TdsTls create(SocketChannel channel, String host, int port,
+    public static TdsTls create(space.seclume.internal.Transport channel, String host, int port,
                                 boolean trustAnyCertificate) throws IOException {
         try {
             SSLContext context;
