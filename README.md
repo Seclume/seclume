@@ -630,6 +630,28 @@ have to trust that a contribution does not do that. Not here:
 A contribution that breaks the core property therefore turns red without anyone having to read
 it for that. For an open project that is worth more than any guideline in a wiki.
 
+## Coordinates
+
+```xml
+<dependency>
+  <groupId>space.seclume</groupId>
+  <artifactId>seclume-postgresql</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
+
+One artifact per database — `seclume-postgresql`, `seclume-mysql`, `seclume-sqlserver`,
+`seclume-oracle` — plus `seclume-pool` and `seclume-spring-boot-starter`. The starter pulls
+what it needs.
+
+**The package root is `space.seclume`, without the hyphen**, and that is deliberate
+rather than an oversight: a hyphen is legal in a Maven groupId and illegal in a Java identifier,
+so the two cannot be spelled the same. Maven Central verifies the **groupId** — that the GitHub
+account is ours — and nothing verifies the package name, so the mismatch costs nothing. Anyone
+reading `space.seclume.postgresql.jdbc` in a stack trace is in the right place.
+
+The JDBC URL prefix is `jdbc:seclume:` and does not change with any of this.
+
 ## Building
 
 ```
