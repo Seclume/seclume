@@ -49,6 +49,40 @@ public final class TailProbe {
             report("seclume", ownTimes);
             report("pgjdbc  ", vendorTimes);
 
+            // pgjdbc, told to do what we do: prepare on the server from the
+            // first execution instead of waiting for the fifth. If the gap
+            // above is the server planning and storing a named plan, this
+            // arm pays the same and the gap disappears. If it does not, the
+            // cost is ours and worth looking for.
+            java.util.Properties eager = database.vendorProperties();
+            eager.setProperty("prepareThreshold", "1");
+            try (Connection strict = java.sql.DriverManager.getConnection(
+                    database.vendorUrl(), eager)) {
+                long[] strictTimes = new long[perBlock * blocks];
+                run(strict, sql, new long[perBlock], 0, perBlock);
+                for (int block = 0; block < blocks; block++) {
+                    run(strict, sql, strictTimes, block * perBlock, perBlock);
+                }
+                report("pgjdbc eager", strictTimes);
+            }
+
+            // And pgjdbc with its own cache switched off. It keeps server-side
+            // plans per connection, keyed by the SQL text, so calling
+            // prepareStatement in a loop is a cache hit after the first - which
+            // would make the arm above no comparison at all. Our driver has no
+            // such cache; the pool holds one instead.
+            java.util.Properties uncached = database.vendorProperties();
+            uncached.setProperty("preparedStatementCacheQueries", "0");
+            try (Connection plain = java.sql.DriverManager.getConnection(
+                    database.vendorUrl(), uncached)) {
+                long[] plainTimes = new long[perBlock * blocks];
+                run(plain, sql, new long[perBlock], 0, perBlock);
+                for (int block = 0; block < blocks; block++) {
+                    run(plain, sql, plainTimes, block * perBlock, perBlock);
+                }
+                report("pgjdbc uncached", plainTimes);
+            }
+
             // The same again with the statement prepared once. What is left is
             // the execution path - bind, send, read the answer - which is what
             // a pool with a statement cache actually runs.
