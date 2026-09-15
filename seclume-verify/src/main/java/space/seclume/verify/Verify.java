@@ -254,6 +254,17 @@ public final class Verify {
                     RoundTrips.of(connection) - before));
 
             connection.setAutoCommit(true);
+            // One throwaway statement before the measurement, and it is not
+            // ceremony: setAutoCommit does not talk to the server, it queues a
+            // setting to ride along with whatever comes next. Measured without
+            // this, the count includes that setting and reads one too high -
+            // which is exactly what the first version of this line did, and it
+            // took a second instrument to notice.
+            try (Statement flush = connection.createStatement();
+                 ResultSet rows = flush.executeQuery(probe)) {
+                rows.next();
+            }
+
             // The first use of a prepared statement, measured from the
             // prepareStatement call rather than from the execution.
             //
@@ -261,9 +272,14 @@ public final class Verify {
             // three where one is enough, and neither the mean nor a percentile
             // showed it - one operation in a thousand is invisible in an
             // average and looks like noise in a tail. A count does not average.
+            //
+            // The text is made unique on purpose. Two of the four drivers keep
+            // prepared statements per session, so asking for the same SQL twice
+            // would measure a cache hit and report the first use as free.
+            String fresh = probe + " /* seclume-verify */";
             long beforeFirst = RoundTrips.of(connection);
-            try (PreparedStatement fresh = connection.prepareStatement(probe);
-                 ResultSet rows = fresh.executeQuery()) {
+            try (PreparedStatement statement = connection.prepareStatement(fresh);
+                 ResultSet rows = statement.executeQuery()) {
                 rows.next();
             }
             report.line("prepared, first run", String.valueOf(
