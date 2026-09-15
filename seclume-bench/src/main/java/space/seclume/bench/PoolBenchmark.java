@@ -109,6 +109,12 @@ public class PoolBenchmark {
         settings.setMinimumIdle(size);
         settings.setWarmup(true);
         settings.setName("seclume-bench");
+        // Only when asked: otherwise the pool's own default is what gets
+        // measured, which is the number a user actually gets.
+        Integer cache = Integer.getInteger("bench.statementCache");
+        if (cache != null) {
+            settings.setStatementCacheSize(cache);
+        }
         settings.setConnectionTimeout(Duration.ofSeconds(10));
         return new SeclumePool(source, settings);
     }
@@ -124,6 +130,30 @@ public class PoolBenchmark {
     public void borrowAndReturn(Blackhole hole) throws SQLException {
         try (Connection connection = pool.getConnection()) {
             hole.consume(connection);
+        }
+    }
+
+    /**
+     * Borrow, prepare, execute, return - what a framework actually does.
+     *
+     * <p>{@link #borrowQueryReturn} uses a plain {@code Statement}, and that
+     * turns out to measure the one path applications almost never take:
+     * Hibernate and Spring Data prepare every statement, always. The two
+     * shapes are not interchangeable either - the prepared one is where a
+     * statement cache in the pool can do something, and where a driver that
+     * stops re-describing its results on every execution shows up.
+     *
+     * <p>The statement is prepared inside the borrow on purpose. Hoisting it
+     * out would measure a connection nobody gives back, which is not a pool.
+     */
+    @Benchmark
+    public void borrowPreparedReturn(Blackhole hole) throws SQLException {
+        try (Connection connection = pool.getConnection();
+             java.sql.PreparedStatement statement = connection.prepareStatement(selectOne);
+             ResultSet result = statement.executeQuery()) {
+            while (result.next()) {
+                hole.consume(result.getInt(1));
+            }
         }
     }
 

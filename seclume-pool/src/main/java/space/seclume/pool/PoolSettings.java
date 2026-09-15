@@ -27,7 +27,7 @@ public final class PoolSettings {
     private Duration validationBypassWindow = Duration.ofMillis(500);
     private Duration leakDetectionThreshold = Duration.ZERO;
     private boolean warmup;
-    private int statementCacheSize;
+    private int statementCacheSize = 64;
     private boolean renewBrokenConnections = true;
 
     /** Defaults; frameworks fill in from here through the setters. */
@@ -166,15 +166,34 @@ public final class PoolSettings {
     /**
      * How many prepared statements a connection keeps between borrows.
      *
-     * <p>Zero - the default - means none: a statement that is closed is closed,
-     * and the server throws its plan away. That is what every other pool does,
-     * and it is the safe default because a cache changes how long objects live.
+     * <p>Sixty-four by default, and it used to be zero. The old reasoning was
+     * that no other pool caches statements either - which is true and beside
+     * the point: <b>HikariCP does not cache because pgjdbc does</b>, with 256
+     * queries per connection, switched on out of the box. Our driver has no
+     * such cache of its own, so zero here meant no caching anywhere, while the
+     * combination it was being compared against cached all along.
      *
-     * <p>Set it, and a framework that builds a {@code PreparedStatement} per
-     * operation stops paying for the same parse over and over. The cache
-     * belongs to the physical connection - a plan lives in a session and means
-     * nothing outside it - and it is bounded, because a cache without a bound
-     * is a leak with good manners.
+     * <p>What that cost is measured. Borrow, prepare, execute, return - the
+     * shape every framework uses, because Hibernate and Spring Data prepare
+     * every statement:
+     *
+     * <pre>
+     * HikariCP + pgjdbc          832 B    59.6 us
+     * seclume, cache off       1235 B   111.1 us
+     * seclume, cache on         464 B    58.0 us
+     * </pre>
+     *
+     * <p>Off, the most common shape in production was twice as slow as
+     * HikariCP; on, it allocates a little over half as much and is no slower.
+     * A default that loses by a factor of two on the ordinary case is not a
+     * safe default, it is a trap.
+     *
+     * <p>Zero still switches it off. What it costs: the server keeps a plan
+     * per cached statement per connection, and a connection that sees more
+     * than sixty-four distinct statements churns the cache rather than
+     * growing it - bounded, because a cache without a bound is a leak with
+     * good manners. A plan lives in a session, so the cache belongs to the
+     * physical connection and goes when it does.
      */
     public void setStatementCacheSize(int statementCacheSize) {
         if (statementCacheSize < 0) {

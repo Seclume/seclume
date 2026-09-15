@@ -169,10 +169,20 @@ class PoolWithPostgresTest {
         }
     }
 
-    /** Without the cache nothing is kept - the old behaviour, unchanged. */
+    /**
+     * Switched off, nothing is kept - and it has to be switched off explicitly.
+     *
+     * <p>This test used to rely on zero being the default. It is not any more:
+     * off meant no statement caching anywhere, because this driver has none of
+     * its own, while the HikariCP-plus-pgjdbc combination it gets compared
+     * against caches in the driver. That cost a factor of two on the shape
+     * every framework uses; see {@code PoolSettings#setStatementCacheSize}.
+     */
     @Test
     void withoutTheCacheNothingStaysPrepared() throws Exception {
-        try (SeclumePool pool = new SeclumePool(dataSource(), settings(1))) {
+        PoolSettings off = settings(1);
+        off.setStatementCacheSize(0);
+        try (SeclumePool pool = new SeclumePool(dataSource(), off)) {
             String sql = "select 2 where 2 = ?";
             try (Connection connection = pool.getConnection();
                  PreparedStatement query = connection.prepareStatement(sql)) {
