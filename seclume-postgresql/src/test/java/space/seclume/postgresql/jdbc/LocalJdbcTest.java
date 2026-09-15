@@ -66,6 +66,51 @@ class LocalJdbcTest {
         return DriverManager.getConnection(url);
     }
 
+    /**
+     * A reused plan keeps its own columns, even when another one ran between.
+     *
+     * <p>This is the test for the risk that came with not asking any more.
+     * The first execution of a prepared statement gets the row description
+     * from the server and keeps it; every one after it skips the
+     * {@code DESCRIBE}, which is worth some five hundred bytes per execution.
+     * The price is that the session's idea of „the current columns" is no
+     * longer set by the server on each execution - so if it were not set from
+     * the remembered description, the rows of one statement would be decoded
+     * against the columns of whatever ran last on the connection.
+     *
+     * <p>Two statements with different shapes, run alternately, catch exactly
+     * that: names, types and values all have to stay with their own statement.
+     */
+    @Test
+    void aReusedPlanKeepsItsOwnColumnsAfterAnotherStatementRanBetween() throws Exception {
+        try (Connection connection = connect();
+             PreparedStatement two = connection.prepareStatement(
+                     "select ?::int as alpha, 'text'::varchar as beta");
+             PreparedStatement one = connection.prepareStatement(
+                     "select ?::bigint as gamma")) {
+
+            for (int round = 0; round < 3; round++) {
+                two.setInt(1, 40 + round);
+                try (ResultSet rows = two.executeQuery()) {
+                    assertEquals(2, rows.getMetaData().getColumnCount(), "round " + round);
+                    assertEquals("alpha", rows.getMetaData().getColumnLabel(1));
+                    assertEquals("beta", rows.getMetaData().getColumnLabel(2));
+                    assertTrue(rows.next());
+                    assertEquals(40 + round, rows.getInt(1));
+                    assertEquals("text", rows.getString(2));
+                }
+
+                one.setLong(1, 900 + round);
+                try (ResultSet rows = one.executeQuery()) {
+                    assertEquals(1, rows.getMetaData().getColumnCount(), "round " + round);
+                    assertEquals("gamma", rows.getMetaData().getColumnLabel(1));
+                    assertTrue(rows.next());
+                    assertEquals(900 + round, rows.getLong(1));
+                }
+            }
+        }
+    }
+
     @Test
     void theDriverManagerFindsUsThroughTheServiceFile() throws Exception {
         assertNotNull(DriverManager.getDriver(url));

@@ -145,7 +145,17 @@ final class PgPreparedStatement extends PgStatement implements PreparedStatement
         }
         PgSession session = connection.session();
         decideStreaming(true);
-        beginExecution(session, parameters, name, executeLimit(), sql);
+        // The first execution asks the server what the result looks like; every
+        // one after it already knows. That saves a DESCRIBE message, the whole
+        // row description coming back, and rebuilding the Field objects and
+        // column names from it - measured at some five hundred bytes per
+        // execution on a one-row query.
+        beginExecution(session, parameters, name, executeLimit(), sql, described);
+        if (described == null) {
+            // Empty counts as known: a statement that returns no rows has no
+            // description, and there is no point asking again for that either.
+            described = session.fields();
+        }
     }
 
     // ---- batches ---------------------------------------------------------

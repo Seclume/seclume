@@ -221,8 +221,19 @@ class PgStatement implements Statement, PgSession.RowHandler {
     /** Runs a prepared plan; the rows land the same way as above. */
     void beginExecution(PgSession session, space.seclume.postgresql.PgParameters params,
                         String statementName, int limit, String sql) throws SQLException {
+        beginExecution(session, params, statementName, limit, sql, null);
+    }
+
+    /**
+     * The same, for a statement whose result shape is already known - then the
+     * {@code DESCRIBE} is left out. See {@code PgSession.bindAndExecute}.
+     */
+    void beginExecution(PgSession session, space.seclume.postgresql.PgParameters params,
+                        String statementName, int limit, String sql,
+                        java.util.List<PgSession.Field> known) throws SQLException {
         collectingSql = sql;
-        collect(session, handler -> session.bindAndExecute(statementName, params, limit, handler));
+        collect(session, handler ->
+                session.bindAndExecute(statementName, params, limit, handler, known));
     }
 
     ResultSet currentResultSet() {

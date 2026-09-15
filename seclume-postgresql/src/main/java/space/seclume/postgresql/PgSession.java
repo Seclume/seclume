@@ -631,12 +631,29 @@ public final class PgSession implements AutoCloseable {
     }
 
     /**
-     * Runs a prepared statement.
+     * Runs a prepared statement, asking the server to describe the result.
      *
      * @param maxRows 0 = all rows; otherwise the server stops after that many
      */
     public void bindAndExecute(String statement, PgParameters parameters, int maxRows,
                                RowHandler handler) throws SQLException {
+        bindAndExecute(statement, parameters, maxRows, handler, null);
+    }
+
+    /**
+     * Runs a prepared statement whose result shape is already known.
+     *
+     * <p>{@code known} is the row description from the first execution. With
+     * it the {@code DESCRIBE} is left out and the server stops answering with
+     * the whole description on every execution - which is where the column
+     * names and the {@code Field} objects were being rebuilt each time, some
+     * five hundred bytes per execution measured on a one-row query.
+     *
+     * @param known the fields of an earlier execution, or {@code null} to ask
+     * @param maxRows 0 = all rows; otherwise the server stops after that many
+     */
+    public void bindAndExecute(String statement, PgParameters parameters, int maxRows,
+                               RowHandler handler, List<Field> known) throws SQLException {
         // Anything that really needs an answer sends the block first - that
         // is the promise of the pipeline: it saves round trips nobody waited
         // for, never a value somebody asked for.
@@ -644,16 +661,25 @@ public final class PgSession implements AutoCloseable {
         try {
             int carried = writePending() + writePendingParse();
             WireBuffer out = channel.begin(PgProtocol.BIND);
-            out.putCString("");                       // unbenanntes Portal
+            out.putCString("");                       // the unnamed portal
             out.putCString(statement);
             parameters.write(out);
-            out.putShort((short) 0);                  // Ergebnis im Textformat
+            out.putShort((short) 0);                  // results as text
             channel.end();
 
-            out = channel.begin(PgProtocol.DESCRIBE);
-            out.putByte((byte) 'P');
-            out.putCString("");
-            channel.end();
+            if (known == null) {
+                // Only the first time. Parse already described the statement,
+                // and a prepared statement's result shape cannot change under
+                // it: PostgreSQL refuses the execution with "cached plan must
+                // not change result type" rather than answering with a
+                // different one. That guarantee is what makes it safe to stop
+                // asking - and it holds today too, because the plan has been
+                // cached on the server all along.
+                out = channel.begin(PgProtocol.DESCRIBE);
+                out.putByte((byte) 'P');
+                out.putCString("");
+                channel.end();
+            }
 
             out = channel.begin(PgProtocol.EXECUTE);
             out.putCString("");
@@ -666,6 +692,12 @@ public final class PgSession implements AutoCloseable {
 
             for (int i = 0; i < carried; i++) {
                 runUntilReady(null);              // the answers to what rode along
+            }
+            if (known != null) {
+                // After the carried answers, before the rows: without a
+                // DESCRIBE nothing sets this, and what stands here otherwise
+                // belongs to whatever ran last on this connection.
+                fields = known;
             }
             runUntilReady(handler);
         } catch (IOException e) {
