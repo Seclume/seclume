@@ -50,6 +50,10 @@ public final class FrameworkShapeProbe {
         String which = args.length > 0 ? args[0] : "seclume";
         int threads = args.length > 1 ? Integer.parseInt(args[1]) : 8;
         int perThread = args.length > 2 ? Integer.parseInt(args[2]) : 2_000;
+        // "virtual" runs the same load on virtual threads. Worth its own mode
+        // rather than its own probe: the comparison is only worth anything if
+        // everything else about it is identical.
+        boolean virtual = args.length > 3 && "virtual".equals(args[3]);
 
         BenchDatabase database = BenchDatabase.fromSystemProperties();
         String sql = database.selectOne();
@@ -70,7 +74,7 @@ public final class FrameworkShapeProbe {
         Thread[] workers = new Thread[threads];
         for (int t = 0; t < threads; t++) {
             final int index = t;
-            workers[t] = new Thread(() -> {
+            Runnable work = () -> {
                 try {
                     start.await();
                     for (int i = 0; i < perThread; i++) {
@@ -81,7 +85,8 @@ public final class FrameworkShapeProbe {
                 } catch (Exception failure) {
                     throw new RuntimeException(failure);
                 }
-            });
+            };
+            workers[t] = virtual ? Thread.ofVirtual().unstarted(work) : new Thread(work);
             workers[t].start();
         }
         start.countDown();
@@ -94,8 +99,9 @@ public final class FrameworkShapeProbe {
             System.arraycopy(times[t], 0, all, t * perThread, perThread);
         }
         Arrays.sort(all);
-        System.out.printf("%-9s %2d threads  p50 %8.1f  p99 %9.1f  p99.9 %9.1f us%s%n",
-                which, threads, at(all, 0.50), at(all, 0.99), at(all, 0.999),
+        System.out.printf("%-9s %5d %-8s p50 %8.1f  p99 %9.1f  p99.9 %9.1f us%s%n",
+                which, threads, virtual ? "virtual" : "platform",
+                at(all, 0.50), at(all, 0.99), at(all, 0.999),
                 roundTrips < 0 ? "" : "   round trips per request: " + roundTrips);
 
         if (pool instanceof AutoCloseable closeable) {
