@@ -310,7 +310,7 @@ public final class PgChannel implements AutoCloseable {
         }
         int rest = filled - position;
         if (rest > 0 && position + 512 < in.capacity()) {
-            return;    // es passt noch etwas hinein, kein Grund zu schieben
+            return;    // there is still room, no reason to move anything
         }
         if (rest > 0) {
             java.lang.foreign.MemorySegment.copy(in.segment(), position, in.segment(), 0, rest);
