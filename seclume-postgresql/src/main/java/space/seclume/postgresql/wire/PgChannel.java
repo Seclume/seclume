@@ -46,10 +46,23 @@ public final class PgChannel implements AutoCloseable {
 
     public static PgChannel connect(String host, int port, int connectTimeoutMillis)
             throws IOException {
-        // The socket options that used to stand here - blocking, TCP_NODELAY -
-        // live in the transport now, because they belong to whoever owns the
-        // descriptor and not to whoever writes messages into it.
-        return new PgChannel(space.seclume.internal.SocketTransport.connect(host, port, connectTimeoutMillis));
+        return connect(host, port, connectTimeoutMillis, null);
+    }
+
+    /**
+     * The same, with a say in which transport carries it.
+     *
+     * <p>The socket options that used to stand here - blocking, TCP_NODELAY -
+     * live in the transport now, because they belong to whoever owns the
+     * descriptor and not to whoever writes messages into it.
+     *
+     * @param transport {@code socket}, {@code ffm}, {@code ffm-if-available},
+     *                  or null to take what the system property says
+     */
+    public static PgChannel connect(String host, int port, int connectTimeoutMillis,
+            String transport) throws IOException {
+        return new PgChannel(space.seclume.internal.Transports.open(
+                transport, host, port, connectTimeoutMillis));
     }
 
     /**
