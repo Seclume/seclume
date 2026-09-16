@@ -1561,6 +1561,68 @@ public final class PgSession implements AutoCloseable {
         return channel.isOpen();
     }
 
+    /** The channel underneath - for tests that have to look at the transport. */
+    PgChannel channel() {
+        return channel;
+    }
+
+    /**
+     * Freezes this connection and thaws it again on a new socket.
+     *
+      * <p>Within one process: the
+     * same session, the same server backend, a different descriptor. Nothing
+     * about the protocol state is serialised, because nothing about it moves -
+     * the parser, the prepared plans and the buffers are objects that never
+     * learn anything happened. What moves is the kernel's control block.
+     *
+     * <p>Both halves of the quiescent point are checked first, and they are two
+     * different things: {@link PgChannel#isIdle()} says this driver has nothing
+     * half-written or half-read, and {@code isQuiescent()} says the kernel has
+     * nothing unacknowledged or unread. A connection can satisfy one and not
+     * the other, and taking it apart then loses bytes silently.
+     *
+     * <p>Order, and it is the one PoC 0 paid for: thaw first, close the old
+     * socket afterwards. The other way round, a retransmission from the server
+     * arrives at a host with no socket for it and is answered with a RST.
+     *
+     * @throws SQLException if this connection is not on an FFM transport, is
+     *                      not idle, or the kernel refuses - CAP_NET_ADMIN is
+      * the descriptor itself
+     */
+    public void migrateInPlace() throws SQLException {
+        // the alternate transport, developed separately
+                current)) {
+            throw new SQLException("moving a connection needs a descriptor of our own - "
+                    + "open it with transport=ffm", "0A000");
+        }
+        try {
+            if (!channel.isIdle()) {
+                throw new SQLException("the driver is not idle on this connection", "25000");
+            }
+        // connection state, developed separately
+            // The old socket has to go first, and this is the one place where
+            // that is true. Two sockets cannot hold the same four-tuple: the
+            // kernel refuses the thaw with EADDRNOTAVAIL while the old one is
+            // still there. Measured, not reasoned - errno 99, every time.
+            //
+            // Closing first is what PoC 0 warned against, and the warning still
+            // stands where it was made: across nodes, the address must stop
+            // routing to the old host before it lets go, or a retransmission
+            // finds no socket and is answered with a RST. Here the gap between
+            // close and thaw is microseconds against a retransmission timer of
+            // two hundred milliseconds, and the socket is closed in repair
+            // mode, which sends nothing. A move between nodes does not get to
+            // use this shortcut.
+            current.close();
+        // the alternate transport, developed separately
+        // the alternate transport, developed separately
+            channel.replaceTransport(thawed);
+        } catch (IOException e) {
+            throw new SQLNonTransientConnectionException(
+                    "the connection could not be moved: " + e.getMessage(), "08006", e);
+        }
+    }
+
     /** Tells the server and hangs up. */
     @Override
     public void close() {

@@ -21,7 +21,11 @@ public final class PgChannel implements AutoCloseable {
 
     private static final int DEFAULT_BUFFER = 32 * 1024;
 
-    private final space.seclume.internal.Transport channel;
+    /**
+     * Not final: a session outlives its socket when a connection is moved.
+     * See {@link #replaceTransport}.
+     */
+    private space.seclume.internal.Transport channel;
 
     /**
      * The TLS layer once the server agreed to it, or {@code null}.
@@ -333,6 +337,49 @@ public final class PgChannel implements AutoCloseable {
         in.position(0);
         filled = rest;
         in.limit(filled);
+    }
+
+
+    // ---- moving the connection underneath ---------------------------------
+
+    /** The transport carrying this channel - for whoever has to freeze it. */
+    public space.seclume.internal.Transport transport() {
+        return channel;
+    }
+
+    /**
+     * Whether the channel has nothing of its own in flight.
+     *
+     * <p>Nothing written and not yet flushed, nothing received and not yet
+     * read, and no row window pinning the buffer. This is the protocol half of
+     * the quiescent point; the TCP half is the two empty queues, and both have
+     * to hold before a connection may be taken apart.
+     */
+    public boolean isIdle() {
+        return out.position() == 0 && in.position() == filled && !keeping;
+    }
+
+    /**
+     * Puts a different transport underneath, keeping every buffer as it is.
+     *
+     * <p>That is the whole trick of a move within one process: the protocol
+     * state, the prepared plans, the TLS engine and the two buffers are all
+     * objects that never noticed anything. Only the descriptor changed.
+     *
+     * <p>The old transport is <b>not</b> closed here. Closing it while the
+     * server may still retransmit is what answers that retransmission with a
+      * a design developed separately
+     * The caller closes it once the new one has taken over.
+     */
+    public void replaceTransport(space.seclume.internal.Transport replacement)
+            throws IOException {
+        if (!isIdle()) {
+            throw new IOException("this channel has work in flight - "
+                    + out.position() + " bytes unsent, "
+                    + (filled - in.position()) + " unread"
+                    + (keeping ? ", and a row window is holding the buffer" : ""));
+        }
+        this.channel = replacement;
     }
 
     @Override
