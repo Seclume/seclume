@@ -1,0 +1,215 @@
+package space.seclume.tls;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
+import space.seclume.crypto.AesGcm;
+import space.seclume.crypto.AesKey;
+import space.seclume.crypto.HashAlgorithm;
+import space.seclume.crypto.Hkdf;
+
+/**
+ * One direction of a TLS 1.3 record layer: key, IV, sequence number.
+ *
+ * <p>The cipher underneath is verified against the JDK's
+ * ({@code AesGcmTest}); what lives here is the construction around it, and
+ * every part of it is a place where two implementations can disagree while both
+ * look correct on their own:
+ *
+ * <ul>
+ *   <li>the <b>nonce</b> is the IV exclusive-ored with the sequence number,
+ *       right-aligned - not the sequence number itself, and not concatenated;
+ *   <li>the <b>additional data</b> is exactly the five bytes of the record
+ *       header, including the length of what follows <i>with</i> its tag;
+ *   <li>the <b>content type</b> travels <b>inside</b> the encryption, after the
+ *       payload, and the outer type on the wire is always
+ *       {@code application_data} - a record whose real type is visible is TLS
+ *       1.2 thinking;
+ *   <li>and padding is zero bytes after that inner type, so opening means
+ *       walking backwards past the zeroes to find it.
+ * </ul>
+ *
+ * <p><b>The sequence number is never sent.</b> Both sides count, and a record
+ * that arrives out of order cannot be opened - which is the property that makes
+ * a moved connection work at all: the sequence number is part of the state that
+ * travels, and getting it wrong shows up immediately rather than subtly.
+ *
+ * <p>Keys and IV stay in native memory for their whole life. That is the reason
+ * this class exists instead of an {@code SSLEngine}.
+ */
+public final class RecordProtection implements AutoCloseable {
+
+    /** Every record on the wire claims to be this, whatever it really is. */
+    public static final byte APPLICATION_DATA = 23;
+    /** The header is type, two version bytes and two length bytes. */
+    public static final int HEADER = 5;
+    private static final int MAX_PLAINTEXT = 16384;
+
+    private final Arena arena = Arena.ofShared();
+    private final AesKey key;
+    private final MemorySegment iv;
+    private final HashAlgorithm hash;
+    private final MemorySegment secret;
+    private final int keyLength;
+    private long sequence;
+
+    private RecordProtection(HashAlgorithm hash, MemorySegment trafficSecret, int keyLength) {
+        this.hash = hash;
+        this.keyLength = keyLength;
+        this.secret = arena.allocate(hash.digestLength());
+        MemorySegment.copy(trafficSecret, 0, secret, 0, hash.digestLength());
+
+        MemorySegment material = arena.allocate(keyLength);
+        Hkdf.expandLabel(hash, secret, "key", null, material, 0, keyLength);
+        this.key = new AesKey(material, 0, keyLength);
+        material.fill((byte) 0);
+
+        this.iv = arena.allocate(AesGcm.NONCE);
+        Hkdf.expandLabel(hash, secret, "iv", null, iv, 0, AesGcm.NONCE);
+    }
+
+    /**
+     * Derives key and IV from a traffic secret.
+     *
+     * @param keyLength 16 for AES-128, 32 for AES-256
+     */
+    public static RecordProtection fromSecret(HashAlgorithm hash, MemorySegment trafficSecret,
+            int keyLength) {
+        return new RecordProtection(hash, trafficSecret, keyLength);
+    }
+
+    /** What a record turned out to be. */
+    public record Opened(byte contentType, int length) {
+    }
+
+    /** How many bytes a record of this payload will take on the wire. */
+    public static int sealedLength(int plaintextLength) {
+        return HEADER + plaintextLength + 1 + AesGcm.TAG;
+    }
+
+    /**
+     * Writes one complete record - header and all.
+     *
+     * @return the number of bytes written
+     */
+    public int seal(byte contentType, MemorySegment plain, long offset, int length,
+            MemorySegment out, long outOffset) {
+        if (length > MAX_PLAINTEXT) {
+            throw new IllegalArgumentException("a record holds at most " + MAX_PLAINTEXT
+                    + " bytes, not " + length);
+        }
+        int inner = length + 1;
+        int body = inner + AesGcm.TAG;
+        writeHeader(out, outOffset, body);
+
+        try (Arena scratch = Arena.ofConfined()) {
+            MemorySegment nonce = scratch.allocate(AesGcm.NONCE);
+            nonce(nonce);
+            MemorySegment content = scratch.allocate(inner);
+            if (length > 0) {
+                MemorySegment.copy(plain, offset, content, 0, length);
+            }
+            content.set(ValueLayout.JAVA_BYTE, length, contentType);
+
+            AesGcm.encrypt(key, nonce, 0, out, outOffset, HEADER, content, 0, inner,
+                    out, outOffset + HEADER);
+            content.fill((byte) 0);
+        }
+        sequence++;
+        return HEADER + body;
+    }
+
+    /**
+     * Opens one complete record, header included.
+     *
+     * @return what it was, or null if the tag did not match
+     */
+    public Opened open(MemorySegment record, long offset, int recordLength,
+            MemorySegment out, long outOffset) {
+        int body = recordLength - HEADER;
+        if (body <= AesGcm.TAG) {
+            return null;                    // not even room for the inner type
+        }
+        int inner = body - AesGcm.TAG;
+        try (Arena scratch = Arena.ofConfined()) {
+            MemorySegment nonce = scratch.allocate(AesGcm.NONCE);
+            nonce(nonce);
+            MemorySegment content = scratch.allocate(inner);
+            boolean ok = AesGcm.decrypt(key, nonce, 0, record, offset, HEADER,
+                    record, offset + HEADER, inner, content, 0);
+            if (!ok) {
+                return null;
+            }
+            sequence++;
+            // Backwards past the padding: the last byte that is not zero is
+            // the real content type. A record that is all zeroes has none and
+            // is a protocol error rather than an empty message.
+            int at = inner - 1;
+            while (at >= 0 && content.get(ValueLayout.JAVA_BYTE, at) == 0) {
+                at--;
+            }
+            if (at < 0) {
+                content.fill((byte) 0);
+                return null;
+            }
+            byte contentType = content.get(ValueLayout.JAVA_BYTE, at);
+            if (at > 0) {
+                MemorySegment.copy(content, 0, out, outOffset, at);
+            }
+            content.fill((byte) 0);
+            return new Opened(contentType, at);
+        }
+    }
+
+    /**
+     * Advances to the next generation of keys after a KeyUpdate.
+     *
+     * <p>The new secret comes from the old one, the sequence number goes back
+     * to zero, and the old key is gone. Forgetting to reset the counter is the
+     * classic way to make a key update look like it worked until the first
+     * record after it.
+     */
+    public RecordProtection next() {
+        try (Arena scratch = Arena.ofConfined()) {
+            MemorySegment updated = scratch.allocate(hash.digestLength());
+            Hkdf.expandLabel(hash, secret, "traffic upd", null, updated, 0, hash.digestLength());
+            return new RecordProtection(hash, updated, keyLength);
+        }
+    }
+
+    /** The number of records processed in this direction so far. */
+    public long sequence() {
+        return sequence;
+    }
+
+    /** Sets it - for a connection rebuilt from a written-down state. */
+    public void sequence(long value) {
+        this.sequence = value;
+    }
+
+    private void writeHeader(MemorySegment out, long offset, int bodyLength) {
+        out.set(ValueLayout.JAVA_BYTE, offset, APPLICATION_DATA);
+        out.set(ValueLayout.JAVA_BYTE, offset + 1, (byte) 0x03);
+        out.set(ValueLayout.JAVA_BYTE, offset + 2, (byte) 0x03);
+        out.set(ValueLayout.JAVA_BYTE, offset + 3, (byte) (bodyLength >>> 8));
+        out.set(ValueLayout.JAVA_BYTE, offset + 4, (byte) bodyLength);
+    }
+
+    /** IV xor sequence number, the number right-aligned in the twelve bytes. */
+    private void nonce(MemorySegment out) {
+        MemorySegment.copy(iv, 0, out, 0, AesGcm.NONCE);
+        for (int i = 0; i < 8; i++) {
+            int at = AesGcm.NONCE - 1 - i;
+            byte counter = (byte) (sequence >>> (8 * i));
+            out.set(ValueLayout.JAVA_BYTE, at,
+                    (byte) (out.get(ValueLayout.JAVA_BYTE, at) ^ counter));
+        }
+    }
+
+    @Override
+    public void close() {
+        key.close();
+        arena.close();
+    }
+}

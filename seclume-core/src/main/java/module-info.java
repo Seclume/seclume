@@ -18,5 +18,10 @@ module seclume.core {
     // Internal building blocks the driver modules need (randomness, encoding,
     // off-heap I/O). Not a stable contract for applications.
     exports space.seclume.internal;
+
+    // The TLS 1.3 client of our own - see docs/tls.md. Exported because the
+    // drivers will need it; not a contract for applications, and not a
+    // replacement for JSSE, which stays the default.
+    exports space.seclume.tls;
     exports space.seclume.internal.jdbc;
 }
