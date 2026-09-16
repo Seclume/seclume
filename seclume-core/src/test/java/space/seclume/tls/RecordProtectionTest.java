@@ -37,11 +37,15 @@ import space.seclume.crypto.Hkdf;
  * out by hand, and compares. If this code and that description disagree, one of
  * them is wrong and the test says so.
  *
- * <p><b>Still missing, and named rather than papered over:</b> a record
- * produced by a real TLS 1.3 server. That arrives with the handshake milestone,
- * when a captured session and its key log can be held against this. Until then
- * the construction is checked against the specification as read, not against
- * the wire.
+ * <p><b>This was the weak point, and it is now closed elsewhere.</b> Every
+ * check in this class rebuilds the record from the same reading of the
+ * specification the code was written from, so a misreading would agree with
+ * itself and pass. {@code Rfc8448VectorsTest} supplies what this class cannot:
+ * 27 records out of the published traces of RFC 8448, encrypted by an
+ * implementation that never saw this code, all of which {@link
+ * RecordProtection#open} opens to exactly the plaintext the RFC prints beside
+ * them. The construction is therefore checked against the wire and not only
+ * against the specification as read.
  */
 class RecordProtectionTest {
 
