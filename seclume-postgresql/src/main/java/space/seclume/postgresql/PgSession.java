@@ -1567,6 +1567,33 @@ public final class PgSession implements AutoCloseable {
     }
 
     /**
+     * Whether this connection could be handed to another machine.
+     *
+     * <p>Two conditions, and the second is a limit of this library rather than
+     * of the idea.
+     *
+     * <p>The descriptor has to be ours - {@link #migrateInPlace()} explains
+     * why - and <b>the connection must not be encrypted</b>. Moving a session
+     * between nodes means writing its state down and reading it back somewhere
+     * else, and the TLS half of that state is inside an {@code SSLEngine}. The
+     * JDK hands out neither the keys nor the record sequence numbers: no method
+     * of {@code SSLSession} or {@code SSLEngine} is named for any of them, by
+     * design. An encrypted connection can therefore be frozen and thawed
+     * <b>in this process</b>, where the engine is an object that stays put, and
+     * cannot leave it.
+     *
+     * <p>That restriction is meant to be temporary and the way out is known: a
+     * TLS 1.3 record layer of our own, with the JCA keeping the cryptography.
+      * Until then this method is the
+     * honest answer, and it is a method rather than a sentence in a document so
+     * that the code refuses rather than the reader remembers.
+     */
+    public boolean canMoveBetweenNodes() {
+        // the alternate transport, developed separately
+                && !channel.isEncrypted();
+    }
+
+    /**
      * Freezes this connection and thaws it again on a new socket.
      *
       * <p>Within one process: the

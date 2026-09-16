@@ -38,7 +38,13 @@ public final class TlsChannel implements AutoCloseable {
     private static final ByteBuffer EMPTY = ByteBuffer.allocateDirect(0);
 
     private final SSLEngine engine;
-    private final Transport channel;
+    /**
+     * Not final: when a connection is moved the socket underneath is rebuilt,
+     * and this layer has to be told. It held the old one, and reads through a
+     * closed descriptor fail in a way that looks like the server hung up - see
+     * {@link #replaceTransport}.
+     */
+    private Transport channel;
 
     private final ByteBuffer netOut;
     private final ByteBuffer netIn;
@@ -227,6 +233,26 @@ public final class TlsChannel implements AutoCloseable {
         } catch (javax.net.ssl.SSLPeerUnverifiedException e) {
             throw new IOException("the server sent no certificate: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Puts a different transport underneath, keeping the engine as it is.
+     *
+     * <p>The TLS state - keys, record sequence numbers, half-read records - is
+     * inside the {@code SSLEngine}, and the engine neither knows nor cares
+     * which descriptor its bytes came from. So a connection whose socket is
+     * rebuilt with the same sequence numbers carries on encrypted, as long as
+     * this layer is told about the new socket.
+     *
+     * <p>It was not, at first. {@code PgChannel} swapped its own transport and
+     * this one kept the old, closed descriptor; the next query failed with "the
+     * connection broke while running a statement", which reads like the server
+     * hanging up and is nothing of the sort. A test against a TLS server caught
+     * it; against a plaintext one everything passed, because there is no second
+     * reference to get wrong.
+     */
+    public void replaceTransport(Transport replacement) {
+        this.channel = replacement;
     }
 
     public String protocol() {

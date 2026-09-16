@@ -342,6 +342,11 @@ public final class PgChannel implements AutoCloseable {
 
     // ---- moving the connection underneath ---------------------------------
 
+    /** Whether this channel runs inside TLS. */
+    public boolean isEncrypted() {
+        return tls != null;
+    }
+
     /** The transport carrying this channel - for whoever has to freeze it. */
     public space.seclume.internal.Transport transport() {
         return channel;
@@ -380,6 +385,11 @@ public final class PgChannel implements AutoCloseable {
                     + (keeping ? ", and a row window is holding the buffer" : ""));
         }
         this.channel = replacement;
+        if (tls != null) {
+            // The TLS layer holds its own reference and would otherwise keep
+            // reading through the closed descriptor.
+            tls.replaceTransport(replacement);
+        }
     }
 
     @Override
