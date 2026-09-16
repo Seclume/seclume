@@ -24,6 +24,7 @@ import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Hkdf;
@@ -40,10 +41,12 @@ import space.seclume.crypto.Hkdf;
  * visible immediately and names itself.
  *
  * <p><b>The vectors are not typed.</b> {@code tools/rfc8448_vectors.py} parses
- * them out of the RFC text into {@code rfc8448-vectors.txt}; 135 of them,
- * across all five traces. A hand-copied vector that is wrong in one nibble fails in a
- * way that looks like a bug in the code it is meant to check, and the hours
- * that costs have been paid once already on the Oracle work.
+ * them out of the RFC text into {@code rfc8448-vectors.txt}; 186 of them,
+ * across all five traces - secrets, key material, encrypted records, handshake
+ * messages and the ephemeral public keys. A hand-copied vector that is wrong in
+ * one nibble fails in a way that looks like a bug in the code it is meant to
+ * check, and the hours that costs have been paid once already on the Oracle
+ * work.
  *
  * <p>Every expand vector is checked <b>twice</b>, and the split is the point:
  * once through {@link Hkdf#expand} with the {@code info} structure the RFC
@@ -406,6 +409,83 @@ class Rfc8448VectorsTest {
             assertTrue(published.contains(share[0]),
                     "the key share in the ServerHello is not any public key this trace "
                             + "published - the extension walk or the entry shape is wrong");
+        }
+    }
+
+    /**
+     * The transcript hash ties the messages to the key schedule.
+     *
+     * <p>The two halves of this file have been independent until now: the
+     * handshake messages on one side, the {@code hash} field of every
+     * {@code Derive-Secret} on the other, extracted from different blocks of
+     * the RFC by different branches of the same script. They meet here. If
+     * {@link TranscriptHash} feeds the messages in the right order, with their
+     * four-byte headers included and the record framing excluded, then the
+     * digest after ServerHello <b>is</b> the context of {@code c hs traffic},
+     * the digest after the server's Finished is the context of
+     * {@code c ap traffic}, and so on. Nothing here is asserted about where a
+     * given hash should appear; what is asserted is that every context the key
+     * schedule used turns up somewhere in the running transcript, which cannot
+     * happen by accident.
+     *
+     * <p>Two shapes the specification demands and this checks by including
+     * them: the digest of an <b>empty</b> transcript, which is the context of
+     * every {@code derived} step, and the {@code message_hash} substitution
+     * after a HelloRetryRequest, without which section 5 agrees with nothing
+     * after its second ServerHello.
+     *
+     * <p><b>Section 4 is left out, and why.</b> Its transcript needs the
+     * ClientHello <i>with</i> its PSK binders, and the block the extractor
+     * takes messages from holds the truncated one the binder is computed over.
+     * The complete message is in the trace, inside a record, and reaching it
+     * means reassembling records - which belongs to milestone 4, not here.
+     */
+    @ParameterizedTest(name = "transcript of section {0}")
+    @ValueSource(strings = {"3", "5", "6", "7"})
+    void theTranscriptReproducesTheKeyScheduleContexts(String section) {
+        List<Vector> messages = load("message").stream()
+                .filter(v -> v.section().equals(section))
+                .toList();
+        // Only the contexts that are a digest; the resumption secret's is a
+        // two-byte ticket nonce and belongs to no transcript.
+        List<String> wanted = load("expand").stream()
+                .filter(v -> v.section().equals(section))
+                .map(v -> v.fields().get(1))
+                .filter(context -> context.length() == 64)
+                .distinct()
+                .toList();
+        assertTrue(wanted.size() >= 3, "too few contexts to be worth asserting");
+
+        // A second ClientHello is what a HelloRetryRequest leaves behind. A
+        // real client recognises one by the ServerHello's random; a test over
+        // a published trace may recognise it by its shape.
+        boolean retried = messages.stream()
+                .filter(v -> messageType(v).startsWith("ClientHello")).count() > 1;
+
+        List<String> running = new ArrayList<>();
+        try (Arena arena = Arena.ofConfined();
+             TranscriptHash transcript = new TranscriptHash(HashAlgorithm.SHA_256)) {
+            MemorySegment digest = arena.allocate(32);
+            transcript.current(digest, 0);
+            running.add(HEX.formatHex(bytes(digest, 32)));      // the empty transcript
+
+            boolean substituted = false;
+            for (Vector message : messages) {
+                if (retried && !substituted && !messageType(message).startsWith("ClientHello")) {
+                    transcript.substituteWithMessageHash();
+                    substituted = true;
+                }
+                byte[] bytes = message.at(1);
+                transcript.update(of(arena, bytes), 0, bytes.length);
+                transcript.current(digest, 0);
+                running.add(HEX.formatHex(bytes(digest, 32)));
+            }
+        }
+
+        for (String context : wanted) {
+            assertTrue(running.contains(context),
+                    "no point in the transcript produces the context " + context.substring(0, 16)
+                            + "... that the key schedule of section " + section + " used");
         }
     }
 
