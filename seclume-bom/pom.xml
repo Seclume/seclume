@@ -31,6 +31,10 @@
       </dependency>
       <dependency>
         <groupId>space.seclume</groupId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
         <artifactId>seclume-postgresql</artifactId>
         <version>${project.version}</version>
       </dependency>
