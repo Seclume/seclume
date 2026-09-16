@@ -65,7 +65,8 @@ class Rfc8448VectorsTest {
 
         @Override
         public String toString() {
-            return "section " + section + " " + name;    // what a failure is called
+            String extra = kind.equals("message") ? " " + fields.get(0) : "";
+            return "section " + section + " " + name + extra;   // what a failure is called
         }
     }
 
@@ -114,6 +115,19 @@ class Rfc8448VectorsTest {
     static Stream<Vector> encryptedRecordVectors() {
         return load("record").stream()
                 .filter(v -> v.fields().get(1).startsWith("17"));
+    }
+
+    static Stream<Vector> messageVectors() {
+        return load("message").stream();
+    }
+
+    static Stream<Vector> serverHelloVectors() {
+        return load("message").stream().filter(v -> messageType(v).equals("ServerHello"));
+    }
+
+    /** A message row carries the speaker in the name column and the type here. */
+    private static String messageType(Vector vector) {
+        return vector.fields().get(0);
     }
 
     // ---- the tests --------------------------------------------------------
@@ -285,6 +299,117 @@ class Rfc8448VectorsTest {
     }
 
     /**
+     * The framing of forty messages encoded by somebody else.
+     *
+     * <p>Small, and the point is that it is not circular: the type byte has to
+     * be the one the RFC's prose calls the message, and the three-byte length
+     * has to account for exactly the bytes that are there. A parser that read
+     * the length as two bytes or four passes neither.
+     */
+    @ParameterizedTest(name = "frame {0}")
+    @MethodSource("messageVectors")
+    void theFramingOfEveryMessageIsRead(Vector vector) {
+        byte[] message = vector.at(1);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment data = of(arena, message);
+            assertEquals(typeOf(messageType(vector)), Handshake.type(data, 0),
+                    "the type byte is not the message the RFC says this is");
+            if (messageType(vector).endsWith("-truncated")) {
+                // The ClientHello a PSK binder is computed over: the header
+                // already counts the binders, the bytes stop before them. Not
+                // an exception made for a failing test - the RFC prints the
+                // whole message a block later, and this shape is the one the
+                // binder covers.
+                assertTrue(Handshake.totalLength(data, 0) > message.length,
+                        "a truncated ClientHello whose header does not claim more than it "
+                                + "carries is not truncated at all");
+                return;
+            }
+            assertEquals(message.length, Handshake.totalLength(data, 0),
+                    "the three-byte length does not account for the message");
+        }
+    }
+
+    /**
+     * A ServerHello parsed down to the version it really selected.
+     *
+     * <p>The header says 0x0303 in every one of these, which is TLS 1.2 and is
+     * a lie the protocol tells on purpose. The truth is in
+     * {@code supported_versions}, and a client that reads the header instead
+     * negotiates itself down while the server thinks it agreed to 1.3.
+     */
+    @ParameterizedTest(name = "ServerHello {0}")
+    @MethodSource("serverHelloVectors")
+    void aServerHelloSaysTwelveAndMeansThirteen(Vector vector) {
+        byte[] message = vector.at(1);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment data = of(arena, message);
+            long body = Handshake.HEADER;
+            assertEquals(Handshake.LEGACY_VERSION, Handshake.u16(data, body),
+                    "the legacy version in the header");
+
+            int[] extensionsLength = new int[1];
+            long extensions = Handshake.serverHelloExtensions(data, body, extensionsLength);
+            assertTrue(extensionsLength[0] > 0, "a ServerHello without extensions");
+            assertEquals(message.length, extensions + extensionsLength[0],
+                    "the extensions do not end where the message does - the session id or "
+                            + "the compression byte is being skipped wrongly");
+
+            int[] selected = {0};
+            Handshake.extensions(data, extensions, extensionsLength[0], (type, at, length) -> {
+                if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS) {
+                    selected[0] = Handshake.selectedVersion(data, at);
+                }
+            });
+            assertEquals(0x0304, selected[0], "the selected version is not TLS 1.3");
+        }
+    }
+
+    /**
+     * And the key share in a Hello is the key the trace published separately.
+     *
+     * <p>This is the cross-check worth having: the public key comes out of the
+     * "create an ephemeral key pair" block and the key share out of the encoded
+     * message, two extractions that never meet. If the extension walk is off by
+     * the two bytes of the group, or reads a client's list shape where a server
+     * sends a bare entry, the thirty-two bytes do not match anything.
+     *
+     * <p>A HelloRetryRequest is skipped rather than fudged: its key_share
+     * carries only the group it wants and no key at all, so there is nothing
+     * here to compare.
+     */
+    @ParameterizedTest(name = "key share {0}")
+    @MethodSource("serverHelloVectors")
+    void theServersKeyShareIsThePublishedPublicKey(Vector vector) {
+        byte[] message = vector.at(1);
+        List<String> published = load("keypair").stream()
+                .filter(k -> k.section().equals(vector.section()))
+                .map(k -> k.fields().get(0))
+                .toList();
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment data = of(arena, message);
+            int[] extensionsLength = new int[1];
+            long extensions =
+                    Handshake.serverHelloExtensions(data, Handshake.HEADER, extensionsLength);
+            String[] share = {null};
+            Handshake.extensions(data, extensions, extensionsLength[0], (type, at, length) -> {
+                if (type == Handshake.EXTENSION_KEY_SHARE && length > 2) {
+                    long[] where = new long[2];
+                    Handshake.serverKeyShare(data, at, where);
+                    share[0] = HEX.formatHex(bytes(data.asSlice(where[0]), (int) where[1]));
+                }
+            });
+            if (share[0] == null) {
+                return;                       // a HelloRetryRequest; nothing to compare
+            }
+            assertTrue(published.contains(share[0]),
+                    "the key share in the ServerHello is not any public key this trace "
+                            + "published - the extension walk or the entry shape is wrong");
+        }
+    }
+
+    /**
      * The resource is what the extractor produced, and all of it arrived.
      *
      * <p>A parser that silently stopped at the first page break would leave a
@@ -294,9 +419,9 @@ class Rfc8448VectorsTest {
      */
     @Test
     void everyVectorFromTheRfcIsHere() {
-        assertArrayEquals(new int[] {15, 58, 21, 41},
+        assertArrayEquals(new int[] {15, 58, 21, 41, 40, 11},
                 new int[] {load("extract").size(), load("expand").size(), load("keys").size(),
-                    load("record").size()},
+                    load("record").size(), load("message").size(), load("keypair").size()},
                 "the vector file does not hold what tools/rfc8448_vectors.py produced");
         assertTrue(load("expand").stream().anyMatch(v -> v.name().equals("resumption")),
                 "the ticket-nonce vector is missing - it is the only non-digest context");
@@ -305,6 +430,23 @@ class Rfc8448VectorsTest {
     }
 
     // ---- the small machinery ---------------------------------------------
+
+    /** The handshake type the RFC's prose gives each message. */
+    private static int typeOf(String name) {
+        return switch (name) {
+            case "ClientHello", "ClientHello-truncated" -> Handshake.CLIENT_HELLO;
+            case "ServerHello" -> Handshake.SERVER_HELLO;
+            case "NewSessionTicket" -> Handshake.NEW_SESSION_TICKET;
+            case "EndOfEarlyData" -> Handshake.END_OF_EARLY_DATA;
+            case "EncryptedExtensions" -> Handshake.ENCRYPTED_EXTENSIONS;
+            case "Certificate" -> Handshake.CERTIFICATE;
+            case "CertificateRequest" -> Handshake.CERTIFICATE_REQUEST;
+            case "CertificateVerify" -> Handshake.CERTIFICATE_VERIFY;
+            case "Finished" -> Handshake.FINISHED;
+            default -> throw new AssertionError("the extractor produced an unknown "
+                    + "message name: " + name);
+        };
+    }
 
     private static MemorySegment of(Arena arena, byte[] bytes) {
         MemorySegment segment = arena.allocate(Math.max(bytes.length, 1));
