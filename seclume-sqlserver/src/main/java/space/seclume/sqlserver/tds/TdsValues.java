@@ -39,6 +39,10 @@ public final class TdsValues {
      * @param length its length, as the row framing found it
      */
     public static long asLong(WireBuffer in, int type, int at, int length) {
+        if (type == TdsTypes.SQLVARIANT) {
+            Variant inner = unwrap(in, at, length);
+            return asLong(in, inner.type(), inner.at(), inner.length());
+        }
         return switch (type) {
             case TdsTypes.BIT, TdsTypes.BITN -> in.getByte(at) != 0 ? 1 : 0;
             case TdsTypes.INT1 -> in.getByte(at) & 0xff;
@@ -59,6 +63,10 @@ public final class TdsValues {
 
     /** The value as a floating-point number. */
     public static double asDouble(WireBuffer in, int type, int at, int length) {
+        if (type == TdsTypes.SQLVARIANT) {
+            Variant inner = unwrap(in, at, length);
+            return asDouble(in, inner.type(), inner.at(), inner.length());
+        }
         return switch (type) {
             case TdsTypes.FLT4 -> Float.intBitsToFloat((int) unsigned(in, at, 4));
             case TdsTypes.FLT8 -> Double.longBitsToDouble(unsigned(in, at, 8));
@@ -78,6 +86,10 @@ public final class TdsValues {
      *              time types use it
      */
     public static String asText(WireBuffer in, int type, int at, int length, int scale) {
+        if (type == TdsTypes.SQLVARIANT) {
+            Variant inner = unwrap(in, at, length);
+            return asText(in, inner.type(), inner.at(), inner.length(), inner.scale());
+        }
         return switch (type) {
             case TdsTypes.BIT, TdsTypes.BITN -> in.getByte(at) != 0 ? "1" : "0";
             case TdsTypes.INT1, TdsTypes.INT2, TdsTypes.INT4, TdsTypes.INT8, TdsTypes.INTN ->
@@ -125,6 +137,10 @@ public final class TdsValues {
 
     /** Whether the value is true - {@code bit} and everything that counts as a number. */
     public static boolean asBoolean(WireBuffer in, int type, int at, int length) {
+        if (type == TdsTypes.SQLVARIANT) {
+            Variant inner = unwrap(in, at, length);
+            return asBoolean(in, inner.type(), inner.at(), inner.length());
+        }
         if (TdsTypes.isUnicodeText(type) || TdsTypes.isSingleByteText(type)) {
             String text = asText(in, type, at, length, 0).trim();
             return !text.isEmpty() && !text.equals("0")
@@ -136,6 +152,35 @@ public final class TdsValues {
     }
 
     // ---- the individual formats ------------------------------------------
+
+    /** What a {@code sql_variant} turned out to be holding. */
+    private record Variant(int type, int at, int length, int scale) {
+    }
+
+    /**
+     * Unpacks a {@code sql_variant}: one byte of base type, one byte saying
+     * how many property bytes follow, those properties, then the value.
+     *
+     * <p>The property count is read <b>off the wire</b> rather than looked up
+     * in a table of types. That matters: a base type nobody here anticipated
+     * still lands on the right first byte of the value instead of being
+     * decoded from somewhere in the middle of its own description. Only the
+     * two families whose properties change how a value reads - the decimals
+     * and the time types - are interpreted at all, and both put what is
+     * needed at a fixed place within their properties.
+     */
+    private static Variant unwrap(WireBuffer in, int at, int length) {
+        int base = in.getByte(at) & 0xff;
+        int properties = in.getByte(at + 1) & 0xff;
+        int scale = switch (base) {
+            case TdsTypes.DECIMAL, TdsTypes.DECIMALN, TdsTypes.NUMERIC, TdsTypes.NUMERICN ->
+                    in.getByte(at + 3) & 0xff;                 // precision first, then scale
+            case TdsTypes.TIMEN, TdsTypes.DATETIME2N, TdsTypes.DATETIMEOFFSETN ->
+                    in.getByte(at + 2) & 0xff;
+            default -> 0;
+        };
+        return new Variant(base, at + 2 + properties, length - 2 - properties, scale);
+    }
 
     /** An unsigned number of {@code count} bytes, least significant first. */
     private static long unsigned(WireBuffer in, int at, int count) {

@@ -103,6 +103,20 @@ public final class TdsRow {
         if (column.plp()) {
             return readPlp(index, p);
         }
+        if (type == TdsTypes.SQLVARIANT) {
+            // Four bytes of length, and zero means NULL - there is no text
+            // pointer here, which is why this cannot share the branch below.
+            // The cell keeps its base type and property bytes; TdsValues
+            // unwraps them, because only the value knows what it is.
+            int length = in.getIntLe(p);
+            p += 4;
+            if (length == 0) {
+                set(index, p, -1);
+                return p;
+            }
+            set(index, p, length);
+            return p + length;
+        }
         if (TdsTypes.hasFourByteLength(type)) {
             int pointerLength = in.getByte(p) & 0xff;
             p++;

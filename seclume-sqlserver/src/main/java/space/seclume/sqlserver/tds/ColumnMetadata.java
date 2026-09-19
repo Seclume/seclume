@@ -89,6 +89,12 @@ public final class ColumnMetadata {
                     p += COLLATION_SIZE;
                 }
                 p = skipTableName(in, p);
+            } else if (type == TdsTypes.SQLVARIANT) {
+                // A four-byte maximum length and nothing else - no collation
+                // and no table name, unlike the other four-byte types. What a
+                // value actually is travels with the value.
+                size = in.getIntLe(p);
+                p += 4;
             } else if (type == TdsTypes.XML) {
                 p = skipXmlInfo(in, p);
                 size = TdsColumn.MAX_SIZE;

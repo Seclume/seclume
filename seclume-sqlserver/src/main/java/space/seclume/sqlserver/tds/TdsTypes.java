@@ -72,6 +72,17 @@ public final class TdsTypes {
     public static final int IMAGE = 0x22;
     public static final int NTEXT = 0x63;
 
+    /**
+     * {@code sql_variant}: a value that carries its own type with it.
+     *
+     * <p>Rarer than the rest in application schemas and unavoidable in
+     * practice - every {@code SERVERPROPERTY(...)} returns one, which is how
+     * Flyway asks a server what edition it is. A column of this type says
+     * nothing about what any particular row holds; the base type sits in the
+     * first byte of each value.
+     */
+    public static final int SQLVARIANT = 0x62;
+
     private TdsTypes() {
     }
 
@@ -196,6 +207,7 @@ public final class TdsTypes {
             case BINARY, BIGBINARY -> "binary";
             case VARBINARY, BIGVARBINARY -> "varbinary";
             case IMAGE -> "image";
+            case SQLVARIANT -> "sql_variant";
             default -> "unknown(0x" + Integer.toHexString(type) + ")";
         };
     }
