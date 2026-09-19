@@ -5,6 +5,8 @@ import space.seclume.RoundTrips;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.CallableStatement;
+
+import space.seclume.internal.jdbc.CallSyntax;
 import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -170,9 +172,11 @@ public final class MyConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public CallableStatement prepareCall(String sql) throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume has no CallableStatement - call a procedure with 'call fn(?)' "
-                + "through a PreparedStatement; OUT parameters are not supported");
+        checkOpen();
+        MyCallableStatement statement =
+                new MyCallableStatement(this, CallSyntax.parse(sql));
+        open.add(statement);
+        return statement;
     }
 
     @Override

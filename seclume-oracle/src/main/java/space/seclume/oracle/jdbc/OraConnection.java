@@ -187,7 +187,16 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public CallableStatement prepareCall(String sql) throws SQLException {
-        throw new SQLFeatureNotSupportedException("seclume has no CallableStatement");
+        // The other three drivers have one; Oracle's is the one that needs
+        // protocol work rather than SQL. A call is an anonymous block with
+        // output binds, and those exist here already for "returning into" -
+        // what is missing is marking a chosen bind as an output rather than
+        // appending one, describing it with the registered type instead of
+        // always NUMBER, and decoding what comes back by that type.
+        // docs/handover.md carries the detail.
+        throw new SQLFeatureNotSupportedException("seclume has no CallableStatement for Oracle "
+                + "yet - call a procedure with 'begin p(:1); end;' through a PreparedStatement; "
+                + "output parameters need typed output binds, which are not built");
     }
 
     @Override

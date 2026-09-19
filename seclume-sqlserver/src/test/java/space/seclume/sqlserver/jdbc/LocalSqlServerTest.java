@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
@@ -684,6 +685,101 @@ class LocalSqlServerTest {
             }
             statement.execute("drop table zl_child");
             statement.execute("drop table zl_parent");
+        }
+    }
+
+    // ---- procedure calls --------------------------------------------------
+
+    /** An OUT parameter, through the declare/exec/select batch. */
+    @Test
+    void callsAProcedureAndReadsAnOutputParameter() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_double') is not null drop procedure zl_double");
+            statement.execute("create procedure zl_double @n int, @doubled int output as "
+                    + "set @doubled = @n * 2");
+            try (CallableStatement call = connection.prepareCall("{call zl_double(?, ?)}")) {
+                call.setInt(1, 21);
+                call.registerOutParameter(2, Types.INTEGER);
+                call.execute();
+                assertEquals(42, call.getInt(2));
+                assertFalse(call.wasNull());
+            }
+            statement.execute("drop procedure zl_double");
+        }
+    }
+
+    /** An INOUT parameter: the value goes in and comes back changed. */
+    @Test
+    void callsAProcedureWithAnInOutParameter() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_grow') is not null drop procedure zl_grow");
+            statement.execute("create procedure zl_grow @n int output as set @n = @n + 5");
+            try (CallableStatement call = connection.prepareCall("{call zl_grow(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.setInt(1, 37);
+                call.execute();
+                assertEquals(42, call.getInt(1));
+            }
+            statement.execute("drop procedure zl_grow");
+        }
+    }
+
+    /** Two outputs of different types, so neither can pass by landing on the other. */
+    @Test
+    void callsAProcedureWithTwoOutputsOfDifferentTypes() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_split') is not null drop procedure zl_split");
+            statement.execute("create procedure zl_split @whole nvarchar(50), "
+                    + "@head nvarchar(50) output, @count int output as begin "
+                    + "set @head = left(@whole, charindex('-', @whole) - 1); "
+                    + "set @count = len(@whole); end");
+            try (CallableStatement call = connection.prepareCall("{call zl_split(?, ?, ?)}")) {
+                call.setString(1, "left-right");
+                call.registerOutParameter(2, Types.VARCHAR);
+                call.registerOutParameter(3, Types.INTEGER);
+                call.execute();
+                assertEquals("left", call.getString(2));
+                assertEquals(10, call.getInt(3));
+            }
+            statement.execute("drop procedure zl_split");
+        }
+    }
+
+    /** A scalar function, where parameter 1 is the return value. */
+    @Test
+    void callsAFunctionAndReadsItsReturnValue() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_triple') is not null drop function zl_triple");
+            statement.execute("create function zl_triple(@n int) returns int as "
+                    + "begin return @n * 3 end");
+            try (CallableStatement call = connection.prepareCall("{? = call dbo.zl_triple(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.setInt(2, 14);
+                call.execute();
+                assertEquals(42, call.getInt(1));
+            }
+            statement.execute("drop function zl_triple");
+        }
+    }
+
+    /** An output that came back NULL says so rather than reading as zero. */
+    @Test
+    void anOutputThatIsNullSaysSo() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_nothing') is not null drop procedure zl_nothing");
+            statement.execute("create procedure zl_nothing @n int output as set @n = null");
+            try (CallableStatement call = connection.prepareCall("{call zl_nothing(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.execute();
+                assertEquals(0, call.getInt(1));
+                assertTrue(call.wasNull());
+            }
+            statement.execute("drop procedure zl_nothing");
         }
     }
 }

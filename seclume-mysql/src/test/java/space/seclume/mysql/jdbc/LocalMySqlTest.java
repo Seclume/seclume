@@ -12,6 +12,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
@@ -666,6 +667,129 @@ class LocalMySqlTest {
             }
             statement.execute("drop table zl_child");
             statement.execute("drop table zl_parent");
+        }
+    }
+
+    // ---- procedure calls --------------------------------------------------
+
+    /**
+     * An {@code OUT} parameter, through {@code CallableStatement}.
+     *
+     * <p>MySQL takes a user variable in that position and the value is read
+     * back afterwards - three statements where PostgreSQL needs one. What is
+     * tested is that the caller sees none of that.
+     */
+    @Test
+    void callsAProcedureAndReadsAnOutputParameter() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("drop procedure if exists zl_double");
+            statement.execute("create procedure zl_double(in n int, out doubled int) "
+                    + "begin set doubled = n * 2; end");
+            try (CallableStatement call = connection.prepareCall("{call zl_double(?, ?)}")) {
+                call.setInt(1, 21);
+                call.registerOutParameter(2, Types.INTEGER);
+                call.execute();
+                assertEquals(42, call.getInt(2));
+                assertFalse(call.wasNull());
+            }
+            statement.execute("drop procedure zl_double");
+        }
+    }
+
+    /**
+     * An {@code INOUT} parameter: the value goes in and comes back changed.
+     * That is the case the session variable has to be assigned for, rather
+     * than only read.
+     */
+    @Test
+    void callsAProcedureWithAnInOutParameter() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("drop procedure if exists zl_grow");
+            statement.execute("create procedure zl_grow(inout n int) begin set n = n + 5; end");
+            try (CallableStatement call = connection.prepareCall("{call zl_grow(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.setInt(1, 37);
+                call.execute();
+                assertEquals(42, call.getInt(1));
+            }
+            statement.execute("drop procedure zl_grow");
+        }
+    }
+
+    /** Two outputs, so that the second cannot pass by landing on the first. */
+    @Test
+    void callsAProcedureWithTwoOutputs() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("drop procedure if exists zl_split");
+            statement.execute("create procedure zl_split(in whole varchar(50), "
+                    + "out head varchar(50), out tail varchar(50)) begin "
+                    + "set head = substring_index(whole, '-', 1); "
+                    + "set tail = substring_index(whole, '-', -1); end");
+            try (CallableStatement call = connection.prepareCall("{call zl_split(?, ?, ?)}")) {
+                call.setString(1, "left-right");
+                call.registerOutParameter(2, Types.VARCHAR);
+                call.registerOutParameter(3, Types.VARCHAR);
+                call.execute();
+                assertEquals("left", call.getString(2));
+                assertEquals("right", call.getString(3));
+            }
+            statement.execute("drop procedure zl_split");
+        }
+    }
+
+    /** A function, where parameter 1 is the return value and the rest shifts. */
+    @Test
+    void callsAFunctionAndReadsItsReturnValue() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("drop function if exists zl_triple");
+            statement.execute("create function zl_triple(n int) returns int deterministic "
+                    + "return n * 3");
+            try (CallableStatement call = connection.prepareCall("{? = call zl_triple(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.setInt(2, 14);
+                call.execute();
+                assertEquals(42, call.getInt(1));
+            }
+            statement.execute("drop function zl_triple");
+        }
+    }
+
+    /**
+     * A call's output survives another call on the same connection.
+     *
+     * <p>Two things make that true and this test does not separate them: the
+     * outputs are read back <b>during</b> {@code execute()} rather than when
+     * a getter asks, and the session variables are named per statement. The
+     * control was run and is worth recording: with shared variable names the
+     * test still passes, because the eager read gets there first. So this
+     * guards the behaviour, not either mechanism on its own - the naming
+     * earns its keep against a procedure that uses a variable of the same
+     * name itself, which is not what is exercised here.
+     */
+    @Test
+    void aCallsOutputSurvivesAnotherCallOnTheSameConnection() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("drop procedure if exists zl_double");
+            statement.execute("create procedure zl_double(in n int, out doubled int) "
+                    + "begin set doubled = n * 2; end");
+            try (CallableStatement first = connection.prepareCall("{call zl_double(?, ?)}");
+                 CallableStatement second = connection.prepareCall("{call zl_double(?, ?)}")) {
+                first.setInt(1, 1);
+                first.registerOutParameter(2, Types.INTEGER);
+                second.setInt(1, 100);
+                second.registerOutParameter(2, Types.INTEGER);
+
+                first.execute();
+                second.execute();
+                assertEquals(2, first.getInt(2), "the first call's output was overwritten");
+                assertEquals(200, second.getInt(2));
+            }
+            statement.execute("drop procedure zl_double");
         }
     }
 }

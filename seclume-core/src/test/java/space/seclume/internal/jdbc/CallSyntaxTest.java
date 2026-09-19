@@ -118,4 +118,19 @@ class CallSyntaxTest {
         assertFalse(plain.returnsValue());
         assertEquals(2, plain.totalParameters());
     }
+
+    @Test
+    void rewritesPlaceholdersAndLeavesLiteralsAlone() throws SQLException {
+        CallSyntax call = CallSyntax.parse("{call p(?, 'a?b', ?)}");
+        assertEquals("@out1, 'a?b', @out2",
+                call.argumentsWith(number -> "@out" + number));
+        assertEquals("?, 'a?b', ?", call.argumentsWith(number -> "?"),
+                "returning a question mark has to leave the list as it was");
+    }
+
+    @Test
+    void rewritingNumbersThePlaceholdersFromOne() throws SQLException {
+        CallSyntax call = CallSyntax.parse("{call p(?, ?, ?)}");
+        assertEquals("1, 2, 3", call.argumentsWith(String::valueOf));
+    }
 }

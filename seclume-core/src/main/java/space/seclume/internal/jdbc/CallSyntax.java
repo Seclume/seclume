@@ -90,6 +90,39 @@ public record CallSyntax(String name, String arguments, int parameters, boolean 
         return new CallSyntax(name, arguments, countPlaceholders(arguments), returnsValue);
     }
 
+    /**
+     * The argument list with every placeholder replaced.
+     *
+     * <p>For the drivers that cannot simply bind an output: MySQL passes a
+     * session variable where an {@code OUT} parameter stands, and reads it
+     * back afterwards. The replacement is asked for each placeholder in turn,
+     * numbered from one, and returning {@code "?"} leaves it as it was.
+     *
+     * <p>It walks with the same scanner the counting uses, so a question mark
+     * inside a literal is left alone here too - replacing one would corrupt
+     * the argument rather than renumber it.
+     */
+    public String argumentsWith(java.util.function.IntFunction<String> replacement) {
+        StringBuilder out = new StringBuilder(arguments.length() + 16);
+        int at = 0;
+        int number = 0;
+        while (at < arguments.length()) {
+            int skipped = skipNonCode(arguments, at);
+            if (skipped != at) {
+                out.append(arguments, at, skipped);
+                at = skipped;
+                continue;
+            }
+            if (arguments.charAt(at) == '?') {
+                out.append(replacement.apply(++number));
+            } else {
+                out.append(arguments.charAt(at));
+            }
+            at++;
+        }
+        return out.toString();
+    }
+
     /** How many parameters the statement has altogether, the return value included. */
     public int totalParameters() {
         return parameters + (returnsValue ? 1 : 0);
