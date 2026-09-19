@@ -55,6 +55,7 @@ public final class TlsConnection implements Transport {
     private long pendingOffset;
     private int pendingLength;
     private boolean closed;
+    private boolean frozen;
     private boolean endOfStream;
 
     TlsConnection(Transport underlying, RecordStream records) {
@@ -70,6 +71,7 @@ public final class TlsConnection implements Transport {
 
     @Override
     public int read(ByteBuffer into) throws IOException {
+        checkUsable();
         if (!into.hasRemaining()) {
             return 0;
         }
@@ -89,6 +91,7 @@ public final class TlsConnection implements Transport {
 
     @Override
     public int write(ByteBuffer from) throws IOException {
+        checkUsable();
         int total = from.remaining();
         while (from.hasRemaining()) {
             int chunk = Math.min(from.remaining(), RecordStream.MAX_PLAINTEXT);
@@ -157,9 +160,89 @@ public final class TlsConnection implements Transport {
         records.writeWith(records.writeProtection().next());
     }
 
+    // ---- moving the connection somewhere else ----------------------------
+
+    /**
+     * How many bytes {@link #freeze} needs.
+     *
+     * <p>Ask before allocating, and allocate a {@link space.seclume.secret.SecretScope}
+     * rather than an array - what {@code freeze} writes is key material.
+     */
+    public int frozenLength() {
+        return TlsMigration.encodedLength(records.writeProtection().hash());
+    }
+
+    /**
+     * Writes this connection's encryption state out and gives up the
+     * connection, <b>without closing the socket underneath and without
+     * saying goodbye to the peer</b> - as far as the server is concerned
+     * nothing happened, which is the entire point.
+     *
+     * <p>Afterwards this object is spent: reading or writing throws, and
+     * {@link #close()} releases what is held here without touching the
+     * transport, which now belongs to whoever continues the connection.
+     *
+     * <p><b>Only at a quiet moment.</b> If a record has been decrypted whose
+     * bytes nobody has read yet, freezing would drop them - the peer
+     * believes they were delivered, and nothing would ever ask for them
+     * again. That is refused rather than risked: read what is there first,
+     * then freeze. In practice a driver freezes between statements, where
+     * there is nothing outstanding by construction.
+     *
+     * @return the number of bytes written
+     */
+    public int freeze(MemorySegment out, long offset) {
+        if (closed || frozen) {
+            throw new IllegalStateException("this connection is already "
+                    + (frozen ? "frozen" : "closed"));
+        }
+        if (pendingLength > 0) {
+            throw new IllegalStateException("there are still " + pendingLength + " bytes read "
+                    + "from the peer that nobody has taken - freezing now would lose them; "
+                    + "read to a quiet point first");
+        }
+        if (postHandshake.buffered() > 0) {
+            throw new IllegalStateException("half of a post-handshake message is buffered - "
+                    + "freezing now would lose it");
+        }
+        int length = TlsMigration.encode(out, offset,
+                records.readProtection(), records.writeProtection());
+        frozen = true;
+        return length;
+    }
+
+    /**
+     * Carries on a connection somebody else froze, over a transport that
+      * reaches the same peer - the far end of a handover,
+     * or of this project's own TCP stack having moved the socket.
+     *
+     * <p>The peer is told nothing and notices nothing: the keys and the
+     * record sequence numbers continue exactly where they stopped. If any of
+     * them is wrong the very next record fails its tag, which is the
+     * property that makes this safe to attempt at all.
+     */
+    public static TlsConnection thaw(Transport transport, MemorySegment in, long offset,
+            int available) {
+        TlsMigration.Thawed state = TlsMigration.decode(in, offset, available);
+        RecordStream records = new RecordStream(transport);
+        records.readWith(state.reading());
+        records.writeWith(state.writing());
+        return new TlsConnection(transport, records);
+    }
+
     @Override
     public boolean isOpen() {
-        return !closed && underlying.isOpen();
+        return !closed && !frozen && underlying.isOpen();
+    }
+
+    private void checkUsable() throws IOException {
+        if (frozen) {
+            throw new IOException("this connection was frozen and now belongs to whoever thawed "
+                    + "it; using it here would send records the peer no longer expects");
+        }
+        if (closed) {
+            throw new IOException("this connection is closed");
+        }
     }
 
     @Override
@@ -168,6 +251,15 @@ public final class TlsConnection implements Transport {
             return;
         }
         closed = true;
+        if (frozen) {
+            // Released, not ended: the socket and the peer's session belong to
+            // whoever continues them. A close_notify here would tear down the
+            // very connection that was just handed on.
+            postHandshake.close();
+            records.close();
+            arena.close();
+            return;
+        }
         try {
             MemorySegment goodbye = scratch.asSlice(0, 2);
             goodbye.set(ValueLayout.JAVA_BYTE, 0, (byte) TlsAlertException.WARNING);

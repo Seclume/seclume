@@ -183,6 +183,28 @@ public final class RecordProtection implements AutoCloseable {
         return sequence;
     }
 
+    // ---- what a migration needs, and nothing more -------------------------
+    //
+    // These three are package-private on purpose. Handing out a traffic
+    // secret is the one operation that can undo everything this class is for,
+    // so the only callers able to reach it are the ones in this package that
+    // write a connection down - see TlsMigration, which copies it straight
+    // into native memory the caller has to wipe. There is no public getter and
+    // there should not be one.
+
+    HashAlgorithm hash() {
+        return hash;
+    }
+
+    int keyLength() {
+        return keyLength;
+    }
+
+    /** Copies the current traffic secret out - {@code hash().digestLength()} bytes. */
+    void copySecretInto(MemorySegment out, long offset) {
+        MemorySegment.copy(secret, 0, out, offset, hash.digestLength());
+    }
+
     /** Sets it - for a connection rebuilt from a written-down state. */
     public void sequence(long value) {
         this.sequence = value;

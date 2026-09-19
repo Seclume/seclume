@@ -7,20 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
-import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicReference;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
@@ -161,7 +155,7 @@ class ClientHandshakeTest {
     // ---- plumbing ---------------------------------------------------------
 
     private static Transport connectTo(EchoServer server) throws IOException {
-        return SocketTransport.connect(InetAddress.getLoopbackAddress().getHostAddress(),
+        return SocketTransport.connect(java.net.InetAddress.getLoopbackAddress().getHostAddress(),
                 server.port(), 10_000);
     }
 
@@ -190,53 +184,4 @@ class ClientHandshakeTest {
         return context;
     }
 
-    /** A JSSE server that sends back whatever it is given, for one connection. */
-    private static final class EchoServer implements AutoCloseable {
-
-        private final SSLServerSocket socket;
-        private final Thread thread;
-        private final AtomicReference<Exception> failure = new AtomicReference<>();
-
-        private EchoServer(SSLServerSocket socket) {
-            this.socket = socket;
-            this.thread = Thread.ofVirtual().start(this::serve);
-        }
-
-        static EchoServer start(SSLContext context) throws IOException {
-            SSLServerSocket socket = (SSLServerSocket) context.getServerSocketFactory()
-                    .createServerSocket(0, 1, InetAddress.getLoopbackAddress());
-            socket.setSoTimeout(60_000);
-            return new EchoServer(socket);
-        }
-
-        int port() {
-            return socket.getLocalPort();
-        }
-
-        private void serve() {
-            try (SSLSocket accepted = (SSLSocket) socket.accept()) {
-                accepted.setSoTimeout(60_000);
-                InputStream in = accepted.getInputStream();
-                OutputStream out = accepted.getOutputStream();
-                byte[] buffer = new byte[8192];
-                int read;
-                while ((read = in.read(buffer)) > 0) {
-                    out.write(buffer, 0, read);
-                    out.flush();
-                }
-            } catch (Exception e) {
-                failure.set(e);               // a refused handshake lands here; the test says why
-            }
-        }
-
-        @Override
-        public void close() throws IOException {
-            socket.close();
-            try {
-                thread.join(java.time.Duration.ofSeconds(30));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
 }
