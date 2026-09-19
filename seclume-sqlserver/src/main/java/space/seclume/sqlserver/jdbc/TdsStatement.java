@@ -108,8 +108,43 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         TdsResultBlock[] target = {collected};
         collected = null;
         block = target[0];
+        if (capturingGeneratedKeys) {
+            // The statement was sent as "<insert>;select scope_identity()", so
+            // the rows that came back are the key and not a result the caller
+            // asked for. The count has to come from the first statement of the
+            // two: the select reports one row of its own, which for a one-row
+            // insert is the same number by coincidence and not otherwise.
+            closeGeneratedKeys();
+            generatedKeys = block;
+            block = null;
+            resultSet = null;
+            updateCount = stream.firstUpdateCount();
+            return;
+        }
         resultSet = block == null ? null : new TdsResultSet(block, this);
         updateCount = block != null ? -1 : stream.updateCount();
+    }
+
+    /**
+     * Set while a statement carries its own {@code scope_identity()} - see
+     * {@link TdsPreparedStatement}, which is the only thing that sets it.
+     */
+    boolean capturingGeneratedKeys;
+    private TdsResultBlock generatedKeys;
+
+    /** The key block this statement captured, or null if it captured none. */
+    ResultSet capturedGeneratedKeys() {
+        return generatedKeys == null ? null : new TdsResultSet(generatedKeys, this);
+    }
+
+    /**
+     * Forgets the keys - without freeing anything, because the block they sit
+     * in is the statement's own reusable one. {@link #blockFor} hands the same
+     * memory out again for the next execution, and only {@link #close} gives
+     * it back. Closing it here would free it twice.
+     */
+    void closeGeneratedKeys() {
+        generatedKeys = null;
     }
 
     /**
@@ -522,6 +557,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         if (!closed) {
             closed = true;
             closeResult();
+            closeGeneratedKeys();
             if (reusable != null) {
                 // Here, and only here, the native block goes back.
                 // Not freed: the connection keeps it for the next

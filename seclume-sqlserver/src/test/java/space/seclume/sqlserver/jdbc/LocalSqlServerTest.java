@@ -511,6 +511,82 @@ class LocalSqlServerTest {
         }
     }
 
+    /**
+     * The same, through a {@code PreparedStatement} - and the second insert is
+     * the whole test.
+     *
+     * <p>A prepared statement runs inside {@code sp_executesql}, a scope of its
+     * own, so a {@code SCOPE_IDENTITY()} asked afterwards reports what the
+     * <em>outer</em> scope last inserted. That used to return the first row's
+     * key for the second row: not an error, a wrong answer, and Hibernate's
+     * "null identifier" on a connection that had inserted nothing yet. One
+     * insert alone would still pass with the bug in place, which is why there
+     * are two here.
+     */
+    @Test
+    void reportsTheGeneratedKeyOfAPreparedInsertAndNotThePreviousOne() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_prepared_keys') is not null "
+                    + "drop table zl_prepared_keys");
+            statement.execute("create table zl_prepared_keys (id int identity primary key, "
+                    + "name nvarchar(10))");
+
+            long[] seen = new long[2];
+            for (int i = 0; i < 2; i++) {
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "insert into zl_prepared_keys (name) values (?)",
+                        Statement.RETURN_GENERATED_KEYS)) {
+                    insert.setString(1, "row" + i);
+                    assertEquals(1, insert.executeUpdate(),
+                            "the count has to be the insert's, not the identity select's");
+                    try (ResultSet keys = insert.getGeneratedKeys()) {
+                        assertTrue(keys.next(), "an identity insert has a key");
+                        seen[i] = keys.getLong(1);
+                    }
+                }
+            }
+            assertEquals(1, seen[0]);
+            assertEquals(2, seen[1], "the second insert's key, not the first one's again");
+
+            // And what the table actually holds has to agree with what was reported.
+            try (ResultSet rows = statement.executeQuery(
+                    "select id, name from zl_prepared_keys order by id")) {
+                assertTrue(rows.next());
+                assertEquals(1, rows.getInt(1));
+                assertEquals("row0", rows.getString(2));
+                assertTrue(rows.next());
+                assertEquals(2, rows.getInt(1));
+                assertEquals("row1", rows.getString(2));
+            }
+            statement.execute("drop table zl_prepared_keys");
+        }
+    }
+
+    /**
+     * Asking for keys that were never requested is refused rather than
+     * answered with somebody else's - the shape the bug above had.
+     */
+    @Test
+    void aStatementNotPreparedForKeysRefusesToInventThem() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_nokeys') is not null drop table zl_nokeys");
+            statement.execute("create table zl_nokeys (id int identity primary key, "
+                    + "name nvarchar(10))");
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into zl_nokeys (name) values (?)")) {
+                insert.setString(1, "a");
+                insert.executeUpdate();
+                SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                        SQLException.class, insert::getGeneratedKeys);
+                assertTrue(refused.getMessage().contains("RETURN_GENERATED_KEYS"),
+                        refused.getMessage());
+            }
+            statement.execute("drop table zl_nokeys");
+        }
+    }
+
     /** An error has to arrive as an error, with its number and SQLState. */
     @Test
     void reportsAnErrorWithItsNumber() throws Exception {

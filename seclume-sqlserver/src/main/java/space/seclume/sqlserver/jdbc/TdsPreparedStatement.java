@@ -42,13 +42,43 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
      */
     private final TdsSession.Prepared prepared = new TdsSession.Prepared();
     private List<Object[]> batch;
+    private final boolean wantsGeneratedKeys;
 
     TdsPreparedStatement(TdsConnection connection, String sql) throws SQLException {
+        this(connection, sql, false);
+    }
+
+    /**
+     * @param wantsGeneratedKeys whether the caller asked for the key an
+     *                           identity column hands out - see
+     *                           {@link #keyCarryingSql}
+     */
+    TdsPreparedStatement(TdsConnection connection, String sql, boolean wantsGeneratedKeys)
+            throws SQLException {
         super(connection);
         this.originalSql = sql;
         TdsSqlRewriter.Rewritten rewritten = TdsSqlRewriter.rewrite(sql);
         this.sql = rewritten.sql();
         this.parameterCount = rewritten.parameters();
+        this.wantsGeneratedKeys = wantsGeneratedKeys;
+    }
+
+    /**
+     * The statement with its own {@code scope_identity()} behind it.
+     *
+     * <p><b>Why it has to travel with the statement rather than follow it.</b>
+     * A prepared statement runs through {@code sp_executesql}, which is a
+     * scope of its own. {@code SCOPE_IDENTITY()} asked afterwards, in a batch
+     * of its own, therefore does not see that insert at all - it reports
+     * whatever the outer scope last inserted, which is the previous statement's
+     * key or nothing. Measured: inserting through a {@code Statement} and then
+     * through a {@code PreparedStatement} gave rows 1 and 2, and asking
+     * afterwards returned 1 both times. A wrong key, not an error, which is
+     * the worst shape a bug can take here - so the select rides along inside
+     * the same call, which is what the vendor driver does too.
+     */
+    private String keyCarryingSql() {
+        return sql + ";select scope_identity() as GENERATED_KEY";
     }
 
     // ---- executing -------------------------------------------------------
@@ -98,7 +128,9 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
             openCursor(session, sql, declaration, parameters);
             return;
         }
-        collect(session, handler -> session.rpc(sql, declaration, parameters, handler));
+        capturingGeneratedKeys = wantsGeneratedKeys;
+        String statement = wantsGeneratedKeys ? keyCarryingSql() : sql;
+        collect(session, handler -> session.rpc(statement, declaration, parameters, handler));
     }
 
     // ---- parameters ------------------------------------------------------
@@ -207,6 +239,31 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
     @Override
     public void addBatch(String otherSql) throws SQLException {
         throw new SQLException("this is a prepared statement - use addBatch() without SQL");
+    }
+
+    /**
+     * The key this insert produced - captured from the statement's own call,
+     * never asked for afterwards.
+     *
+     * <p>Empty rather than wrong when the caller never asked for keys:
+     * {@code prepareStatement(sql)} sends no {@code scope_identity()}, and
+     * inventing one here would read another statement's identity. JDBC allows
+     * an empty result for exactly this case.
+     */
+    @Override
+    public ResultSet getGeneratedKeys() throws SQLException {
+        checkOpen();
+        ResultSet keys = capturedGeneratedKeys();
+        if (keys != null) {
+            return keys;
+        }
+        if (wantsGeneratedKeys) {
+            throw new SQLException("the statement asked for generated keys and the server "
+                    + "returned none - it inserted into no identity column");
+        }
+        throw new SQLException("this statement was not prepared for generated keys - "
+                + "use prepareStatement(sql, Statement.RETURN_GENERATED_KEYS), because the key "
+                + "has to be asked for inside the same call and cannot be fetched afterwards");
     }
 
     @Override

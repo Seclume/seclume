@@ -52,6 +52,17 @@ public final class TokenStream {
     private List<TdsColumn> columns = List.of();
     private TdsRow row;
     private long updateCount = -1;
+    /**
+     * The count the <b>first</b> statement of a batch reported.
+     *
+     * <p>Needed by exactly one caller and worth the field: a prepared insert
+     * that asks for its generated key is sent as the insert plus a
+     * {@code select scope_identity()}, and the select's own count would
+     * otherwise be what {@code executeUpdate} reports. For a one-row insert
+     * both happen to be 1, which is exactly the kind of coincidence that
+     * holds until somebody inserts two rows.
+     */
+    private long firstUpdateCount = -1;
     /** What a procedure wrote back, in order - see readReturnValue. */
     private final java.util.List<Integer> returned = new java.util.ArrayList<>(2);
     /** One count per call of a batch, in order; null when nobody asked. */
@@ -126,6 +137,9 @@ public final class TokenStream {
                         // count; the last one that reports anything wins, which
                         // is what JDBC expects from executeUpdate.
                         updateCount = count;
+                        if (firstUpdateCount < 0) {
+                            firstUpdateCount = count;
+                        }
                     }
                     p += DONE_SIZE;
                 }
@@ -342,6 +356,11 @@ public final class TokenStream {
     /** The last row count the server reported; -1 if it reported none. */
     public long updateCount() {
         return updateCount;
+    }
+
+    /** The count of the first statement in the batch; -1 if none reported one. */
+    public long firstUpdateCount() {
+        return firstUpdateCount;
     }
 
     /** How many rows went through the handler. */
