@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 import space.seclume.crypto.HashAlgorithm;
-import space.seclume.crypto.Hkdf;
 import space.seclume.crypto.NativeP256;
 import space.seclume.internal.Entropy;
 import space.seclume.secret.SecretScope;
@@ -115,23 +114,15 @@ class LocalP256HandshakeTest {
     private static RecordProtection protection(HashAlgorithm hash, int keySize,
             MemorySegment client, MemorySegment server, MemorySegment shared) {
         int size = hash.digestLength();
-        try (SecretScope material = SecretScope.allocate(size * 6);
-                TranscriptHash transcript = new TranscriptHash(hash)) {
-            MemorySegment zeros = material.segment().asSlice(0, size);
-            MemorySegment emptyHash = material.segment().asSlice(size, size);
-            MemorySegment early = material.segment().asSlice(size * 2L, size);
-            MemorySegment derived = material.segment().asSlice(size * 3L, size);
-            MemorySegment handshake = material.segment().asSlice(size * 4L, size);
-            MemorySegment traffic = material.segment().asSlice(size * 5L, size);
-            transcript.current(emptyHash, 0);
-            Hkdf.extract(hash, zeros, zeros, early, 0);
-            Hkdf.expandLabel(hash, early, "derived", emptyHash, derived, 0, size);
-            Hkdf.extract(hash, derived, shared, handshake, 0);
+        try (TranscriptHash transcript = new TranscriptHash(hash);
+                SecretScope digest = SecretScope.allocate(size);
+                KeySchedule schedule = KeySchedule.withoutPsk(hash)) {
             transcript.update(client, 0, (int) client.byteSize());
             transcript.update(server, 0, (int) server.byteSize());
-            transcript.current(emptyHash, 0);
-            Hkdf.expandLabel(hash, handshake, "s hs traffic", emptyHash, traffic, 0, size);
-            return RecordProtection.fromSecret(hash, traffic, keySize);
+            transcript.current(digest.segment(), 0);
+            schedule.deriveHandshakeSecret(shared);
+            schedule.deriveHandshakeTrafficSecrets(digest.segment().asSlice(0, size));
+            return RecordProtection.fromSecret(hash, schedule.serverHandshakeTrafficSecret(), keySize);
         }
     }
 
