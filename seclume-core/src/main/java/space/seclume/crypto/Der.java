@@ -67,6 +67,21 @@ final class Der {
             readAny();
         }
 
+        /** The tag byte of the next element, without consuming it - for an optional field. */
+        int peekTag() {
+            if (position >= end) {
+                throw new IllegalArgumentException("truncated DER structure");
+            }
+            return data.get(ValueLayout.JAVA_BYTE, position) & 0xff;
+        }
+
+        /** The next element whole - tag and length bytes included, not just its content. */
+        Range readElement() {
+            long start = position;
+            readAny();
+            return new Range(start, position - start);
+        }
+
         private Range readTagged(int expectedTag) {
             int tag = nextByte();
             if (tag != expectedTag) {

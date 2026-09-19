@@ -148,12 +148,17 @@ public final class Rsa {
     /** m^e mod n on the fully padded block. */
     private static int raw(RsaPublicKey key, MemorySegment block,
                            MemorySegment out, long outOffset, Arena arena) {
+        return raw(key, block, 0, out, outOffset, arena);
+    }
+
+    private static int raw(RsaPublicKey key, MemorySegment block, long blockOffset,
+                           MemorySegment out, long outOffset, Arena arena) {
         int k = key.modulusBytes();
         int words = key.words();
         MemorySegment base = arena.allocate(words * 4L);
         MemorySegment result = arena.allocate(words * 4L);
         try {
-            BigWords.fromBytes(block, 0, k, base, words);
+            BigWords.fromBytes(block, blockOffset, k, base, words);
             BigWords.modPow(base, key.exponentBytes(), 0, key.exponentLength(),
                     key.modulusWords(), words, result, arena);
             BigWords.toBytes(result, words, out, outOffset, k);
@@ -161,6 +166,25 @@ public final class Rsa {
         } finally {
             base.fill((byte) 0);
             result.fill((byte) 0);
+        }
+    }
+
+    /**
+     * The raw RSA public-key operation, {@code m = s^e mod n} (RFC 8017,
+     * section 5.2.2, RSAVP1) - on an already {@code modulusBytes()}-long
+     * block, with no padding applied or removed.
+     *
+     * <p>{@link #encryptPkcs1} and {@link #encryptOaep} build a padded block
+     * and never let the caller see it recovered. Signature schemes need the
+     * opposite: recover {@code m} from a signature and check its own padding
+     * by hand (see {@code RsaPss}), which is a different operation from
+     * either encryption padding even though the arithmetic underneath is the
+     * one this class already has.
+     */
+    public static void publicOperation(RsaPublicKey key, MemorySegment block, long blockOffset,
+                                       MemorySegment out, long outOffset) {
+        try (Arena arena = Arena.ofConfined()) {
+            raw(key, block, blockOffset, out, outOffset, arena);
         }
     }
 }
