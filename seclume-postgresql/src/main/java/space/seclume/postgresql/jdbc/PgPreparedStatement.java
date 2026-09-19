@@ -38,7 +38,12 @@ import space.seclume.postgresql.PgSession;
  * escaped, but because values and statement are separate fields of the same
  * message.
  */
-final class PgPreparedStatement extends PgStatement implements PreparedStatement {
+/*
+ * Not final: PgCallableStatement is the same statement with a call in front of
+ * it and output parameters behind it, and everything in between - parse, bind,
+ * execute, the plan cache - is this class's and should stay in one place.
+ */
+class PgPreparedStatement extends PgStatement implements PreparedStatement {
 
     private final String sql;
     /** As the caller wrote it - the key the connection caches the plan under. */
@@ -361,9 +366,20 @@ final class PgPreparedStatement extends PgStatement implements PreparedStatement
         set(index, value);
     }
 
-    private void set(int index, Object value) throws SQLException {
+    /**
+     * Every one of the forty-eight setters above ends here, which is what
+     * makes a subclass able to renumber them: a call written
+     * {@code {? = call f(?)}} counts its return value as parameter 1, and the
+     * statement underneath has only the one placeholder.
+     */
+    void set(int index, Object value) throws SQLException {
         checkOpen();
         parameters.set(index, value);
+    }
+
+    /** What has been bound so far - the callable checks its outputs against it. */
+    PgParameters parameters() {
+        return parameters;
     }
 
     /**

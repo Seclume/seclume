@@ -14,6 +14,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
@@ -81,6 +82,7 @@ class LocalJdbcTest {
      * <p>Two statements with different shapes, run alternately, catch exactly
      * that: names, types and values all have to stay with their own statement.
      */
+
     @Test
     void aReusedPlanKeepsItsOwnColumnsAfterAnotherStatementRanBetween() throws Exception {
         try (Connection connection = connect();
@@ -798,8 +800,6 @@ class LocalJdbcTest {
             assertThrows(java.sql.SQLFeatureNotSupportedException.class,
                     () -> connection.prepareStatement("insert into nothing values (1)",
                             new int[] {1}));
-            assertThrows(java.sql.SQLFeatureNotSupportedException.class,
-                    () -> connection.prepareCall("{ call whatever() }"));
             try (ResultSet result = statement.executeQuery("select 1")) {
                 assertTrue(result.next());
                 assertThrows(java.sql.SQLFeatureNotSupportedException.class, result::previous);
@@ -1255,4 +1255,100 @@ class LocalJdbcTest {
         }
     }
 
+    // ---- procedure calls --------------------------------------------------
+
+    /**
+     * A procedure with an {@code INOUT} parameter, through
+     * {@code CallableStatement} - the shape {@code SimpleJdbcCall} and Spring
+     * Data's {@code @Procedure} use.
+     *
+     * <p>PostgreSQL answers a {@code CALL} with one row holding the outputs,
+     * which is the whole mechanism; what is being tested is that the escape
+     * syntax reaches it and the value comes back under the right index.
+     */
+    @Test
+    void callsAProcedureAndReadsItsOutput() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_double(inout n int) "
+                    + "language plpgsql as $$ begin n := n * 2; end $$");
+            try (CallableStatement call = connection.prepareCall("{call zl_double(?)}")) {
+                call.setInt(1, 21);
+                call.registerOutParameter(1, Types.INTEGER);
+                call.execute();
+                assertEquals(42, call.getInt(1));
+                assertFalse(call.wasNull());
+            }
+            statement.execute("drop procedure zl_double(int)");
+        }
+    }
+
+    /** Two outputs, so that the second one cannot pass by landing on the first. */
+    @Test
+    void callsAProcedureWithTwoOutputs() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_split("
+                    + "in text_in text, inout head text, inout tail text) "
+                    + "language plpgsql as $$ begin "
+                    + "head := split_part(text_in, '-', 1); "
+                    + "tail := split_part(text_in, '-', 2); end $$");
+            try (CallableStatement call = connection.prepareCall("{call zl_split(?, ?, ?)}")) {
+                call.setString(1, "left-right");
+                call.registerOutParameter(2, Types.VARCHAR);
+                call.registerOutParameter(3, Types.VARCHAR);
+                call.execute();
+                assertEquals("left", call.getString(2));
+                assertEquals("right", call.getString(3));
+            }
+            statement.execute("drop procedure zl_split(text, text, text)");
+        }
+    }
+
+    /**
+     * A function with a return value - <code>{? = call f(?)}</code>, where the
+     * caller counts the return as parameter 1 and everything else shifts.
+     */
+    @Test
+    void callsAFunctionAndReadsItsReturnValue() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace function zl_triple(n int) returns int "
+                    + "language sql as $$ select n * 3 $$");
+            try (CallableStatement call = connection.prepareCall("{? = call zl_triple(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.setInt(2, 14);           // parameter 2, because 1 is the return value
+                call.execute();
+                assertEquals(42, call.getInt(1));
+            }
+            statement.execute("drop function zl_triple(int)");
+        }
+    }
+
+    /** A NULL output is a NULL, and says so through wasNull. */
+    @Test
+    void anOutputThatIsNullSaysSo() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_nothing(inout n int) "
+                    + "language plpgsql as $$ begin n := null; end $$");
+            try (CallableStatement call = connection.prepareCall("{call zl_nothing(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.execute();
+                assertEquals(0, call.getInt(1));
+                assertTrue(call.wasNull(), "an output that came back NULL has to report it");
+            }
+            statement.execute("drop procedure zl_nothing(int)");
+        }
+    }
+
+    /** What is not a call is refused before anything reaches the server. */
+    @Test
+    void refusesSqlThatIsNotACall() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                    SQLException.class, () -> connection.prepareCall("select 1"));
+            assertTrue(refused.getMessage().contains("{call p(?)}"), refused.getMessage());
+        }
+    }
 }

@@ -5,6 +5,8 @@ import space.seclume.RoundTrips;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.CallableStatement;
+
+import space.seclume.internal.jdbc.CallSyntax;
 import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -258,9 +260,19 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public CallableStatement prepareCall(String sql) throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume has no CallableStatement - call a PostgreSQL function with "
-                + "'select fn(?)' through a PreparedStatement");
+        checkOpen();
+        CallSyntax call = CallSyntax.parse(sql);
+        // The plan cache is keyed by the statement that goes to the server,
+        // not by what the caller wrote - two callers writing the same call
+        // with and without braces share one plan, which is right.
+        String statement = PgCallableStatement.statementFor(call);
+        Idle idle = takePlan(statement);
+        PgCallableStatement prepared = idle == null
+                ? new PgCallableStatement(this, call,
+                        "zl_" + statementCounter.incrementAndGet(), null)
+                : new PgCallableStatement(this, call, idle.name(), idle.described());
+        open.add(prepared);
+        return prepared;
     }
 
     @Override
