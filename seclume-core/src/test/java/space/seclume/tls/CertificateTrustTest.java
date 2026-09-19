@@ -12,13 +12,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyStore;
 import java.security.cert.CertificateException;
-import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
-import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -49,10 +45,7 @@ import org.junit.jupiter.api.Test;
  */
 class CertificateTrustTest {
 
-    private static final String PASSWORD = "seclume-test";
-
-    private static Path directory;
-    private static X509Certificate caCertificate;
+    private static TestCertificates certificates;
     private static X509Certificate leaf;               // digitalSignature, three SANs
     private static X509Certificate encipherOnlyLeaf;   // keyEncipherment only
     private static KeyStore trustStore;
@@ -61,56 +54,25 @@ class CertificateTrustTest {
 
     @BeforeAll
     static void generateAPrivateCertificateAuthority() throws Exception {
-        Path keytool = Path.of(System.getProperty("java.home"), "bin",
-                System.getProperty("os.name").toLowerCase(java.util.Locale.ROOT).contains("win")
-                        ? "keytool.exe" : "keytool");
-        Assumptions.assumeTrue(Files.isExecutable(keytool), "no keytool in this JDK");
-
-        directory = Files.createTempDirectory("seclume-trust");
-        String tool = keytool.toString();
-        Path caStore = directory.resolve("ca.p12");
-        Path leafStore = directory.resolve("leaf.p12");
-        Path encipherStore = directory.resolve("encipher.p12");
-
-        keypair(tool, caStore, "ca", "CN=seclume-test-ca", "bc:c");
-        keypair(tool, leafStore, "leaf", "CN=seclume-leaf", null);
-        keypair(tool, encipherStore, "leaf", "CN=seclume-encipher-leaf", null);
-
-        caCertificate = export(tool, caStore, "ca");
-        Path signedLeaf = sign(tool, caStore, leafStore, "leaf",
+        Assumptions.assumeTrue(TestCertificates.available(), "no keytool in this JDK");
+        certificates = TestCertificates.generate();
+        TestCertificates.Issued good = certificates.issue("leaf",
                 "san=dns:db.example.com,dns:*.wild.example.com,ip:10.1.2.3",
                 "ku:c=digitalSignature");
-        leaf = read(signedLeaf);
-        encipherOnlyLeaf = read(sign(tool, caStore, encipherStore, "leaf",
-                "san=dns:db.example.com", "ku:c=keyEncipherment"));
+        leaf = good.certificate();
+        encipherOnlyLeaf = certificates.issue("encipher",
+                "san=dns:db.example.com", "ku:c=keyEncipherment").certificate();
 
-        trustStore = KeyStore.getInstance("PKCS12");
-        trustStore.load(null, null);
-        trustStore.setCertificateEntry("seclume-test-ca", caCertificate);
-
-        // For the live-handshake oracle below the leaf keystore has to hold the
-        // signed certificate and its issuer, not the self-signed one it was born with.
-        Path caFile = caStore.resolveSibling("ca.cer");
-        run(List.of(tool, "-importcert", "-noprompt", "-alias", "ca", "-file", caFile.toString(),
-                "-keystore", leafStore.toString(), "-storepass", PASSWORD));
-        run(List.of(tool, "-importcert", "-noprompt", "-alias", "leaf",
-                "-file", signedLeaf.toString(),
-                "-keystore", leafStore.toString(), "-storepass", PASSWORD));
-        serverContext = serverContext(leafStore);
+        trustStore = certificates.trustStore();
+        serverContext = serverContext(good.keystore());
         clientContext = clientContext(trustStore);
     }
 
     @AfterAll
     static void removeEverythingThatWasGenerated() throws IOException {
-        if (directory == null) {
-            return;
+        if (certificates != null) {
+            certificates.close();
         }
-        try (var walk = Files.walk(directory)) {
-            for (Path path : walk.sorted(Comparator.reverseOrder()).toList()) {
-                Files.deleteIfExists(path);
-            }
-        }
-        assertTrue(Files.notExists(directory), "the generated keys and certificates are gone");
     }
 
     // ---- the chain --------------------------------------------------------
@@ -275,10 +237,10 @@ class CertificateTrustTest {
     private static SSLContext serverContext(Path keystore) throws Exception {
         KeyStore store = KeyStore.getInstance("PKCS12");
         try (InputStream in = Files.newInputStream(keystore)) {
-            store.load(in, PASSWORD.toCharArray());
+            store.load(in, TestCertificates.PASSWORD.toCharArray());
         }
         KeyManagerFactory keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-        keys.init(store, PASSWORD.toCharArray());
+        keys.init(store, TestCertificates.PASSWORD.toCharArray());
         SSLContext context = SSLContext.getInstance("TLSv1.3");
         context.init(keys.getKeyManagers(), null, null);
         return context;
@@ -293,59 +255,4 @@ class CertificateTrustTest {
         return context;
     }
 
-    private static void keypair(String keytool, Path store, String alias, String dname,
-            String extension) throws Exception {
-        var command = new java.util.ArrayList<>(List.of(keytool,
-                "-genkeypair", "-alias", alias, "-keyalg", "RSA", "-keysize", "2048",
-                "-sigalg", "SHA256withRSA", "-dname", dname, "-validity", "2",
-                "-keystore", store.toString(), "-storetype", "PKCS12",
-                "-storepass", PASSWORD, "-keypass", PASSWORD));
-        if (extension != null) {
-            command.add("-ext");
-            command.add(extension);
-        }
-        run(command);
-    }
-
-    private static Path sign(String keytool, Path caStore, Path leafStore, String alias,
-            String... extensions) throws Exception {
-        Path request = leafStore.resolveSibling(alias + "-" + leafStore.getFileName() + ".csr");
-        Path signed = leafStore.resolveSibling(alias + "-" + leafStore.getFileName() + ".cer");
-        run(List.of(keytool, "-certreq", "-alias", alias, "-keystore", leafStore.toString(),
-                "-storepass", PASSWORD, "-file", request.toString()));
-
-        var command = new java.util.ArrayList<>(List.of(keytool,
-                "-gencert", "-alias", "ca", "-keystore", caStore.toString(),
-                "-storepass", PASSWORD, "-sigalg", "SHA256withRSA", "-validity", "2",
-                "-infile", request.toString(), "-outfile", signed.toString(), "-rfc"));
-        for (String extension : extensions) {
-            command.add("-ext");
-            command.add(extension);
-        }
-        run(command);
-        return signed;
-    }
-
-    private static X509Certificate export(String keytool, Path store, String alias) throws Exception {
-        Path file = store.resolveSibling(alias + ".cer");
-        run(List.of(keytool, "-exportcert", "-alias", alias, "-keystore", store.toString(),
-                "-storepass", PASSWORD, "-rfc", "-file", file.toString()));
-        return read(file);
-    }
-
-    private static X509Certificate read(Path file) throws Exception {
-        try (InputStream in = Files.newInputStream(file)) {
-            return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(in);
-        }
-    }
-
-    private static void run(List<String> command) throws Exception {
-        Process process = new ProcessBuilder(command)
-                .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .start();
-        assertTrue(process.waitFor(60, TimeUnit.SECONDS), "keytool did not finish: " + command);
-        assertTrue(process.exitValue() == 0,
-                "keytool failed with " + process.exitValue() + ": " + String.join(" ", command));
-    }
 }

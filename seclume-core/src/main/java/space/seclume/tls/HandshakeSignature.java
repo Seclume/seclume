@@ -27,11 +27,13 @@ import java.util.Arrays;
  */
 public final class HandshakeSignature {
 
-    /** {@code rsa_pss_rsae_sha256} (RFC 8446, section 4.2.3) - the scheme this class can verify. */
+    /** {@code rsa_pss_rsae_sha256} (RFC 8446, section 4.2.3). */
     public static final int RSA_PSS_RSAE_SHA256 = 0x0804;
-
-    private static final PSSParameterSpec PSS_SHA256 =
-            new PSSParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, 32, 1);
+    public static final int RSA_PSS_RSAE_SHA384 = 0x0805;
+    public static final int RSA_PSS_RSAE_SHA512 = 0x0806;
+    public static final int ECDSA_SECP256R1_SHA256 = 0x0403;
+    public static final int ECDSA_SECP384R1_SHA384 = 0x0503;
+    public static final int ECDSA_SECP521R1_SHA512 = 0x0603;
 
     private static final String SERVER_CONTEXT = "TLS 1.3, server CertificateVerify";
     private static final String CLIENT_CONTEXT = "TLS 1.3, client CertificateVerify";
@@ -65,18 +67,52 @@ public final class HandshakeSignature {
      */
     public static boolean verifyServer(PublicKey leafKey, byte[] transcriptHash,
             int signatureScheme, byte[] signature) {
-        if (signatureScheme != RSA_PSS_RSAE_SHA256) {
-            return false;
-        }
         byte[] content = content(true, transcriptHash);
         try {
-            Signature verifier = Signature.getInstance("RSASSA-PSS");
-            verifier.setParameter(PSS_SHA256);
+            Signature verifier = verifierFor(signatureScheme);
+            if (verifier == null) {
+                return false;
+            }
             verifier.initVerify(leafKey);
             verifier.update(content);
             return verifier.verify(signature);
         } catch (GeneralSecurityException e) {
             return false;                     // wrong key type, malformed signature bytes, ...
         }
+    }
+
+    /**
+     * A verifier for one {@code SignatureScheme}, or null for one this client
+     * never offered.
+     *
+     * <p>The six here are exactly the six {@link ClientHello} advertises, and
+     * that is the invariant worth keeping: a scheme offered but not
+     * understood is a handshake that fails against a perfectly ordinary
+     * server, and one understood but not offered is dead code.
+     *
+     * <p>The curve a scheme names is <b>not</b> checked against the key's
+     * actual curve - {@code SHA256withECDSA} will verify with a P-384 key
+     * just as happily. Named because it is a real gap, and a small one: the
+     * signature still has to verify under the certificate the chain
+     * validation already accepted.
+     */
+    private static Signature verifierFor(int scheme) throws GeneralSecurityException {
+        return switch (scheme) {
+            case RSA_PSS_RSAE_SHA256 -> pss("SHA-256", MGF1ParameterSpec.SHA256, 32);
+            case RSA_PSS_RSAE_SHA384 -> pss("SHA-384", MGF1ParameterSpec.SHA384, 48);
+            case RSA_PSS_RSAE_SHA512 -> pss("SHA-512", MGF1ParameterSpec.SHA512, 64);
+            case ECDSA_SECP256R1_SHA256 -> Signature.getInstance("SHA256withECDSA");
+            case ECDSA_SECP384R1_SHA384 -> Signature.getInstance("SHA384withECDSA");
+            case ECDSA_SECP521R1_SHA512 -> Signature.getInstance("SHA512withECDSA");
+            default -> null;
+        };
+    }
+
+    private static Signature pss(String digest, MGF1ParameterSpec mgf1, int saltLength)
+            throws GeneralSecurityException {
+        Signature verifier = Signature.getInstance("RSASSA-PSS");
+        // TLS 1.3 fixes the salt length to the digest length (RFC 8446, 4.2.3).
+        verifier.setParameter(new PSSParameterSpec(digest, "MGF1", mgf1, saltLength, 1));
+        return verifier;
     }
 }
