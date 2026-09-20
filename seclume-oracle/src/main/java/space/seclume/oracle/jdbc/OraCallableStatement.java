@@ -15,6 +15,7 @@ import java.util.Map;
 
 import space.seclume.internal.jdbc.CallSyntax;
 import space.seclume.internal.jdbc.OutParameters;
+import space.seclume.internal.jdbc.ParameterNames;
 import space.seclume.internal.jdbc.ParameterSetters;
 import space.seclume.oracle.net.OracleColumn;
 import space.seclume.oracle.net.OracleNumber;
@@ -113,6 +114,84 @@ final class OraCallableStatement extends OraStatement
         Object value = values.get(index);
         lastWasNull = value == null;
         return value;
+    }
+
+    // ---- parameters by name ------------------------------------------------
+
+    /**
+     * The catalog question, asked once per statement.
+     *
+     * <p>Oracle keeps this in {@code all_arguments} rather than in
+     * {@code information_schema}, which it does not have. Three details of
+     * that view matter here:
+     *
+     * <ul>
+     *   <li><b>{@code data_level = 0}</b> - a record or collection argument
+     *       is listed again, one row per field, at a deeper level. Without
+     *       this those fields would be counted as parameters of their
+     *       own.</li>
+     *   <li><b>{@code position > 0}</b> - position 0 is a function's return
+     *       value, which JDBC counts as parameter 1 by itself.</li>
+     *   <li><b>{@code subprogram_id}</b> - a package may declare the same
+     *       procedure name several times, and it is the pair of object and
+     *       subprogram that identifies one of them.</li>
+     * </ul>
+     */
+    private static final String PARAMETER_QUERY = """
+            select a.object_id || '.' || a.subprogram_id, a.argument_name, a.position
+              from all_arguments a
+             where upper(a.object_name) = upper(?)
+               and %s
+               and a.data_level = 0
+               and a.position > 0
+             order by a.object_id, a.subprogram_id, a.position""";
+
+    private ParameterNames names;
+
+    @Override
+    public int indexOf(String parameterName) throws SQLException {
+        checkOpen();
+        if (names == null) {
+            names = loadNames();
+        }
+        return names.indexOf(parameterName);
+    }
+
+    private ParameterNames loadNames() throws SQLException {
+        String container = null;
+        String routine = call.name();
+        int dot = routine.lastIndexOf('.');
+        if (dot >= 0) {
+            container = routine.substring(0, dot);
+            routine = routine.substring(dot + 1);
+        }
+        // A qualified call is pkg.proc far more often than owner.proc, and a
+        // stand-alone procedure has no package at all - so the one name in
+        // front is allowed to be either.
+        String sql = PARAMETER_QUERY.formatted(container == null
+                ? "a.package_name is null"
+                : "(upper(a.package_name) = upper(?) or upper(a.owner) = upper(?))");
+        int arguments = call.parameters() - (call.returnsValue() ? 1 : 0);
+        try (java.sql.PreparedStatement ask = connection.prepareStatement(sql)) {
+            ask.setString(1, unquoted(routine));
+            if (container != null) {
+                // Twice, because the driver numbers placeholders by position:
+                // one name, asked of the package column and of the owner.
+                ask.setString(2, unquoted(container));
+                ask.setString(3, unquoted(container));
+            }
+            try (ResultSet rows = ask.executeQuery()) {
+                return ParameterNames.fromCatalog(rows, arguments, call.returnsValue());
+            }
+        }
+    }
+
+    /** A quoted identifier stands for itself; the quotes are not part of the name. */
+    private static String unquoted(String identifier) {
+        String text = identifier.trim();
+        return text.length() > 1 && text.startsWith("\"") && text.endsWith("\"")
+                ? text.substring(1, text.length() - 1)
+                : text;
     }
 
     @Override

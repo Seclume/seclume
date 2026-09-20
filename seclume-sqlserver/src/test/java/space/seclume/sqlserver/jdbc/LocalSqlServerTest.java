@@ -782,4 +782,31 @@ class LocalSqlServerTest {
             statement.execute("drop procedure zl_nothing");
         }
     }
+
+    /**
+     * Parameters addressed by the name the procedure declared.
+     *
+     * <p>The arguments are set in the wrong order on purpose and the
+     * procedure subtracts, so a driver that ignored the names and filled the
+     * positions in the order it was called would answer 60 rather than -60.
+     * One name is passed with the {@code @} SQL Server writes it with and one
+     * without, because an application may well do either.
+     */
+    @Test
+    void addressesParametersByName() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_minus') is not null drop procedure zl_minus");
+            statement.execute("create procedure zl_minus @base int, @minus int, "
+                    + "@answer int output as set @answer = @base - @minus");
+            try (CallableStatement call = connection.prepareCall("{call zl_minus(?, ?, ?)}")) {
+                call.setInt("@minus", 100);
+                call.setInt("base", 40);
+                call.registerOutParameter("answer", Types.INTEGER);
+                call.execute();
+                assertEquals(-60, call.getInt("@answer"));
+            }
+            statement.execute("drop procedure zl_minus");
+        }
+    }
 }

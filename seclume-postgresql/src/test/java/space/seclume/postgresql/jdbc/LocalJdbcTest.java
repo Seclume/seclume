@@ -1342,6 +1342,51 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * Parameters addressed by the name the procedure declared.
+     *
+     * <p>The procedure subtracts, and the arguments are set in the wrong
+     * order on purpose - {@code minus} before {@code base}. Subtraction is
+     * not symmetric, so a driver that ignored the names and filled the
+     * positions in the order it was called would answer 60 instead of -60.
+     * The output is read by name as well, and the case is deliberately not
+     * the case the catalog stores.
+     */
+    @Test
+    void addressesParametersByName() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_minus("
+                    + "in base int, in minus int, inout answer int) "
+                    + "language plpgsql as $$ begin answer := base - minus; end $$");
+            try (CallableStatement call = connection.prepareCall("{call zl_minus(?, ?, ?)}")) {
+                call.setInt("minus", 100);
+                call.setInt("BASE", 40);
+                call.registerOutParameter("answer", Types.INTEGER);
+                call.execute();
+                assertEquals(-60, call.getInt("answer"));
+            }
+            statement.execute("drop procedure zl_minus(int, int, int)");
+        }
+    }
+
+    /** A name the procedure does not declare is refused, and the message says what it does. */
+    @Test
+    void refusesAParameterNameThatIsNotThere() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_named(inout n int) "
+                    + "language plpgsql as $$ begin n := n; end $$");
+            try (CallableStatement call = connection.prepareCall("{call zl_named(?)}")) {
+                SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                        SQLException.class, () -> call.setInt("nope", 1));
+                assertTrue(refused.getMessage().contains("nope")
+                        && refused.getMessage().contains("n at 1"), refused.getMessage());
+            }
+            statement.execute("drop procedure zl_named(int)");
+        }
+    }
+
     /** What is not a call is refused before anything reaches the server. */
     @Test
     void refusesSqlThatIsNotACall() throws Exception {

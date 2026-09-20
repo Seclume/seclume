@@ -746,4 +746,35 @@ class LocalOracleJdbcTest {
             statement.execute("drop procedure zl_nothing");
         }
     }
+
+    /**
+     * Parameters addressed by the name the procedure declared.
+     *
+     * <p>The arguments are set in the wrong order on purpose and the
+     * procedure subtracts, so a driver that ignored the names and filled the
+     * positions in the order it was called would answer 60 rather than -60.
+     * The names are written in lower case although Oracle stores them upper
+     * case, which is the case an application will actually use. The second
+     * one is called {@code less} rather than {@code minus}, because
+     * {@code MINUS} is a set operator in Oracle and a procedure that declares
+     * it compiles to an INVALID object whose arguments the catalog then does
+     * not list at all.
+     */
+    @Test
+    void addressesParametersByName() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_minus("
+                    + "base in number, less in number, answer out number) as "
+                    + "begin answer := base - less; end;");
+            try (CallableStatement call = connection.prepareCall("{call zl_minus(?, ?, ?)}")) {
+                call.setInt("less", 100);
+                call.setInt("base", 40);
+                call.registerOutParameter("answer", Types.INTEGER);
+                call.execute();
+                assertEquals(-60, call.getInt("answer"));
+            }
+            statement.execute("drop procedure zl_minus");
+        }
+    }
 }

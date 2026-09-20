@@ -7,6 +7,7 @@ import java.util.List;
 
 import space.seclume.internal.jdbc.CallSyntax;
 import space.seclume.internal.jdbc.OutParameters;
+import space.seclume.internal.jdbc.ParameterNames;
 import space.seclume.postgresql.PgSession;
 
 /**
@@ -75,6 +76,71 @@ final class PgCallableStatement extends PgPreparedStatement implements OutParame
     @Override
     void set(int index, Object value) throws SQLException {
         super.set(wireIndex(index), value);
+    }
+
+    // ---- parameters by name ------------------------------------------------
+
+    /**
+     * The catalog question, asked once per statement.
+     *
+     * <p>{@code information_schema} is the standard place and PostgreSQL
+     * keeps it honest: {@code specific_name} is unique per overload, which is
+     * exactly what {@link ParameterNames#fromCatalog} needs to tell two
+     * procedures of the same name apart. Position 0 is a function's return
+     * value and is left out - JDBC counts it as parameter 1 by itself.
+     *
+     * <p>The schema is compared only when the call named one. A cast is
+     * needed on the parameter because PostgreSQL will not infer the type of a
+     * placeholder that appears only in {@code is null}.
+     */
+    private static final String PARAMETER_QUERY = """
+            select p.specific_name, p.parameter_name, p.ordinal_position
+              from information_schema.parameters p
+              join information_schema.routines r
+                on r.specific_schema = p.specific_schema
+               and r.specific_name = p.specific_name
+             where lower(r.routine_name) = lower(?)
+               and (cast(? as text) is null
+                    or lower(r.routine_schema) = lower(cast(? as text)))
+               and p.ordinal_position > 0
+             order by p.specific_name, p.ordinal_position""";
+
+    private ParameterNames names;
+
+    @Override
+    public int indexOf(String parameterName) throws SQLException {
+        checkOpen();
+        if (names == null) {
+            names = loadNames();
+        }
+        return names.indexOf(parameterName);
+    }
+
+    private ParameterNames loadNames() throws SQLException {
+        String schema = null;
+        String routine = call.name();
+        int dot = routine.lastIndexOf('.');
+        if (dot >= 0) {
+            schema = routine.substring(0, dot);
+            routine = routine.substring(dot + 1);
+        }
+        int arguments = call.parameters() - (call.returnsValue() ? 1 : 0);
+        try (java.sql.PreparedStatement ask = connection.prepareStatement(PARAMETER_QUERY)) {
+            ask.setString(1, unquoted(routine));
+            ask.setString(2, schema == null ? null : unquoted(schema));
+            ask.setString(3, schema == null ? null : unquoted(schema));
+            try (ResultSet rows = ask.executeQuery()) {
+                return ParameterNames.fromCatalog(rows, arguments, call.returnsValue());
+            }
+        }
+    }
+
+    /** A quoted identifier stands for itself; the quotes are not part of the name. */
+    private static String unquoted(String identifier) {
+        String text = identifier.trim();
+        return text.length() > 1 && text.startsWith("\"") && text.endsWith("\"")
+                ? text.substring(1, text.length() - 1)
+                : text;
     }
 
     // ---- outputs ----------------------------------------------------------

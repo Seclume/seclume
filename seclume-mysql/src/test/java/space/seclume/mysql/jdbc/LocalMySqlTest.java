@@ -792,4 +792,32 @@ class LocalMySqlTest {
             statement.execute("drop procedure zl_double");
         }
     }
+
+    /**
+     * Parameters addressed by the name the procedure declared.
+     *
+     * <p>The arguments are set in the wrong order on purpose, and the
+     * procedure subtracts: a driver that ignored the names and filled the
+     * positions in the order it was called would answer 60 rather than -60.
+     * The output is read by name too, and in a case the catalog does not
+     * store.
+     */
+    @Test
+    void addressesParametersByName() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("drop procedure if exists zl_minus");
+            statement.execute("create procedure zl_minus("
+                    + "in base int, in minus int, out answer int) "
+                    + "begin set answer = base - minus; end");
+            try (CallableStatement call = connection.prepareCall("{call zl_minus(?, ?, ?)}")) {
+                call.setInt("minus", 100);
+                call.setInt("BASE", 40);
+                call.registerOutParameter("answer", Types.INTEGER);
+                call.execute();
+                assertEquals(-60, call.getInt("answer"));
+            }
+            statement.execute("drop procedure zl_minus");
+        }
+    }
 }

@@ -11,6 +11,7 @@ import java.util.Map;
 
 import space.seclume.internal.jdbc.CallSyntax;
 import space.seclume.internal.jdbc.OutParameters;
+import space.seclume.internal.jdbc.ParameterNames;
 import space.seclume.internal.jdbc.ParameterSetters;
 
 /**
@@ -100,6 +101,67 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
     @Override
     public boolean lastWasNull() {
         return lastWasNull;
+    }
+
+    // ---- parameters by name ------------------------------------------------
+
+    /**
+     * The catalog question, asked once per statement.
+     *
+     * <p>SQL Server does not overload procedures, so the specific name is the
+     * procedure's own and stands for one signature. Position 0 is a scalar
+     * function's return value, which JDBC counts as parameter 1 by itself.
+     * The names the catalog holds carry the {@code @} SQL Server writes them
+     * with; {@code ParameterNames} strips it from either side, so an
+     * application may pass the name with it or without.
+     */
+    private static final String PARAMETER_QUERY = """
+            select p.specific_name, p.parameter_name, p.ordinal_position
+              from information_schema.parameters p
+             where lower(p.specific_name) = lower(?)
+               and (%s)
+               and p.ordinal_position > 0
+             order by p.ordinal_position""";
+
+    private ParameterNames names;
+
+    @Override
+    public int indexOf(String parameterName) throws SQLException {
+        checkOpen();
+        if (names == null) {
+            names = loadNames();
+        }
+        return names.indexOf(parameterName);
+    }
+
+    private ParameterNames loadNames() throws SQLException {
+        String schema = null;
+        String routine = call.name();
+        int dot = routine.lastIndexOf('.');
+        if (dot >= 0) {
+            schema = routine.substring(0, dot);
+            routine = routine.substring(dot + 1);
+        }
+        String sql = PARAMETER_QUERY.formatted(
+                schema == null ? "1 = 1" : "lower(p.specific_schema) = lower(?)");
+        int arguments = call.parameters() - (call.returnsValue() ? 1 : 0);
+        try (java.sql.PreparedStatement ask = connection.prepareStatement(sql)) {
+            ask.setString(1, unquoted(routine));
+            if (schema != null) {
+                ask.setString(2, unquoted(schema));
+            }
+            try (java.sql.ResultSet rows = ask.executeQuery()) {
+                return ParameterNames.fromCatalog(rows, arguments, call.returnsValue());
+            }
+        }
+    }
+
+    /** A quoted identifier stands for itself; the brackets are not part of the name. */
+    private static String unquoted(String identifier) {
+        String text = identifier.trim();
+        return text.length() > 1 && text.startsWith("[") && text.endsWith("]")
+                ? text.substring(1, text.length() - 1)
+                : text;
     }
 
     @Override
