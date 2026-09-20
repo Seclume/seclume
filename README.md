@@ -90,6 +90,10 @@ authentication is the fallback for everything not in a domain.
   OUT parameters and parameters by name, generated keys, batches, `ParameterMetaData`,
   scrollable results, fetch size and block cursors, LOB streams, `setNull`, escape functions,
   query timeouts and row limits.
+- **Procedures that return rows**, in the form each server has one: a `SYS_REFCURSOR` output
+  on Oracle, read with `registerOutParameter(i, Types.REF_CURSOR)`; and on SQL Server the
+  results a procedure selects, walked with `getResultSet` and `getMoreResults` — several of
+  them, and without the driver's own bookkeeping showing up among them.
 - Every Java type an application maps, old and new: `BigDecimal`, `UUID`, `LocalDate`,
   `LocalDateTime`, `OffsetDateTime`, `Instant`, `LocalTime`, `Duration`, `Year`, byte arrays,
   `Clob`/`Blob`, enums, booleans — each written and read back unchanged, on every server.
@@ -145,7 +149,6 @@ rather than staying silent.
 
 ## What it does not do yet
 
-- Procedures returning cursors on Oracle and SQL Server.
 - CockroachDB and YugabyteDB are exercised in CI, but without authentication, so that is not
   yet evidence that the driver serves them.
 - Moving a live session from one host to another. The drivers hold their own protocol and TLS

@@ -47,6 +47,25 @@ public final class TokenStream {
     @FunctionalInterface
     public interface RowHandler {
         void row(TdsRow row) throws SQLException;
+
+        /**
+         * A new result begins here - a {@code COLMETADATA} arrived.
+         *
+         * <p>Without this, a handler cannot tell where one result of a batch
+         * ends and the next starts: rows carry their own columns, so two
+         * results that happen to have the same shape look like one long one,
+         * and a procedure that selects twice reads back as a single table.
+         *
+         * <p>It is also the only way an <b>empty</b> result announces itself.
+         * A select that matched nothing sends its description and then a
+         * {@code DONE} with no rows in between, and the difference between
+         * "no rows" and "no result" is one an application acts on.
+         *
+         * <p>Default empty, so a handler that only ever runs one statement -
+         * which is most of them - need not care.
+         */
+        default void nextResult(List<TdsColumn> columns) throws SQLException {
+        }
     }
 
     private List<TdsColumn> columns = List.of();
@@ -98,6 +117,9 @@ public final class TokenStream {
                     columns = parsed.columns();
                     row = columns.isEmpty() ? null : new TdsRow(in, columns);
                     p = parsed.end();
+                    if (handler != null && refused == null && !columns.isEmpty()) {
+                        handler.nextResult(columns);
+                    }
                 }
                 case Tds.TOKEN_ROW, Tds.TOKEN_NBCROW -> {
                     if (row == null) {

@@ -241,7 +241,20 @@ public final class TtcBinds {
         out.putByte((byte) TtcMessage.TYPE_ROW_DATA);
         for (Object value : values) {
             if (value instanceof Output output) {
-                if (output.placeholder()) {
+                if (output.type() == OracleColumn.TYPE_CURSOR) {
+                    // A cursor slot is not an empty value. It carries the
+                    // number of the cursor the client is offering - zero,
+                    // meaning "open one" - and that number is one byte long,
+                    // so the pair is a length of 1 and the zero itself.
+                    //
+                    // Sending the empty value that every other output uses
+                    // costs one byte, and the consequence is not an error:
+                    // the server reads the following bind's description one
+                    // byte out of step and then waits for the rest of a
+                    // message that has already been sent. The call hangs.
+                    out.putByte((byte) 1);
+                    out.putByte((byte) 0);
+                } else if (output.placeholder()) {
                     out.putByte((byte) 0);    // an empty value - see Output
                 }
                 continue;
@@ -259,6 +272,14 @@ public final class TtcBinds {
      * would truncate a value nobody could have known was longer.
      */
     private static long outputBufferSize(int type) {
+        if (type == OracleColumn.TYPE_CURSOR) {
+            // One byte, and it matters that it is not zero: with a size of
+            // zero the server answers ORA-06502, a PL/SQL conversion error,
+            // as though the parameter had been given a value of the wrong
+            // type. Nothing is written into that byte - what comes back is
+            // the cursor's description and its number, not a value.
+            return 1;
+        }
         if (type == OracleColumn.TYPE_VARCHAR) {
             return 4000L * BYTES_PER_CHARACTER;
         }

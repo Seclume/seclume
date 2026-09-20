@@ -51,6 +51,14 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
     private final Map<Integer, String> declaredTypes = new HashMap<>();
     private final Map<Integer, Object> values = new HashMap<>();
     private boolean lastWasNull;
+    /**
+     * The statement the call actually ran as.
+     *
+     * <p>It stays open after {@link #execute}, because a procedure's own
+     * result sets live in it and the caller has not read them yet. Closed by
+     * the next execution and by {@link #close}.
+     */
+    private TdsStatement run;
 
     TdsCallableStatement(TdsConnection connection, CallSyntax call) {
         super(connection);
@@ -192,31 +200,93 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
 
     // ---- executing ---------------------------------------------------------
 
+    /**
+     * Runs the call and leaves its own result sets where the caller can read
+     * them.
+     *
+     * <p>A procedure on SQL Server has no cursor parameter: it selects, and
+     * the rows come back as results of the batch. The batch this class builds
+     * appends one select of its own to read the output parameters, so the
+     * <b>last</b> result belongs to the driver - it is taken away here, and
+     * everything before it is the procedure's and is handed on unchanged.
+     */
     @Override
     public boolean execute() throws SQLException {
         checkOpen();
+        closeRun();
         List<Object> bound = new ArrayList<>(call.parameters());
         String batch = buildBatch(bound);
-        try (PreparedStatement statement = connection.prepareStatement(batch)) {
+        TdsStatement statement = (TdsStatement) connection.prepareStatement(batch);
+        boolean kept = false;
+        try {
+            PreparedStatement prepared = (PreparedStatement) statement;
             for (int i = 0; i < bound.size(); i++) {
-                statement.setObject(i + 1, bound.get(i));
+                prepared.setObject(i + 1, bound.get(i));
             }
-            statement.execute();
+            prepared.execute();
             readOutputs(statement);
+            statement.positionAtFirstResult();
+            run = statement;
+            kept = true;
+            return statement.getResultSet() != null;
+        } finally {
+            if (!kept) {
+                statement.close();
+            }
         }
-        return false;                         // the outputs are not a result the caller asked for
     }
 
     @Override
     public int executeUpdate() throws SQLException {
         execute();
-        return 0;
+        return run == null ? 0 : Math.max(run.getUpdateCount(), 0);
     }
 
     @Override
     public ResultSet executeQuery() throws SQLException {
-        throw new SQLException("this call is run with execute() and its outputs read with the "
-                + "getters - a procedure's own result set is not carried through yet");
+        if (!execute()) {
+            throw new SQLException("the procedure " + call.name() + " returned no rows - "
+                    + "run it with execute() and read its output parameters with the getters");
+        }
+        return run.getResultSet();
+    }
+
+    // ---- the procedure's own results ---------------------------------------
+
+    @Override
+    public ResultSet getResultSet() throws SQLException {
+        checkOpen();
+        return run == null ? null : run.getResultSet();
+    }
+
+    @Override
+    public boolean getMoreResults() throws SQLException {
+        checkOpen();
+        return run != null && run.getMoreResults();
+    }
+
+    @Override
+    public boolean getMoreResults(int current) throws SQLException {
+        return getMoreResults();
+    }
+
+    @Override
+    public int getUpdateCount() throws SQLException {
+        checkOpen();
+        return run == null ? -1 : run.getUpdateCount();
+    }
+
+    @Override
+    public void close() {
+        closeRun();
+        super.close();
+    }
+
+    private void closeRun() {
+        if (run != null) {
+            run.close();
+            run = null;
+        }
     }
 
     /**
@@ -273,12 +343,18 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
         return sql.toString();
     }
 
-    /** The row the trailing select produced, in the order the outputs were declared. */
-    private void readOutputs(PreparedStatement statement) throws SQLException {
+    /**
+     * The row the trailing select produced, in the order the outputs were
+     * declared.
+     *
+     * <p>It is the answer's last result, not its first: anything the
+     * procedure selected itself came before it.
+     */
+    private void readOutputs(TdsStatement statement) throws SQLException {
         if (outputs.isEmpty()) {
             return;
         }
-        try (ResultSet result = statement.getResultSet()) {
+        try (ResultSet result = statement.takeLastResult()) {
             if (result == null || !result.next()) {
                 throw new SQLException("the call did not return its output parameters - "
                         + "the procedure may not have the OUTPUT parameters it was called with");

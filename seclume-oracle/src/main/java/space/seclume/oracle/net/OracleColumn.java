@@ -78,6 +78,15 @@ public record OracleColumn(String name, int type, int precision, int scale,
     public static final int TYPE_BLOB = 113;
 
     /**
+     * A cursor - what a PL/SQL {@code SYS_REFCURSOR} parameter is on the wire.
+     *
+     * <p>Not a value type: what comes back in the bind is the number of a
+     * cursor the server has opened, and the rows are fetched from it
+     * afterwards exactly like the rows of a query.
+     */
+    public static final int TYPE_CURSOR = 102;
+
+    /**
      * Whether the column carries a locator instead of its contents.
      *
      * <p>The distinction matters twice over: the row is laid out differently,

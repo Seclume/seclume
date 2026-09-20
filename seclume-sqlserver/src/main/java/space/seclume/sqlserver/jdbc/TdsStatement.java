@@ -37,6 +37,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     /** What the connection was configured with; ResultLimit.NONE unless set. */
     private ResultLimit resultLimit = ResultLimit.NONE;
     private TdsResultSet resultSet;
+    /** Every result of the last answer, in the order the server sent them. */
+    private final List<TdsResultBlock> results = new ArrayList<>(2);
+    /** The blocks allocated for a second or later result - freed with the answer. */
+    private final List<TdsResultBlock> owned = new ArrayList<>(2);
+    private int resultIndex;
+    private boolean reusableTaken;
+    /** Set while a cursor fetch is running - see {@link #fetchNextBlock}. */
+    private boolean refetching;
     private long updateCount = -1;
     private int maxRows;
     private int fetchSize;
@@ -100,14 +108,17 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         // counter - four objects per query, before the first row arrives.
         collected = null;
         collectedRows = 0;
+        results.clear();
+        resultIndex = 0;
+        reusableTaken = false;
         TokenStream stream = execution.run(this);
-        if (collected == null && !stream.columns().isEmpty()) {
-            // A select that found nothing: there is a result, it is empty.
+        if (collected == null && results.isEmpty() && !stream.columns().isEmpty()) {
+            // A select that found nothing and whose description arrived before
+            // this statement was the handler - an empty result all the same.
             collected = blockFor(stream.columns());
         }
-        TdsResultBlock[] target = {collected};
-        collected = null;
-        block = target[0];
+        finishResult();
+        block = results.isEmpty() ? null : results.get(0);
         if (capturingGeneratedKeys) {
             // The statement was sent as "<insert>;select scope_identity()", so
             // the rows that came back are the key and not a result the caller
@@ -117,12 +128,68 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
             closeGeneratedKeys();
             generatedKeys = block;
             block = null;
+            results.clear();
             resultSet = null;
             updateCount = stream.firstUpdateCount();
             return;
         }
         resultSet = block == null ? null : new TdsResultSet(block, this);
         updateCount = block != null ? -1 : stream.updateCount();
+    }
+
+    /**
+     * A new result begins - so the one being collected is complete.
+     *
+     * <p>This is what makes a batch or a procedure with several selects come
+     * back as several results instead of one long one. The first result keeps
+     * the statement's reusable block, which is the case that matters for
+     * speed; every further one gets a block of its own and is freed with the
+     * statement, because a second select in the same answer is rare enough
+     * not to be worth a second permanent buffer.
+     */
+    @Override
+    public void nextResult(java.util.List<space.seclume.sqlserver.tds.TdsColumn> columns) {
+        if (refetching) {
+            return;
+        }
+        finishResult();
+        collected = blockFor(columns);
+        collectedRows = 0;
+    }
+
+    /**
+     * Takes the last result away from the caller's view and returns it.
+     *
+     * <p>{@link TdsCallableStatement} needs this: it appends a select of its
+     * own to read the output parameters back, so the answer's final result is
+     * the driver's own bookkeeping and not something the application asked
+     * for. Removing it here is what lets the procedure's own selects be
+     * handed on unchanged.
+     */
+    ResultSet takeLastResult() {
+        if (results.isEmpty()) {
+            return null;
+        }
+        TdsResultBlock last = results.remove(results.size() - 1);
+        return new TdsResultSet(last, this);
+    }
+
+    /** Positions on the first result again, after something walked past it. */
+    void positionAtFirstResult() {
+        if (resultSet != null) {
+            resultSet.close();
+        }
+        resultIndex = 0;
+        block = results.isEmpty() ? null : results.get(0);
+        resultSet = block == null ? null : new TdsResultSet(block, this);
+        updateCount = block == null ? updateCount : -1;
+    }
+
+    private void finishResult() {
+        if (collected != null) {
+            results.add(collected);
+            collected = null;
+        }
     }
 
     /**
@@ -194,11 +261,29 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         return updateCount;
     }
 
+    /**
+     * Moves to the next result of the same answer.
+     *
+     * <p>A procedure that selects twice, or a batch of two selects, produces
+     * two - and JDBC's way through them is this method. It closes the current
+     * result, as the no-argument form is defined to, and says whether another
+     * one followed.
+     */
     @Override
     public boolean getMoreResults() throws SQLException {
         checkOpen();
-        closeResult();
+        if (resultSet != null) {
+            resultSet.close();
+            resultSet = null;
+        }
         updateCount = -1;
+        resultIndex++;
+        if (resultIndex < results.size()) {
+            block = results.get(resultIndex);
+            resultSet = new TdsResultSet(block, this);
+            return true;
+        }
+        block = null;
         return false;
     }
 
@@ -253,9 +338,16 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         collected = block;
         collectedRows = 0;
         block.reset(block.columns());
+        // A cursor fetch repeats the description before its rows. That is the
+        // same result continuing, not a new one, so the boundary is ignored
+        // for the length of the fetch - otherwise every block after the first
+        // would start a result of its own and the rows already read would be
+        // dropped.
+        refetching = true;
         try {
             lastBlock = session.cursorFetch(cursor, fetchSize, this);
         } finally {
+            refetching = false;
             collected = null;
         }
         return block.rowCount() > 0;
@@ -276,6 +368,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      * reused. A new one would mean a native allocation and a free per query.
      */
     private TdsResultBlock blockFor(java.util.List<space.seclume.sqlserver.tds.TdsColumn> columns) {
+        if (reusableTaken) {
+            // The second and any later result of one answer. Its block belongs
+            // to this execution alone and goes back in closeResult.
+            TdsResultBlock extra = new TdsResultBlock(columns);
+            owned.add(extra);
+            return extra;
+        }
+        reusableTaken = true;
         if (reusable == null) {
             // A block another statement of this connection left behind, if
             // there is one: allocating and freeing one per statement is the
@@ -300,6 +400,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
             resultSet = null;
         }
         block = null;
+        results.clear();
+        resultIndex = 0;
+        // Only the blocks this statement allocated for a second or later
+        // result. The reusable one is not among them and is freed at close.
+        for (TdsResultBlock extra : owned) {
+            extra.close();
+        }
+        owned.clear();
     }
 
     /**

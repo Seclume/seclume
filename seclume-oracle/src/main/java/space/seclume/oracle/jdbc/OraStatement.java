@@ -87,6 +87,7 @@ class OraStatement implements Statement, TtcResult.RowHandler {
                 session.columnsFor(sql), streaming);
         session.rememberCursor(sql, result.cursorId(), result.columns());
         lastReturned = result.returned();
+        lastAnswer = result;
         OraResultBlock[] target = {collected};
         collected = null;
         if (result.isFailure()) {
@@ -176,6 +177,53 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         return resultSet;
     }
 
+    /**
+     * Reads a cursor the server opened for an output bind.
+     *
+     * <p>A {@code SYS_REFCURSOR} comes back as a number and a description,
+     * not as rows: the procedure opened a cursor and the client fetches from
+     * it exactly as it would from a query of its own. That is the whole
+     * difference from SQL Server, where a procedure simply selects and the
+     * rows arrive with the answer.
+     *
+     * <p>The rows are read to the end here rather than block by block. A
+     * cursor left half-read would have to survive the call that produced it,
+     * and the statement it belongs to may be closed long before the
+     * application walks the result - reading it out is the honest price for
+     * handing back something that still works afterwards.
+     *
+     * <p>The block is this statement's own and is freed with it, so several
+     * cursors out of one call do not overwrite each other.
+     */
+    ResultSet readCursor(int cursorId, java.util.List<space.seclume.oracle.net.OracleColumn> columns)
+            throws SQLException {
+        OraResultBlock into = new OraResultBlock(columns);
+        cursorBlocks.add(into);
+        space.seclume.oracle.OracleSession session = connection.session();
+        TtcResult answer;
+        do {
+            answer = session.fetchMore(cursorId, FETCH_ROWS, row -> into.append(row), columns);
+            if (answer.isFailure()) {
+                throw failure(answer);
+            }
+        } while (!answer.isExhausted() && answer.rowCount() > 0);
+        return new OraResultSet(into, this);
+    }
+
+    /** How many rows one fetch from a cursor asks for. */
+    private static final int FETCH_ROWS = 100;
+
+    /** Blocks allocated for cursors of an output bind - freed with the statement. */
+    private final java.util.List<OraResultBlock> cursorBlocks = new java.util.ArrayList<>(1);
+
+    /** Gives those blocks back; called from {@link #close}. */
+    void closeCursorBlocks() {
+        for (OraResultBlock block : cursorBlocks) {
+            block.close();
+        }
+        cursorBlocks.clear();
+    }
+
     // ---- results ---------------------------------------------------------
 
     @Override
@@ -216,6 +264,18 @@ class OraStatement implements Statement, TtcResult.RowHandler {
 
     java.util.List<byte[]> lastReturned() {
         return lastReturned;
+    }
+
+    /**
+     * The whole answer of the last execution.
+     *
+     * <p>A call with a cursor bind needs more of it than the output bytes:
+     * the cursor the server opened and the columns it described.
+     */
+    private space.seclume.oracle.net.TtcResult lastAnswer;
+
+    space.seclume.oracle.net.TtcResult lastAnswer() {
+        return lastAnswer;
     }
 
     /** Takes what an {@code into} bind brought back as this statement's keys. */
@@ -552,6 +612,7 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         if (!closed) {
             closed = true;
             closeResult();
+            closeCursorBlocks();
             if (reusable != null) {
                 // Here, and only here, the native block goes back.
                 // Not freed: the connection keeps it for the next

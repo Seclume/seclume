@@ -247,9 +247,18 @@ final class OraCallableStatement extends OraStatement
             }
         }
 
-        connection.session().expectReturning(outputs.size(), true);
+        boolean[] cursorBinds = new boolean[outputs.size()];
+        boolean anyCursor = false;
+        for (int i = 0; i < outputs.size(); i++) {
+            cursorBinds[i] = registeredTypes.getOrDefault(outputs.get(i), Types.NUMERIC)
+                    == Types.REF_CURSOR;
+            anyCursor |= cursorBinds[i];
+        }
+        connection.session().expectReturning(outputs.size(), true,
+                anyCursor ? cursorBinds : null);
         run(block(), binds);
         decodeOutputs(lastReturned());
+        readCursors();
         return false;                         // outputs are not a result the caller asked for
     }
 
@@ -262,7 +271,33 @@ final class OraCallableStatement extends OraStatement
     @Override
     public ResultSet executeQuery() throws SQLException {
         throw new SQLException("this call is run with execute() and its outputs read with the "
-                + "getters - a procedure's own cursor is not carried through yet");
+                + "getters - a cursor the procedure opens is one of them: register it with "
+                + "registerOutParameter(i, Types.REF_CURSOR) and read it with getObject(i)");
+    }
+
+    /**
+     * Turns the cursors the call brought back into result sets.
+     *
+     * <p>They arrive in the order of the output binds that are cursors, which
+     * is the order {@link #outputs} holds them in once the non-cursor ones
+     * are passed over.
+     */
+    private void readCursors() throws SQLException {
+        java.util.List<space.seclume.oracle.net.TtcResult.Cursor> opened =
+                lastAnswer() == null ? java.util.List.of() : lastAnswer().cursors();
+        int next = 0;
+        for (int index : outputs) {
+            if (registeredTypes.getOrDefault(index, Types.NUMERIC) != Types.REF_CURSOR) {
+                continue;
+            }
+            if (next >= opened.size()) {
+                values.put(index, null);
+                continue;
+            }
+            var cursor = opened.get(next++);
+            values.put(index, cursor.columns().isEmpty()
+                    ? null : readCursor(cursor.id(), cursor.columns()));
+        }
     }
 
     /** {@code begin p(:1); end;}, or with the assignment a function needs. */
@@ -297,7 +332,7 @@ final class OraCallableStatement extends OraStatement
                  Types.LONGNVARCHAR ->
                     // seclume-allow: an output value, the same payload a ResultSet hands out
                     new String(bytes, StandardCharsets.UTF_8);
-            case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> bytes;
+            case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY, Types.REF_CURSOR -> bytes;
             default -> number(bytes, sqlType);
         };
     }
@@ -324,6 +359,7 @@ final class OraCallableStatement extends OraStatement
                  Types.LONGNVARCHAR -> OracleColumn.TYPE_VARCHAR;
             case Types.DATE, Types.TIME, Types.TIMESTAMP -> OracleColumn.TYPE_DATE;
             case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> OracleColumn.TYPE_RAW;
+            case Types.REF_CURSOR -> OracleColumn.TYPE_CURSOR;
             default -> OracleColumn.TYPE_NUMBER;
         };
     }

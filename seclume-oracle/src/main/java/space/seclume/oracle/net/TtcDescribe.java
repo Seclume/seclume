@@ -45,8 +45,29 @@ public final class TtcDescribe {
      * @param at the position just after the message-type byte
      */
     public static Parsed read(WireBuffer in, int at) {
+        return read(in, at, true);
+    }
+
+    /**
+     * The same description, with or without the block it is introduced by.
+     *
+     * <p>A {@code DESCRIBE_INFO} message of its own starts with a block that
+     * carries nothing this driver needs. The description that comes back
+     * inside a cursor bind is the same structure <b>without</b> it - it is
+     * not a message there but a field, and it begins at the row size.
+     *
+     * <p>Reading the one as the other is not an error the parser can notice:
+     * the block's length byte is then taken for the row size, the row size
+     * for the column count, and what comes out is a plausible number of
+     * columns with nonsense in them.
+     *
+     * @param introduced whether the leading block is there
+     */
+    public static Parsed read(WireBuffer in, int at, boolean introduced) {
         Reader reader = new Reader(in, at);
-        reader.block();                                // a block that is skipped
+        if (introduced) {
+            reader.block();                            // a block that is skipped
+        }
         reader.number();                               // largest row size
         int count = (int) reader.number();
         if (count == 0) {

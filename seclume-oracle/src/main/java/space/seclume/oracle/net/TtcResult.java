@@ -427,15 +427,51 @@ public final class TtcResult {
      * is an empty value - not an error, just nothing.
      */
     public void expectReturned(int count, boolean fromCall) {
+        expectReturned(count, fromCall, null);
+    }
+
+    /**
+     * The same again, saying which of the output binds is a cursor.
+     *
+     * <p>A cursor does not come back as a value. What arrives in its slot is
+     * the <b>description of the result</b> the procedure opened, followed by
+     * the number of the cursor it left open - so the slot has to be read as a
+     * describe and not as bytes, and a reader that does not know which bind
+     * is which walks off the end of the message.
+     *
+     * @param cursors one flag per output bind, in the order they were
+     *                registered, or {@code null} when none is a cursor
+     */
+    public void expectReturned(int count, boolean fromCall, boolean[] cursors) {
         this.expectedReturned = count;
         this.returnedFromCall = fromCall;
+        this.cursorBinds = cursors;
     }
 
     private boolean returnedFromCall;
+    private boolean[] cursorBinds;
+    private final java.util.List<Cursor> cursors = new java.util.ArrayList<>(1);
+
+    /** A cursor an output bind brought back: its number and what it returns. */
+    public record Cursor(int id, List<OracleColumn> columns) {
+    }
+
+    /**
+     * The cursors the output binds brought back, in the order of those binds.
+     *
+     * <p>Empty for every call that has none, which is almost all of them.
+     */
+    public java.util.List<Cursor> cursors() {
+        return cursors;
+    }
 
     private int readReturned(WireBuffer in, int at) {
         int p = at;
         for (int i = 0; i < expectedReturned; i++) {
+            if (cursorBinds != null && i < cursorBinds.length && cursorBinds[i]) {
+                p = readCursorBind(in, p);
+                continue;
+            }
             long rows = 1;
             if (!returnedFromCall) {
                 rows = number(in, p);                  // rows this bind stands for
@@ -454,6 +490,32 @@ public final class TtcResult {
                 returned.add(value);
             }
         }
+        return p;
+    }
+
+    /**
+     * One output bind that is a cursor.
+     *
+     * <p>The shape: a byte nobody has had to read, then the whole
+     * {@code DESCRIBE_INFO} of the result the procedure opened - the same
+     * structure a query is answered with - and then the cursor's number. The
+     * rows are not here: they are fetched from that cursor afterwards, which
+     * is what makes a {@code REF CURSOR} a cursor rather than a value.
+     *
+     * <p>An empty cursor - one the procedure opened over nothing, or left
+     * unopened - describes no columns, and then there is no number either.
+     */
+    private int readCursorBind(WireBuffer in, int at) {
+        int p = at + 1;
+        TtcDescribe.Parsed described = TtcDescribe.read(in, p, false);
+        p = described.end();
+        int id = (int) number(in, p);
+        p = skipNumber(in, p);
+        p = skipNumber(in, p);                         // return code, as for every other bind
+        cursors.add(new Cursor(id, described.columns()));
+        // The slot still has to appear among the returned values, or every
+        // output after it is read one place to the left.
+        returned.add(new byte[0]); // seclume-allow: an empty placeholder, not a value
         return p;
     }
 

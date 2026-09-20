@@ -264,6 +264,7 @@ public final class OracleSession implements AutoCloseable {
             TtcResult result = readAnswer(handler, known, returningCount);
             returningCount = 0;
             returningFromCall = false;
+            returningCursors = null;
             rows = result.rowCount();
             java.util.List<space.seclume.oracle.net.OracleColumn> columns =
                     result.columns();
@@ -505,11 +506,24 @@ public final class OracleSession implements AutoCloseable {
 
     /** The same, saying that they come from a PL/SQL call - a different shape. */
     public void expectReturning(int count, boolean fromCall) {
+        expectReturning(count, fromCall, null);
+    }
+
+    /**
+     * The same, saying which of the outputs is a cursor.
+     *
+     * <p>A cursor slot in the answer is read as a description and a cursor
+     * number rather than as bytes - see {@code TtcResult}. Which slot that is
+     * cannot be seen from the answer, only from what was bound.
+     */
+    public void expectReturning(int count, boolean fromCall, boolean[] cursors) {
         this.returningCount = count;
         this.returningFromCall = fromCall;
+        this.returningCursors = cursors;
     }
 
     private boolean returningFromCall;
+    private boolean[] returningCursors;
 
     /**
      * Whether the cursor of the last query still has rows in it.
@@ -581,7 +595,7 @@ public final class OracleSession implements AutoCloseable {
             throw new SQLException("expected a DATA packet, got " + NsPacket.typeName(type));
         }
         TtcResult result = new TtcResult(columns, carried);
-        result.expectReturned(returning, returningFromCall);
+        result.expectReturned(returning, returningFromCall, returningCursors);
 
         if ((channel.dataFlags() & END_OF_ANSWER) != 0) {
             // The common case: the whole answer is in this packet, and it is
