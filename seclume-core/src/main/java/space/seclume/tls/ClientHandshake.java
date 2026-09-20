@@ -73,7 +73,30 @@ public final class ClientHandshake {
             throw new IllegalArgumentException("no trust: call connectWithoutAuthenticating if "
                     + "that is really what is wanted, so that it is visible at the call site");
         }
-        return handshake(transport, host, trust);
+        return handshake(transport, host, trust, null);
+    }
+
+    /**
+     * The same, proving who the client is as well.
+     *
+     * <p>Mutual TLS. The server asks with a {@code CertificateRequest} and
+     * this answers with the identity's certificate chain and a signature over
+     * the transcript - made by the identity, from a private key that is never
+     * a Java object. See {@link ClientIdentity}.
+     *
+     * <p>Passing an identity does not force anything: a server that does not
+     * ask never sees it. Conversely a server that asks while there is none
+     * gets an empty certificate list and decides for itself whether that is
+     * acceptable, which is the behaviour RFC 8446 prescribes and is more
+     * useful than refusing on the client side.
+     */
+    public static TlsConnection connect(Transport transport, String host, CertificateTrust trust,
+            ClientIdentity identity) throws IOException {
+        if (trust == null) {
+            throw new IllegalArgumentException("no trust: call connectWithoutAuthenticating if "
+                    + "that is really what is wanted, so that it is visible at the call site");
+        }
+        return handshake(transport, host, trust, identity);
     }
 
     /**
@@ -87,11 +110,17 @@ public final class ClientHandshake {
      */
     public static TlsConnection connectWithoutAuthenticating(Transport transport, String host)
             throws IOException {
-        return handshake(transport, host, null);
+        return handshake(transport, host, null, null);
     }
 
-    private static TlsConnection handshake(Transport transport, String host, CertificateTrust trust)
-            throws IOException {
+    /** The same without checking the server, but proving who we are. */
+    public static TlsConnection connectWithoutAuthenticating(Transport transport, String host,
+            ClientIdentity identity) throws IOException {
+        return handshake(transport, host, null, identity);
+    }
+
+    private static TlsConnection handshake(Transport transport, String host,
+            CertificateTrust trust, ClientIdentity identity) throws IOException {
         RecordStream records = new RecordStream(transport);
         boolean done = false;
         try (Arena arena = Arena.ofConfined();
@@ -147,7 +176,8 @@ public final class ClientHandshake {
                         hash, schedule.serverHandshakeTrafficSecret(), keyLength));
 
                 // ---- the server's encrypted flight ------------------------
-                readServerFlight(records, transcript, schedule, digest, hash, host, trust);
+                byte[] certificateRequest =
+                        readServerFlight(records, transcript, schedule, digest, hash, host, trust);
 
                 // Everything through the server's Finished: the context for both
                 // the application secrets and our own Finished.
@@ -161,7 +191,25 @@ public final class ClientHandshake {
                 records.writeChangeCipherSpec();
                 records.writeWith(RecordProtection.fromSecret(
                         hash, schedule.clientHandshakeTrafficSecret(), keyLength));
-                sendFinished(records, schedule, throughServerFinished, hash, arena);
+
+                MemorySegment beforeFinished = throughServerFinished;
+                if (certificateRequest != null) {
+                    // Our own Certificate and CertificateVerify go into the
+                    // transcript before the Finished, so the hash the Finished
+                    // is computed over is no longer the one the application
+                    // secrets came from. Both are read out of the same buffer,
+                    // which is safe only because those secrets were derived
+                    // from it two statements ago.
+                    sendClientCertificate(records, transcript, certificateRequest, identity);
+                    if (identity != null) {
+                        transcript.current(digest.segment(), 0);
+                        sendCertificateVerify(records, transcript, identity,
+                                digest.segment().asSlice(0, hash.digestLength()), arena);
+                    }
+                    transcript.current(digest.segment(), 0);
+                    beforeFinished = digest.segment().asSlice(0, hash.digestLength());
+                }
+                sendFinished(records, schedule, beforeFinished, hash, arena);
 
                 // ---- and from here on, application keys --------------------
                 records.readWith(RecordProtection.fromSecret(
@@ -238,15 +286,21 @@ public final class ClientHandshake {
     }
 
     /**
-     * EncryptedExtensions, Certificate, CertificateVerify and Finished -
-     * however many records they arrive in, and in whatever combination.
+     * EncryptedExtensions, Certificate, CertificateVerify, an optional
+     * CertificateRequest and Finished - however many records they arrive in,
+     * and in whatever combination.
+     *
+     * @return the request context if a {@code CertificateRequest} arrived -
+     *         normally empty, which is not the same as absent - or
+     *         {@code null} if the server did not ask for a client certificate
      */
-    private static void readServerFlight(RecordStream records, TranscriptHash transcript,
+    private static byte[] readServerFlight(RecordStream records, TranscriptHash transcript,
             KeySchedule schedule, SecretScope digest, HashAlgorithm hash, String host,
             CertificateTrust trust) throws IOException {
         try (HandshakeReassembler flight = new HandshakeReassembler(1 << 20)) {
             List<X509Certificate> chain = new ArrayList<>();
             boolean[] finished = {false};
+            byte[][] certificateRequest = {null};
             IOException[] failure = {null};
 
             while (!finished[0] && failure[0] == null) {
@@ -295,9 +349,14 @@ public final class ClientHandshake {
                                 transcript.update(message, start, total);
                                 finished[0] = true;
                             }
-                            case Handshake.CERTIFICATE_REQUEST -> throw new IOException(
-                                    "the server asked for a client certificate, which this "
-                                            + "client does not have");
+                            case Handshake.CERTIFICATE_REQUEST -> {
+                                // Only noted here. The answer belongs in the
+                                // client's own flight, which is written once
+                                // this one has been read to its end.
+                                certificateRequest[0] =
+                                        CertificateMessage.requestContext(message, at);
+                                transcript.update(message, start, total);
+                            }
                             default -> throw new IOException("handshake message of type " + type
                                     + " is not expected in a server's first flight");
                         }
@@ -309,7 +368,52 @@ public final class ClientHandshake {
             if (failure[0] != null) {
                 throw failure[0];
             }
+            return certificateRequest[0];
         }
+    }
+
+    /**
+     * Our certificate, or the absence of one, said out loud.
+     *
+     * <p>An empty list is a valid answer and the only correct one when there
+     * is no identity: the server asked, and silence would hang the handshake
+     * while a refusal here would take a decision that belongs to the server.
+     */
+    private static void sendClientCertificate(RecordStream records, TranscriptHash transcript,
+            byte[] context, ClientIdentity identity) throws IOException {
+        List<byte[]> chain = identity == null ? List.of() : identity.chain();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment message = arena.allocate(CertificateMessage.sizeFor(context, chain));
+            int length = CertificateMessage.write(message, context, chain);
+            records.write((byte) 22, message, 0, length);
+            transcript.update(message, 0, length);
+        }
+    }
+
+    /**
+     * The proof that we hold the key belonging to that certificate.
+     *
+     * <p>Signed over the transcript up to and including the Certificate just
+     * sent - which is why the hash is taken by the caller before this message
+     * is added to it, exactly the way the server's own CertificateVerify is
+     * handled a few lines above.
+     */
+    private static void sendCertificateVerify(RecordStream records, TranscriptHash transcript,
+            ClientIdentity identity, MemorySegment transcriptHash, Arena arena)
+            throws IOException {
+        byte[] content = HandshakeSignature.content(false,
+                transcriptHash.toArray(ValueLayout.JAVA_BYTE));
+        byte[] signature;
+        try {
+            signature = identity.sign(content);
+        } catch (RuntimeException e) {
+            throw new IOException("signing the client CertificateVerify failed: "
+                    + e.getMessage(), e);
+        }
+        MemorySegment message = arena.allocate(Handshake.HEADER + 4L + signature.length);
+        int length = CertificateVerifyMessage.write(message, identity.signatureScheme(), signature);
+        records.write((byte) 22, message, 0, length);
+        transcript.update(message, 0, length);
     }
 
     private static void readCertificates(MemorySegment message, long body, int length,

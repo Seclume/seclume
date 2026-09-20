@@ -180,6 +180,35 @@ the result secure is lying by omission. On PostgreSQL the login is additionally 
 connection (SCRAM-SHA-256-PLUS), and when the server offers no binding the client says so
 rather than staying silent.
 
+**Mutual TLS, with the client key off the heap too**
+
+A password held carefully while the private key that authenticates the *same* connection sits
+in an unwipeable `PrivateKey` protects nothing — whoever has that key does not need the
+password. So seclume signs the client `CertificateVerify` with a P-256 key that never becomes
+a Java object: the key file goes through a secret provider into native memory,
+`EcPrivateKeyFile` picks the scalar out of the PKCS#8 or SEC1 structure in place, and CNG or
+OpenSSL keeps it from there. Only the certificate chain and the signature — both public —
+are ordinary objects.
+
+```java
+try (ClientIdentity me = new P256ClientIdentity(Path.of("/etc/tls/client.crt"),
+                                                SecretProviders.of(Map.of(
+                                                    "provider", "file",
+                                                    "path", "/etc/tls/client.key")));
+     TlsConnection tls = ClientHandshake.connect(transport, host, trust, me)) {
+    ...
+}
+```
+
+P-256 only, and refused rather than downgraded for anything else: an RSA client certificate
+would mean the JCA, and the JCA means the key on the heap.
+
+**What is not wired up yet:** this works on seclume's own TLS stack, which is also what the
+live-session move needs — but the four drivers still reach TLS through an `SSLEngine`, so a
+JDBC URL cannot ask for a client certificate this way yet. Doing so through JSSE would need a
+`KeyManager`, which puts the key back on the heap and gives up the only thing this is for. The
+two meet when the drivers move onto the own stack.
+
 **Beside the drivers**
 
 - `seclume-pool` — a connection pool with no third-party dependency, fit for virtual threads,

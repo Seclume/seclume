@@ -14,6 +14,7 @@ final class Der {
     static final int SEQUENCE = 0x30;
     static final int INTEGER = 0x02;
     static final int BIT_STRING = 0x03;
+    static final int OCTET_STRING = 0x04;
 
     private Der() {
     }
@@ -57,9 +58,53 @@ final class Der {
             return new Reader(data, content.offset() + 1, content.length() - 1);
         }
 
+        /** Descends into an OCTET STRING, whose content is itself DER. */
+        Reader readOctetStringAsDer() {
+            Range content = readTagged(OCTET_STRING);
+            return new Reader(data, content.offset(), content.length());
+        }
+
+        /** The content of an OCTET STRING, as a range in the source. */
+        Range readOctetStringRange() {
+            return readTagged(OCTET_STRING);
+        }
+
         /** The content of an INTEGER, without the length field. */
         Range readIntegerRange() {
             return readTagged(INTEGER);
+        }
+
+        /**
+         * A small unsigned INTEGER - version numbers and nothing else.
+         *
+         * <p>Refuses anything that does not fit in an {@code int}, because the
+         * only callers are structure versions and a four-byte version number
+         * is a structure this code should not be parsing.
+         */
+        int readSmallInteger() {
+            Range value = readIntegerRange();
+            if (value.length() < 1 || value.length() > 4) {
+                throw new IllegalArgumentException(
+                        "expected a small DER INTEGER, found " + value.length() + " bytes");
+            }
+            int result = 0;
+            for (long i = 0; i < value.length(); i++) {
+                result = (result << 8) | (data.get(ValueLayout.JAVA_BYTE, value.offset() + i) & 0xff);
+            }
+            return result;
+        }
+
+        /** The tag of the next element, without consuming it. */
+        int peekTag() {
+            if (position >= end) {
+                throw new IllegalArgumentException("truncated DER structure");
+            }
+            return data.get(ValueLayout.JAVA_BYTE, position) & 0xff;
+        }
+
+        /** Whether anything is left in this container. */
+        boolean hasMore() {
+            return position < end;
         }
 
         /** Skips the next element together with its content. */

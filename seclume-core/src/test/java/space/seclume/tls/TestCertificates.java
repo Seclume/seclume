@@ -96,14 +96,35 @@ final class TestCertificates implements AutoCloseable {
      * server identity - which needs the chain, not just the key.
      */
     Issued issue(String alias, String... extensions) throws Exception {
+        return issue(alias, false, extensions);
+    }
+
+    /**
+     * The same with a P-256 key instead of RSA.
+     *
+     * <p>Needed for the client identity: seclume signs a client
+     * CertificateVerify with P-256 and nothing else, because that is the curve
+     * it can sign with off the heap.
+     */
+    Issued issueEc(String alias, String... extensions) throws Exception {
+        return issue(alias, true, extensions);
+    }
+
+    private Issued issue(String alias, boolean ec, String... extensions) throws Exception {
         Path store = directory.resolve(alias + ".p12");
         Path request = directory.resolve(alias + ".csr");
         Path signed = directory.resolve(alias + ".cer");
 
-        run(List.of(keytool, "-genkeypair", "-alias", alias, "-keyalg", "RSA", "-keysize", "2048",
-                "-sigalg", "SHA256withRSA", "-dname", "CN=" + alias, "-validity", "2",
+        List<String> genkey = ec
+                ? List.of(keytool, "-genkeypair", "-alias", alias, "-keyalg", "EC",
+                        "-groupname", "secp256r1", "-sigalg", "SHA256withECDSA")
+                : List.of(keytool, "-genkeypair", "-alias", alias, "-keyalg", "RSA",
+                        "-keysize", "2048", "-sigalg", "SHA256withRSA");
+        List<String> command = new ArrayList<>(genkey);
+        command.addAll(List.of("-dname", "CN=" + alias, "-validity", "2",
                 "-keystore", store.toString(), "-storetype", "PKCS12",
                 "-storepass", PASSWORD, "-keypass", PASSWORD));
+        run(command);
         run(List.of(keytool, "-certreq", "-alias", alias, "-keystore", store.toString(),
                 "-storepass", PASSWORD, "-file", request.toString()));
 

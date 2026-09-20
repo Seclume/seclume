@@ -32,9 +32,22 @@ final class EchoServer implements AutoCloseable {
     }
 
     static EchoServer start(SSLContext context) throws IOException {
+        return start(context, false);
+    }
+
+    /**
+     * The same, optionally demanding a client certificate.
+     *
+     * <p>With {@code needClientAuth} the server sends a CertificateRequest and
+     * refuses the connection unless what comes back is signed by a key it can
+     * check against its trust store - which makes it the judge for the client
+     * authentication as well, not only for the record layer.
+     */
+    static EchoServer start(SSLContext context, boolean needClientAuth) throws IOException {
         SSLServerSocket socket = (SSLServerSocket) context.getServerSocketFactory()
                 .createServerSocket(0, 1, InetAddress.getLoopbackAddress());
         socket.setSoTimeout(60_000);
+        socket.setNeedClientAuth(needClientAuth);
         return new EchoServer(socket);
     }
 
