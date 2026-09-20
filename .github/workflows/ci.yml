@@ -1,18 +1,22 @@
 name: CI
 
-# Der eigentliche Gewinn dieser Datei: hier laufen die Tests gegen *echte*
-# Datenbanken. Auf einem Entwicklungsrechner steht selten mehr als eine, und
-# ein selbstgebauter Testserver bestaetigt nur die eigenen Annahmen. Erst hier
-# wird aus "compiliert und wirkt plausibel" ein Nachweis.
+# What this file is actually worth: here the tests run against *real*
+# databases. A development machine rarely has more than one, and a test server
+# somebody built themselves only confirms their own assumptions. This is where
+# "it compiles and looks plausible" turns into evidence.
+#
+# Every job writes the password into a file and points the driver at that
+# file - the same path the library offers an application. No echo, and no
+# environment variable in the log.
 
 on:
   push:
   pull_request:
 
 jobs:
-  # Alles, was ohne Datenbank pruefbar ist: Krypto gegen die offiziellen
-  # Vektoren, der Heapdump-Nachweis samt Negativkontrolle, die Poolmechanik,
-  # und die Regel, dass kein verbotener API-Aufruf hereinrutscht.
+  # Everything provable without a database: the cryptography against the
+  # published vectors, the heap-dump proof with its negative control, the pool
+  # mechanics, and the rule that no forbidden API call slips in.
   core:
     runs-on: ubuntu-latest
     steps:
@@ -28,14 +32,14 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        # Zwei Staende, damit ein Protokollunterschied auffaellt und nicht
-        # erst beim Anwender.
+        # Two releases, so that a protocol difference shows up here and not at
+        # somebody's installation.
         image: postgres:${{ matrix.version }}
         env:
           POSTGRES_USER: seclume_test
           POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
           POSTGRES_DB: seclume_test
-          # scram-sha-256 ist der Weg, den der Treiber koennen muss.
+          # scram-sha-256 is the path the driver has to manage.
           POSTGRES_HOST_AUTH_METHOD: scram-sha-256
           POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
         ports: ['5432:5432']
@@ -53,8 +57,6 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
-      # Das Passwort geht ueber eine Datei herein - genau den Weg, den die
-      # Bibliothek anbietet. Kein echo, keine Umgebungsvariable im Log.
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
       - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter -am test
       - if: always()
@@ -72,14 +74,19 @@ jobs:
           MYSQL_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
         ports: ['3306:3306']
         options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1"
+          --health-cmd "${{ matrix.health }}"
           --health-interval 5s --health-timeout 5s --health-retries 20
     strategy:
       fail-fast: false
       matrix:
-        # MySQL 8 benutzt caching_sha2_password, MariaDB mysql_native_password -
-        # beide Wege muessen laufen.
-        image: ['mysql:8.4', 'mariadb:11.4']
+        # MySQL 8 uses caching_sha2_password, MariaDB mysql_native_password -
+        # both paths have to work. They do not agree on what a health check is
+        # called either: mysqladmin is gone from the MariaDB images.
+        include:
+          - image: 'mysql:8.4'
+            health: 'mysqladmin ping -h 127.0.0.1'
+          - image: 'mariadb:11.4'
+            health: 'healthcheck.sh --connect --innodb_initialized'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -92,24 +99,15 @@ jobs:
       - if: always()
         run: rm -f .local-mysql-password
 
-  # Die PostgreSQL-Familie: CockroachDB und YugabyteDB sprechen dasselbe
-  # Wireprotokoll. Hier wird nicht ein neuer Treiber geprueft, sondern die
-  # Behauptung, dass der vorhandene sie bedient - das kostet einen Testlauf
-  # statt eines Treibers.
-  postgres-compatible:
+  sqlserver:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: cockroachdb
-            image: cockroachdb/cockroach:latest-v24.1
-            command: start-single-node --insecure
-            port: 26257
-          - name: yugabytedb
-            image: yugabytedb/yugabyte:latest
-            command: bin/yugabyted start --daemon=false
-            port: 5433
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
+        ports: ['1433:1433']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -117,20 +115,23 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
-      - name: ${{ matrix.name }} starten
+      # The image carries no health check, so wait for the port rather than
+      # guessing a sleep long enough.
+      - name: Wait for SQL Server
         run: |
-          docker run -d --name ${{ matrix.name }} -p ${{ matrix.port }}:${{ matrix.port }}             ${{ matrix.image }} ${{ matrix.command }}
-          sleep 45
-      # Diese Server sind unverschluesselt und ohne Passwort erreichbar; der
-      # Punkt ist das Protokoll, nicht die Anmeldung.
-      - run: ./mvnw -B -pl seclume-postgresql -am test
-        env:
-          SECLUME_PG_PORT: ${{ matrix.port }}
+          for i in $(seq 1 60); do
+            if (echo > /dev/tcp/127.0.0.1/1433) >/dev/null 2>&1; then exit 0; fi
+            sleep 2
+          done
+          echo "SQL Server did not open port 1433" >&2
+          exit 1
+      - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
+      - run: ./mvnw -B -pl seclume-sqlserver -am test
       - if: always()
-        run: docker rm -f ${{ matrix.name }}
+        run: rm -f .local-mssql-password
 
-  # Oracle Free deckt den 12C-Anmeldeweg ab, also den, den neuere Instanzen
-  # benutzen. Das Abbild braucht laenger zum Hochfahren als die anderen.
+  # Oracle Free covers the 12c login path, which is the one newer instances
+  # use. The image takes longer to come up than the others.
   oracle:
     runs-on: ubuntu-latest
     services:
@@ -156,15 +157,27 @@ jobs:
       - if: always()
         run: rm -f .local-oracle-password
 
-  sqlserver:
+  # The PostgreSQL family: CockroachDB and YugabyteDB speak the same wire
+  # protocol. What is checked here is not a new driver but the claim that the
+  # existing one serves them - a test run instead of a driver.
+  #
+  # Both are reachable without a password, so the tests that need one skip
+  # themselves. That is honest rather than useful, and it is the reason this
+  # job is not evidence yet: see docs/roadmap.md.
+  postgres-compatible:
     runs-on: ubuntu-latest
-    services:
-      sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
-        env:
-          ACCEPT_EULA: 'Y'
-          MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
-        ports: ['1433:1433']
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cockroachdb
+            image: cockroachdb/cockroach:latest-v24.1
+            command: start-single-node --insecure
+            port: 26257
+          - name: yugabytedb
+            image: yugabytedb/yugabyte:latest
+            command: bin/yugabyted start --daemon=false
+            port: 5433
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -172,6 +185,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
-      # Stufe 5 ist noch nicht begonnen; der Auftrag steht schon, damit der
-      # Server bereitsteht, sobald der Treiber es ist.
-      - run: echo "the SQL Server driver is still open - see README, stage 5"
+      - name: Start ${{ matrix.name }}
+        run: |
+          docker run -d --name ${{ matrix.name }} \
+            -p ${{ matrix.port }}:${{ matrix.port }} \
+            ${{ matrix.image }} ${{ matrix.command }}
+          sleep 45
+      # Where the server is comes in the way TestHosts reads it - a system
+      # property, not an environment variable of its own invention.
+      - run: ./mvnw -B -pl seclume-postgresql -am test -Dseclume.pg.port=${{ matrix.port }}
+      - if: always()
+        run: docker rm -f ${{ matrix.name }}
