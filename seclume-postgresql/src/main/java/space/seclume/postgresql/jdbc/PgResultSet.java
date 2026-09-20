@@ -6,7 +6,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
 
+import space.seclume.internal.jdbc.OpaqueRowId;
 import space.seclume.internal.jdbc.ReadOnlyResultSet;
+import space.seclume.internal.jdbc.XmlValue;
 import space.seclume.postgresql.PgSession;
 
 /**
@@ -156,10 +158,99 @@ public final class PgResultSet extends ReadOnlyResultSet {
         throw new IllegalStateException("not a hex digit in a bytea value: " + (char) c);
     }
 
+    /**
+     * An {@code oid} column is a pointer into {@code pg_largeobject}, so the
+     * {@code Blob} for one is a real locator and not the row's own bytes.
+     *
+     * <p>Every other binary column is a {@code bytea} and arrives whole, which
+     * is what the inherited behaviour already says.
+     */
+    @Override
+    protected java.sql.Blob blobAt(int column) throws SQLException {
+        if (block.fields().get(column).typeOid() == PgOids.OID) {
+            return new PgLargeObjectBlob(largeObjects(), longAt(column));
+        }
+        return super.blobAt(column);
+    }
+
+    /** The same pointer, read as a stream - which is the point of one. */
+    @Override
+    protected java.io.InputStream binaryStreamAt(int column) throws SQLException {
+        if (block.fields().get(column).typeOid() == PgOids.OID) {
+            return largeObjects().stream(longAt(column));
+        }
+        return super.binaryStreamAt(column);
+    }
+
+    private PgLargeObjects largeObjects() throws SQLException {
+        if (owner == null) {
+            throw new SQLException("this result set has no connection to read a large object "
+                    + "through");
+        }
+        return new PgLargeObjects(owner.connection);
+    }
+
+    /**
+     * PostgreSQL is the only one of the four with a real array type, and it
+     * writes one as text like everything else - so the decoding is the text
+     * form, not a second wire format.
+     */
+    @Override
+    protected java.sql.Array arrayAt(int column) throws SQLException {
+        int oid = block.fields().get(column).typeOid();
+        if (!PgOids.isArray(oid)) {
+            throw new SQLException("column " + (column + 1) + " is "
+                    + PgOids.typeName(oid) + ", not an array", "42804");
+        }
+        return new PgArray(oid, stringAt(column));
+    }
+
+    /**
+     * An {@code xml} column. Any text column would parse as well, but saying
+     * so would be a lie about the column rather than a convenience: a
+     * {@code varchar} that happens to hold XML is still a {@code varchar}, and
+     * an application that reads it as one keeps working when the day comes
+     * that it does not hold XML.
+     */
+    @Override
+    protected java.sql.SQLXML sqlXmlAt(int column) throws SQLException {
+        int oid = block.fields().get(column).typeOid();
+        if (oid != PgOids.XML) {
+            throw new SQLException("column " + (column + 1) + " is "
+                    + PgOids.typeName(oid) + ", not xml - read it with getString", "42804");
+        }
+        return new XmlValue(stringAt(column));
+    }
+
+    /**
+     * The row address, which in PostgreSQL is the {@code ctid} column and has
+     * to be selected by name: {@code select ctid, * from t}.
+     *
+     * <p>It is worth knowing what such an address is worth here. A
+     * {@code ctid} is the physical position of the tuple, and PostgreSQL moves
+     * tuples - an {@code update} writes a new version elsewhere, and
+     * {@code vacuum full} rewrites the table. So it identifies a row
+     * <b>within one transaction</b> and not beyond it, which is exactly what
+     * {@code ROWID_VALID_TRANSACTION} in the metadata says.
+     */
+    @Override
+    protected java.sql.RowId rowIdAt(int column) throws SQLException {
+        int oid = block.fields().get(column).typeOid();
+        if (oid != PgOids.TID) {
+            throw new SQLException("column " + (column + 1) + " is "
+                    + PgOids.typeName(oid) + ", not a row address - select ctid to get one",
+                    "42804");
+        }
+        return new OpaqueRowId(stringAt(column));
+    }
+
     @Override
     protected Object objectAt(int column) throws SQLException {
         PgSession.Field field = block.fields().get(column);
         int index = column + 1;
+        if (PgOids.isArray(field.typeOid())) {
+            return getArray(index);
+        }
         return switch (field.typeOid()) {
             case PgOids.BOOL -> getBoolean(index);
             case PgOids.INT2 -> getShort(index);
@@ -173,6 +264,8 @@ public final class PgResultSet extends ReadOnlyResultSet {
             case PgOids.TIME -> getTime(index);
             case PgOids.TIMESTAMP, PgOids.TIMESTAMPTZ -> getTimestamp(index);
             case PgOids.UUID -> UUID.fromString(stringAt(column));
+            case PgOids.XML -> getSQLXML(index);
+            case PgOids.TID -> getRowId(index);
             default -> stringAt(column);
         };
     }

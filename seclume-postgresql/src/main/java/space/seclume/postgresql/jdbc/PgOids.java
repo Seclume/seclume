@@ -38,11 +38,106 @@ public final class PgOids {
     public static final int UUID = 2950;
     public static final int JSONB = 3802;
 
+    /** The row address of a heap tuple - PostgreSQL's {@code ctid}. */
+    public static final int TID = 27;
+
+    /**
+     * The array types.
+     *
+     * <p>Every type in {@code pg_type} has an array companion with its own oid,
+     * and they are as fixed as the element oids. The pairing is the only thing
+     * that lets a row description say "this column is an array of int4" - the
+     * server sends the array oid and nothing else.
+     *
+     * <p>Only the elements worth decoding are listed. An array of anything
+     * else is still served, with its elements left as text, which is what the
+     * server sent and what the element's own type would have been read as.
+     */
+    public static final int BOOL_ARRAY = 1000;
+    public static final int BYTEA_ARRAY = 1001;
+    public static final int CHAR_ARRAY = 1002;
+    public static final int NAME_ARRAY = 1003;
+    public static final int INT2_ARRAY = 1005;
+    public static final int INT4_ARRAY = 1007;
+    public static final int TEXT_ARRAY = 1009;
+    public static final int BPCHAR_ARRAY = 1014;
+    public static final int VARCHAR_ARRAY = 1015;
+    public static final int INT8_ARRAY = 1016;
+    public static final int FLOAT4_ARRAY = 1021;
+    public static final int FLOAT8_ARRAY = 1022;
+    public static final int OID_ARRAY = 1028;
+    public static final int DATE_ARRAY = 1182;
+    public static final int TIME_ARRAY = 1183;
+    public static final int TIMESTAMP_ARRAY = 1115;
+    public static final int TIMESTAMPTZ_ARRAY = 1185;
+    public static final int NUMERIC_ARRAY = 1231;
+    public static final int UUID_ARRAY = 2951;
+    public static final int JSON_ARRAY = 199;
+    public static final int JSONB_ARRAY = 3807;
+    public static final int XML_ARRAY = 143;
+
     private PgOids() {
+    }
+
+    /**
+     * The element type of an array type, or 0 if the oid is not an array.
+     *
+     * <p>The real answer lives in {@code pg_type.typelem} and could be looked
+     * up, but that would be a query per unknown column on a mapping that has
+     * not moved in twenty years. Anything not listed is not treated as an
+     * array at all, which is the safe direction: a column read as text is
+     * right, a non-array read as an array is not.
+     */
+    public static int elementOf(int arrayOid) {
+        return switch (arrayOid) {
+            case BOOL_ARRAY -> BOOL;
+            case BYTEA_ARRAY -> BYTEA;
+            case CHAR_ARRAY -> CHAR;
+            case NAME_ARRAY -> NAME;
+            case INT2_ARRAY -> INT2;
+            case INT4_ARRAY -> INT4;
+            case TEXT_ARRAY -> TEXT;
+            case BPCHAR_ARRAY -> BPCHAR;
+            case VARCHAR_ARRAY -> VARCHAR;
+            case INT8_ARRAY -> INT8;
+            case FLOAT4_ARRAY -> FLOAT4;
+            case FLOAT8_ARRAY -> FLOAT8;
+            case OID_ARRAY -> OID;
+            case DATE_ARRAY -> DATE;
+            case TIME_ARRAY -> TIME;
+            case TIMESTAMP_ARRAY -> TIMESTAMP;
+            case TIMESTAMPTZ_ARRAY -> TIMESTAMPTZ;
+            case NUMERIC_ARRAY -> NUMERIC;
+            case UUID_ARRAY -> UUID;
+            case JSON_ARRAY -> JSON;
+            case JSONB_ARRAY -> JSONB;
+            case XML_ARRAY -> XML;
+            default -> 0;
+        };
+    }
+
+    /** Whether this oid names an array type. */
+    public static boolean isArray(int oid) {
+        return elementOf(oid) != 0;
+    }
+
+    /**
+     * The character that separates the elements of an array of this type.
+     *
+     * <p>Almost always a comma. {@code box} is the exception in the built-in
+     * types, and it is not one this driver decodes - but the parser takes the
+     * delimiter as a parameter rather than assuming, so the day a type with a
+     * different one arrives, only this method is wrong.
+     */
+    public static char arrayDelimiter(int elementOid) {
+        return ',';
     }
 
     /** The matching {@link Types} value JDBC callers expect. */
     public static int sqlType(int oid) {
+        if (isArray(oid)) {
+            return Types.ARRAY;
+        }
         return switch (oid) {
             case BOOL -> Types.BOOLEAN;
             case BYTEA -> Types.BINARY;
@@ -59,6 +154,7 @@ public final class PgOids {
             case TIMESTAMPTZ -> Types.TIMESTAMP_WITH_TIMEZONE;
             case VARCHAR, NAME, TEXT -> Types.VARCHAR;
             case XML -> Types.SQLXML;
+            case TID -> Types.ROWID;
             case JSON, JSONB -> Types.OTHER;
             case UUID -> Types.OTHER;
             default -> Types.OTHER;
@@ -67,6 +163,11 @@ public final class PgOids {
 
     /** The name of the type, the way the server itself writes it. */
     public static String typeName(int oid) {
+        // The server's own name for an array type is the element's with an
+        // underscore in front: an int4[] column is of type _int4.
+        if (isArray(oid)) {
+            return "_" + typeName(elementOf(oid));
+        }
         return switch (oid) {
             case BOOL -> "bool";
             case BYTEA -> "bytea";
@@ -92,6 +193,7 @@ public final class PgOids {
             case NUMERIC -> "numeric";
             case UUID -> "uuid";
             case JSONB -> "jsonb";
+            case TID -> "tid";
             default -> "oid" + oid;
         };
     }
@@ -103,6 +205,9 @@ public final class PgOids {
      * contract an ORM asks for and then believes.
      */
     public static String javaClass(int oid) {
+        if (isArray(oid)) {
+            return "java.sql.Array";
+        }
         return switch (oid) {
             case BOOL -> "java.lang.Boolean";
             case BYTEA -> "[B";
@@ -116,6 +221,8 @@ public final class PgOids {
             case TIME, TIMETZ -> "java.sql.Time";
             case TIMESTAMP, TIMESTAMPTZ -> "java.sql.Timestamp";
             case UUID -> "java.util.UUID";
+            case XML -> "java.sql.SQLXML";
+            case TID -> "java.sql.RowId";
             default -> "java.lang.String";
         };
     }

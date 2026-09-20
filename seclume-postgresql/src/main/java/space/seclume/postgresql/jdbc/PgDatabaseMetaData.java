@@ -654,9 +654,16 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
         return sqlStateSQL;
     }
 
+    /**
+     * A {@code ctid} is the physical position of a tuple, and PostgreSQL moves
+     * tuples: an update writes a new version elsewhere and a vacuum can
+     * rewrite the whole table. So the address identifies a row for the length
+     * of the transaction that read it, and saying anything longer would invite
+     * an application to store one.
+     */
     @Override
     public RowIdLifetime getRowIdLifetime() {
-        return RowIdLifetime.ROWID_UNSUPPORTED;
+        return RowIdLifetime.ROWID_VALID_TRANSACTION;
     }
 
     // ---- what the driver can do - and what it cannot ---------------------

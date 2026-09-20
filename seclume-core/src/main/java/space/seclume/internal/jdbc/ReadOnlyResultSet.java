@@ -29,9 +29,13 @@ import java.util.Map;
  * The scaffolding of a forward-only, read-only {@code ResultSet}.
  *
  * <p>{@code ResultSet} has over 190 methods, of which a driver of this shape
- * really answers about fifteen. The rest are backwards cursors, updating in
- * place, streams, {@code Blob}, {@code Ref}, {@code Array} - all things seclume
- * cannot do and does not pretend to.
+ * really answers about twenty. The rest are backwards cursors and updating in
+ * place - things seclume cannot do and does not pretend to.
+ *
+ * <p>{@code Array}, {@code SQLXML} and {@code RowId} sit between the two: they
+ * are refused here and served by whichever driver actually has the type, which
+ * is why they are hooks rather than a flat answer. {@code Ref} has no hook,
+ * because none of the four servers has a type it could point at.
  *
  * <p>This class answers the unanswerable part once and for all, with
  * {@link SQLFeatureNotSupportedException}. A {@code ResultSet} that acts as if
@@ -105,6 +109,36 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     /** A large binary value as a stream. */
     protected InputStream binaryStreamAt(int column) throws SQLException {
         return new java.io.ByteArrayInputStream(bytesAt(column));
+    }
+
+    /**
+     * An array column as a JDBC {@link Array}.
+     *
+     * <p>Refused unless a driver overrides it, because an array is the one
+     * type where the servers genuinely differ: PostgreSQL has real array
+     * columns and a text form for them, and the other three have no array
+     * type at all. There is nothing sensible to do here in general.
+     */
+    protected Array arrayAt(int column) throws SQLException {
+        throw noSuchType("ARRAY");
+    }
+
+    /** An XML column as a {@link SQLXML}; refused unless a driver overrides it. */
+    protected SQLXML sqlXmlAt(int column) throws SQLException {
+        throw noSuchType("SQLXML");
+    }
+
+    /**
+     * A row address as a {@link RowId}.
+     *
+     * <p>Only a column that <i>is</i> one can answer this, which means the
+     * driver has to have selected it: PostgreSQL's {@code ctid}, Oracle's
+     * {@code rowid}. Asking an ordinary column for its row address is a
+     * mistake rather than a missing feature, and the drivers that override
+     * this say which of the two happened.
+     */
+    protected RowId rowIdAt(int column) throws SQLException {
+        throw noSuchType("ROWID");
     }
 
     /** The zero-based index for a column name, or -1. */
@@ -1440,32 +1474,35 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final Array getArray(int columnIndex) throws SQLException {
-        throw noSuchType("ARRAY");
+        int column = check(columnIndex);
+        return lastWasNull ? null : arrayAt(column);
     }
 
     @Override
     public final Array getArray(String columnLabel) throws SQLException {
-        throw noSuchType("ARRAY");
+        return getArray(columnIndexOf(columnLabel) + 1);
     }
 
     @Override
     public final RowId getRowId(int columnIndex) throws SQLException {
-        throw noSuchType("ROWID");
+        int column = check(columnIndex);
+        return lastWasNull ? null : rowIdAt(column);
     }
 
     @Override
     public final RowId getRowId(String columnLabel) throws SQLException {
-        throw noSuchType("ROWID");
+        return getRowId(columnIndexOf(columnLabel) + 1);
     }
 
     @Override
     public final SQLXML getSQLXML(int columnIndex) throws SQLException {
-        throw noSuchType("SQLXML");
+        int column = check(columnIndex);
+        return lastWasNull ? null : sqlXmlAt(column);
     }
 
     @Override
     public final SQLXML getSQLXML(String columnLabel) throws SQLException {
-        throw noSuchType("SQLXML");
+        return getSQLXML(columnIndexOf(columnLabel) + 1);
     }
 
     /** A text column read as a URL, which is all any of the four stores. */

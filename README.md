@@ -95,6 +95,11 @@ authentication is the fallback for everything not in a domain.
   `Clob`/`Blob`, enums, booleans — each written and read back unchanged, on every server.
 - `DatabaseMetaData` far enough for Hibernate's schema validation, Flyway and
   `SimpleJdbcCall` to work from the catalogue alone.
+- **The types only PostgreSQL has**: `getArray` on any array column, including nested and
+  including the difference between a null element and the word `NULL`; `getSQLXML` on `xml`;
+  `getRowId` on `ctid`; and large objects, where `getBlob` on an `oid` column is a real
+  locator that reads in chunks rather than the row's own bytes. `java.sql.Ref` stays refused,
+  because none of the four servers has a type it could point at.
 - **Distributed transactions (XA)** in all four, off by default.
 - **Failover on connect** across a host list.
 
@@ -140,8 +145,6 @@ rather than staying silent.
 
 ## What it does not do yet
 
-- PostgreSQL large objects (`oid`), `getArray`, `getSQLXML`, `getRowId`, `getRef` — these
-  throw rather than pretend.
 - Procedures returning cursors on Oracle and SQL Server.
 - CockroachDB and YugabyteDB are exercised in CI, but without authentication, so that is not
   yet evidence that the driver serves them.

@@ -615,9 +615,20 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
         throw large("CLOB");
     }
 
+    /**
+     * Refused on purpose. JDBC's {@code createBlob} promises an empty
+     * writable value with no side effect, and PostgreSQL has no such thing: a
+     * large object is created in the database and stays there whether or not
+     * anybody ever stores its oid. Creating one is therefore asked for by
+     * name - see {@link PgLargeObjects} - so that what it leaves behind is the
+     * caller's decision rather than a factory method's.
+     */
     @Override
     public Blob createBlob() throws SQLException {
-        throw large("BLOB");
+        throw new SQLFeatureNotSupportedException(
+                "PostgreSQL has no free-standing empty BLOB - create a large object with "
+                + "connection.unwrap(PgLargeObjects.class).create(bytes), or use a bytea "
+                + "column and setBytes");
     }
 
     @Override
@@ -687,6 +698,12 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
         if (iface.isInstance(this)) {
             return iface.cast(this);
         }
+        // Large objects are asked for by name rather than being reachable
+        // through createBlob - PgLargeObjects says why.
+        if (iface == PgLargeObjects.class) {
+            checkOpen();
+            return iface.cast(new PgLargeObjects(this));
+        }
         if (iface.isInstance(session)) {
             return iface.cast(session);
         }
@@ -695,6 +712,7 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public boolean isWrapperFor(Class<?> iface) {
-        return iface.isInstance(this) || iface.isInstance(session);
+        return iface.isInstance(this) || iface.isInstance(session)
+                || iface == PgLargeObjects.class;
     }
 }
