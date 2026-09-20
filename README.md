@@ -75,6 +75,9 @@ Never from the URL and never from a `String`. Pick a provider:
 | `rds-iam` | an AWS RDS IAM token, signed locally rather than fetched |
 | `encrypted` | an AES-GCM ciphertext, decrypted straight into native memory; the key comes from another provider |
 | `vault` | HashiCorp Vault over HTTPS, answer parsed in native memory; dynamic credentials with their lease |
+| `aws-secrets-manager` | AWS Secrets Manager, request signed here, answer parsed in native memory |
+| `azure-key-vault` | Azure Key Vault, bearer token from another provider |
+| `gcp-secret-manager` | Google Secret Manager, Base64 payload decoded segment to segment |
 | `callback` | your own code, handed native memory to write into |
 
 `encrypted` is for the case where the password may not stand in the configuration in the
@@ -113,6 +116,48 @@ Here the credential says when it stops and the pool retires connections before t
 minute early by default (`seclume.datasources.main.pool.credential-margin`). Each connection
 carries the credential it was opened with, so a rotation does not empty the pool: the old
 connections run out on their own schedule while new ones start on the new one.
+
+### The three cloud vaults
+
+Same idea, three different shapes, and each shape is where an SDK would have put the password
+on the heap. AWS wraps a JSON document inside a JSON string; Azure puts the expiry in a
+sibling object; Google Base64-encodes the payload. All three go through the same two pieces —
+`SecretFetch` for the HTTPS, `JsonOff` for the answer — so nothing is ever a `String`, and
+none of the three SDKs is a dependency.
+
+```properties
+# AWS: a field out of the secret's own JSON, request signed with SigV4
+...secret.provider=aws-secrets-manager
+...secret.region=eu-central-1
+...secret.secret-id=prod/db
+...secret.field=password
+...secret.access-key-id=AKIA...
+...secret.key-provider=file
+...secret.key-path=/run/secrets/aws-secret-key
+
+# Azure: a bearer token, itself from a provider
+...secret.provider=azure-key-vault
+...secret.vault-uri=https://my-vault.vault.azure.net
+...secret.name=db-password
+...secret.token-provider=file
+...secret.token-path=/var/run/secrets/azure/token
+
+# Google
+...secret.provider=gcp-secret-manager
+...secret.project=my-project
+...secret.name=db-password
+...secret.token-provider=file
+...secret.token-path=/var/run/secrets/gcp/token
+```
+
+Azure reports `attributes.exp` when a secret has one, so a rotating secret feeds the same
+pool machinery the Vault lease does.
+
+**One limitation, stated rather than worked around:** the AWS provider takes long-term access
+keys, not session tokens. A session token has to be sent *and signed*, which makes it part of
+the canonical request — a string that is built, hashed and concatenated. There is no way to
+sign it without putting it on the heap, and doing that quietly in this of all libraries would
+be dishonest. On RDS use `rds-iam`; otherwise a sidecar that writes the secret to a file.
 
 ### One line instead of four
 

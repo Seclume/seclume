@@ -46,7 +46,8 @@ public final class SecretProviders {
             throw new IllegalArgumentException(
                     "no secret provider configured - set 'provider' to one of "
                     + "file, env-file, unix-socket, process, dpapi, credential-manager, "
-                    + "rds-iam, encrypted, vault");
+                    + "rds-iam, encrypted, vault, aws-secrets-manager, azure-key-vault, "
+                    + "gcp-secret-manager");
         }
         int maxLength = maxLength(settings);
         return switch (kind.toLowerCase(Locale.ROOT)) {
@@ -92,10 +93,35 @@ public final class SecretProviders {
                     !"false".equalsIgnoreCase(settings.getOrDefault("verify", "true")),
                     Integer.parseInt(settings.getOrDefault("timeout-millis", "10000")),
                     maxLength);
+            // The three cloud vaults. All of them build on the same two
+            // pieces - SecretFetch for the HTTPS, JsonOff for the answer - so
+            // that no SDK ever hands out a String. "token-" says where the
+            // bearer token comes from; for AWS it is "key-", because a
+            // signature is made rather than a token presented.
+            case "aws-secrets-manager", "awssecretsmanager" ->
+                    new AwsSecretsManagerSecretProvider(
+                            of(nested(settings, "key-")),
+                            required(settings, "access-key-id", "aws-secrets-manager"),
+                            required(settings, "region", "aws-secrets-manager"),
+                            required(settings, "secret-id", "aws-secrets-manager"),
+                            value(settings, "field"),
+                            maxLength);
+            case "azure-key-vault", "azurekeyvault" -> new AzureKeyVaultSecretProvider(
+                    required(settings, "vault-uri", "azure-key-vault"),
+                    required(settings, "name", "azure-key-vault"),
+                    value(settings, "version"),
+                    of(nested(settings, "token-")),
+                    maxLength);
+            case "gcp-secret-manager", "gcpsecretmanager" -> new GcpSecretManagerSecretProvider(
+                    required(settings, "project", "gcp-secret-manager"),
+                    required(settings, "name", "gcp-secret-manager"),
+                    value(settings, "version"),
+                    of(nested(settings, "token-")),
+                    maxLength);
             default -> throw new IllegalArgumentException(
                     "unknown secret provider '" + kind + "' - known are file, env-file, "
                     + "unix-socket, process, dpapi, credential-manager, rds-iam, encrypted, "
-                    + "vault");
+                    + "vault, aws-secrets-manager, azure-key-vault, gcp-secret-manager");
         };
     }
 

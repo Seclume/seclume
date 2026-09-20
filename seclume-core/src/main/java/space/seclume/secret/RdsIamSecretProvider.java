@@ -8,8 +8,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
-import space.seclume.crypto.HashAlgorithm;
-import space.seclume.crypto.Hmac;
+import space.seclume.internal.AwsSigV4;
 
 /**
  * The password for AWS RDS IAM authentication - built, not stored.
@@ -108,7 +107,7 @@ public final class RdsIamSecretProvider implements SecretProvider {
                 + SIGNED_HEADERS + "\n"
                 + EMPTY_PAYLOAD;
         String toSign = ALGORITHM + "\n" + stamp + "\n" + scope + "\n"
-                + hex(sha256(canonicalRequest));
+                + AwsSigV4.sha256Hex(canonicalRequest);
 
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment signature = sign(arena, toSign, day);
@@ -129,75 +128,17 @@ public final class RdsIamSecretProvider implements SecretProvider {
     /**
      * The signing chain, and the only part that touches the secret.
      *
-     * <p>{@code AWS4 + key -> date -> region -> service -> aws4_request}, each
-     * step an HMAC over the previous result. The key is read into native
-     * memory, used, and wiped; nothing in between is a heap object.
+     * <p>Shared with the Secrets Manager provider, which needs the same four
+     * HMACs for a differently shaped request - see {@link AwsSigV4}.
      */
     private MemorySegment sign(Arena arena, String toSign, String day) {
-        MemorySegment key = arena.allocate(MAX_KEY_BYTES);
-        MemorySegment prefixed = arena.allocate(MAX_KEY_BYTES + 4);
         try {
-            int length = awsSecretKey.writeSecret(key);
-            if (length <= 0) {
-                throw new SecretUnavailableException(
-                        "the AWS secret key source gave nothing - an IAM token cannot be "
-                        + "signed without it");
-            }
-            // "AWS4" + secret, and that concatenation is the initial key.
-            byte[] aws4 = {'A', 'W', 'S', '4'}; // seclume-allow: four constant letters, not a secret
-            MemorySegment.copy(aws4, 0, prefixed, ValueLayout.JAVA_BYTE, 0, 4);
-            MemorySegment.copy(key, 0, prefixed, 4, length);
-
-            MemorySegment step = hmac(arena, prefixed, 0, 4 + length, day);
-            step = hmac(arena, step, 0, step.byteSize(), region);
-            step = hmac(arena, step, 0, step.byteSize(), SERVICE);
-            step = hmac(arena, step, 0, step.byteSize(), TERMINATOR);
-            return hmac(arena, step, 0, step.byteSize(), toSign);
-        } finally {
-            key.fill((byte) 0);
-            prefixed.fill((byte) 0);
+            return AwsSigV4.sign(arena, awsSecretKey::writeSecret, toSign, day, region, SERVICE);
+        } catch (IllegalStateException empty) {
+            throw new SecretUnavailableException(
+                    "the AWS secret key source gave nothing - an IAM token cannot be signed "
+                    + "without it", empty);
         }
-    }
-
-    private static MemorySegment hmac(Arena arena, MemorySegment key, long offset, long length,
-                                      String message) {
-        try (Hmac mac = new Hmac(HashAlgorithm.SHA_256, key, offset, length)) {
-            MemorySegment text = arena.allocate(message.length() * 3L + 1);
-            int written = writeAscii(text, message);
-            mac.update(text, 0, written);
-            MemorySegment out = arena.allocate(mac.macLength());
-            mac.doFinal(out, 0);
-            return out;
-        }
-    }
-
-    private static MemorySegment sha256(String text) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment in = arena.allocate(text.length() * 3L + 1);
-            int written = writeAscii(in, text);
-            MemorySegment out = Arena.ofAuto().allocate(HashAlgorithm.SHA_256.digestLength());
-            HashAlgorithm.SHA_256.hash(in, 0, written, out, 0);
-            return out;
-        }
-    }
-
-    /** UTF-8 without a heap array in between - the strings here are ASCII anyway. */
-    private static int writeAscii(MemorySegment target, String text) {
-        int at = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c < 0x80) {
-                target.set(ValueLayout.JAVA_BYTE, at++, (byte) c);
-            } else if (c < 0x800) {
-                target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0xc0 | (c >> 6)));
-                target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | (c & 0x3f)));
-            } else {
-                target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0xe0 | (c >> 12)));
-                target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | ((c >> 6) & 0x3f)));
-                target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | (c & 0x3f)));
-            }
-        }
-        return at;
     }
 
     private static int write(MemorySegment target, String token) {
@@ -210,37 +151,15 @@ public final class RdsIamSecretProvider implements SecretProvider {
                     + " bytes and the buffer takes " + target.byteSize()
                     + " - raise the secret buffer size");
         }
-        return writeAscii(target, token);
+        return AwsSigV4.writeAscii(target, token);
     }
 
     private static String hex(MemorySegment bytes) {
-        StringBuilder text = new StringBuilder((int) bytes.byteSize() * 2); // seclume-allow: a signature, which is public by design
-        for (long i = 0; i < bytes.byteSize(); i++) {
-            int value = bytes.get(ValueLayout.JAVA_BYTE, i) & 0xff;
-            text.append(Character.forDigit(value >> 4, 16));
-            text.append(Character.forDigit(value & 0xf, 16));
-        }
-        return text.toString();
+        return AwsSigV4.hex(bytes);
     }
 
-    /** What AWS expects: RFC 3986, and a slash is not safe. */
     private static String urlEncode(String text) {
-        StringBuilder out = new StringBuilder(text.length() + 8); // seclume-allow: a user name and a key id, never the secret
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            boolean safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-                    || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
-            if (safe) {
-                out.append(c);
-            } else {
-                out.append('%')
-                        .append(Character.toUpperCase(Character.forDigit((c >> 4) & 0xf, 16)))
-                        .append(Character.toUpperCase(Character.forDigit(c & 0xf, 16)));
-            }
-        }
-        return out.toString();
+        return AwsSigV4.urlEncode(text);
     }
 
-    /** Long enough for any AWS secret key, short enough to stay cheap. */
-    private static final int MAX_KEY_BYTES = 256;
 }
