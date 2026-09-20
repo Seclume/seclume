@@ -58,6 +58,14 @@ class RecordedLoginTest {
     private static final int DERIVATION_COUNT = 3;
 
     // ---- chosen: random in a real login, fixed here so it reproduces -------
+    //
+    // These three still spell the project's former name, and they stay that
+    // way. They are inputs of a frozen vector: the expected values below were
+    // derived from exactly these bytes on a connection a real server accepted,
+    // and the two ASCII strings are exactly 32 and 16 bytes long. Renaming
+    // them would change their length, change the result, and leave a test
+    // that proves the implementation agrees with itself. The word is a date
+    // stamp here, not a name.
 
     /** The user of the throwaway account this vector was recorded with. */
     private static final String USER = "zl_vector";

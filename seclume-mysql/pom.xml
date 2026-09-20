@@ -13,8 +13,7 @@
   <artifactId>seclume-mysql</artifactId>
   <name>seclume MySQL</name>
   <description>
-    MySQL- und MariaDB-Protokoll 4.1, vollstaendig eigen implementiert.
-  </description>
+    MySQL and MariaDB protocol 4.1, implemented from scratch.</description>
 
   <dependencies>
     <dependency>

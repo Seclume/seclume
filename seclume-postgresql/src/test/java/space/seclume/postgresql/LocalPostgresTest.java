@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import space.seclume.tck.TestHosts;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -25,7 +27,7 @@ import space.seclume.secret.SecretProvider;
  * Against a real PostgreSQL server.
  *
  * <p>Expects the role and database {@code seclume_test} on
- * {@code localhost:5432} and the password in the file
+ * {@code localhost:5432} by default and the password in the file
  * {@code .local-pg-password} in the project directory. If one of those is
  * missing the test is skipped rather than failed - on someone else's machine
  * its absence is not an error.
@@ -41,8 +43,8 @@ import space.seclume.secret.SecretProvider;
  */
 class LocalPostgresTest {
 
-    private static final String HOST = "127.0.0.1";
-    private static final int PORT = 5432;
+    private static final String HOST = TestHosts.postgres();
+    private static final int PORT = TestHosts.postgresPort();
     private static final String DATABASE = "seclume_test";
     private static final String USER = "seclume_test";
 
@@ -52,7 +54,8 @@ class LocalPostgresTest {
     static void findTheServer() {
         passwordFile = locatePasswordFile();
         Assumptions.assumeTrue(passwordFile != null && Files.exists(passwordFile),
-                "no .local-pg-password - skipping the tests against a real server");
+                "no " + TestHosts.postgresPasswordFile() + " - skipping the tests "
+                        + "against a real server");
         Assumptions.assumeTrue(reachable(), "no PostgreSQL on " + HOST + ":" + PORT);
     }
 
@@ -75,11 +78,19 @@ class LocalPostgresTest {
      * The login method really was SCRAM, not cleartext and not md5. The
      * session remembers it; an ordinary user is not allowed to read
      * {@code pg_authid}.
+     *
+     * <p>Either spelling counts. A server reached over TLS offers
+     * {@code scram-sha-256-plus}, which binds the proof to this connection
+     * and is the better of the two - insisting on the plain name would fail
+     * the test for being more secure than expected.
      */
     @Test
     void theServerUsesScram() throws Exception {
         try (PgSession session = open()) {
-            assertEquals("scram-sha-256", session.authenticationMethod());
+            String method = session.authenticationMethod();
+            assertTrue(method.equals("scram-sha-256")
+                            || method.equals("scram-sha-256-plus"),
+                    "authenticated with " + method);
         }
     }
 
@@ -167,8 +178,8 @@ class LocalPostgresTest {
 
     /** Depending on where it starts, the project directory is one level up. */
     private static Path locatePasswordFile() {
-        for (Path candidate : List.of(Path.of(".local-pg-password"),
-                Path.of("..", ".local-pg-password"))) {
+        for (Path candidate : List.of(Path.of(TestHosts.postgresPasswordFile()),
+                Path.of("..", TestHosts.postgresPasswordFile()))) {
             if (Files.exists(candidate)) {
                 return candidate;
             }

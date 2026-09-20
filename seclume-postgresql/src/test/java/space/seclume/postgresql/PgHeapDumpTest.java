@@ -3,6 +3,8 @@ package space.seclume.postgresql;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import space.seclume.tck.TestHosts;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -37,17 +39,17 @@ class PgHeapDumpTest {
 
     @BeforeAll
     static void findTheServer() {
-        for (Path candidate : List.of(Path.of(".local-pg-password"),
-                Path.of("..", ".local-pg-password"))) {
+        for (Path candidate : List.of(Path.of(TestHosts.postgresPasswordFile()),
+                Path.of("..", TestHosts.postgresPasswordFile()))) {
             if (Files.exists(candidate)) {
                 passwordFile = candidate;
             }
         }
-        Assumptions.assumeTrue(passwordFile != null, "no .local-pg-password");
+        Assumptions.assumeTrue(passwordFile != null, TestHosts.postgresPasswordFile() + " is not there");
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", 5432), 1000);
+            socket.connect(new InetSocketAddress(TestHosts.postgres(), TestHosts.postgresPort()), 1000);
         } catch (IOException e) {
-            Assumptions.abort("no PostgreSQL on 127.0.0.1:5432");
+            Assumptions.abort("no PostgreSQL on " + TestHosts.postgres() + ":" + TestHosts.postgresPort());
         }
     }
 

@@ -13,9 +13,8 @@
   <artifactId>seclume-core</artifactId>
   <name>seclume core</name>
   <description>
-    SecretProvider, SecretScope, Off-Heap-Krypto und die gemeinsamen
-    Bausteine der Treiber. Ohne Abhaengigkeiten zur Laufzeit.
-  </description>
+    SecretProvider, SecretScope, off-heap cryptography and the pieces the
+    drivers share. No dependencies at runtime.</description>
 
   <dependencies>
     <dependency>

@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import space.seclume.tck.TestHosts;
+
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
@@ -56,9 +58,12 @@ class LocalJdbcTest {
     static void findTheServer() {
         Path password = locatePasswordFile();
         Assumptions.assumeTrue(password != null,
-                "no .local-pg-password - skipping the tests against a real server");
-        Assumptions.assumeTrue(reachable(), "no PostgreSQL on 127.0.0.1:5432");
-        url = "jdbc:seclume:postgresql://127.0.0.1:5432/" + DATABASE
+                "no " + TestHosts.postgresPasswordFile() + " - skipping the tests "
+                        + "against a real server");
+        Assumptions.assumeTrue(reachable(), "no PostgreSQL on "
+                + TestHosts.postgres() + ":" + TestHosts.postgresPort());
+        url = "jdbc:seclume:postgresql://" + TestHosts.postgres()
+                + ":" + TestHosts.postgresPort() + "/" + DATABASE
                 + "?user=" + USER + "&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
@@ -816,7 +821,9 @@ class LocalJdbcTest {
      */
     @Test
     void connectsToTheSecondServerWhenTheFirstIsDead() throws Exception {
-        String withDeadHead = url.replace("//127.0.0.1:5432/", "//127.0.0.1:1,127.0.0.1:5432/");
+        String alive = TestHosts.postgres() + ":" + TestHosts.postgresPort();
+        String withDeadHead = url.replace("//" + alive + "/",
+                "//" + TestHosts.postgres() + ":1," + alive + "/");
         try (Connection connection = DriverManager.getConnection(withDeadHead);
              Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery("select 1")) {
@@ -828,11 +835,14 @@ class LocalJdbcTest {
     /** And when none of them answers, the message says what was tried. */
     @Test
     void namesEveryServerItTriedWhenNoneAnswers() {
-        String allDead = url.replace("//127.0.0.1:5432/", "//127.0.0.1:1,127.0.0.1:2/");
+        String dead = TestHosts.postgres();
+        String allDead = url.replace(
+                "//" + dead + ":" + TestHosts.postgresPort() + "/",
+                "//" + dead + ":1," + dead + ":2/");
         SQLException thrown = assertThrows(SQLException.class,
                 () -> DriverManager.getConnection(allDead));
-        assertTrue(thrown.getMessage().contains("127.0.0.1:1")
-                && thrown.getMessage().contains("127.0.0.1:2"), thrown.getMessage());
+        assertTrue(thrown.getMessage().contains(dead + ":1")
+                && thrown.getMessage().contains(dead + ":2"), thrown.getMessage());
     }
 
     /**
@@ -1177,8 +1187,8 @@ class LocalJdbcTest {
     }
 
     private static Path locatePasswordFile() {
-        for (Path candidate : List.of(Path.of(".local-pg-password"),
-                Path.of("..", ".local-pg-password"))) {
+        for (Path candidate : List.of(Path.of(TestHosts.postgresPasswordFile()),
+                Path.of("..", TestHosts.postgresPasswordFile()))) {
             if (Files.exists(candidate)) {
                 return candidate.toAbsolutePath().normalize();
             }
@@ -1188,7 +1198,8 @@ class LocalJdbcTest {
 
     private static boolean reachable() {
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", 5432), 1000);
+            socket.connect(new InetSocketAddress(
+                    TestHosts.postgres(), TestHosts.postgresPort()), 1000);
             return true;
         } catch (IOException e) {
             return false;

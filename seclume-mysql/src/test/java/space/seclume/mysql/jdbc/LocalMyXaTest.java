@@ -37,7 +37,7 @@ import space.seclume.internal.jdbc.XidText;
 class LocalMyXaTest {
 
     private static final String HOST = System.getProperty("seclume.mysql.host",
-            "db.example.invalid");
+            space.seclume.tck.TestHosts.database());
     private static final int PORT = Integer.getInteger("seclume.mysql.port", 3307);
     private static final String DATABASE = "seclume_test";
     private static final String USER = "seclume_test";

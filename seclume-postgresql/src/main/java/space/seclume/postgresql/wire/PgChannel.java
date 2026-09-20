@@ -154,7 +154,7 @@ public final class PgChannel implements AutoCloseable {
     public WireBuffer begin(byte tag) {
         out.putByte(tag);
         lengthAt = out.position();
-        out.putInt(0);              // Platzhalter
+        out.putInt(0);              // a placeholder
         return out;
     }
 

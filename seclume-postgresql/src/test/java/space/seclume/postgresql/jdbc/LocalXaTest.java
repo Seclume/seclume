@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import space.seclume.tck.TestHosts;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -47,15 +49,17 @@ class LocalXaTest {
     static void findTheServer() {
         password = locatePasswordFile();
         Assumptions.assumeTrue(password != null,
-                "no .local-pg-password - skipping the tests against a real server");
-        Assumptions.assumeTrue(reachable(), "no PostgreSQL on 127.0.0.1:5432");
+                "no " + TestHosts.postgresPasswordFile() + " - skipping the tests "
+                        + "against a real server");
+        Assumptions.assumeTrue(reachable(), "no PostgreSQL on "
+                + TestHosts.postgres() + ":" + TestHosts.postgresPort());
     }
 
     private static SeclumeXaDataSource source() {
         SeclumeXaDataSource source = new SeclumeXaDataSource();
         SeclumeDataSource settings = source.settings();
-        settings.setHost("127.0.0.1");
-        settings.setPort(5432);
+        settings.setHost(TestHosts.postgres());
+        settings.setPort(TestHosts.postgresPort());
         settings.setDatabase(DATABASE);
         settings.setUser(USER);
         settings.setProperty("provider", "file");
@@ -212,8 +216,8 @@ class LocalXaTest {
     }
 
     private static Path locatePasswordFile() {
-        for (Path candidate : List.of(Path.of(".local-pg-password"),
-                Path.of("..", ".local-pg-password"))) {
+        for (Path candidate : List.of(Path.of(TestHosts.postgresPasswordFile()),
+                Path.of("..", TestHosts.postgresPasswordFile()))) {
             if (Files.exists(candidate)) {
                 return candidate.toAbsolutePath().normalize();
             }
@@ -223,7 +227,8 @@ class LocalXaTest {
 
     private static boolean reachable() {
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", 5432), 1000);
+            socket.connect(new InetSocketAddress(
+                    TestHosts.postgres(), TestHosts.postgresPort()), 1000);
             return true;
         } catch (IOException e) {
             return false;

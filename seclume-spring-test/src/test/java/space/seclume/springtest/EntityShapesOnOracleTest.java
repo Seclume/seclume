@@ -11,6 +11,6 @@ class EntityShapesOnOracleTest extends EntityShapesTest {
 
     @BeforeAll
     static void findTheServer() {
-        Servers.require(".local-oracle-password", "db.example.invalid", 1521);
+        Servers.require(".local-oracle-password", space.seclume.tck.TestHosts.database(), 1521);
     }
 }

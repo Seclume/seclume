@@ -11,6 +11,6 @@ class EntityShapesOnMySqlTest extends EntityShapesTest {
 
     @BeforeAll
     static void findTheServer() {
-        Servers.require(".local-mysql-password", "db.example.invalid", 3307);
+        Servers.require(".local-mysql-password", space.seclume.tck.TestHosts.database(), 3307);
     }
 }

@@ -31,14 +31,17 @@ import org.junit.jupiter.api.Test;
  * <p>So this test does what no reader does: it compares the BOM against the
  * modules of the build. New module, no entry, red.
  *
- * <p>What counts as depend-able: everything that is installed. Modules that set
- * {@code maven.install.skip} - the benchmarks and the Spring integration test -
- * exist to measure and to prove, never to be pulled in, and have no business in
- * a BOM.
+ * <p>What counts as depend-able: everything the parent builds and installs.
+ * Modules that set {@code maven.install.skip} - the benchmarks and the Spring
+ * integration test - exist to measure and to prove, never to be pulled in, and
+ * have no business in a BOM. Neither has a directory the parent does not build:
+ * the TCP core is licensed separately and is not part of this distribution, so
+ * it is not in the BOM either.
  */
 class BomTest {
 
     private static final Pattern ARTIFACT = Pattern.compile("<artifactId>([^<]+)</artifactId>");
+    private static final Pattern MODULE = Pattern.compile("<module>([^<]+)</module>");
 
     @Test
     void theBomListsEveryModuleSomebodyCanDependOn() throws IOException {
@@ -62,13 +65,15 @@ class BomTest {
                 + "the entry points at something that is not there");
     }
 
-    /** Every module directory whose pom is installed, by its artifact id. */
+    /** Every module the parent builds and installs, by its artifact id. */
     private static Set<String> publishedModules(Path root) throws IOException {
+        Set<String> built = builtModules(root.resolve("pom.xml"));
         Set<String> published = new LinkedHashSet<>();
         try (Stream<Path> modules = Files.list(root)) {
             for (Path module : modules.sorted().toList()) {
                 Path pom = module.resolve("pom.xml");
-                if (!Files.isRegularFile(pom)) {
+                if (!Files.isRegularFile(pom)
+                        || !built.contains(module.getFileName().toString())) {
                     continue;
                 }
                 String text = Files.readString(pom, StandardCharsets.UTF_8);
@@ -83,6 +88,20 @@ class BomTest {
             }
         }
         return published;
+    }
+
+    /** The module directories the parent POM lists. */
+    private static Set<String> builtModules(Path parent) throws IOException {
+        String text = Files.readString(parent, StandardCharsets.UTF_8);
+        int start = text.indexOf("<modules>");
+        int end = text.indexOf("</modules>");
+        assertTrue(start >= 0 && end > start, parent + " builds no modules at all");
+        Set<String> modules = new LinkedHashSet<>();
+        Matcher found = MODULE.matcher(text.substring(start, end));
+        while (found.find()) {
+            modules.add(found.group(1));
+        }
+        return modules;
     }
 
     /** The artifact ids inside {@code dependencyManagement}, in order. */

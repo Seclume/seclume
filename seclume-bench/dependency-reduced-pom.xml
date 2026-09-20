@@ -8,8 +8,8 @@
   <modelVersion>4.0.0</modelVersion>
   <artifactId>seclume-bench</artifactId>
   <name>seclume Benchmarks</name>
-  <description>JMH-Messstrecke: seclume gegen die Herstellertreiber und gegen HikariCP.
-    Wird nicht veroeffentlicht - das hier ist das Messgeraet, nicht das Werkstueck.</description>
+  <description>JMH measurements: seclume against the vendor drivers and against HikariCP.
+    Not published - this is the instrument, not the work.</description>
   <build>
     <plugins>
       <plugin>

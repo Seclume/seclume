@@ -15,12 +15,9 @@
   <name>seclume BOM</name>
 
   <description>
-    Eine Zeile im Projekt, und alle seclume-Versionen passen zusammen. Hier
-    stehen alle Module, die jemand einbinden kann - was fehlt, bekommt der
-    Anwender naemlich nicht zu sehen, sondern schreibt eine Version von Hand
-    hin und merkt den Fehler beim naechsten Update. Ein Test haelt die Liste
-    vollstaendig.
-  </description>
+    One line in a project, and every seclume version fits together. Every
+    module anyone may depend on is listed here; what is missing is not what a
+    user sees but what they would have to write a version number for.</description>
 
   <dependencyManagement>
     <dependencies>
@@ -29,10 +26,8 @@
         <artifactId>seclume-core</artifactId>
         <version>${project.version}</version>
       </dependency>
-      <dependency>
-        <groupId>space.seclume</groupId>
-        <version>${project.version}</version>
-      </dependency>
+      <!-- seclume-tcp-core is not listed here: it is not part of this
+           distribution and is licensed separately. -->
       <dependency>
         <groupId>space.seclume</groupId>
         <artifactId>seclume-postgresql</artifactId>

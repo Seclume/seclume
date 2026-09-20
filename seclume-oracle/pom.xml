@@ -13,8 +13,7 @@
   <artifactId>seclume-oracle</artifactId>
   <name>seclume Oracle</name>
   <description>
-    Oracle TNS/NS und TTC, vollstaendig eigen implementiert. In Arbeit.
-  </description>
+    Oracle TNS/NS and TTC, implemented from scratch.</description>
 
   <dependencies>
     <dependency>

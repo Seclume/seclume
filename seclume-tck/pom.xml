@@ -13,9 +13,8 @@
   <artifactId>seclume-tck</artifactId>
   <name>seclume TCK</name>
   <description>
-    Der Beweismechanismus: hprof-Parser, Heapdump-Harness und die gemeinsamen
-    Integrationstests. Testwerkzeug - gehoert nicht in eine Anwendung.
-  </description>
+    The proving mechanism: an hprof parser, the heap-dump harness and the
+    shared integration tests. A test tool - it does not belong in an application.</description>
 
   <dependencies>
     <dependency>
@@ -23,8 +22,8 @@
       <artifactId>seclume-core</artifactId>
       <version>${project.version}</version>
     </dependency>
-    <!-- Nicht test-scope: die Erweiterung ist Teil des Lieferumfangs. Wer sie
-         benutzt, hat JUnit ohnehin, deshalb optional. -->
+    <!-- Not test scope: the extension is part of what ships. Whoever
+         uses it has JUnit anyway, hence optional. -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

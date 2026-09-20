@@ -30,6 +30,16 @@ public final class ChildJvm {
         command.add("--enable-native-access=ALL-UNNAMED");
         command.add("-cp");
         command.add(System.getProperty("java.class.path"));
+        // The probe has to reach the same server as whoever started it. Those
+        // properties are set on the command line of the build, and a child
+        // process inherits nothing of that: without this the probe quietly
+        // dialled the default address instead, and the failure it produced -
+        // a rejected password - said nothing about the cause.
+        for (String name : System.getProperties().stringPropertyNames()) {
+            if (name.startsWith("seclume.")) {
+                command.add("-D" + name + "=" + System.getProperty(name));
+            }
+        }
         command.add(mainClass.getName());
         command.addAll(arguments);
 

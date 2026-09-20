@@ -13,10 +13,9 @@
   <artifactId>seclume-verify</artifactId>
   <name>seclume Verify</name>
   <description>
-    Vorflug-Kommando: verbindet einmal und schreibt einen Bericht ueber Server,
-    Verschluesselung, Geheimnisquelle, Faehigkeiten und Roundtrips - etwas, das
-    man in ein Ticket kleben kann.
-  </description>
+    A pre-flight command: connects once and writes a report on the server, the
+    encryption, the secret's source, the capabilities and the round trips -
+    something to paste into a ticket.</description>
 
   <dependencies>
     <dependency>

@@ -11,6 +11,8 @@ class EntityShapesOnPostgresTest extends EntityShapesTest {
 
     @BeforeAll
     static void findTheServer() {
-        Servers.require(".local-pg-password", "127.0.0.1", 5432);
+        Servers.require(space.seclume.tck.TestHosts.postgresPasswordFile(),
+                space.seclume.tck.TestHosts.postgres(),
+                space.seclume.tck.TestHosts.postgresPort());
     }
 }

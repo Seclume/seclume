@@ -36,7 +36,7 @@ import space.seclume.secret.FileSecretProvider;
 class OracleQueryTest {
 
     private static final String HOST =
-            System.getProperty("seclume.oracle.host", "db.example.invalid");
+            System.getProperty("seclume.oracle.host", space.seclume.tck.TestHosts.database());
     private static final int PORT = Integer.getInteger("seclume.oracle.port", 1521);
     private static final String USER =
             System.getProperty("seclume.oracle.user", "seclume_test");

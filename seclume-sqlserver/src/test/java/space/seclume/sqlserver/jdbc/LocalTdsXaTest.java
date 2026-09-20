@@ -39,7 +39,7 @@ import space.seclume.internal.jdbc.XidText;
 class LocalTdsXaTest {
 
     private static final String HOST =
-            System.getProperty("seclume.mssql.host", "db.example.invalid");
+            System.getProperty("seclume.mssql.host", space.seclume.tck.TestHosts.database());
     private static final int PORT = Integer.getInteger("seclume.mssql.port", 1433);
     private static final String USER = "sa";
     private static final String DATABASE = "seclume_test";

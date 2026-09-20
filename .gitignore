@@ -12,3 +12,6 @@ target/
 # seclume-tcp-core/README.md.
 seclume-tcp-core/native/
 .local-pgtls-password
+
+# Where this machine reaches the test databases - one machine, not the project.
+.local-test.properties

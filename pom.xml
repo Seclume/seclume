@@ -11,10 +11,37 @@
 
   <name>seclume</name>
   <description>
-    JDBC-Treiber und Connection-Pool, deren Datenbank-Passwoerter nie als String
-    oder char[] auf dem Java-Heap erscheinen.
+    JDBC drivers and a connection pool for PostgreSQL, MySQL, SQL Server and
+    Oracle, whose secrets never appear as a String or char[] on the Java heap.
   </description>
+  <url>https://seclume.space/</url>
+  <inceptionYear>2026</inceptionYear>
 
+  <licenses>
+    <license>
+      <name>The Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>thomas-haas</id>
+      <name>Thomas Haas</name>
+      <url>https://seclume.space/</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/Seclume/seclume.git</connection>
+    <developerConnection>scm:git:git@github.com:Seclume/seclume.git</developerConnection>
+    <url>https://github.com/Seclume/seclume</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <!-- seclume-tcp-core is deliberately absent: the transport that moves a live
+       session between hosts is developed and licensed separately. -->
   <modules>
     <module>seclume-bom</module>
     <module>seclume-core</module>
@@ -32,13 +59,13 @@
   </modules>
 
   <properties>
-    <!-- Zusaetzliche JVM-Argumente fuer Testlaeufe; siehe surefire unten. -->
+    <!-- Extra JVM arguments for test runs; see surefire below. -->
     <seclume.test.argLine></seclume.test.argLine>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>25</maven.compiler.release>
     <junit.version>5.11.4</junit.version>
-    <!-- Reproducible Builds: fester Zeitstempel in den Archiven. -->
+    <!-- Reproducible builds: a fixed timestamp in the archives. -->
     <project.build.outputTimestamp>2026-01-01T00:00:00Z</project.build.outputTimestamp>
   </properties>
 
@@ -60,14 +87,14 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
-          <!-- 3.13 bringt ein ASM mit, das Klassendateien von Java 25
-               (major 69) nicht liest und schon an module-info scheitert. -->
+          <!-- 3.13 ships an ASM that cannot read Java 25 class files
+               (major 69) and fails on module-info already. -->
           <version>3.16.0</version>
           <configuration>
             <compilerArgs>
-              <!-- "restricted" trifft jeden FFM-Downcall; das ist hier der
-                   Normalfall und keine Warnung wert. Alles andere ist ein
-                   Fehler. -->
+              <!-- "restricted" fires on every FFM downcall, which is the
+                   normal case here and not worth a warning. Everything
+                   else is an error. -->
               <arg>-Xlint:all,-restricted</arg>
               <arg>-Werror</arg>
             </compilerArgs>
@@ -78,12 +105,11 @@
           <artifactId>maven-surefire-plugin</artifactId>
           <version>3.5.2</version>
           <configuration>
-            <!-- Tests laufen auf dem Klassenpfad; die Module bleiben trotzdem
-                 echte JPMS-Module fuer die Anwender. -->
+            <!-- Tests run on the class path; the modules are still real
+                 JPMS modules for whoever depends on them. -->
             <useModulePath>false</useModulePath>
-            <!-- Der Zusatz ist leer, bis jemand ihn setzt. Damit laesst sich
-                 eine Systemeigenschaft in die Test-JVM reichen, ohne das POM
-                 anzufassen - etwa
+            <!-- Empty until somebody sets it. It passes a system property
+                 into the test JVM without touching this POM - for example
                  -Dseclume.test.argLine=-Dseclume.oracle.trace=true -->
             <argLine>--enable-native-access=ALL-UNNAMED ${seclume.test.argLine}</argLine>
           </configuration>

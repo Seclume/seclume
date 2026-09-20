@@ -13,8 +13,7 @@
   <artifactId>seclume-pool</artifactId>
   <name>seclume Pool</name>
   <description>
-    Verbindungspool ohne Fremdabhaengigkeiten, tauglich fuer virtuelle Threads.
-  </description>
+    A connection pool with no third-party dependencies, fit for virtual threads.</description>
 
   <dependencies>
     <dependency>

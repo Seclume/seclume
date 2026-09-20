@@ -109,7 +109,9 @@ class TtcRealColumnsTest {
             assertEquals(30, result.rowCount(), "one row lost means the bit vector was misread");
             assertEquals(30, names.size());
             assertEquals("SYS", names.get(0));
-            assertTrue(names.contains("SECLUME_TEST"));
+            // A name every Oracle has, so the assertion says "these are real
+            // rows off a real server" without pinning the test to one account.
+            assertTrue(names.contains("SYSTEM"));
             assertEquals(TtcResult.ORA_NO_DATA_FOUND, result.errorNumber());
             assertTrue(result.isExhausted());
             assertTrue(!result.isFailure(), "1403 is the end of the result, not a failure");

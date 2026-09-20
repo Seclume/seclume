@@ -1,11 +1,24 @@
 # seclume
 
-JDBC drivers and a connection pool for PostgreSQL, MySQL/MariaDB, Microsoft SQL Server and
-Oracle, whose core property is: **database passwords never appear as a `String` or `char[]` on
-the Java heap and are therefore not findable in an hprof heap dump.**
+Four JDBC drivers and a connection pool for PostgreSQL, MySQL/MariaDB, Microsoft SQL Server and
+Oracle — each wire protocol implemented from scratch, no vendor driver used, wrapped or
+delegated to. Java 25, Spring Boot 4.x / Spring Framework 7.x, no runtime dependency beyond the
+JDK and Spring.
 
-Java 25, Spring Boot 4.x / Spring Framework 7.x. No runtime dependencies beyond the JDK and
-Spring. No vendor driver is used, wrapped or delegated to.
+Writing the protocols rather than borrowing them is what makes the rest possible:
+
+- **A secret never appears as a `String` or `char[]` on the Java heap** and is therefore not
+  findable in an hprof heap dump — not the database password, not a TLS key, not a session
+  token. A vendor driver takes a `String`, and from that moment the value is out of anyone's
+  hands.
+- **Nothing is hidden behind a delegate.** Every byte on the wire is written here, so a
+  question about the protocol has an answer in this repository rather than in a decompiler.
+- **The connection's state belongs to the driver**, which is what a live session being moved
+  from one host to another needs.
+
+The name says what the project is about — *seclusion*: keeping what is sensitive where it
+belongs. Heap secrecy is where it started and is still the strictest of its properties, but it
+is not the whole of it.
 
 ---
 
@@ -644,13 +657,10 @@ One artifact per database — `seclume-postgresql`, `seclume-mysql`, `seclume-sq
 `seclume-oracle` — plus `seclume-pool` and `seclume-spring-boot-starter`. The starter pulls
 what it needs.
 
-**The package root is `space.seclume`, without the hyphen**, and that is deliberate
-rather than an oversight: a hyphen is legal in a Maven groupId and illegal in a Java identifier,
-so the two cannot be spelled the same. Maven Central verifies the **groupId** — that the GitHub
-account is ours — and nothing verifies the package name, so the mismatch costs nothing. Anyone
-reading `space.seclume.postgresql.jdbc` in a stack trace is in the right place.
+The groupId and the package root are the same, `space.seclume`, taken from the project's own
+domain. Anyone reading `space.seclume.postgresql.jdbc` in a stack trace is in the right place.
 
-The JDBC URL prefix is `jdbc:seclume:` and does not change with any of this.
+The JDBC URL prefix is `jdbc:seclume:`.
 
 ## Building
 
@@ -709,3 +719,23 @@ to zero.
 - If a protocol detail cannot be reconstructed with certainty, that is recorded in
   `docs/protocol/<db>.md` and the feature counts as unsupported rather than being guessed.
 - Test results are reported with their output. „Should work" does not count.
+
+---
+
+## What is not here
+
+**The TCP core** — the user-space transport that lets a live database session move from one
+host to another, across operating systems, which the kernel will not do — is developed
+separately and is **not part of this repository**. It is not covered by the licence below and
+no rights to it are granted here. Enquiries: <https://seclume.space/>.
+
+Everything a JDBC application needs is here. Session migration is the one feature that depends
+on the separate transport.
+
+## Licence
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+Use it commercially, modify it, ship it inside a closed product. The licence grants the patent
+rights along with the copyright ones, which for a project full of protocol implementations is
+the part that matters.

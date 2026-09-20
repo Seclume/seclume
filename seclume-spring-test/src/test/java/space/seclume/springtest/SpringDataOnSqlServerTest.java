@@ -19,6 +19,6 @@ class SpringDataOnSqlServerTest extends SpringDataOnSeclumeTest {
 
     @BeforeAll
     static void findTheServer() {
-        Servers.require(".local-mssql-password", "db.example.invalid", 1433);
+        Servers.require(".local-mssql-password", space.seclume.tck.TestHosts.database(), 1433);
     }
 }

@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import space.seclume.tck.TestHosts;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -50,24 +52,25 @@ class PoolWithPostgresTest {
 
     @BeforeAll
     static void findTheServer() {
-        for (Path candidate : List.of(Path.of(".local-pg-password"),
-                Path.of("..", ".local-pg-password"))) {
+        for (Path candidate : List.of(Path.of(TestHosts.postgresPasswordFile()),
+                Path.of("..", TestHosts.postgresPasswordFile()))) {
             if (Files.exists(candidate)) {
                 passwordFile = candidate.toAbsolutePath().normalize();
             }
         }
-        Assumptions.assumeTrue(passwordFile != null, "no .local-pg-password");
+        Assumptions.assumeTrue(passwordFile != null, TestHosts.postgresPasswordFile() + " is not there");
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", 5432), 1000);
+            socket.connect(new InetSocketAddress(TestHosts.postgres(), TestHosts.postgresPort()), 1000);
         } catch (IOException e) {
-            Assumptions.abort("no PostgreSQL on 127.0.0.1:5432");
+            Assumptions.abort("no PostgreSQL on "
+                    + TestHosts.postgres() + ":" + TestHosts.postgresPort());
         }
     }
 
     private static SeclumeDataSource dataSource() {
         SeclumeDataSource source = new SeclumeDataSource();
-        source.setHost("127.0.0.1");
-        source.setPort(5432);
+        source.setHost(TestHosts.postgres());
+        source.setPort(TestHosts.postgresPort());
         source.setDatabase("seclume_test");
         source.setUser("seclume_test");
         source.setSecretProvider(new FileSecretProvider(passwordFile, 256));

@@ -2,6 +2,8 @@ package space.seclume.postgresql.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import space.seclume.tck.TestHosts;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -25,19 +27,19 @@ import space.seclume.secret.SecretProviders;
  */
 class LocalTlsTest {
 
-    private static final String HOST = System.getProperty("seclume.pg.host", "127.0.0.1");
-    private static final int PORT = Integer.getInteger("seclume.pg.port", 5432);
+    private static final String HOST = TestHosts.postgres();
+    private static final int PORT = TestHosts.postgresPort();
     private static Path password;
 
     @BeforeAll
     static void findThePassword() {
-        for (Path candidate : List.of(Path.of(".local-pg-password"),
-                Path.of("..", ".local-pg-password"))) {
+        for (Path candidate : List.of(Path.of(TestHosts.postgresPasswordFile()),
+                Path.of("..", TestHosts.postgresPasswordFile()))) {
             if (Files.exists(candidate)) {
                 password = candidate.toAbsolutePath().normalize();
             }
         }
-        Assumptions.assumeTrue(password != null, "no .local-pg-password");
+        Assumptions.assumeTrue(password != null, TestHosts.postgresPasswordFile() + " is not there");
     }
 
     /**
@@ -91,7 +93,7 @@ class LocalTlsTest {
             }
         }
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
-        String host = System.getProperty("seclume.pgtls.host", "db.example.invalid");
+        String host = System.getProperty("seclume.pgtls.host", space.seclume.tck.TestHosts.database());
         int port = Integer.getInteger("seclume.pgtls.port", 5433);
         requireReachable(host, port);
 
@@ -136,7 +138,7 @@ class LocalTlsTest {
             }
         }
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
-        String host = System.getProperty("seclume.pgtls.host", "db.example.invalid");
+        String host = System.getProperty("seclume.pgtls.host", space.seclume.tck.TestHosts.database());
         int port = Integer.getInteger("seclume.pgtls.port", 5433);
         requireReachable(host, port);
 
@@ -187,7 +189,7 @@ class LocalTlsTest {
             }
         }
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
-        String host = System.getProperty("seclume.pgtls.host", "db.example.invalid");
+        String host = System.getProperty("seclume.pgtls.host", space.seclume.tck.TestHosts.database());
         int port = Integer.getInteger("seclume.pgtls.port", 5433);
         requireReachable(host, port);
 
@@ -215,7 +217,7 @@ class LocalTlsTest {
             }
         }
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
-        String url = "jdbc:seclume:postgresql://db.example.invalid:5433/seclume_test"
+        String url = "jdbc:seclume:postgresql://" + space.seclume.tck.TestHosts.database() + ":5433/seclume_test"
                 + "?user=seclume_test&provider=file&path="
                 + secret.toString().replace(java.io.File.separatorChar, '/')
                 + "&tls=require";

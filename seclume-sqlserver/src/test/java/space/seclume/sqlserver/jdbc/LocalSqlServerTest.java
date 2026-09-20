@@ -48,7 +48,7 @@ import org.junit.jupiter.api.Test;
 class LocalSqlServerTest {
 
     private static final String HOST =
-            System.getProperty("seclume.mssql.host", "db.example.invalid");
+            System.getProperty("seclume.mssql.host", space.seclume.tck.TestHosts.database());
     private static final int PORT = Integer.getInteger("seclume.mssql.port", 1433);
     private static final String USER = "sa";
 

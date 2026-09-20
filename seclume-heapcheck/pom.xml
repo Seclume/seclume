@@ -13,10 +13,8 @@
   <artifactId>seclume-heapcheck</artifactId>
   <name>seclume Heap Check</name>
   <description>
-    Beweist fuer einen beliebigen laufenden Java-Prozess, ob ein Geheimnis in
-    seinem Heap steht - auch fuer Anwendungen, die diese Bibliothek gar nicht
-    benutzen.
-  </description>
+    Proves, for any running Java process, whether a secret is in its heap -
+    including applications that do not use this library at all.</description>
 
   <dependencies>
     <dependency>

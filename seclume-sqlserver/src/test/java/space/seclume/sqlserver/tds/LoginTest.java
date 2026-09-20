@@ -36,7 +36,7 @@ import space.seclume.secret.SecretProvider;
 class LoginTest {
 
     private static final String HOST =
-            System.getProperty("seclume.mssql.host", "db.example.invalid");
+            System.getProperty("seclume.mssql.host", space.seclume.tck.TestHosts.database());
     private static final int PORT = Integer.getInteger("seclume.mssql.port", 1433);
     private static final String USER = "sa";
 

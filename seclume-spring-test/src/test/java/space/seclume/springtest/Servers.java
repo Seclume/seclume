@@ -44,5 +44,13 @@ final class Servers {
         }
         System.setProperty("seclume.test.password.file",
                 password.toString().replace('\\', '/'));
+        // The profiles name the host as a placeholder rather than spelling it
+        // out, so that a checked-out copy of this project says nothing about
+        // the machine it was written on. See TestHosts.
+        System.setProperty(space.seclume.tck.TestHosts.PROPERTY,
+                space.seclume.tck.TestHosts.database());
+        System.setProperty("seclume.pg.host", space.seclume.tck.TestHosts.postgres());
+        System.setProperty("seclume.pg.port",
+                Integer.toString(space.seclume.tck.TestHosts.postgresPort()));
     }
 }

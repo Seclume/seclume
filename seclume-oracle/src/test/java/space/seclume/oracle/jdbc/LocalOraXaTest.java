@@ -38,7 +38,7 @@ import space.seclume.internal.jdbc.XidText;
 class LocalOraXaTest {
 
     private static final String HOST =
-            System.getProperty("seclume.oracle.host", "db.example.invalid");
+            System.getProperty("seclume.oracle.host", space.seclume.tck.TestHosts.database());
     private static final int PORT = Integer.getInteger("seclume.oracle.port", 1521);
     private static final String USER =
             System.getProperty("seclume.oracle.user", "seclume_test");
@@ -207,7 +207,7 @@ class LocalOraXaTest {
 
     private static void drop(Connection connection, String table) {
         try {
-            run(connection, "drop table " + table + " purge");   // purge: sonst zaehlt Oracle sie weiter
+            run(connection, "drop table " + table + " purge");   // purge: Oracle keeps counting it otherwise
         } catch (SQLException e) {
             // ORA-00942, it was not there - which is what was wanted.
         }

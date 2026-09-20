@@ -13,8 +13,7 @@
   <artifactId>seclume-spring-boot-starter</artifactId>
   <name>seclume Spring Boot Starter</name>
   <description>
-    Auto-Configuration: Abhaengigkeit einbinden, application.properties ausfuellen, fertig.
-  </description>
+    Auto-configuration: add the dependency, fill in application.properties, done.</description>
 
   <properties>
     <spring.boot.version>4.1.1</spring.boot.version>
@@ -37,8 +36,8 @@
       <version>${spring.boot.version}</version>
     </dependency>
 
-    <!-- Die Treiber sind optional: wer nur PostgreSQL benutzt, soll die
-         anderen drei nicht mitschleppen muessen. -->
+    <!-- The drivers are optional: somebody who uses only PostgreSQL
+         should not have to carry the other three. -->
     <dependency>
       <groupId>space.seclume</groupId>
       <artifactId>seclume-postgresql</artifactId>
@@ -71,16 +70,16 @@
       <optional>true</optional>
     </dependency>
 
-    <!-- Metriken und Health: beide optional. Wer sie nicht auf dem
-         Klassenpfad hat, bekommt einen Starter, der davon nichts weiss. -->
+    <!-- Metrics and health, both optional. Without them on the class
+         path the starter simply knows nothing about either. -->
     <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-core</artifactId>
       <version>1.15.4</version>
       <optional>true</optional>
     </dependency>
-    <!-- Nur damit javac die Annotationen an Springs Health-Klassen aufloesen
-         kann; zur Laufzeit bringt sie der Actuator ohnehin mit. -->
+    <!-- Only so that javac can resolve the annotations on Spring's
+         health classes; at runtime the Actuator brings them anyway. -->
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-annotations</artifactId>
@@ -104,5 +103,13 @@
       <artifactId>junit-platform-launcher</artifactId>
       <scope>test</scope>
     </dependency>
-  </dependencies>
+  
+    <!-- Only for TestHosts: where the live PostgreSQL is stands in one place. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+</dependencies>
 </project>

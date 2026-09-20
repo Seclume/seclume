@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import space.seclume.tck.TestHosts;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -47,21 +49,26 @@ import space.seclume.secret.SecretProvider;
  */
 class AutoConfigurationTest {
 
+    /** Where the live PostgreSQL is - see TestHosts, never a literal here. */
+    private static final String POSTGRES_URL = "jdbc:seclume:postgresql://"
+            + TestHosts.postgres() + ":" + TestHosts.postgresPort() + "/seclume_test";
+
     private static Path passwordFile;
 
     @BeforeAll
     static void findTheServer() {
-        for (Path candidate : List.of(Path.of(".local-pg-password"),
-                Path.of("..", ".local-pg-password"))) {
+        for (Path candidate : List.of(Path.of(TestHosts.postgresPasswordFile()),
+                Path.of("..", TestHosts.postgresPasswordFile()))) {
             if (Files.exists(candidate)) {
                 passwordFile = candidate.toAbsolutePath().normalize();
             }
         }
-        Assumptions.assumeTrue(passwordFile != null, "no .local-pg-password");
+        Assumptions.assumeTrue(passwordFile != null, TestHosts.postgresPasswordFile() + " is not there");
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress("127.0.0.1", 5432), 1000);
+            socket.connect(new InetSocketAddress(TestHosts.postgres(), TestHosts.postgresPort()), 1000);
         } catch (IOException e) {
-            Assumptions.abort("no PostgreSQL on 127.0.0.1:5432");
+            Assumptions.abort("no PostgreSQL on "
+                    + TestHosts.postgres() + ":" + TestHosts.postgresPort());
         }
     }
 
@@ -81,7 +88,7 @@ class AutoConfigurationTest {
 
     private static Map<String, Object> postgres(String prefix) {
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put(prefix + ".url", "jdbc:seclume:postgresql://127.0.0.1:5432/seclume_test");
+        properties.put(prefix + ".url", POSTGRES_URL);
         properties.put(prefix + ".username", "seclume_test");
         properties.put(prefix + ".secret.provider", "file");
         properties.put(prefix + ".secret.path", passwordFile.toString().replace('\\', '/'));
@@ -144,7 +151,7 @@ class AutoConfigurationTest {
     void aSecretProviderBeanCanBePluggedIn() throws Exception {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("seclume.datasources.main.url",
-                "jdbc:seclume:postgresql://127.0.0.1:5432/seclume_test");
+                POSTGRES_URL);
         properties.put("seclume.datasources.main.username", "seclume_test");
         properties.put("seclume.datasources.main.secret.provider", "bean");
         properties.put("seclume.datasources.main.secret.bean", "myVault");
@@ -209,7 +216,7 @@ class AutoConfigurationTest {
     void aMissingSecretProviderSaysWhatIsMissing() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("seclume.datasources.main.url",
-                "jdbc:seclume:postgresql://127.0.0.1:5432/seclume_test");
+                POSTGRES_URL);
         properties.put("seclume.datasources.main.username", "seclume_test");
         Exception failure = assertThrows(Exception.class, () -> context(properties).close());
         assertTrue(messages(failure).contains("secret.provider is missing"), messages(failure));
@@ -219,7 +226,7 @@ class AutoConfigurationTest {
     void aMissingSecretBeanSaysSo() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("seclume.datasources.main.url",
-                "jdbc:seclume:postgresql://127.0.0.1:5432/seclume_test");
+                POSTGRES_URL);
         properties.put("seclume.datasources.main.username", "seclume_test");
         properties.put("seclume.datasources.main.secret.provider", "bean");
         properties.put("seclume.datasources.main.secret.bean", "nowhere");

@@ -359,7 +359,7 @@ public final class MySession implements AutoCloseable {
             out.putCString(settings.user());
 
             int lengthAt = out.position();
-            out.putByte((byte) 0);                 // Platzhalter fuer die Laenge
+            out.putByte((byte) 0);                 // a placeholder for the length
             int written = writeAuthResponse(settings, plugin, scramble, out,
                     channel.isEncrypted());
             if (written > 250) {

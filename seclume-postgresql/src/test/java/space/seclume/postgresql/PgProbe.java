@@ -4,6 +4,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import space.seclume.tck.TestHosts;
+
 import space.seclume.secret.FileSecretProvider;
 import space.seclume.tck.Heap;
 
@@ -27,7 +29,7 @@ public final class PgProbe {
 
         FileSecretProvider provider = new FileSecretProvider(secretFile, 256);
         PgSession.Settings settings = new PgSession.Settings(
-                "127.0.0.1", 5432, "seclume_test", "seclume_test", provider);
+                TestHosts.postgres(), TestHosts.postgresPort(), "seclume_test", "seclume_test", provider);
 
         List<String> results = new ArrayList<>();
         for (int i = 0; i < cycles; i++) {

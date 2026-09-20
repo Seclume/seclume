@@ -13,8 +13,7 @@
   <artifactId>seclume-postgresql</artifactId>
   <name>seclume PostgreSQL</name>
   <description>
-    PostgreSQL-Frontend-Protokoll 3.0, vollstaendig eigen implementiert.
-  </description>
+    PostgreSQL frontend protocol 3.0, implemented from scratch.</description>
 
   <dependencies>
     <dependency>

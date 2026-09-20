@@ -13,18 +13,17 @@
   <artifactId>seclume-spring-test</artifactId>
   <name>seclume Spring Data compatibility</name>
   <description>
-    Der Beleg fuer das Endziel: eine kleine Spring-Boot-Anwendung mit Entitaeten,
-    Repositories und Flyway, die gegen die seclume-Treiber laeuft. Nicht
-    veroeffentlicht - das hier ist der Nachweis, nicht das Werkstueck.
-  </description>
+    The evidence for the goal: a small Spring Boot application with entities,
+    repositories and Flyway, running on the seclume drivers. Not published -
+    this is the proof, not the work.</description>
 
   <properties>
     <spring.boot.version>4.1.1</spring.boot.version>
-    <!-- Spring Boot 4 bringt seine eigene JUnit-Version mit, und die muss hier
-         gewinnen: die des Elternprojekts ist aelter, und der Unterschied
-         aeussert sich als NoSuchMethodError mitten im Testlauf. -->
+    <!-- Spring Boot 4 brings its own JUnit version and it has to win
+         here: the parent project's is older, and the difference shows as a
+         NoSuchMethodError in the middle of a test run. -->
     <junit.version>6.0.1</junit.version>
-    <!-- Nirgendwo hin. -->
+    <!-- Nowhere at all. -->
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>
   </properties>
@@ -62,8 +61,8 @@
       <artifactId>spring-boot-starter-data-jpa</artifactId>
       <version>${spring.boot.version}</version>
     </dependency>
-    <!-- Spring Boot 4 hat die Flyway-Autokonfiguration in ein eigenes Modul
-         gezogen; flyway-core allein auf dem Klassenpfad genuegt nicht mehr. -->
+    <!-- Spring Boot 4 moved the Flyway auto-configuration into a module
+         of its own; flyway-core on the class path is no longer enough. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-flyway</artifactId>
@@ -96,6 +95,14 @@
       <version>${spring.boot.version}</version>
       <scope>test</scope>
     </dependency>
+    <!-- Only for TestHosts: where the test databases are stands in one
+         place and not in every test class. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -104,9 +111,9 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
         <configuration>
-          <!-- Hibernate und Spring erzeugen Warnungen, die dieses Projekt sonst
-               als Fehler behandelt; das hier ist der Nachweis, nicht das
-               Werkstueck. -->
+          <!-- Hibernate and Spring produce warnings that this project
+               otherwise treats as errors; this module is the proof, not
+               the work. -->
           <compilerArgs combine.self="override">
             <arg>-Xlint:none</arg>
           </compilerArgs>

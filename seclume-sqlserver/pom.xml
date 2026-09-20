@@ -13,8 +13,7 @@
   <artifactId>seclume-sqlserver</artifactId>
   <name>seclume SQL Server</name>
   <description>
-    Microsoft SQL Server, TDS 7.4, vollstaendig eigen implementiert. In Arbeit.
-  </description>
+    Microsoft SQL Server, TDS 7.4, implemented from scratch.</description>
 
   <dependencies>
     <dependency>
