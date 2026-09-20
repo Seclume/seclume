@@ -18,10 +18,27 @@ import space.seclume.internal.WireBuffer;
  */
 public final class TtcRow {
 
-    private final WireBuffer in;
+    private WireBuffer in;
     private final List<OracleColumn> columns;
     /** Two entries per cell: start within the buffer and length (-1 = NULL). */
     private final int[] cells;
+
+    /**
+     * Where the values of the previous answer were put so that the next one
+     * can still refer to them.
+     *
+     * <p>The server may say "this value is the same as in the row before"
+     * (see {@link #read}), and it says that across the boundary of a fetch as
+     * well: the first row of the second block can point back into the last
+     * row of the first. That block is gone by then - the receive buffer has
+     * been written over - so the values that could still be referred to are
+     * moved here before the buffer is reused. Native memory to native memory,
+     * as everywhere else.
+     */
+    private WireBuffer carry;
+    private WireBuffer spare;
+    /** Which cells live in {@link #carry} rather than in the message. */
+    private final boolean[] carried;
 
     /**
      * How long each LOB is, straight out of the row.
@@ -48,6 +65,70 @@ public final class TtcRow {
         this.columns = columns;
         this.cells = new int[columns.size() * 2]; // seclume-allow: offsets into the buffer, not content
         this.lobLengths = new long[columns.size()]; // seclume-allow: lengths of the protocol, not content
+        this.carried = new boolean[columns.size()]; // seclume-allow: which buffer a cell is in, not content
+    }
+
+    /**
+     * Points the row at the next answer, keeping what it carried over.
+     *
+     * <p>This is what makes a row survive a fetch: the same object reads the
+     * next block, and the values {@link #carryOver} saved are still there for
+     * a first row that refers back to them.
+     */
+    public void rebind(WireBuffer next) {
+        this.in = next;
+    }
+
+    /**
+     * Saves the values of the row as it stands, before the buffer under it is
+     * reused.
+     *
+     * <p>Only called at the end of an answer, so it copies one row per fetch
+     * and not one per row. Cells that already sit in the carry buffer are
+     * copied along - the new one is built from scratch and the two swap, so
+     * the source is never the destination.
+     */
+    public void carryOver() {
+        if (columns.isEmpty()) {
+            return;
+        }
+        if (spare == null) {
+            spare = new WireBuffer(256);
+        }
+        spare.clear();
+        for (int i = 0; i < columns.size(); i++) {
+            int length = cells[i * 2 + 1];
+            if (length <= 0) {
+                cells[i * 2] = 0;
+                carried[i] = true;
+                continue;
+            }
+            spare.ensureCapacity(spare.position() + length);
+            int at = spare.position();
+            spare.putBytes(bufferOf(i).segment(), cells[i * 2], length);
+            cells[i * 2] = at;
+            carried[i] = true;
+        }
+        WireBuffer swap = carry;
+        carry = spare;
+        spare = swap;
+    }
+
+    /** The buffer a cell's bytes are in - the message, or what was carried over. */
+    private WireBuffer bufferOf(int index) {
+        return carried[index] ? carry : in;
+    }
+
+    /** Lets go of the carry buffer; the row is finished with. */
+    public void release() {
+        if (carry != null) {
+            carry.close();
+            carry = null;
+        }
+        if (spare != null) {
+            spare.close();
+            spare = null;
+        }
     }
 
     /**
@@ -81,11 +162,13 @@ public final class TtcRow {
                 // does send bytes.
                 cells[i * 2] = p;
                 cells[i * 2 + 1] = -1;
+                carried[i] = false;
                 continue;
             }
             if (isDuplicate(sent, i)) {
                 continue;                              // keeps the previous value
             }
+            carried[i] = false;                        // this one is in the message
             if (OracleColumn.isLob(column.type())) {
                 p = readLocator(p, i);
                 continue;
@@ -283,7 +366,7 @@ public final class TtcRow {
     public void copyTo(int index, WireBuffer target) {
         int length = cells[index * 2 + 1];
         if (length > 0) {
-            target.putBytes(in.segment(), cells[index * 2], length);
+            target.putBytes(bufferOf(index).segment(), cells[index * 2], length);
         }
     }
 
@@ -299,13 +382,14 @@ public final class TtcRow {
         }
         int at = cells[index * 2];
         int length = cells[index * 2 + 1];
+        WireBuffer from = bufferOf(index);
         OracleColumn column = columns.get(index);
         if (column.type() == OracleColumn.TYPE_NUMBER) {
-            return OracleNumber.toText(in.segment(), at, length);
+            return OracleNumber.toText(from.segment(), at, length);
         }
         char[] letters = new char[length]; // seclume-allow: user payload requested as text, not a secret
         for (int i = 0; i < length; i++) {
-            letters[i] = (char) (in.getByte(at + i) & 0xff);
+            letters[i] = (char) (from.getByte(at + i) & 0xff);
         }
         return new String(letters); // seclume-allow: user payload, not a secret
     }
@@ -315,6 +399,7 @@ public final class TtcRow {
         if (isNull(index)) {
             return 0;
         }
-        return OracleNumber.toLong(in.segment(), cells[index * 2], cells[index * 2 + 1]);
+        return OracleNumber.toLong(bufferOf(index).segment(),
+                cells[index * 2], cells[index * 2 + 1]);
     }
 }

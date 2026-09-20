@@ -61,10 +61,36 @@ public final class TtcResult {
         this.columns = columns;
     }
 
+    /**
+     * The same, continuing a result that has already delivered rows.
+     *
+     * <p>The row object is handed on from the previous answer because the
+     * server refers back to it: a value that has not changed is not sent
+     * again, and the first row of a fetch may point at the last row of the
+     * block before it. See {@link TtcRow#carryOver()}.
+     */
+    public TtcResult(List<OracleColumn> columns, TtcRow previous) {
+        this.columns = columns;
+        this.previous = previous;
+    }
+
+    private TtcRow previous;
+
+    /** The row window this answer used, so the next one can continue it. */
+    public TtcRow row() {
+        return previous;
+    }
+
     /** Reads the answer from {@code at} up to {@code end}. */
     public void read(WireBuffer in, int at, int end, RowHandler handler) throws SQLException {
         int p = at;
-        TtcRow row = columns.isEmpty() ? null : new TtcRow(in, columns);
+        TtcRow row = previous;
+        if (row != null) {
+            row.rebind(in);
+        } else if (!columns.isEmpty()) {
+            row = new TtcRow(in, columns);
+        }
+        previous = row;
         byte[] unchanged = null;
         // A handler that refuses a row - a result limit, say - must not stop
         // the walk: the rest of the answer still has to be read, or the next
@@ -77,7 +103,13 @@ public final class TtcResult {
                 case TtcMessage.TYPE_DESCRIBE_INFO -> {
                     TtcDescribe.Parsed parsed = TtcDescribe.read(in, p);
                     columns = parsed.columns();
+                    // A description means a new result: whatever the previous
+                    // one carried over says nothing about this one.
+                    if (row != null) {
+                        row.release();
+                    }
                     row = columns.isEmpty() ? null : new TtcRow(in, columns);
+                    previous = row;
                     p = parsed.end();
                 }
                 case TtcMessage.TYPE_ROW_HEADER -> {

@@ -253,6 +253,7 @@ public final class OracleSession implements AutoCloseable {
                            boolean oneBlock) throws SQLException {
         try {
             rows = 0;
+            releaseCarried();
             boolean query = returnsRows(sql);
             boolean plsql = isPlsqlBlock(sql);
             if (!autoCommit && !query) {
@@ -536,6 +537,11 @@ public final class OracleSession implements AutoCloseable {
                                java.util.List<space.seclume.oracle.net.OracleColumn> columns)
             throws SQLException {
         try {
+            if (carriedCursor != cursorId) {
+                // Another statement has been through here since; what was
+                // carried over belongs to its cursor, not to this one.
+                releaseCarried();
+            }
             TtcFetch.send(channel, sequence++, cursorId, rows);
             TtcResult more = readAnswer(handler, columns);
             moreRows = !more.isExhausted() && !more.isFailure() && more.rowCount() > 0;
@@ -574,7 +580,7 @@ public final class OracleSession implements AutoCloseable {
         if (type != NsPacket.TYPE_DATA) {
             throw new SQLException("expected a DATA packet, got " + NsPacket.typeName(type));
         }
-        TtcResult result = new TtcResult(columns);
+        TtcResult result = new TtcResult(columns, carried);
         result.expectReturned(returning, returningFromCall);
 
         if ((channel.dataFlags() & END_OF_ANSWER) != 0) {
@@ -582,13 +588,55 @@ public final class OracleSession implements AutoCloseable {
             // parsed where it lies - no copy on the hot path.
             WireBuffer in = channel.packet();
             result.read(in, in.position(), in.limit(), handler);
+            keep(result);
             return result;
         }
         try (WireBuffer whole = collectAnswer()) {
             result.read(whole, 0, whole.position(), handler);
+            keep(result);
         }
         return result;
     }
+
+    /**
+     * Holds on to the last row of an answer for the next one.
+     *
+     * <p>Oracle does not send a value again when it is the same as in the row
+     * before, and it counts the row before across the boundary of a fetch.
+     * The block that row was in is written over by then, so its values are
+     * moved to safety here - one row per answer, no matter how many rows it
+     * carried. Without this the first row of the second block came back with
+     * an empty value wherever the server had left one out, and a schema with
+     * more than a hundred columns in it is enough to see it: Hibernate said
+     * "missing column [holder] in table [zl_ticket]" for a column that was
+     * plainly there.
+     */
+    private void keep(TtcResult result) {
+        space.seclume.oracle.net.TtcRow row = result.row();
+        if (row != null) {
+            row.carryOver();
+        }
+        if (row != carried) {
+            releaseCarried();
+            carried = row;
+        }
+        if (result.cursorId() != 0) {
+            carriedCursor = result.cursorId();
+        }
+    }
+
+    private void releaseCarried() {
+        if (carried != null) {
+            carried.release();
+            carried = null;
+        }
+        carriedCursor = 0;
+    }
+
+    /** The row window that the last answer left behind - see {@link #keep}. */
+    private space.seclume.oracle.net.TtcRow carried;
+    /** Which cursor it belongs to; another one must not read it. */
+    private int carriedCursor;
 
     /**
      * Puts an answer back together that did not fit in one packet.
@@ -828,6 +876,7 @@ public final class OracleSession implements AutoCloseable {
 
     @Override
     public void close() {
+        releaseCarried();
         channel.close();
     }
 }
