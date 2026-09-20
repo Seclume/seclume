@@ -31,6 +31,42 @@ whether the scope was closed - it is counted rather than read back, because afte
 the memory is released and reading it would mean reading freed pages. That closing leaves
 zeroes is shown separately, in an arena the test owns so the segment stays mapped.
 
+## The vendor drivers as the oracle
+
+`seclume-diff` runs the same values through seclume and through pgjdbc or Connector/J, against
+the same server, and reports every disagreement. It is the only module that depends on anybody
+else's code, it is never published, and it exists because a hand-written test can only check
+what its author thought of — and the author of a driver is the worst person to guess what he
+got wrong.
+
+Every value is written by one driver and read by both, in both directions, and through a
+`Statement` **and** a `PreparedStatement` — text and binary are different wire protocols
+decoded by different code, and a driver can be right in one and wrong in the other. Compared:
+`getString`, `getObject`, `wasNull`, the whole `ResultSetMetaData`, and
+`DatabaseMetaData.getColumns`, which is what Hibernate and Flyway read before they will run at
+all.
+
+The first run found eight real defects, none of which any existing test had caught:
+
+| Where | What was wrong |
+|---|---|
+| PostgreSQL | `getObject` on a `smallint` returned `Short`; JDBC 4.3 table B-3 and every other driver say `Integer` |
+| PostgreSQL | `getColumns` computed sizes differently from `ResultSetMetaData` — one driver, two answers about the same column |
+| PostgreSQL | `getColumns.TYPE_NAME` returned `character varying(64)`, the declaration, where a type name belongs |
+| MySQL | `bigint unsigned` read 18446744073709551615 back as **−1** — the wrong value, no exception |
+| MySQL | integer precision counted the minus sign: 11 for `int`, where JDBC means 10 digits |
+| MySQL | `getColumns.TYPE_NAME` returned `varbinary(32)` and dropped `UNSIGNED` |
+| MySQL | `getString` on a `float` gave `0` through one protocol and `0.0` through the other |
+| MySQL | `getColumns.COLUMN_SIZE` was 0 for every date and datetime |
+
+Differences that remain are listed in the tests one at a time, and the two kinds are kept
+apart on purpose: `allow(...)` is a place where two drivers may honestly disagree and seclume
+has decided, with the reason; `knownDefect(...)` is a place where seclume is wrong and the fix
+has not happened yet. Mixing them would turn the list into somewhere bugs go to be forgotten.
+
+SQL Server and Oracle have no differential run yet. The harness is not database-specific — what
+is missing is a corpus for each, and the vendor drivers are already on the module's classpath.
+
 ## What needs a server
 
 Every test class whose name begins with `Local`, plus the Spring Data suite. They look for two

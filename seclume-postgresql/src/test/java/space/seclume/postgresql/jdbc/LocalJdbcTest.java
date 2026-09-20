@@ -575,8 +575,15 @@ class LocalJdbcTest {
                             + result.getString("IS_NULLABLE"));
                 }
             }
-            assertEquals(List.of("id integer NO", "name character varying(40) NO",
-                    "amount numeric(10,2) YES"), columns);
+            // The internal type names, which is what pgjdbc and every other
+            // driver answer here - not the SQL spelling with the length
+            // attached. TYPE_NAME is a type name, not a column declaration,
+            // and a dialect that matches on it does not recognise
+            // "character varying(40)". This test used to hold the old
+            // answers; the differential run against pgjdbc is what showed
+            // they were seclume's alone. See seclume-diff.
+            assertEquals(List.of("id int4 NO", "name varchar NO",
+                    "amount numeric YES"), columns);
 
             try (ResultSet result = meta.getPrimaryKeys(null, "public", "seclume_meta")) {
                 assertTrue(result.next());

@@ -211,8 +211,17 @@ public final class PgOids {
         return switch (oid) {
             case BOOL -> "java.lang.Boolean";
             case BYTEA -> "[B";
-            case INT2 -> "java.lang.Short";
-            case INT4, OID -> "java.lang.Integer";
+            // Integer, not Short. JDBC 4.3 appendix B, table B-3 maps both
+            // SMALLINT and TINYINT to Integer, and every other driver does
+            // the same - a row mapper that casts getObject to Integer works
+            // everywhere else and threw a ClassCastException here. Found by
+            // the differential run against pgjdbc, not by a test of ours.
+            //
+            // Arrays are the exception and stay Short[]: pgjdbc puts Short in
+            // an int2[] too, and matching the specification there while every
+            // other driver does something else would trade one incompatibility
+            // for another. Checked with ArrayElementProbe rather than assumed.
+            case INT2, INT4, OID -> "java.lang.Integer";
             case INT8 -> "java.lang.Long";
             case FLOAT4 -> "java.lang.Float";
             case FLOAT8 -> "java.lang.Double";
@@ -247,6 +256,63 @@ public final class PgOids {
             default -> 0;
         };
     }
+
+    /**
+     * The same precision, as a SQL {@code CASE} for the catalogue queries.
+     *
+     * <p>Generated from {@link #precision} rather than written out beside it.
+     * The two used to be separate - a Java switch for
+     * {@code ResultSetMetaData} and a different expression in
+     * {@code getColumns} - and they disagreed: the result set said a
+     * {@code timestamp} was 29 wide and the catalogue said 0. One driver
+     * answering the same question two ways is worse than either answer, and
+     * the differential run against pgjdbc is what found it.
+     *
+     * <p>The three types whose size depends on the type modifier keep their
+     * arithmetic here, because it has to run on the server; the comment in
+     * {@link #precision} is the reference for all three.
+     */
+    public static String precisionCase(String oidColumn, String modColumn) {
+        StringBuilder sql = new StringBuilder("case ").append(oidColumn);
+        for (int oid : FIXED_SIZE) {
+            sql.append(" when ").append(oid).append(" then ").append(precision(oid, -1));
+        }
+        sql.append(" when ").append(NUMERIC).append(" then case when ").append(modColumn)
+                .append(" < 0 then 0 else ((").append(modColumn)
+                .append(" - 4) >> 16) & 65535 end");
+        sql.append(" when ").append(VARCHAR).append(" then case when ").append(modColumn)
+                .append(" < 0 then 0 else ").append(modColumn).append(" - 4 end");
+        sql.append(" when ").append(BPCHAR).append(" then case when ").append(modColumn)
+                .append(" < 0 then 0 else ").append(modColumn).append(" - 4 end");
+        return sql.append(" else 0 end").toString();
+    }
+
+    /** {@link #scale}, as SQL, for the same reason. */
+    public static String scaleCase(String oidColumn, String modColumn) {
+        return "case " + oidColumn
+                + " when " + NUMERIC + " then case when " + modColumn
+                + " < 0 then 0 else (" + modColumn + " - 4) & 65535 end"
+                + " when " + TIME + " then case when " + modColumn
+                + " < 0 then 6 else " + modColumn + " end"
+                + " when " + TIMETZ + " then case when " + modColumn
+                + " < 0 then 6 else " + modColumn + " end"
+                + " when " + TIMESTAMP + " then case when " + modColumn
+                + " < 0 then 6 else " + modColumn + " end"
+                + " when " + TIMESTAMPTZ + " then case when " + modColumn
+                + " < 0 then 6 else " + modColumn + " end"
+                + " else 0 end";
+    }
+
+    /**
+     * The types whose size the type itself fixes.
+     *
+     * <p>Listed once so {@link #precisionCase} can ask {@link #precision} for
+     * each of them instead of repeating the numbers.
+     */
+    private static final int[] FIXED_SIZE = {
+        BOOL, INT2, INT4, OID, INT8, FLOAT4, FLOAT8, DATE, TIME, TIMETZ,
+        TIMESTAMP, TIMESTAMPTZ, UUID,
+    };
 
     /** Decimal places; only {@code numeric} and the time types have any. */
     public static int scale(int oid, int typeModifier) {

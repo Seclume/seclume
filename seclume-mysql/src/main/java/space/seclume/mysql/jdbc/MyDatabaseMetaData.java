@@ -147,9 +147,45 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
         return query("""
                 select table_schema as `TABLE_CAT`, null as `TABLE_SCHEM`,
                        table_name as `TABLE_NAME`, column_name as `COLUMN_NAME`,
-                       %s as `DATA_TYPE`, column_type as `TYPE_NAME`,
-                       coalesce(character_maximum_length, numeric_precision, 0)
-                           as `COLUMN_SIZE`,
+                       %s as `DATA_TYPE`,
+                       -- data_type, not column_type. column_type is the
+                       -- declaration - "tinyint(1)", "varbinary(32)" - where
+                       -- TYPE_NAME is meant to be the type, and Connector/J
+                       -- answers "TINYINT" and "VARBINARY". A dialect that
+                       -- matches on the name does not recognise the long
+                       -- form. Found by the differential run, same mistake
+                       -- as the PostgreSQL driver was making.
+                       -- ...with UNSIGNED kept: in MySQL it is part of the
+                       -- type and Connector/J answers "BIGINT UNSIGNED".
+                       -- Built by concatenation rather than by stripping the
+                       -- width out of column_type, so no regular expression
+                       -- has to be right about enum('a(1)','b').
+                       upper(concat(data_type,
+                               if(locate('unsigned', column_type) > 0,
+                                  ' unsigned', ''))) as `TYPE_NAME`,
+                       -- The temporal case is here for the same reason the
+                       -- PostgreSQL driver grew one: information_schema has
+                       -- no length for a date, so the catalogue answered 0
+                       -- while ResultSetMetaData answered 10. Hibernate and
+                       -- Flyway read the catalogue. The widths are the
+                       -- printed ones - 'YYYY-MM-DD' is ten characters, a
+                       -- datetime nineteen, and a fractional part adds its
+                       -- digits and the point.
+                       coalesce(character_maximum_length, numeric_precision,
+                                case data_type
+                                     when 'date' then 10
+                                     when 'year' then 4
+                                     when 'time' then
+                                          8 + if(datetime_precision > 0,
+                                                 datetime_precision + 1, 0)
+                                     when 'datetime' then
+                                          19 + if(datetime_precision > 0,
+                                                  datetime_precision + 1, 0)
+                                     when 'timestamp' then
+                                          19 + if(datetime_precision > 0,
+                                                  datetime_precision + 1, 0)
+                                end,
+                                0) as `COLUMN_SIZE`,
                        null as `BUFFER_LENGTH`,
                        coalesce(numeric_scale, datetime_precision, 0) as `DECIMAL_DIGITS`,
                        10 as `NUM_PREC_RADIX`,

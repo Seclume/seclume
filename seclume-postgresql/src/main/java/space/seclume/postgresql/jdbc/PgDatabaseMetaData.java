@@ -126,12 +126,24 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
         return query("""
                 select current_database() as "TABLE_CAT", n.nspname as "TABLE_SCHEM",
                        c.relname as "TABLE_NAME", a.attname as "COLUMN_NAME",
-                       %s as "DATA_TYPE", format_type(a.atttypid, a.atttypmod) as "TYPE_NAME",
-                       coalesce(information_schema._pg_char_max_length(a.atttypid, a.atttypmod),
-                                information_schema._pg_numeric_precision(a.atttypid, a.atttypmod),
-                                0) as "COLUMN_SIZE",
+                       %s as "DATA_TYPE",
+                       -- t.typname, not format_type(). format_type answers
+                       -- "character varying(64)" - the SQL spelling with the
+                       -- length attached - where every other driver answers
+                       -- "varchar". TYPE_NAME is a type name and not a column
+                       -- declaration, and a dialect that matches on it does
+                       -- not recognise the long form.
+                       t.typname as "TYPE_NAME",
+                       -- Both of these come from PgOids, which is also what
+                       -- ResultSetMetaData answers from. They used to be
+                       -- computed here instead, and the two disagreed: the
+                       -- result set said a timestamp was 29 wide and the
+                       -- catalogue said 0, because _pg_char_max_length knows
+                       -- only about character types. Hibernate and Flyway
+                       -- read the catalogue.
+                       %s as "COLUMN_SIZE",
                        null::int as "BUFFER_LENGTH",
-                       information_schema._pg_numeric_scale(a.atttypid, a.atttypmod) as "DECIMAL_DIGITS",
+                       %s as "DECIMAL_DIGITS",
                        10 as "NUM_PREC_RADIX",
                        case when a.attnotnull then 0 else 1 end as "NULLABLE",
                        d.description as "REMARKS",
@@ -157,13 +169,17 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
                 from pg_catalog.pg_attribute a
                 join pg_catalog.pg_class c on c.oid = a.attrelid
                 join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+                join pg_catalog.pg_type t on t.oid = a.atttypid
                 left join pg_catalog.pg_attrdef ad on ad.adrelid = c.oid and ad.adnum = a.attnum
                 left join pg_catalog.pg_description d on d.objoid = c.oid and d.objsubid = a.attnum
                 where a.attnum > 0 and not a.attisdropped
                   and c.relkind in ('r','p','v','m','f')
                   and %s and %s and %s
                 order by 2, 3, 17
-                """.formatted(SQL_TYPE_CASE, like("n.nspname", schemaPattern),
+                """.formatted(SQL_TYPE_CASE,
+                        PgOids.precisionCase("a.atttypid", "a.atttypmod"),
+                        PgOids.scaleCase("a.atttypid", "a.atttypmod"),
+                        like("n.nspname", schemaPattern),
                         like("c.relname", tableNamePattern),
                         like("a.attname", columnNamePattern)));
     }

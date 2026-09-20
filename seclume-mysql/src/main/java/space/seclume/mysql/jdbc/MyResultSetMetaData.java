@@ -81,6 +81,21 @@ final class MyResultSetMetaData implements ResultSetMetaData {
                 default -> 1;
             };
             length = length / bytesPerCharacter;
+        } else if (isDecimal(f) && length > 0) {
+            // The field length of decimal(20,6) is 22: twenty digits, the
+            // decimal point and the sign. getPrecision is the twenty.
+            length -= (f.decimals() > 0 ? 1 : 0) + (f.unsigned() ? 0 : 1);
+        } else if (isSignedInteger(f) && length > 0) {
+            // MySQL sends the display width, which has room for the minus
+            // sign: 11 for int, 20 for bigint. getPrecision is the maximum
+            // number of digits - 10 and 19 - and that is what Connector/J
+            // reports. An unsigned column has no sign to make room for and
+            // keeps its width.
+            // Never below one: tinyint(1) has a display width of 1, and a
+            // column that can hold a digit has a precision of at least one
+            // digit. Subtracting blindly reported 0, which is what this
+            // guard is here to have caught.
+            length = Math.max(1, length - 1);
         }
         return (int) Math.min(length, Integer.MAX_VALUE);
     }
@@ -95,6 +110,23 @@ final class MyResultSetMetaData implements ResultSetMetaData {
     @Override
     public int getColumnDisplaySize(int column) throws SQLException {
         return getPrecision(column);
+    }
+
+    /** Fixed-point, where the length also counts the point and the sign. */
+    private static boolean isDecimal(MySession.Field f) {
+        return f.type() == MyTypes.DECIMAL || f.type() == MyTypes.NEWDECIMAL;
+    }
+
+    /** A whole-number column that reserves a character for its sign. */
+    private static boolean isSignedInteger(MySession.Field f) {
+        if (f.unsigned()) {
+            return false;
+        }
+        return switch (f.type()) {
+            case MyTypes.TINY, MyTypes.SHORT, MyTypes.INT24, MyTypes.LONG,
+                 MyTypes.LONGLONG -> true;
+            default -> false;
+        };
     }
 
     @Override

@@ -253,8 +253,9 @@ public final class PgResultSet extends ReadOnlyResultSet {
         }
         return switch (field.typeOid()) {
             case PgOids.BOOL -> getBoolean(index);
-            case PgOids.INT2 -> getShort(index);
-            case PgOids.INT4 -> getInt(index);
+            // Integer for smallint as well - see PgOids.javaClass, and keep
+            // the two in step: an ORM reads the class name and then casts.
+            case PgOids.INT2, PgOids.INT4 -> getInt(index);
             case PgOids.INT8 -> getLong(index);
             case PgOids.FLOAT4 -> getFloat(index);
             case PgOids.FLOAT8 -> getDouble(index);

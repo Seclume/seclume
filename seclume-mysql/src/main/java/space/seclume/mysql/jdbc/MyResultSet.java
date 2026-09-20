@@ -68,7 +68,20 @@ public final class MyResultSet extends ReadOnlyResultSet {
         if (block.isBinary()) {
             return BinaryValues.toText(block, column);
         }
-        return block.textAt(block.offset(column), block.length(column));
+        String text = block.textAt(block.offset(column), block.length(column));
+        // The two protocols have to give the same answer. The binary one
+        // decodes four or eight bytes and renders them with Float.toString,
+        // so it says "0.0"; the text one used to hand through whatever the
+        // server wrote, which is "0". One driver, one column, two strings -
+        // found by reading every value through both a Statement and a
+        // PreparedStatement in the differential run. Java's rendering wins
+        // because it is the one an application gets from the value itself.
+        return switch (block.fields().get(column).type()) {
+            case MyTypes.FLOAT -> text.isEmpty() ? text : Float.toString(Float.parseFloat(text));
+            case MyTypes.DOUBLE -> text.isEmpty() ? text
+                    : Double.toString(Double.parseDouble(text));
+            default -> text;
+        };
     }
 
     /** Without a {@code String} and without {@code parseLong} - straight from the bytes. */
@@ -150,7 +163,27 @@ public final class MyResultSet extends ReadOnlyResultSet {
             case MyTypes.TINY, MyTypes.SHORT, MyTypes.YEAR -> (int) longAt(column);
             case MyTypes.LONG, MyTypes.INT24 ->
                     field.unsigned() ? (Object) longAt(column) : (Object) (int) longAt(column);
-            case MyTypes.LONGLONG -> longAt(column);
+            // bigint unsigned goes up to 2^64-1 and a long stops at
+            // 2^63-1, so the top half of the range came back as a negative
+            // number: 18446744073709551615 read as -1. Not an exception, not
+            // a warning - the wrong value, quietly. getString was already
+            // right (BinaryValues uses Long.toUnsignedString), which is how
+            // the differential run against Connector/J caught it: the two
+            // getters disagreed with each other.
+            //
+            // BigInteger is what Connector/J returns, and it is the only
+            // standard type that holds the range.
+            //
+            // On the BigInteger: the rule against it is about key material,
+            // which is what BigInteger holds everywhere else in this project
+            // - an RSA modulus that cannot be wiped. This is a row value on
+            // its way to the application, the same kind of object as the
+            // BigDecimal two lines below and the String below that. A result
+            // set is where application data lives; it is not the secret path.
+            case MyTypes.LONGLONG -> field.unsigned()
+                    // seclume-allow: a column value, not key material - see above
+                    ? new java.math.BigInteger(stringAt(column).trim())
+                    : (Object) longAt(column);
             case MyTypes.FLOAT -> (float) doubleAt(column);
             case MyTypes.DOUBLE -> doubleAt(column);
             case MyTypes.DECIMAL, MyTypes.NEWDECIMAL ->
