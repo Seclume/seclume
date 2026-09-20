@@ -115,24 +115,26 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
-      # The image carries no health check, so wait for the port rather than
-      # guessing a sleep long enough.
-      - name: Wait for SQL Server
-        run: |
-          for i in $(seq 1 60); do
-            if (echo > /dev/tcp/127.0.0.1/1433) >/dev/null 2>&1; then exit 0; fi
-            sleep 2
-          done
-          echo "SQL Server did not open port 1433" >&2
-          exit 1
-      # The image brings no database of its own, and the XA tests need one:
-      # a distributed transaction is enlisted per database, so master will
-      # not do.
-      - name: Create the test database
+      # The image brings no health check, and an open port is not one: the
+      # listener is up long before the engine takes a login. The readiness
+      # check is therefore the first thing that has to work anyway - creating
+      # the database. The XA tests need one of their own, because a
+      # distributed transaction is enlisted per database and master will not
+      # do.
+      - name: Wait for SQL Server and create the test database
         run: |
           id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
+          if [ -z "$id" ]; then echo "no SQL Server container found" >&2; exit 1; fi
           sql="if db_id('seclume_test') is null create database seclume_test"
-          docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -Q "$sql" -P "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          for i in $(seq 1 40); do
+            if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" -Q "$sql"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "SQL Server never accepted a login" >&2
+          exit 1
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
       - run: ./mvnw -B -pl seclume-sqlserver -am test
       - if: always()

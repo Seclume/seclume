@@ -1,17 +1,9 @@
+target/
 *.hprof
-.local-mssql-password
-.local-mysql-password
-.local-oracle-password
-.local-pg-password
+
+# Everything that describes one machine rather than the project: where its
+# test databases are, and the passwords to reach them. One rule rather than a
+# list, because a list is one forgotten entry away from committing a secret.
+.local-*
 .mssql-env.tmp
 .oracle-env.tmp
-target/
-
-# Wintun kommt von wintun.net und wird nicht mitgeliefert: fremdes Binaerpaket,
-# Weitergabelizenz noch nicht geklaert. Bezug und Pruefsumme stehen in
-# seclume-tcp-core/README.md.
-seclume-tcp-core/native/
-.local-pgtls-password
-
-# Where this machine reaches the test databases - one machine, not the project.
-.local-test.properties
