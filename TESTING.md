@@ -10,6 +10,27 @@ The cryptography against the published vectors, the wire protocols against known
 pool mechanics, the heap-dump proof with its negative control, and the rule that no forbidden
 API call slips into production code. That is most of the suite.
 
+## The wipe, and the paths where it gets lost
+
+The heap-dump proof covers a login that works. Wipes are not usually lost there - they are
+lost on the way out of a failure, where a method leaves early and the cleanup was attached to
+the end. Three classes cover that, none of them needing a server:
+
+- `space.seclume.secret.WipeOnFailureTest` - the shapes, one layer down: a source that dies
+  mid-write, one that lies about the length, an exception or an `Error` thrown while the
+  credential is in hand, an interrupted thread, a timeout, nested scopes, and a forged
+  ciphertext that must leave the caller's segment untouched.
+- `space.seclume.postgresql.ConnectFailureWipeTest` - the same against a socket: a rejected
+  password, a connection dropped mid-login, a server that stops answering while the client is
+  interrupted, and a refused TLS handshake, which must not read the secret at all.
+- `space.seclume.mysql.LoginFailureWipeTest` - the second handshake, which shares nothing with
+  the first but `SecretScope`, plus an unreachable server that must not cost a secret read.
+
+Two different things are measured, and the difference matters. `SecretScope.open()` says
+whether the scope was closed - it is counted rather than read back, because after a real close
+the memory is released and reading it would mean reading freed pages. That closing leaves
+zeroes is shown separately, in an arena the test owns so the segment stays mapped.
+
 ## What needs a server
 
 Every test class whose name begins with `Local`, plus the Spring Data suite. They look for two

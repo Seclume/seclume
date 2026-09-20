@@ -34,6 +34,15 @@ public final class SecretScope implements AutoCloseable {
      */
     private static final AtomicLong ALLOCATIONS = new AtomicLong();
 
+    /**
+     * How many of those have been closed again.
+     *
+     * <p>Counted separately from {@link #ALLOCATIONS} rather than kept as one
+     * balance, because the difference is what the tests actually ask for and a
+     * single counter could not tell "never opened" from "opened and closed".
+     */
+    private static final AtomicLong CLOSES = new AtomicLong();
+
     private final Arena arena;
     private final boolean ownsArena;
     private final MemorySegment segment;
@@ -129,9 +138,31 @@ public final class SecretScope implements AutoCloseable {
     }
 
     /**
+     * How many secret segments are open right now - allocated and not yet
+     * zeroed.
+     *
+     * <p>This exists for one kind of test and is worth the two lines it costs:
+     * the wipe is written as try-with-resources everywhere, so what can go
+     * wrong is not the zeroing but an exit that never reaches it - an
+     * authentication failure, a broken TLS handshake, a timeout, an interrupt.
+     * Those paths are hard to observe from outside, because the memory is gone
+     * by the time the exception arrives and reading it afterwards would be
+     * reading freed pages. The gauge answers the question that is actually
+     * being asked - did the scope get closed - without touching anything that
+     * has been released. That {@link #close()} really zeroes is a separate
+     * fact, proven separately.
+     *
+     * <p>In a healthy process this is zero between connections and at most as
+     * large as the number of logins running at this instant.
+     */
+    public static long open() {
+        return ALLOCATIONS.get() - CLOSES.get();
+    }
+
+    /**
      * Zeroes the segment and releases it. Closing more than once is allowed,
-     * so that {@code try}-with-resources and an error path do not get in each
-     * Gehege kommen.
+     * so that try-with-resources and an error path that closes early do not
+     * get in each other's way.
      */
     @Override
     public void close() {
@@ -140,6 +171,7 @@ public final class SecretScope implements AutoCloseable {
         }
         closed = true;
         segment.fill((byte) 0);
+        CLOSES.incrementAndGet();
         if (locked) {
             MemoryLock.unlock(segment);
         }

@@ -57,6 +57,8 @@ final class FakeMySqlServer implements AutoCloseable {
     private List<Column> columns = List.of();
     private List<List<String>> rows = List.of();
     private String errorMessage;
+    /** Whether to refuse the login itself - see {@link #rejectLogin()}. */
+    private volatile boolean rejectLogin;
     private volatile boolean stopped;
 
     FakeMySqlServer(String user, String password) throws IOException {
@@ -76,6 +78,17 @@ final class FakeMySqlServer implements AutoCloseable {
 
     FakeMySqlServer failWith(String message) {
         this.errorMessage = message;
+        return this;
+    }
+
+    /**
+     * Answer the login with an error packet instead of an OK.
+     *
+     * <p>For the wipe tests: the password has been read, hashed and sent by
+     * then, so the refusal arrives while the driver still holds it.
+     */
+    FakeMySqlServer rejectLogin() {
+        this.rejectLogin = true;
         return this;
     }
 
@@ -128,7 +141,17 @@ final class FakeMySqlServer implements AutoCloseable {
         try (InputStream in = socket.getInputStream();
              OutputStream out = socket.getOutputStream()) {
             sendHandshake(out);
-            checkLogin(readPacket(in));
+            byte[] login = readPacket(in);
+            if (rejectLogin) {
+                // Checked first anyway: a driver that sends a wrong hash and
+                // is then told "wrong password" would pass the test for the
+                // wrong reason.
+                checkLogin(login);
+                sendError(out, 2, 1045, "28000",
+                        "Access denied for user '" + expectedUser + "'@'localhost'");
+                return;
+            }
+            checkLogin(login);
             sendOk(out, 2, 0, 0);
 
             while (true) {
