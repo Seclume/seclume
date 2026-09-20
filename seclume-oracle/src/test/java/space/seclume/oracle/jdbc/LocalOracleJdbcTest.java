@@ -15,6 +15,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
@@ -641,4 +642,108 @@ class LocalOracleJdbcTest {
         }
     }
 
+    // ---- procedure calls --------------------------------------------------
+
+    /**
+     * An {@code OUT} parameter, through the anonymous block and an output
+     * bind - the mechanism Oracle actually has, rather than a translation
+     * into something else.
+     */
+    @Test
+    void callsAProcedureAndReadsAnOutputParameter() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_double(n in number, "
+                    + "doubled out number) as begin doubled := n * 2; end;");
+            try (CallableStatement call = connection.prepareCall("{call zl_double(?, ?)}")) {
+                call.setInt(1, 21);
+                call.registerOutParameter(2, Types.INTEGER);
+                call.execute();
+                assertEquals(42, call.getInt(2));
+                assertFalse(call.wasNull());
+            }
+            statement.execute("drop procedure zl_double");
+        }
+    }
+
+    /** An {@code IN OUT} parameter: the value goes in and comes back changed. */
+    @Test
+    void callsAProcedureWithAnInOutParameter() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_grow(n in out number) as "
+                    + "begin n := n + 5; end;");
+            try (CallableStatement call = connection.prepareCall("{call zl_grow(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.setInt(1, 37);
+                call.execute();
+                assertEquals(42, call.getInt(1));
+            }
+            statement.execute("drop procedure zl_grow");
+        }
+    }
+
+    /**
+     * A text output beside a number one.
+     *
+     * <p>This is the case the typed output bind exists for: described as a
+     * NUMBER - which is all the driver could do before - a VARCHAR2 comes
+     * back as bytes that decode into nonsense rather than into an error.
+     */
+    @Test
+    void callsAProcedureWithATextOutputAndANumberOutput() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_split(whole in varchar2, "
+                    + "head out varchar2, size_out out number) as begin "
+                    + "head := substr(whole, 1, instr(whole, '-') - 1); "
+                    + "size_out := length(whole); end;");
+            try (CallableStatement call = connection.prepareCall("{call zl_split(?, ?, ?)}")) {
+                call.setString(1, "left-right");
+                call.registerOutParameter(2, Types.VARCHAR);
+                call.registerOutParameter(3, Types.INTEGER);
+                call.execute();
+                assertEquals("left", call.getString(2));
+                assertEquals(10, call.getInt(3));
+            }
+            statement.execute("drop procedure zl_split");
+        }
+    }
+
+    /**
+     * A function: {@code begin :1 := f(:2); end;}, so the return value is
+     * simply the output bind at position one and nothing shifts.
+     */
+    @Test
+    void callsAFunctionAndReadsItsReturnValue() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace function zl_triple(n in number) "
+                    + "return number as begin return n * 3; end;");
+            try (CallableStatement call = connection.prepareCall("{? = call zl_triple(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.setInt(2, 14);
+                call.execute();
+                assertEquals(42, call.getInt(1));
+            }
+            statement.execute("drop function zl_triple");
+        }
+    }
+
+    /** An output that came back NULL says so rather than reading as zero. */
+    @Test
+    void anOutputThatIsNullSaysSo() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_nothing(n out number) as "
+                    + "begin n := null; end;");
+            try (CallableStatement call = connection.prepareCall("{call zl_nothing(?)}")) {
+                call.registerOutParameter(1, Types.INTEGER);
+                call.execute();
+                assertEquals(0, call.getInt(1));
+                assertTrue(call.wasNull());
+            }
+            statement.execute("drop procedure zl_nothing");
+        }
+    }
 }

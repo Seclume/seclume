@@ -120,6 +120,7 @@ public final class TtcResult {
                         }
                     }
                 }
+                case TtcMessage.TYPE_IO_VECTOR -> p = skipIoVector(in, p);
                 case TtcMessage.TYPE_PARAMETER -> p = skipReturnParameters(in, p);
                 case TtcMessage.TYPE_ERROR -> {
                     readError(in, p);
@@ -143,6 +144,33 @@ public final class TtcResult {
         if (refused != null) {
             throw refused;
         }
+    }
+
+    /**
+     * Steps over the in/out vector a PL/SQL call is answered with.
+     *
+     * <p>It says which binds the server wrote into, and the values follow it.
+     * Before this was handled the walk stopped here - not with an error, which
+     * would have been easy to find, but by returning what it had, so the
+     * outputs came back empty and the call looked as if the procedure had
+     * done nothing.
+     *
+     * <p>The shape was measured rather than read: a byte, the number of
+     * binds, five numbers that were zero, one and zeros in every recording,
+     * and then <b>one flag byte per bind</b> - {@code 0x20} where the client
+     * sent a value and {@code 0x10} where the server writes one. Two calls of
+     * two binds could not have shown that last part, so a third with three
+     * binds was recorded: {@code 20 10} became {@code 20 10 10}. See
+     * {@code docs/protocol/oracle.md}.
+     */
+    private int skipIoVector(WireBuffer in, int at) {
+        int p = at + 1;                                // a byte nobody has decoded
+        long binds = number(in, p);
+        p = skipNumber(in, p);
+        for (int i = 0; i < 5; i++) {
+            p = skipNumber(in, p);                     // constant in every recording
+        }
+        return p + (int) binds;                        // one flag byte per bind
     }
 
     /** The row header, with the bit vector of columns that stayed the same. */
@@ -345,14 +373,38 @@ public final class TtcResult {
 
     /** Says how many output binds the answer will carry. */
     public void expectReturned(int count) {
-        this.expectedReturned = count;
+        expectReturned(count, false);
     }
+
+    /**
+     * The same, saying whether they come from a PL/SQL call.
+     *
+     * <p>The two shapes differ by one field and the difference is invisible
+     * until the values come out empty. A DML {@code returning} writes, per
+     * bind, <b>how many rows it stands for</b>, then the value, then a
+     * return code - it has to, because one statement can return many rows. A
+     * PL/SQL bind has exactly one value and no count: the recorded answer to
+     * {@code begin p(:1, :2); end;} is {@code 07 02 C1 2B 00}, which is the
+     * row-data marker, the number 42 and a return code of zero. Read with the
+     * count expected, the value itself is eaten as the count and what is left
+     * is an empty value - not an error, just nothing. Measured with
+     * {@code docs/protocol/oracle.md}.
+     */
+    public void expectReturned(int count, boolean fromCall) {
+        this.expectedReturned = count;
+        this.returnedFromCall = fromCall;
+    }
+
+    private boolean returnedFromCall;
 
     private int readReturned(WireBuffer in, int at) {
         int p = at;
         for (int i = 0; i < expectedReturned; i++) {
-            long rows = number(in, p);                 // rows this bind stands for
-            p = skipNumber(in, p);
+            long rows = 1;
+            if (!returnedFromCall) {
+                rows = number(in, p);                  // rows this bind stands for
+                p = skipNumber(in, p);
+            }
             int length = in.getByte(p) & 0xff;
             byte[] value = new byte[length]; // seclume-allow: a returned key, payload
             for (int b = 0; b < length; b++) {
@@ -360,7 +412,9 @@ public final class TtcResult {
             }
             p += 1 + length;
             p = skipNumber(in, p);                     // return code
-            if (rows > 0 && length > 0) {
+            if (rows > 0) {
+                // An empty value is a NULL output and belongs in the list -
+                // leaving it out would shift every output after it.
                 returned.add(value);
             }
         }

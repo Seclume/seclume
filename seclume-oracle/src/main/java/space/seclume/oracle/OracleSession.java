@@ -254,13 +254,15 @@ public final class OracleSession implements AutoCloseable {
         try {
             rows = 0;
             boolean query = returnsRows(sql);
+            boolean plsql = isPlsqlBlock(sql);
             if (!autoCommit && !query) {
                 inTransaction = true;
             }
             TtcQuery.send(channel, sequence++, sql, query ? PREFETCH_ROWS : 0, query, binds,
-                    cursorId, iterations, batch, autoCommit);
+                    cursorId, iterations, batch, autoCommit, plsql);
             TtcResult result = readAnswer(handler, known, returningCount);
             returningCount = 0;
+            returningFromCall = false;
             rows = result.rowCount();
             java.util.List<space.seclume.oracle.net.OracleColumn> columns =
                     result.columns();
@@ -497,8 +499,16 @@ public final class OracleSession implements AutoCloseable {
 
     /** Says that the next statement has that many {@code into} binds. */
     public void expectReturning(int count) {
-        this.returningCount = count;
+        expectReturning(count, false);
     }
+
+    /** The same, saying that they come from a PL/SQL call - a different shape. */
+    public void expectReturning(int count, boolean fromCall) {
+        this.returningCount = count;
+        this.returningFromCall = fromCall;
+    }
+
+    private boolean returningFromCall;
 
     /**
      * Whether the cursor of the last query still has rows in it.
@@ -565,7 +575,7 @@ public final class OracleSession implements AutoCloseable {
             throw new SQLException("expected a DATA packet, got " + NsPacket.typeName(type));
         }
         TtcResult result = new TtcResult(columns);
-        result.expectReturned(returning);
+        result.expectReturned(returning, returningFromCall);
 
         if ((channel.dataFlags() & END_OF_ANSWER) != 0) {
             // The common case: the whole answer is in this packet, and it is
@@ -755,6 +765,20 @@ public final class OracleSession implements AutoCloseable {
     /** How often this session has waited for the server. */
     public long roundTrips() {
         return channel.roundTrips();
+    }
+
+    /**
+     * Whether this is an anonymous PL/SQL block rather than a statement.
+     *
+     * <p>It decides the options mask, and the wrong one is not a nuance: a
+     * block sent with {@code OPTION_NOT_PLSQL} - which every other statement
+     * carries - is answered with {@code ORA-03146, invalid buffer length for
+     * TTC field}. Recognised from the text, the same way a query is.
+     */
+    private static boolean isPlsqlBlock(String sql) {
+        String text = sql.stripLeading();
+        return text.regionMatches(true, 0, "begin", 0, 5)
+                || text.regionMatches(true, 0, "declare", 0, 7);
     }
 
     /**

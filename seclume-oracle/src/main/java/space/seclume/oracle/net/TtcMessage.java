@@ -28,6 +28,13 @@ public final class TtcMessage {
     public static final int TYPE_PARAMETER = 8;
     /** The end of a call, with its return value. */
     public static final int TYPE_STATUS = 9;
+    /**
+     * The in/out vector of a PL/SQL call - which binds the server is writing
+     * back. It arrives in front of their values and has to be stepped over,
+     * or the values behind it are never read.
+     */
+    public static final int TYPE_IO_VECTOR = 11;
+
     /** The description of a value. */
     public static final int TYPE_OAC = 13;
     /**

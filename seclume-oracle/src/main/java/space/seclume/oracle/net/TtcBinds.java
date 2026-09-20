@@ -100,16 +100,52 @@ public final class TtcBinds {
      * everything else - see {@code TtcResult#returned}.
      */
     public void addOutput() {
-        values.add(OUTPUT);
+        values.add(new Output(OracleColumn.TYPE_NUMBER, false));
+    }
+
+    /**
+     * Marks a chosen place as one the server writes into, with the type it
+     * should write there.
+     *
+     * <p>{@link #addOutput()} appends, which is all a {@code returning into}
+     * needs - its binds go at the end. A procedure call cannot: its outputs
+     * sit wherever the caller wrote them, and each has a type of its own. A
+     * {@code VARCHAR2} output described as a NUMBER comes back as bytes that
+     * decode into nonsense rather than into an error.
+     *
+     * @param type one of {@link OracleColumn}'s type numbers
+     */
+    public void setOutput(int index, int type) throws SQLException {
+        set(index, new Output(type, true));
     }
 
     /** Whether this list has an output bind in it. */
     public boolean hasOutput() {
-        return values.contains(OUTPUT);
+        for (Object value : values) {
+            if (value instanceof Output) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    /** Marks a place the server writes into; never sent as a value. */
-    private static final Object OUTPUT = new Object();
+    /**
+     * A place the server writes into.
+     *
+     * <p>{@code placeholder} is the part that had to be measured, and the two
+     * cases genuinely differ. A {@code returning into} bind carries
+     * <b>nothing</b> in the row data - that was measured when generated keys
+     * were built. A bind of a PL/SQL call carries a <b>length of zero</b>: the
+     * recording of {@code begin p(:1, :2); end;} ends in
+     * {@code 07 02 C1 16 00}, where the {@code 07} opens the values, the
+     * {@code 02 C1 16} is the input 21 and the last {@code 00} is the output's
+     * empty value. Leaving it out makes the message one byte short, and Oracle
+     * answers a short message by waiting for the rest - the session sits in
+     * {@code SQL*Net more data from client} and the client waits for an answer
+     * that will never come. See {@code docs/protocol/oracle.md}.
+     */
+    private record Output(int type, boolean placeholder) {
+    }
 
     /** The value at a JDBC index, or {@code null}. */
     public Object get(int index) {
@@ -149,12 +185,13 @@ public final class TtcBinds {
     public void putDescriptors(WireBuffer out, long[] sizes) throws SQLException {
         for (int index = 0; index < values.size(); index++) {
             Object value = values.get(index);
-            int type = value == OUTPUT ? OracleColumn.TYPE_NUMBER : typeOf(value);
+            int type = value instanceof Output output ? output.type() : typeOf(value);
             out.putByte((byte) type);
             out.putByte((byte) 1);                     // flags, always one here
             out.putByte((byte) 0);                     // precision
             out.putByte((byte) 0);                     // scale
-            TtcParameters.putNumber(out, value == OUTPUT ? NUMBER_SIZE
+            TtcParameters.putNumber(out, value instanceof Output
+                    ? outputBufferSize(type)
                     : (sizes == null ? bufferSizeOf(value, type) : sizes[index]));
             TtcParameters.putNumber(out, 0);           // largest number of array elements
             TtcParameters.putNumber(out, value instanceof Locator
@@ -179,12 +216,32 @@ public final class TtcBinds {
     public void putValues(WireBuffer out) throws SQLException {
         out.putByte((byte) TtcMessage.TYPE_ROW_DATA);
         for (Object value : values) {
-            if (value == OUTPUT) {
-                // Nothing: the server writes here, it does not read.
+            if (value instanceof Output output) {
+                if (output.placeholder()) {
+                    out.putByte((byte) 0);    // an empty value - see Output
+                }
                 continue;
             }
             putValue(out, value);
         }
+    }
+
+    /**
+     * How much room the server is given to write an output into.
+     *
+     * <p>A number and a date have a known width; text does not, and the
+     * caller's registration says only the type. 4000 bytes is what a
+     * {@code VARCHAR2} bind can hold, so it is what gets asked for - less
+     * would truncate a value nobody could have known was longer.
+     */
+    private static long outputBufferSize(int type) {
+        if (type == OracleColumn.TYPE_VARCHAR) {
+            return 4000L * BYTES_PER_CHARACTER;
+        }
+        if (type == OracleColumn.TYPE_DATE) {
+            return DATE_SIZE;
+        }
+        return NUMBER_SIZE;
     }
 
     private static void putValue(WireBuffer out, Object value) throws SQLException {

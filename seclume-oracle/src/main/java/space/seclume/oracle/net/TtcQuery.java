@@ -59,6 +59,32 @@ public final class TtcQuery {
     public static final int OPTIONS_UPDATE =
             OPTION_NOT_PLSQL | OPTION_EXECUTE | OPTION_PARSE;
 
+    /**
+     * A bit the reference client sets on a PL/SQL block and on nothing else.
+     * Not decoded further; measured.
+     */
+    private static final int OPTION_PLSQL_BLOCK = 0x0400;
+
+    /**
+     * An anonymous PL/SQL block - {@code begin p(:1); end;}.
+     *
+     * <p>The difference from {@link #OPTIONS_UPDATE} is not a detail: the
+     * mask there carries {@code OPTION_NOT_PLSQL}, whose name says what it
+     * means, and a block sent with it makes the server answer
+     * {@code ORA-03146: invalid buffer length for TTC field}. Measured
+     * against python-oracledb calling the same procedure, which sends
+     * {@code 0x0429} - see {@code docs/protocol/oracle.md}.
+     *
+     * <p>The bind bit is <b>not</b> in here, although the measured mask has
+     * it: it is added below for every statement that actually has binds, and
+     * a block that has none must not carry it. Putting it in the constant
+     * made {@code begin dbms_xa...; end;} - which binds nothing - fail with
+     * {@code ORA-01009: missing mandatory parameter}, because the server then
+     * waits for a bind section that was never sent.
+     */
+    public static final int OPTIONS_CALL =
+            OPTION_PLSQL_BLOCK | OPTION_EXECUTE | OPTION_PARSE;
+
     /** The largest {@code LONG} the client will accept. */
     private static final long MAX_LONG_LENGTH = 0x7fffffffL;
     /** The fixed length of the {@code al8i4} field. */
@@ -141,6 +167,14 @@ public final class TtcQuery {
     public static void put(WireBuffer out, int sequence, String sql, int prefetchRows,
                            boolean query, TtcBinds binds, int cursorId, int iterations,
                            Rows rows, boolean autoCommit) {
+        put(out, sequence, sql, prefetchRows, query, binds, cursorId, iterations, rows,
+                autoCommit, false);
+    }
+
+    /** The same, for a statement that may be an anonymous PL/SQL block. */
+    public static void put(WireBuffer out, int sequence, String sql, int prefetchRows,
+                           boolean query, TtcBinds binds, int cursorId, int iterations,
+                           Rows rows, boolean autoCommit, boolean plsql) {
         byte[] text = sql.getBytes(java.nio.charset.StandardCharsets.UTF_8); // seclume-allow: statement text, never a secret
 
         out.putByte((byte) TtcMessage.TYPE_FUNCTION);
@@ -149,7 +183,7 @@ public final class TtcQuery {
         TtcParameters.putNumber(out, 0);                  // token number
 
         int count = binds == null ? 0 : binds.count();
-        int options = query ? OPTIONS_QUERY : OPTIONS_UPDATE;
+        int options = plsql ? OPTIONS_CALL : query ? OPTIONS_QUERY : OPTIONS_UPDATE;
         if (cursorId != 0) {
             // The server already has this statement under that number, so it
             // must not parse it again - and the text is not sent at all. That
@@ -326,9 +360,17 @@ public final class TtcQuery {
     public static void send(NsChannel channel, int sequence, String sql, int prefetchRows,
                             boolean query, TtcBinds binds, int cursorId, int iterations,
                             Rows rows, boolean autoCommit) throws IOException {
+        send(channel, sequence, sql, prefetchRows, query, binds, cursorId, iterations, rows,
+                autoCommit, false);
+    }
+
+    /** The same, saying whether the statement is an anonymous PL/SQL block. */
+    public static void send(NsChannel channel, int sequence, String sql, int prefetchRows,
+                            boolean query, TtcBinds binds, int cursorId, int iterations,
+                            Rows rows, boolean autoCommit, boolean plsql) throws IOException {
         WireBuffer out = channel.beginData();
         put(out, sequence, sql, prefetchRows, query, binds, cursorId, iterations, rows,
-                autoCommit);
+                autoCommit, plsql);
         channel.sendData();
     }
 }
