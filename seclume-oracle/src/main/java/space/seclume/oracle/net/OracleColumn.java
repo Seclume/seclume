@@ -41,6 +41,30 @@ public record OracleColumn(String name, int type, int precision, int scale,
     /** {@code TIMESTAMP WITH LOCAL TIME ZONE}. */
     public static final int TYPE_TIMESTAMP_LOCAL = 231;
 
+    /**
+     * {@code BINARY_FLOAT} and {@code BINARY_DOUBLE} - IEEE 754, not Oracle's
+     * own number format.
+     *
+     * <p>Hibernate maps a Java {@code double} to {@code binary_double}, so
+     * every entity with one in it goes through these. The bytes are
+     * transformed so that they sort as numbers do - see
+     * {@code OracleFloat}.
+     */
+    public static final int TYPE_BINARY_FLOAT = 100;
+    /** See {@link #TYPE_BINARY_FLOAT}. */
+    public static final int TYPE_BINARY_DOUBLE = 101;
+
+    /**
+     * {@code BOOLEAN}, which Oracle has had since 23ai.
+     *
+     * <p>Measured rather than looked up: the type number is 252, and the
+     * value is one byte per boolean - {@code 01} for true and {@code 00} for
+     * false, with true arriving as two bytes where the second repeats the
+     * first. Anything non-zero in the first byte is true, which is the
+     * reading that survives both shapes.
+     */
+    public static final int TYPE_BOOLEAN = 252;
+
     /** {@code LONG} - text without a length limit, sent in chunks. */
     public static final int TYPE_LONG = 8;
 
@@ -87,6 +111,9 @@ public record OracleColumn(String name, int type, int precision, int scale,
             case TYPE_TIMESTAMP_ZONE, TYPE_TIMESTAMP_LOCAL ->
                     java.sql.Types.TIMESTAMP_WITH_TIMEZONE;
             case TYPE_RAW -> java.sql.Types.VARBINARY;
+            case TYPE_BOOLEAN -> java.sql.Types.BOOLEAN;
+            case TYPE_BINARY_FLOAT -> java.sql.Types.REAL;
+            case TYPE_BINARY_DOUBLE -> java.sql.Types.DOUBLE;
             case TYPE_LONG -> java.sql.Types.LONGVARCHAR;
             case TYPE_LONG_RAW -> java.sql.Types.LONGVARBINARY;
             case TYPE_CLOB -> java.sql.Types.CLOB;
@@ -106,6 +133,9 @@ public record OracleColumn(String name, int type, int precision, int scale,
             case TYPE_TIMESTAMP_ZONE -> "TIMESTAMP WITH TIME ZONE";
             case TYPE_TIMESTAMP_LOCAL -> "TIMESTAMP WITH LOCAL TIME ZONE";
             case TYPE_RAW -> "RAW";
+            case TYPE_BOOLEAN -> "BOOLEAN";
+            case TYPE_BINARY_FLOAT -> "BINARY_FLOAT";
+            case TYPE_BINARY_DOUBLE -> "BINARY_DOUBLE";
             case TYPE_LONG -> "LONG";
             case TYPE_LONG_RAW -> "LONG RAW";
             case TYPE_CLOB -> "CLOB";

@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,6 +31,29 @@ public final class TtcBinds {
     private static final int NUMBER_SIZE = 22;
     /** How many bytes a DATE takes. */
     private static final int DATE_SIZE = 7;
+    /**
+     * How many bytes a TIMESTAMP takes: the seven of a DATE and four more for
+     * the fraction of a second.
+     *
+     * <p>Sending a point in time as a DATE is what this driver did, and it
+     * costs the fraction silently - a row written at 11:29:16.153 comes back
+     * as 11:29:16, and nothing anywhere says so. Hibernate's
+     * {@code @LastModifiedDate} then compares two timestamps that differ by
+     * less than a second and finds them equal. So anything carrying a time of
+     * day goes as a TIMESTAMP; a bare date still goes as a DATE, which is
+     * what it is.
+     */
+    private static final int TIMESTAMP_SIZE = 11;
+    /**
+     * A TIMESTAMP WITH TIME ZONE: the eleven of a TIMESTAMP and two more for
+     * the offset - the hour shifted by 20 and the minute by 60, so that a
+     * negative offset has no negative byte.
+     */
+    private static final int TIMESTAMP_ZONE_SIZE = 13;
+    /** Oracle's offset for the hours of a time zone. */
+    private static final int ZONE_HOUR_BIAS = 20;
+    /** And for its minutes. */
+    private static final int ZONE_MINUTE_BIAS = 60;
     /** Bytes per character the server is told to expect. */
     private static final int BYTES_PER_CHARACTER = 4;
     /** AL32UTF8, the character set this driver talks. */
@@ -241,6 +265,12 @@ public final class TtcBinds {
         if (type == OracleColumn.TYPE_DATE) {
             return DATE_SIZE;
         }
+        if (type == OracleColumn.TYPE_TIMESTAMP) {
+            return TIMESTAMP_SIZE;
+        }
+        if (type == OracleColumn.TYPE_TIMESTAMP_ZONE) {
+            return TIMESTAMP_ZONE_SIZE;
+        }
         return NUMBER_SIZE;
     }
 
@@ -261,9 +291,19 @@ public final class TtcBinds {
             case String text -> putText(out, text);
             case byte[] bytes -> putBytes(out, bytes);
             case LocalDate date -> putDate(out, date.atStartOfDay());
-            case LocalDateTime stamp -> putDate(out, stamp);
+            // Oracle has no type for a time of day - Hibernate maps one to a
+            // timestamp, and the date part is the epoch, as java.sql.Time
+            // itself uses it.
+            case LocalTime time -> putTimestamp(out, time.atDate(java.time.LocalDate.EPOCH));
+            case java.sql.Time time -> putTimestamp(out,
+                    time.toLocalTime().atDate(java.time.LocalDate.EPOCH));
+            case LocalDateTime stamp -> putTimestamp(out, stamp);
             case java.sql.Date date -> putDate(out, date.toLocalDate().atStartOfDay());
-            case java.sql.Timestamp stamp -> putDate(out, stamp.toLocalDateTime());
+            case java.sql.Timestamp stamp -> putTimestamp(out, stamp.toLocalDateTime());
+            case java.time.OffsetDateTime stamp -> putZonedTimestamp(out, stamp);
+            case java.time.Instant instant -> putZonedTimestamp(out,
+                    instant.atOffset(java.time.ZoneOffset.UTC));
+            case java.util.UUID id -> putUuid(out, id);
             default -> throw new SQLException("seclume cannot send a "
                     + value.getClass().getName() + " to Oracle as a bind variable");
         }
@@ -297,9 +337,14 @@ public final class TtcBinds {
             case String ignored -> OracleColumn.TYPE_VARCHAR;
             case byte[] ignored -> OracleColumn.TYPE_RAW;
             case LocalDate ignored -> OracleColumn.TYPE_DATE;
-            case LocalDateTime ignored -> OracleColumn.TYPE_DATE;
+            case LocalTime ignored -> OracleColumn.TYPE_TIMESTAMP;
+            case java.sql.Time ignored -> OracleColumn.TYPE_TIMESTAMP;
+            case LocalDateTime ignored -> OracleColumn.TYPE_TIMESTAMP;
             case java.sql.Date ignored -> OracleColumn.TYPE_DATE;
-            case java.sql.Timestamp ignored -> OracleColumn.TYPE_DATE;
+            case java.sql.Timestamp ignored -> OracleColumn.TYPE_TIMESTAMP;
+            case java.time.OffsetDateTime ignored -> OracleColumn.TYPE_TIMESTAMP_ZONE;
+            case java.time.Instant ignored -> OracleColumn.TYPE_TIMESTAMP_ZONE;
+            case java.util.UUID ignored -> OracleColumn.TYPE_RAW;
             default -> throw new SQLException("seclume cannot send a "
                     + value.getClass().getName() + " to Oracle as a bind variable");
         };
@@ -319,6 +364,8 @@ public final class TtcBinds {
         return switch (type) {
             case OracleColumn.TYPE_NUMBER -> NUMBER_SIZE;
             case OracleColumn.TYPE_DATE -> DATE_SIZE;
+            case OracleColumn.TYPE_TIMESTAMP -> TIMESTAMP_SIZE;
+            case OracleColumn.TYPE_TIMESTAMP_ZONE -> TIMESTAMP_ZONE_SIZE;
             case OracleColumn.TYPE_RAW -> Math.max(((byte[]) value).length, 1);
             default -> value == null ? NULL_SIZE
                     : Math.max(((String) value).length() * BYTES_PER_CHARACTER, 1);
@@ -393,5 +440,70 @@ public final class TtcBinds {
         out.putByte((byte) (stamp.getHour() + 1));
         out.putByte((byte) (stamp.getMinute() + 1));
         out.putByte((byte) (stamp.getSecond() + 1));
+    }
+
+    /**
+     * The same seven bytes and four more: the nanoseconds, most significant
+     * byte first.
+     *
+     * <p>The length in front says eleven rather than seven, which is how the
+     * server tells the two apart - the fields before the fraction are
+     * identical.
+     */
+    private static void putTimestamp(WireBuffer out, LocalDateTime stamp) {
+        out.putByte((byte) TIMESTAMP_SIZE);
+        int year = stamp.getYear();
+        out.putByte((byte) (year / 100 + YEAR_BIAS));
+        out.putByte((byte) (year % 100 + YEAR_BIAS));
+        out.putByte((byte) stamp.getMonthValue());
+        out.putByte((byte) stamp.getDayOfMonth());
+        out.putByte((byte) (stamp.getHour() + 1));
+        out.putByte((byte) (stamp.getMinute() + 1));
+        out.putByte((byte) (stamp.getSecond() + 1));
+        int nanos = stamp.getNano();
+        out.putByte((byte) (nanos >>> 24));
+        out.putByte((byte) (nanos >>> 16));
+        out.putByte((byte) (nanos >>> 8));
+        out.putByte((byte) nanos);
+    }
+
+    /**
+     * The same again with the offset behind it.
+     *
+     * <p>Oracle writes the fields of the value as they stand and the offset
+     * beside them, rather than converting to UTC - so an
+     * {@code OffsetDateTime} keeps the zone it was written with, which is
+     * the point of the column type.
+     */
+    private static void putZonedTimestamp(WireBuffer out, java.time.OffsetDateTime stamp) {
+        out.putByte((byte) TIMESTAMP_ZONE_SIZE);
+        java.time.LocalDateTime local = stamp.toLocalDateTime();
+        int year = local.getYear();
+        out.putByte((byte) (year / 100 + YEAR_BIAS));
+        out.putByte((byte) (year % 100 + YEAR_BIAS));
+        out.putByte((byte) local.getMonthValue());
+        out.putByte((byte) local.getDayOfMonth());
+        out.putByte((byte) (local.getHour() + 1));
+        out.putByte((byte) (local.getMinute() + 1));
+        out.putByte((byte) (local.getSecond() + 1));
+        int nanos = local.getNano();
+        out.putByte((byte) (nanos >>> 24));
+        out.putByte((byte) (nanos >>> 16));
+        out.putByte((byte) (nanos >>> 8));
+        out.putByte((byte) nanos);
+        int seconds = stamp.getOffset().getTotalSeconds();
+        out.putByte((byte) (seconds / 3600 + ZONE_HOUR_BIAS));
+        out.putByte((byte) (seconds % 3600 / 60 + ZONE_MINUTE_BIAS));
+    }
+
+    /** Sixteen bytes, most significant first - what a {@code raw(16)} holds. */
+    private static void putUuid(WireBuffer out, java.util.UUID id) {
+        out.putByte((byte) 16);
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            out.putByte((byte) (id.getMostSignificantBits() >>> shift));
+        }
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            out.putByte((byte) (id.getLeastSignificantBits() >>> shift));
+        }
     }
 }

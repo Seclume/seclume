@@ -74,7 +74,8 @@ public final class MyResultSet extends ReadOnlyResultSet {
     /** Without a {@code String} and without {@code parseLong} - straight from the bytes. */
     @Override
     protected long longAt(int column) throws SQLException {
-        if (block.isBinary()) {
+        if (block.isBinary() || block.fields().get(column).type() == MyTypes.BIT) {
+            // A bit column carries its bits in both protocols, not digits.
             return BinaryValues.toLong(block, column);
         }
         int offset = block.offset(column);
@@ -125,7 +126,7 @@ public final class MyResultSet extends ReadOnlyResultSet {
     @Override
     protected boolean booleanAt(int column) throws SQLException {
         int type = block.fields().get(column).type();
-        if (block.isBinary() || MyTypes.binaryFixedLength(type) > 0) {
+        if (block.isBinary() || type == MyTypes.BIT || MyTypes.binaryFixedLength(type) > 0) {
             return longAt(column) != 0;
         }
         int offset = block.offset(column);

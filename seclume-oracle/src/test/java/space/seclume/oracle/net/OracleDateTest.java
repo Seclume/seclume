@@ -55,23 +55,29 @@ class OracleDateTest {
     /**
      * What the driver writes has to be what the driver reads - the two are
      * separate implementations of the same shifted bytes.
+     *
+     * <p>A {@code LocalDateTime} goes as a TIMESTAMP, eleven bytes, and not
+     * as the seven of a DATE: the four at the end are the fraction of a
+     * second, and binding a point in time as a DATE threw it away silently.
+     * The last two values here have one, so that a driver that went back to
+     * seven bytes would be caught by the value and not only by the length.
      */
     @ParameterizedTest
     @CsvSource({"2026-09-08T00:00", "1899-12-31T23:59:59", "2000-02-29T12:00:01",
-                "1970-01-01T00:00", "2099-12-31T23:59:59"})
+                "1970-01-01T00:00", "2099-12-31T23:59:59",
+                "2026-09-20T11:29:16.153456789", "2026-09-20T11:29:16.000000001"})
     void readsBackWhatItWrote(String value) throws Exception {
         LocalDateTime stamp = LocalDateTime.parse(value);
         TtcBinds binds = new TtcBinds();
         binds.set(1, stamp);
         try (WireBuffer out = new WireBuffer(32)) {
             binds.putValues(out);
-            // Behind the ROW_DATA byte comes the length, and then the seven
-            // bytes themselves.
+            // Behind the ROW_DATA byte comes the length, and then the bytes.
             int length = out.getByte(1) & 0xff;
-            assertEquals(OracleDate.DATE_LENGTH, length);
-            assertEquals(stamp.toString().replace('T', ' ')
-                            + (stamp.getSecond() == 0 ? ":00" : ""),
-                    OracleDate.toText(out.segment(), 2, length));
+            assertEquals(OracleDate.DATE_LENGTH + 4, length);
+            String expected = stamp.toString().replace('T', ' ')
+                    + (stamp.getSecond() == 0 && stamp.getNano() == 0 ? ":00" : "");
+            assertEquals(expected, OracleDate.toText(out.segment(), 2, length));
         }
     }
 }

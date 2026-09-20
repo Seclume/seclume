@@ -443,6 +443,7 @@ public final class TdsSession implements AutoCloseable {
         }
 
         private int handle;
+        private String declaration = "";
 
         public int handle() {
             return handle;
@@ -450,6 +451,23 @@ public final class TdsSession implements AutoCloseable {
 
         public boolean isPrepared() {
             return handle != 0;
+        }
+
+        /**
+         * Whether the compiled statement still fits the row about to be sent.
+         *
+         * <p>A handle is compiled <b>with</b> its parameter declaration -
+         * {@code @P14 nvarchar(1)} - and every row sent through it afterwards
+         * is converted to those types. So a batch whose first row passed a
+         * null (declared {@code nvarchar(1)}) and whose second passes
+         * "DORMANT" does not fail: the server silently truncates it to "D".
+         * That is a data error with no error message, and it is what a check
+         * constraint caught here by accident. The declaration is therefore
+         * kept and compared, and the statement is compiled again when it
+         * changes.
+         */
+        boolean fits(String wanted) {
+            return handle != 0 && declaration.equals(wanted);
         }
     }
 
@@ -488,6 +506,7 @@ public final class TdsSession implements AutoCloseable {
                         + "number", "HY000");
             }
             prepared.handle = handle;
+            prepared.declaration = declaration;
             // updateCount(), not updateCounts(): the latter is only filled
             // when a number of answers was announced in advance, which is the
             // batch case. This is a single call with a single count.
@@ -541,12 +560,16 @@ public final class TdsSession implements AutoCloseable {
                            int count, BatchBinder binder) throws SQLException {
         long[] counts = new long[count]; // seclume-allow: update counts, not a secret
         int at = 0;
-        if (!prepared.isPrepared()) {
+        binder.bind(0);
+        if (!prepared.fits(parameters.declaration())) {
             // The first row compiles the statement and brings the handle back.
             // It costs a round trip of its own - once per statement, not once
             // per batch - and every row after it travels as a handle and its
             // values instead of the whole statement text.
-            binder.bind(0);
+            if (prepared.isPrepared()) {
+                unprepare(prepared.handle());
+                prepared.handle = 0;
+            }
             counts[0] = prepExec(prepared, sql, parameters);
             at = 1;
             if (at >= count) {
@@ -561,10 +584,17 @@ public final class TdsSession implements AutoCloseable {
                 WireBuffer out = channel.begin();
                 putAllHeaders(out);
                 while (at < count && sent < BATCH_ROWS && out.position() < BATCH_BYTES) {
+                    binder.bind(at);
+                    if (!prepared.fits(parameters.declaration())) {
+                        // This row needs other types than the handle was
+                        // compiled with - a longer string, a value where the
+                        // last row had a null. Send what is gathered, then
+                        // compile again for the rest.
+                        break;
+                    }
                     if (sent > 0) {
                         out.putByte((byte) RPC_SEPARATOR);
                     }
-                    binder.bind(at);
                     out.putShortLe((short) 0xffff);
                     out.putShortLe((short) PROC_SP_EXECUTE);
                     out.putShortLe((short) 0);        // no options
@@ -572,6 +602,15 @@ public final class TdsSession implements AutoCloseable {
                     parameters.writeAll(out);
                     at++;
                     sent++;
+                }
+                if (sent == 0) {
+                    // The very next row already needs another shape.
+                    unprepare(prepared.handle());
+                    prepared.handle = 0;
+                    counts[at] = prepExec(prepared, sql, parameters);
+                    at++;
+                    flushPending();
+                    continue;
                 }
                 channel.send(Tds.TYPE_RPC);
                 TokenStream answer = readAnswer(null, sent);

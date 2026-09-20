@@ -26,6 +26,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -805,6 +806,81 @@ class LocalOracleJdbcTest {
             }
             assertEquals(List.of("N 1 2", "DOUBLED 2 2", "NOTE 4 12"), described);
             statement.execute("drop procedure zl_described");
+        }
+    }
+
+    /**
+     * A timestamp keeps its fraction of a second.
+     *
+     * <p>Oracle's {@code DATE} has no fraction, and binding a point in time
+     * as one throws it away without a word. That is not a rounding detail:
+     * Hibernate's {@code @LastModifiedDate} writes a value and compares it
+     * with what comes back, and two timestamps that differ by 153
+     * milliseconds are then equal. The value here has a fraction that
+     * survives neither a DATE nor a truncation to milliseconds.
+     */
+    @Test
+    void aTimestampKeepsItsFractionOfASecond() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("begin execute immediate 'drop table zl_stamp'; "
+                    + "exception when others then null; end;");
+            // timestamp(9), because the default is six digits and would
+            // truncate the value before the driver ever saw it.
+            statement.execute("create table zl_stamp (at timestamp(9))");
+            LocalDateTime written = LocalDateTime.of(2026, 9, 20, 11, 29, 16, 153_456_789);
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into zl_stamp (at) values (?)")) {
+                insert.setObject(1, written);
+                insert.executeUpdate();
+            }
+            try (ResultSet rows = statement.executeQuery("select at from zl_stamp")) {
+                assertTrue(rows.next());
+                assertEquals(written, rows.getObject(1, LocalDateTime.class),
+                        "the fraction of a second did not survive");
+            }
+            statement.execute("drop table zl_stamp");
+        }
+    }
+
+    /**
+     * {@code select ... for update} answers with its rows.
+     *
+     * <p>Hibernate writes this for a pessimistic lock, and a driver that
+     * returns nothing for it does not fail - the application simply finds no
+     * row and concludes there is none to lock.
+     */
+    @Test
+    void aSelectForUpdateReturnsItsRows() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            connection.setAutoCommit(false);
+            statement.execute("begin execute immediate 'drop table zl_locked'; "
+                    + "exception when others then null; end;");
+            statement.execute("create table zl_locked (id number primary key)");
+            statement.executeUpdate("insert into zl_locked (id) values (7)");
+            statement.executeUpdate("insert into zl_locked (id) values (8)");
+            statement.executeUpdate("insert into zl_locked (id) values (9)");
+            try (ResultSet rows = statement.executeQuery(
+                    "select id from zl_locked where id = 7 for update")) {
+                assertTrue(rows.next(), "the locking read came back empty");
+                assertEquals(7, rows.getInt(1));
+            }
+            // And with more than one row, because the rowid that a for-update
+            // answer carries comes once per row: a walk that skipped it only
+            // after the description would read the first row and lose the
+            // rest.
+            java.util.List<Integer> all = new java.util.ArrayList<>();
+            try (ResultSet rows = statement.executeQuery(
+                    "select id from zl_locked order by id for update")) {
+                while (rows.next()) {
+                    all.add(rows.getInt(1));
+                }
+            }
+            assertEquals(java.util.List.of(7, 8, 9), all, "the locking read lost rows");
+            connection.rollback();
+            connection.setAutoCommit(true);
+            statement.execute("drop table zl_locked");
         }
     }
 }

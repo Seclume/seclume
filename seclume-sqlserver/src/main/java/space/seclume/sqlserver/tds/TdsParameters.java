@@ -44,6 +44,16 @@ public final class TdsParameters {
     private static final int DECIMAL_SIZE = 17;
     /** SQL Server's largest precision. */
     private static final int MAX_PRECISION = 38;
+    /**
+     * The scales a decimal is declared with - rounded up, not exact.
+     *
+     * <p>A compiled statement is compiled <b>with</b> its declaration, so a
+     * declaration that follows the value needs a new compilation whenever
+     * the value's shape changes. For text and binary that is settled by
+     * declaring the full width (see {@link #typeName}); a decimal's scale
+     * cannot be widened without limit, so it is rounded up to one of these.
+     */
+    private static final int[] SCALES = {0, 2, 4, 8, 16, 30};
     /** 100-nanosecond ticks, the finest SQL Server offers. */
     private static final int TIME_SCALE = 7;
     /** Days from 0001-01-01 to 1970-01-01 - the epoch the wire counts from. */
@@ -139,6 +149,16 @@ public final class TdsParameters {
         }
     }
 
+    /** The smallest of the given sizes that holds this one. */
+    private static int bucket(int needed, int[] sizes) {
+        for (int size : sizes) {
+            if (needed <= size) {
+                return size;
+            }
+        }
+        return sizes[sizes.length - 1];
+    }
+
     // ---- one parameter ---------------------------------------------------
 
     /**
@@ -147,7 +167,8 @@ public final class TdsParameters {
      */
     private static String typeName(Object value) throws SQLException {
         return switch (value) {
-            case null -> "nvarchar(1)";
+            case null -> "nvarchar(" + MAX_NVARCHAR_CHARS + ")";
+            case TypedNull typed -> typed.declaration();
             case Boolean ignored -> "bit";
             case Byte ignored -> "int";
             case Short ignored -> "int";
@@ -155,13 +176,19 @@ public final class TdsParameters {
             case Long ignored -> "bigint";
             case Float ignored -> "real";
             case Double ignored -> "float";
-            case BigDecimal number -> "decimal(" + MAX_PRECISION + "," + scaleOf(number) + ")";
+            case BigDecimal number -> "decimal(" + MAX_PRECISION + ","
+                    + bucket(scaleOf(number), SCALES) + ")";
+            // The full width, not the value's: a parameter is declared once
+            // per compiled statement and the value's own length travels with
+            // the value. Declaring the length made a batch of two hundred
+            // rows recompile on every row whose text was a character longer,
+            // and - worse - let a handle compiled for a null (nvarchar(1))
+            // truncate the next row's "DORMANT" to "D" without a word. This
+            // is also what the vendor's driver sends.
             case String text -> text.length() > MAX_NVARCHAR_CHARS
-                    ? "nvarchar(max)"
-                    : "nvarchar(" + Math.max(text.length(), 1) + ")";
+                    ? "nvarchar(max)" : "nvarchar(" + MAX_NVARCHAR_CHARS + ")";
             case byte[] bytes -> bytes.length > MAX_VARBINARY_BYTES
-                    ? "varbinary(max)"
-                    : "varbinary(" + Math.max(bytes.length, 1) + ")";
+                    ? "varbinary(max)" : "varbinary(" + MAX_VARBINARY_BYTES + ")";
             case java.sql.Date ignored -> "date";
             case LocalDate ignored -> "date";
             case java.sql.Time ignored -> "time(" + TIME_SCALE + ")";
@@ -169,6 +196,7 @@ public final class TdsParameters {
             case java.sql.Timestamp ignored -> "datetime2(" + TIME_SCALE + ")";
             case LocalDateTime ignored -> "datetime2(" + TIME_SCALE + ")";
             case OffsetDateTime ignored -> "datetimeoffset(" + TIME_SCALE + ")";
+            case java.util.UUID ignored -> "uniqueidentifier";
             default -> throw unsupported(value);
         };
     }
@@ -178,12 +206,8 @@ public final class TdsParameters {
         putBVarchar(out, name);
         out.putByte((byte) 0);                        // input parameter
         switch (value) {
-            case null -> {
-                out.putByte((byte) TdsTypes.NVARCHAR);
-                out.putShortLe((short) 2);
-                putCollation(out);
-                out.putShortLe((short) 0xffff);       // NULL
-            }
+            case null -> putNull(out, java.sql.Types.NULL);
+            case TypedNull typed -> putNull(out, typed.sqlType());
             case Boolean flag -> {
                 out.putByte((byte) TdsTypes.BITN);
                 out.putByte((byte) 1);
@@ -216,7 +240,83 @@ public final class TdsParameters {
             case java.sql.Timestamp stamp -> putDateTime2(out, stamp.toLocalDateTime());
             case LocalDateTime stamp -> putDateTime2(out, stamp);
             case OffsetDateTime stamp -> putDateTimeOffset(out, stamp);
+            case java.util.UUID id -> putGuid(out, id);
             default -> throw unsupported(value);
+        }
+    }
+
+    /**
+     * A {@code uniqueidentifier}: sixteen bytes, and not in the order the
+     * text has them.
+     *
+     * <p>SQL Server stores the first three groups little-endian and the last
+     * two as written. A GUID with those bytes the wrong way round still
+     * looks like a GUID and still sorts and joins - it is simply a different
+     * one, which is why the order is spelled out here as it is in
+     * {@code TdsValues} for the way back.
+     */
+    private static void putGuid(WireBuffer out, java.util.UUID id) {
+        out.putByte((byte) TdsTypes.GUID);
+        out.putByte((byte) 16);                       // the declared length
+        out.putByte((byte) 16);                       // the length of this value
+        long high = id.getMostSignificantBits();
+        long low = id.getLeastSignificantBits();
+        out.putIntLe((int) (high >>> 32));            // the first group, swapped
+        out.putShortLe((short) (high >>> 16));        // the second
+        out.putShortLe((short) high);                 // the third
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            out.putByte((byte) (low >>> shift));      // the last two, as written
+        }
+    }
+
+    /**
+     * A null with the type the caller named.
+     *
+     * <p>An untyped null is declared {@code nvarchar(1)}, and SQL Server
+     * refuses to put that into a {@code varbinary} or a {@code date}:
+     * "Implicit conversion from data type nvarchar to varbinary is not
+     * allowed". Every entity with a null {@code byte[]} in it therefore
+     * failed to save. {@code setNull} carries the type for exactly this
+     * reason, and here it is used.
+     */
+    private static void putNull(WireBuffer out, int sqlType) {
+        switch (sqlType) {
+            case java.sql.Types.BINARY, java.sql.Types.VARBINARY,
+                 java.sql.Types.LONGVARBINARY, java.sql.Types.BLOB -> {
+                out.putByte((byte) TdsTypes.BIGVARBINARY);
+                out.putShortLe((short) 1);
+                out.putShortLe((short) 0xffff);       // NULL
+            }
+            default -> {
+                out.putByte((byte) TdsTypes.NVARCHAR);
+                out.putShortLe((short) 2);
+                putCollation(out);
+                out.putShortLe((short) 0xffff);       // NULL
+            }
+        }
+    }
+
+    /** What a null of that type is declared as in the RPC's parameter list. */
+    public record TypedNull(int sqlType) {
+
+        String declaration() {
+            return switch (sqlType) {
+                case java.sql.Types.BINARY, java.sql.Types.VARBINARY,
+                     java.sql.Types.LONGVARBINARY, java.sql.Types.BLOB ->
+                        "varbinary(" + MAX_VARBINARY_BYTES + ")";
+                case java.sql.Types.DATE -> "date";
+                case java.sql.Types.TIME -> "time";
+                case java.sql.Types.TIMESTAMP -> "datetime2";
+                case java.sql.Types.TIMESTAMP_WITH_TIMEZONE -> "datetimeoffset";
+                case java.sql.Types.TINYINT, java.sql.Types.SMALLINT,
+                     java.sql.Types.INTEGER -> "int";
+                case java.sql.Types.BIGINT -> "bigint";
+                case java.sql.Types.BOOLEAN, java.sql.Types.BIT -> "bit";
+                case java.sql.Types.REAL -> "real";
+                case java.sql.Types.FLOAT, java.sql.Types.DOUBLE -> "float";
+                case java.sql.Types.DECIMAL, java.sql.Types.NUMERIC -> "decimal(38,10)";
+                default -> "nvarchar(" + MAX_NVARCHAR_CHARS + ")";
+            };
         }
     }
 

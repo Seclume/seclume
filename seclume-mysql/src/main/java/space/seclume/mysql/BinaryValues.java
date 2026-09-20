@@ -36,6 +36,7 @@ public final class BinaryValues {
                 yield unsigned ? value : (int) value;
             }
             case MyTypes.LONGLONG -> row.unsignedAt(at, 8);
+            case MyTypes.BIT -> bits(row, at, length);
             case MyTypes.FLOAT -> (long) Float.intBitsToFloat((int) row.unsignedAt(at, 4));
             case MyTypes.DOUBLE -> (long) Double.longBitsToDouble(row.unsignedAt(at, 8));
             default -> {
@@ -47,6 +48,25 @@ public final class BinaryValues {
         };
     }
 
+    /**
+     * A {@code bit} column: the bits themselves, most significant byte
+     * first.
+     *
+     * <p>Not text, which is what everything else that is not a fixed-width
+     * number arrives as - a {@code bit(1)} holding true is the single byte
+     * 0x01, and reading that as a digit yields no number at all. Hibernate
+     * maps a Java {@code boolean} to {@code bit(1)} on MySQL, so this is the
+     * ordinary case: the error was "For input string" on every entity with a
+     * boolean in it.
+     */
+    private static long bits(ValueCells row, int at, int length) {
+        long value = 0;
+        for (int i = 0; i < length; i++) {
+            value = (value << 8) | (row.byteAt(at + i) & 0xff);
+        }
+        return value;
+    }
+
     /** The floating-point number from the raw bytes. */
     public static double toDouble(ValueCells row, int column) {
         MySession.Field field = row.fields().get(column);
@@ -55,7 +75,7 @@ public final class BinaryValues {
             case MyTypes.FLOAT -> Float.intBitsToFloat((int) row.unsignedAt(at, 4));
             case MyTypes.DOUBLE -> Double.longBitsToDouble(row.unsignedAt(at, 8));
             case MyTypes.TINY, MyTypes.SHORT, MyTypes.YEAR, MyTypes.LONG,
-                 MyTypes.INT24, MyTypes.LONGLONG -> toLong(row, column);
+                 MyTypes.INT24, MyTypes.LONGLONG, MyTypes.BIT -> toLong(row, column);
             default -> Double.parseDouble(row.textAt(at, row.length(column)).trim());
         };
     }
@@ -67,7 +87,7 @@ public final class BinaryValues {
         int length = row.length(column);
         return switch (field.type()) {
             case MyTypes.TINY, MyTypes.SHORT, MyTypes.YEAR, MyTypes.LONG,
-                 MyTypes.INT24 -> Long.toString(toLong(row, column));
+                 MyTypes.INT24, MyTypes.BIT -> Long.toString(toLong(row, column));
             case MyTypes.LONGLONG -> {
                 long value = row.unsignedAt(at, 8);
                 yield field.unsigned() ? Long.toUnsignedString(value) : Long.toString(value);

@@ -8,6 +8,7 @@ import space.seclume.internal.WireBuffer;
 import space.seclume.internal.jdbc.ReadOnlyResultSet;
 import space.seclume.oracle.net.TtcLob;
 import space.seclume.oracle.net.OracleColumn;
+import space.seclume.oracle.net.OracleFloat;
 import space.seclume.oracle.net.OracleDate;
 import space.seclume.oracle.net.OracleNumber;
 
@@ -172,12 +173,64 @@ public final class OraResultSet extends ReadOnlyResultSet {
         if (description.type() == OracleColumn.TYPE_NUMBER) {
             return OracleNumber.toText(block.data().segment(), at, length);
         }
+        if (OracleFloat.isBinaryFloat(description.type())) {
+            double value = OracleFloat.toDouble(block.data().segment(), at, length);
+            return description.type() == OracleColumn.TYPE_BINARY_FLOAT
+                    ? Float.toString((float) value) : Double.toString(value);
+        }
+        if (description.type() == OracleColumn.TYPE_BOOLEAN) {
+            return length > 0 && block.data().getByte(at) != 0 ? "1" : "0";
+        }
         if (OracleDate.isDate(description.type())) {
             return OracleDate.toText(block.data().segment(), at, length);
         }
+        return utf8(at, length);
+    }
+
+    /**
+     * The bytes of a text column, decoded as UTF-8.
+     *
+     * <p>The driver logs in with AL32UTF8 and the server answers in it, so a
+     * character outside ASCII arrives as two bytes or more. Reading them one
+     * byte per character - which is what this did - turns "Grüße" into
+     * "GrÃ¼ÃŸe", and only for the values that have such a character in them.
+     *
+     * <p>Written out rather than handed to {@code new String(bytes, UTF_8)}:
+     * that would need the bytes in a heap array first, which is the one
+     * thing this project does not do. A malformed sequence becomes the
+     * replacement character rather than throwing - a result set is no place
+     * to fail over one bad byte.
+     */
+    private String utf8(int at, int length) {
         StringBuilder text = new StringBuilder(length); // seclume-allow: user payload requested as text, not a secret
-        for (int i = 0; i < length; i++) {
-            text.append((char) (block.data().getByte(at + i) & 0xff));
+        int i = 0;
+        while (i < length) {
+            int first = block.data().getByte(at + i) & 0xff;
+            i++;
+            if (first < 0x80) {
+                text.append((char) first);
+                continue;
+            }
+            int following = first >= 0xf0 ? 3 : first >= 0xe0 ? 2 : first >= 0xc0 ? 1 : -1;
+            if (following < 0 || i + following > length) {
+                text.append('�');
+                continue;
+            }
+            int point = first & (0x3f >> following);
+            for (int k = 0; k < following; k++) {
+                int next = block.data().getByte(at + i + k) & 0xff;
+                if ((next & 0xc0) != 0x80) {
+                    point = -1;
+                    break;
+                }
+                point = (point << 6) | (next & 0x3f);
+            }
+            if (point < 0) {
+                text.append('�');
+                continue;
+            }
+            i += following;
+            text.appendCodePoint(point);
         }
         return text.toString();
     }
@@ -188,6 +241,14 @@ public final class OraResultSet extends ReadOnlyResultSet {
         if (description.type() == OracleColumn.TYPE_NUMBER) {
             return OracleNumber.toLong(block.data().segment(), block.offset(column),
                     block.length(column));
+        }
+        if (OracleFloat.isBinaryFloat(description.type())) {
+            return (long) OracleFloat.toDouble(block.data().segment(), block.offset(column),
+                    block.length(column));
+        }
+        if (description.type() == OracleColumn.TYPE_BOOLEAN) {
+            return block.length(column) > 0
+                    && block.data().getByte(block.offset(column)) != 0 ? 1 : 0;
         }
         try {
             return Long.parseLong(stringAt(column).trim());
@@ -202,6 +263,10 @@ public final class OraResultSet extends ReadOnlyResultSet {
         OracleColumn description = block.column(column);
         if (description.type() == OracleColumn.TYPE_NUMBER) {
             return OracleNumber.toDouble(block.data().segment(), block.offset(column),
+                    block.length(column));
+        }
+        if (OracleFloat.isBinaryFloat(description.type())) {
+            return OracleFloat.toDouble(block.data().segment(), block.offset(column),
                     block.length(column));
         }
         try {

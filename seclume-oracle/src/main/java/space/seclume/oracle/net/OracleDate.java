@@ -28,6 +28,10 @@ public final class OracleDate {
     private static final int YEAR_BIAS = 100;
     /** Hour, minute and second are shifted by this. */
     private static final int TIME_BIAS = 1;
+    /** Oracle's offset for the hours of a time zone. */
+    private static final int ZONE_HOUR_BIAS = 20;
+    /** And for its minutes. */
+    private static final int ZONE_MINUTE_BIAS = 60;
     /** Digits of a fraction of a second. */
     private static final int NANO_DIGITS = 9;
 
@@ -79,6 +83,20 @@ public final class OracleDate {
                     text.setLength(text.length() - 1);
                 }
             }
+        }
+        if (length >= DATE_LENGTH + 6) {
+            // A TIMESTAMP WITH TIME ZONE carries two more bytes: the hour
+            // shifted by 20 and the minute by 60. Dropping them, which this
+            // did, turns a value that names a point in time into bare
+            // fields - and whoever reads it then reads them in the machine's
+            // own zone. An Instant written as 09:29 UTC came back as 07:29
+            // UTC on a machine two hours ahead, with nothing to show for it.
+            int hours = byteAt(in, at + DATE_LENGTH + 4) - ZONE_HOUR_BIAS;
+            int minutes = byteAt(in, at + DATE_LENGTH + 5) - ZONE_MINUTE_BIAS;
+            text.append(hours < 0 || minutes < 0 ? '-' : '+');
+            pad(text, Math.abs(hours), 2);
+            text.append(':');
+            pad(text, Math.abs(minutes), 2);
         }
         return text.toString();
     }

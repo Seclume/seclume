@@ -201,6 +201,13 @@ public final class TtcResult {
         }
         int keyLength = in.getByte(p) & 0xff;          // rxhrid
         p += 1 + (keyLength == 0 ? 0 : keyLength);
+        if (keyLength > 0) {
+            // What rxhrid announces is the row's rowid, and it follows as a
+            // block of its own - see TtcDescribe, where the same pair stands
+            // after the description of the first row. Only a "for update"
+            // answer carries it.
+            p = skipBlock(in, p);
+        }
         return new Header(unchanged, p);
     }
 

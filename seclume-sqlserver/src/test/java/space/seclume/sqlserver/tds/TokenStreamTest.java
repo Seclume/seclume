@@ -167,8 +167,13 @@ class TokenStreamTest {
         assertEquals("2026-09-07", rows.get(0).get(0).text());
         assertEquals("14:30:15", rows.get(0).get(1).text());
         assertEquals("2026-09-07 14:30:15.250", rows.get(0).get(2).text());
-        // datetimeoffset holds UTC on the wire, the offset next to it.
-        assertEquals("2026-09-07 12:30:15 +02:00", rows.get(0).get(3).text());
+        // datetimeoffset holds UTC on the wire with the offset beside it, so
+        // the local time it names is the wire value plus the offset. This
+        // used to expect "12:30:15 +02:00" - the UTC fields with the offset
+        // written after them, which names a point in time two hours earlier
+        // than the bytes do. A real server confirmed the reading: an
+        // OffsetDateTime written and read back came out two hours off.
+        assertEquals("2026-09-07 14:30:15 +02:00", rows.get(0).get(3).text());
     }
 
     /** A number as little-endian bytes - the order everything in TDS uses. */

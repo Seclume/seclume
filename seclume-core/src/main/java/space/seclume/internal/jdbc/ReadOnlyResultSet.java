@@ -81,30 +81,30 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     protected abstract Object objectAt(int column) throws SQLException;
 
     /**
-     * A large value as a {@code Clob}, for drivers that have them.
+     * A large value as a {@code Clob}.
      *
-     * <p>Refused by default, and that is the honest answer for a driver whose
-     * values arrive whole: a {@code Clob} promises that the value can be read
-     * in pieces and does not have to fit in memory. Only a driver that can keep
-     * that promise should override this.
+     * <p>Over the value the row already carries, which is what
+     * {@link Lobs} explains: accurate about the content, no claim about
+     * laziness. A driver that can genuinely stream - Oracle, through its
+     * locators - overrides this and hands out the real thing.
      */
     protected Clob clobAt(int column) throws SQLException {
-        throw noSuchType("CLOB");
+        return Lobs.text(stringAt(column));
     }
 
     /** The same for a {@code Blob}. */
     protected Blob blobAt(int column) throws SQLException {
-        throw noSuchType("BLOB");
+        return Lobs.binary(bytesAt(column));
     }
 
-    /** A large text value read in pieces. Refused by default. */
+    /** A large text value as a reader. */
     protected Reader readerAt(int column) throws SQLException {
-        throw noSuchType("reader");
+        return new java.io.StringReader(stringAt(column));
     }
 
-    /** A large binary value read in pieces. Refused by default. */
+    /** A large binary value as a stream. */
     protected InputStream binaryStreamAt(int column) throws SQLException {
-        throw noSuchType("stream");
+        return new java.io.ByteArrayInputStream(bytesAt(column));
     }
 
     /** The zero-based index for a column name, or -1. */
@@ -299,20 +299,88 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return text == null ? null : Date.valueOf(text.length() > 10 ? text.substring(0, 10) : text);
     }
 
+    /**
+     * A time of day, whatever the column holds it in.
+     *
+     * <p>Oracle has no type for a time without a date - Hibernate maps one
+     * to a timestamp there - so the value may arrive as a whole timestamp.
+     * The time part of it is what was asked for; a fraction of a second is
+     * dropped, as {@code java.sql.Time} has nowhere to keep it.
+     */
     @Override
     public final Time getTime(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
         if (text == null) {
             return null;
         }
-        int dot = text.indexOf('.');
-        return Time.valueOf(dot < 0 ? text : text.substring(0, dot));
+        String value = text.trim().replace('T', ' ');
+        int space = value.indexOf(' ');
+        if (space > 0 && value.indexOf(':') > space) {
+            value = value.substring(space + 1);
+        }
+        int dot = value.indexOf('.');
+        return Time.valueOf(dot < 0 ? value : value.substring(0, dot));
     }
 
+    /**
+     * A point in time, whether or not the column carries a zone.
+     *
+     * <p>{@code Timestamp.valueOf} takes exactly one shape and throws on
+     * anything else, and three of the four servers hand out a
+     * {@code timestamptz} or {@code datetimeoffset} with the offset written
+     * after it - "2026-09-20 09:29:16.153+02" on PostgreSQL,
+     * "... .1530000 +00:00" on SQL Server. Those are the columns Hibernate
+     * maps an {@code Instant} to, so the shape is ordinary rather than
+     * exotic. Where an offset is there it is used, and the result names the
+     * same point in time in the JVM's zone; where there is none nothing
+     * changes.
+     */
     @Override
     public final Timestamp getTimestamp(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
-        return text == null ? null : Timestamp.valueOf(text.replace('T', ' '));
+        if (text == null) {
+            return null;
+        }
+        java.time.OffsetDateTime zoned = withOffset(text);
+        return zoned == null ? Timestamp.valueOf(text.replace('T', ' ').trim())
+                : Timestamp.from(zoned.toInstant());
+    }
+
+    /**
+     * The value as it stands, when it carries a zone; {@code null} when it
+     * does not.
+     *
+     * <p>Written out rather than handed to a formatter because the four
+     * spell the offset in four ways: {@code Z}, {@code +02}, {@code +02:00}
+     * and {@code +0200}, the last two with or without a space in front.
+     */
+    private static java.time.OffsetDateTime withOffset(String raw) {
+        String text = raw.trim().replace('T', ' ');
+        int time = text.indexOf(' ');
+        if (time < 0) {
+            return null;
+        }
+        int zone = -1;
+        for (int i = time + 1; i < text.length() && zone < 0; i++) {
+            char c = text.charAt(i);
+            if (c == '+' || c == '-' || c == 'Z' || c == 'z') {
+                zone = i;
+            }
+        }
+        if (zone < 0) {
+            return null;
+        }
+        String stamp = text.substring(0, zone).trim();
+        String offset = text.substring(zone).trim();
+        if (offset.length() == 3) {
+            offset = offset + ":00";                   // "+02" is a whole hour
+        }
+        try {
+            return java.time.LocalDateTime.parse(stamp.replace(' ', 'T'))
+                    .atOffset(java.time.ZoneOffset.of(offset.toUpperCase(java.util.Locale.ROOT)));
+        } catch (java.time.DateTimeException notAZone) {
+            return null;
+        }
     }
 
     @Override
@@ -340,18 +408,74 @@ public abstract class ReadOnlyResultSet implements ResultSet {
                 yield time == null ? null : time.toLocalTime();
             }
             case "java.time.LocalDateTime" -> {
+                String text = getString(columnIndex);
+                java.time.OffsetDateTime zoned = text == null ? null : withOffset(text);
+                if (zoned != null) {
+                    // A column with a zone read as a value without one: the
+                    // fields as they stand, not shifted into the JVM's zone.
+                    yield zoned.toLocalDateTime();
+                }
                 Timestamp timestamp = getTimestamp(columnIndex);
                 yield timestamp == null ? null : timestamp.toLocalDateTime();
             }
-            case "java.util.UUID" -> {
+            case "java.time.OffsetDateTime" -> {
                 String text = getString(columnIndex);
-                yield text == null ? null : java.util.UUID.fromString(text);
+                if (text == null) {
+                    yield null;
+                }
+                java.time.OffsetDateTime zoned = withOffset(text);
+                yield zoned != null ? zoned
+                        : Timestamp.valueOf(text.replace('T', ' ').trim()).toLocalDateTime()
+                                .atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime();
+            }
+            case "java.time.ZonedDateTime" -> {
+                java.time.OffsetDateTime zoned =
+                        getObject(columnIndex, java.time.OffsetDateTime.class);
+                yield zoned == null ? null : zoned.toZonedDateTime();
+            }
+            case "java.time.Instant" -> {
+                Timestamp timestamp = getTimestamp(columnIndex);
+                yield timestamp == null ? null : timestamp.toInstant();
+            }
+            case "java.time.OffsetTime" -> {
+                Time clock = getTime(columnIndex);
+                yield clock == null ? null : clock.toLocalTime()
+                        .atOffset(java.time.OffsetDateTime.now().getOffset());
+            }
+            case "java.util.UUID" -> {
+                // Two shapes, and which one it is depends on the column: the
+                // thirty-six characters of the text form, or the sixteen
+                // bytes a binary(16) or raw(16) holds - which is what
+                // Hibernate uses on MySQL and Oracle.
+                int stored = metaData().getColumnType(columnIndex);
+                if (stored == java.sql.Types.BINARY || stored == java.sql.Types.VARBINARY
+                        || stored == java.sql.Types.LONGVARBINARY) {
+                    byte[] bytes = getBytes(columnIndex);
+                    yield bytes == null ? null : uuidOf(bytes);
+                }
+                String text = getString(columnIndex);
+                yield text == null ? null : java.util.UUID.fromString(text.trim());
             }
             case "java.lang.Object" -> getObject(columnIndex);
             default -> throw new SQLFeatureNotSupportedException(
                     "seclume does not convert column " + columnIndex + " to " + type.getName());
         };
         return wasNull() ? null : type.cast(value);
+    }
+
+    /** Sixteen bytes, most significant first - the way all four store one. */
+    private static java.util.UUID uuidOf(byte[] bytes) throws SQLException {
+        if (bytes.length != 16) {
+            throw new SQLException("a UUID is sixteen bytes, and this column holds "
+                    + bytes.length);
+        }
+        long high = 0;
+        long low = 0;
+        for (int i = 0; i < 8; i++) {
+            high = (high << 8) | (bytes[i] & 0xffL);
+            low = (low << 8) | (bytes[i + 8] & 0xffL);
+        }
+        return new java.util.UUID(high, low);
     }
 
     // ---- access by column name -------------------------------------------
@@ -447,10 +571,22 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return getObject(findColumn(columnLabel), type);
     }
 
+    /**
+     * A date read as of a given calendar's time zone.
+     *
+     * <p>The mirror of the setters: the column holds wall-clock fields with
+     * no zone, the caller says which zone they are to be read in, and what
+     * comes back is the point on the time line those fields name there. This
+     * is how Hibernate reads an {@code Instant} - with a calendar in UTC -
+     * and refusing it, as this did, meant such an entity could not be read.
+     */
     @Override
     public final Date getDate(int columnIndex, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        return getDate(columnIndex);
+        Date value = getDate(columnIndex);
+        if (value == null || isDefaultCalendar(calendar)) {
+            return value;
+        }
+        return new Date(shifted(value.toLocalDate().atStartOfDay(), calendar));
     }
 
     @Override
@@ -460,8 +596,12 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final Time getTime(int columnIndex, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        return getTime(columnIndex);
+        Time value = getTime(columnIndex);
+        if (value == null || isDefaultCalendar(calendar)) {
+            return value;
+        }
+        return new Time(shifted(value.toLocalTime().atDate(java.time.LocalDate.EPOCH),
+                calendar));
     }
 
     @Override
@@ -469,10 +609,30 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return getTime(findColumn(columnLabel), calendar);
     }
 
+    /**
+     * A point in time, read as of the calendar's zone.
+     *
+     * <p><b>A column that carries its own offset is not shifted.</b> It
+     * already names a point on the time line, and applying the calendar on
+     * top of it moves the value by the difference between the two zones -
+     * which is how an {@code Instant} written as 09:29 UTC came back as
+     * 11:29 UTC on a machine two hours ahead. The calendar says how to read
+     * fields that have no zone, and only those.
+     */
     @Override
-    public final Timestamp getTimestamp(int columnIndex, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        return getTimestamp(columnIndex);
+    public final Timestamp getTimestamp(int columnIndex, Calendar calendar)
+            throws SQLException {
+        Timestamp value = getTimestamp(columnIndex);
+        if (value == null || isDefaultCalendar(calendar)) {
+            return value;
+        }
+        String text = getString(columnIndex);
+        if (text != null && withOffset(text) != null) {
+            return value;
+        }
+        Timestamp shifted = new Timestamp(shifted(value.toLocalDateTime(), calendar));
+        shifted.setNanos(value.getNanos());
+        return shifted;
     }
 
     @Override
@@ -481,18 +641,15 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return getTimestamp(findColumn(columnLabel), calendar);
     }
 
-    /**
-     * A foreign calendar asks for a time zone conversion this driver does not
-     * perform. Silently skipping it would be a data error that only shows up
-     * months later.
-     */
-    private static void requireDefaultCalendar(Calendar calendar) throws SQLException {
-        if (calendar != null
-                && !calendar.getTimeZone().equals(java.util.TimeZone.getDefault())) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume reads dates and times in the JVM's time zone - ask for an "
-                    + "OffsetDateTime if you need a specific zone");
-        }
+    /** Whether the calendar asks for anything the value does not already say. */
+    private static boolean isDefaultCalendar(Calendar calendar) {
+        return calendar == null
+                || calendar.getTimeZone().equals(java.util.TimeZone.getDefault());
+    }
+
+    /** The epoch milliseconds of wall-clock fields read in the calendar's zone. */
+    private static long shifted(java.time.LocalDateTime fields, Calendar calendar) {
+        return fields.atZone(calendar.getTimeZone().toZoneId()).toInstant().toEpochMilli();
     }
 
     // ---- state -----------------------------------------------------------
@@ -1146,9 +1303,11 @@ public abstract class ReadOnlyResultSet implements ResultSet {
                 + "or byte[] instead");
     }
 
+    /** One byte per character, as JDBC defines it - see {@link Lobs#asciiStream}. */
     @Override
     public final InputStream getAsciiStream(int columnIndex) throws SQLException {
-        throw noSuchType("stream");
+        int column = check(columnIndex);
+        return lastWasNull ? null : Lobs.asciiStream(stringAt(column));
     }
 
     @Override
@@ -1165,7 +1324,7 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final InputStream getAsciiStream(String columnLabel) throws SQLException {
-        throw noSuchType("stream");
+        return getAsciiStream(columnIndexOf(columnLabel) + 1);
     }
 
     @Override
@@ -1192,12 +1351,12 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final Reader getNCharacterStream(int columnIndex) throws SQLException {
-        throw noSuchType("reader");
+        return getCharacterStream(columnIndex);
     }
 
     @Override
     public final Reader getNCharacterStream(String columnLabel) throws SQLException {
-        throw noSuchType("reader");
+        return getCharacterStream(columnLabel);
     }
 
     @Override
@@ -1254,14 +1413,29 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return getClob(columnIndexOf(columnLabel) + 1);
     }
 
+    /**
+     * The national-character variant of {@link #getClob}.
+     *
+     * <p>None of the four servers hands the driver anything different for an
+     * {@code NVARCHAR} than for a {@code VARCHAR} - the text has already been
+     * decoded by the time it gets here - so this is the same value under the
+     * interface JDBC asks for. Where a driver overrides {@code clobAt} with a
+     * real locator, that one has to be an {@code NClob} as well, and it says
+     * so if it is not.
+     */
     @Override
     public final NClob getNClob(int columnIndex) throws SQLException {
-        throw noSuchType("NCLOB");
+        Clob clob = getClob(columnIndex);
+        if (clob == null || clob instanceof NClob national) {
+            return (NClob) clob;
+        }
+        throw new SQLException("this driver's large text values are not national-character "
+                + "ones - read the column with getClob or getString");
     }
 
     @Override
     public final NClob getNClob(String columnLabel) throws SQLException {
-        throw noSuchType("NCLOB");
+        return getNClob(columnIndexOf(columnLabel) + 1);
     }
 
     @Override
@@ -1294,13 +1468,23 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         throw noSuchType("SQLXML");
     }
 
+    /** A text column read as a URL, which is all any of the four stores. */
     @Override
     public final URL getURL(int columnIndex) throws SQLException {
-        throw noSuchType("URL");
+        String value = getString(columnIndex);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return java.net.URI.create(value).toURL();
+        } catch (java.net.MalformedURLException | IllegalArgumentException notAUrl) {
+            throw new SQLException("the column does not hold a URL: " + notAUrl.getMessage(),
+                    notAUrl);
+        }
     }
 
     @Override
     public final URL getURL(String columnLabel) throws SQLException {
-        throw noSuchType("URL");
+        return getURL(columnIndexOf(columnLabel) + 1);
     }
 }

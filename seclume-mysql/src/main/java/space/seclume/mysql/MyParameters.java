@@ -111,7 +111,15 @@ public final class MyParameters {
         if (value instanceof Double || value instanceof Float) {
             return MyTypes.DOUBLE;
         }
-        if (value instanceof byte[]) {
+        if (value instanceof Boolean) {
+            // As a number, not as the text "1": a bit(1) column takes the
+            // text as one character, which is eight bits, and the server
+            // answers "Data too long for column". Hibernate maps a boolean
+            // to bit(1) on MySQL, so this is the ordinary case and not an
+            // exotic one.
+            return MyTypes.LONGLONG;
+        }
+        if (value instanceof byte[] || value instanceof UUID) {
             return MyTypes.BLOB;
         }
         return MyTypes.VAR_STRING;
@@ -127,9 +135,27 @@ public final class MyParameters {
             out.putLongLe(Double.doubleToLongBits(((Number) value).doubleValue()));
             return;
         }
+        if (value instanceof Boolean flag) {
+            out.putLongLe(flag ? 1 : 0);
+            return;
+        }
         if (value instanceof byte[] bytes) {
             MyPackets.writeLengthEncoded(out, bytes.length);
             out.putBytes(MemorySegment.ofArray(bytes), 0, bytes.length);
+            return;
+        }
+        if (value instanceof UUID id) {
+            // Sixteen bytes, most significant first - what Hibernate's
+            // binary(16) column holds. As the thirty-six characters of its
+            // text form it would not fit, and the server says so with "Data
+            // too long" rather than storing something wrong.
+            MyPackets.writeLengthEncoded(out, 16);
+            for (int shift = 56; shift >= 0; shift -= 8) {
+                out.putByte((byte) (id.getMostSignificantBits() >>> shift));
+            }
+            for (int shift = 56; shift >= 0; shift -= 8) {
+                out.putByte((byte) (id.getLeastSignificantBits() >>> shift));
+            }
             return;
         }
         byte[] text = encode(value).getBytes(StandardCharsets.UTF_8); // seclume-allow: user payload, not a database password
@@ -171,8 +197,16 @@ public final class MyParameters {
         if (value instanceof LocalTime time) {
             return time.toString();
         }
-        if (value instanceof UUID uuid) {
-            return uuid.toString();
+        if (value instanceof java.time.OffsetDateTime stamp) {
+            // MySQL's datetime has no zone, so what is written are the
+            // wall-clock fields of the value itself. A caller who means a
+            // point in time regardless of zone passes a Timestamp with a
+            // calendar, which is what Hibernate does.
+            return stamp.toLocalDateTime().toString().replace('T', ' ');
+        }
+        if (value instanceof java.time.Instant instant) {
+            return java.time.LocalDateTime.ofInstant(instant, java.time.ZoneOffset.UTC)
+                    .toString().replace('T', ' ');
         }
         if (value instanceof Number || value instanceof CharSequence
                 || value instanceof Character) {

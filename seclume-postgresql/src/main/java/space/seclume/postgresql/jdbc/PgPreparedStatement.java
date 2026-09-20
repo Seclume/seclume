@@ -333,22 +333,57 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         set(index, value);
     }
 
+    /**
+     * The three with a calendar: the value is shifted into that zone rather
+     * than the calendar being refused.
+     *
+     * <p>This class writes out the setters itself instead of inheriting
+     * {@code ParameterSetters}, so the rule lives in two places - and it is
+     * the same rule, with the same reason: a calendar in UTC is how
+     * Hibernate writes an {@code Instant}, and refusing it made such an
+     * entity unsaveable.
+     */
     @Override
     public void setDate(int index, Date value, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        set(index, value);
+        if (value == null || isDefaultCalendar(calendar)) {
+            set(index, value);
+            return;
+        }
+        set(index, java.time.LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(value.getTime()),
+                calendar.getTimeZone().toZoneId()).toLocalDate());
     }
 
     @Override
     public void setTime(int index, Time value, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        set(index, value);
+        if (value == null || isDefaultCalendar(calendar)) {
+            set(index, value);
+            return;
+        }
+        set(index, java.time.LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(value.getTime()),
+                calendar.getTimeZone().toZoneId()).toLocalTime());
     }
 
+    /**
+     * With the offset written out, not as bare fields.
+     *
+     * <p>PostgreSQL reads a value without a zone into a
+     * {@code timestamptz} column <b>in the session's time zone</b>, so
+     * sending the UTC fields of an {@code Instant} without saying they are
+     * UTC moves the value by the machine's offset - a point in time written
+     * at 09:29Z came back as 07:29Z on a machine two hours ahead. With the
+     * offset there is nothing to guess; a column without a zone takes the
+     * fields and drops it, which is what the calendar asked for anyway.
+     */
     @Override
     public void setTimestamp(int index, Timestamp value, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        set(index, value);
+        if (value == null || isDefaultCalendar(calendar)) {
+            set(index, value);
+            return;
+        }
+        set(index, value.toInstant().atZone(calendar.getTimeZone().toZoneId())
+                .toOffsetDateTime());
     }
 
     @Override
@@ -382,18 +417,10 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         return parameters;
     }
 
-    /**
-     * A foreign calendar would call for a time-zone conversion this driver
-     * does not do - ignoring that silently would be a data error that only
-     * surfaces months later.
-     */
-    private void requireDefaultCalendar(Calendar calendar) throws SQLException {
-        if (calendar != null
-                && !calendar.getTimeZone().equals(java.util.TimeZone.getDefault())) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume sends dates and times in the JVM's time zone - pass an "
-                    + "OffsetDateTime if you need a specific zone");
-        }
+    /** Whether the calendar asks for anything the value does not already say. */
+    private static boolean isDefaultCalendar(Calendar calendar) {
+        return calendar == null
+                || calendar.getTimeZone().equals(java.util.TimeZone.getDefault());
     }
 
     // ---- metadata --------------------------------------------------------

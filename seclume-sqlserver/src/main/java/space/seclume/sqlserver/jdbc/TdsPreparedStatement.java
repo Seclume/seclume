@@ -145,6 +145,25 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
         parameters.set(index, value);
     }
 
+    /**
+     * A null with its type, because SQL Server declares every parameter.
+     *
+     * <p>The shared default throws the type away, which is right where the
+     * server infers it from the statement. An RPC does not: the parameter
+     * list says {@code @P1 nvarchar(1)}, and the server then refuses to put
+     * that into a {@code varbinary} column.
+     */
+    @Override
+    public void setNull(int index, int sqlType) throws SQLException {
+        setParameter(index, new space.seclume.sqlserver.tds
+                .TdsParameters.TypedNull(sqlType));
+    }
+
+    @Override
+    public void setNull(int index, int sqlType, String typeName) throws SQLException {
+        setNull(index, sqlType);
+    }
+
     @Override
     public void clearParameters() throws SQLException {
         checkOpen();

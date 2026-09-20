@@ -73,7 +73,19 @@ public final class TtcDescribe {
         reader.number();                               // dcbmdbz
         reader.number();                               // dcbmnpr
         reader.number();                               // dcbmxpr
-        reader.block();                                // dcbqcky
+        if (reader.block() > 0) {                      // dcbqcky
+            // Measured, not derived: in the answer to a "select ... for
+            // update" this block is one byte long and holds 0x0D, and behind
+            // it stands the row's rowid - thirteen bytes, length-prefixed.
+            // A plain select has the block empty and nothing behind it.
+            // Reading only the first block leaves the walk standing on the
+            // rowid's length byte, which is no message type, so it stops and
+            // the result looks empty: every pessimistic lock found no row.
+            // See docs/protocol/oracle.md, which records one row and
+            // three rows so that a per-row field can be told from a per-answer
+            // one - the last byte of the rowid counts 0, 1, 2 with the rows.
+            reader.block();                            // the rowid itself
+        }
         return new Parsed(List.copyOf(columns), reader.at());
     }
 

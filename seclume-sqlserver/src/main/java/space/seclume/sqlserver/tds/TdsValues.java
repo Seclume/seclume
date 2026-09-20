@@ -111,10 +111,32 @@ public final class TdsValues {
                         + time(timeTicks(in, at, timeBytes), scale);
             }
             case TdsTypes.DATETIMEOFFSETN -> {
+                // The fields on the wire are UTC and the offset stands
+                // beside them - so the local time the value names is the
+                // fields plus the offset. Printing the UTC fields with the
+                // offset behind them names a different point in time, off by
+                // exactly the offset: a value written as 11:29+02:00 read
+                // back as 09:29+02:00. The writer already knew this; the
+                // reader did not.
                 int timeBytes = length - 5;
                 int offsetMinutes = (short) unsigned(in, at + timeBytes + 3, 2);
-                yield date(days(in, at + timeBytes)) + " "
-                        + time(timeTicks(in, at, timeBytes), scale) + " " + offset(offsetMinutes);
+                long ticks = timeTicks(in, at, timeBytes);
+                long perSecond = 1;
+                for (int i = 0; i < scale; i++) {
+                    perSecond *= 10;
+                }
+                long ticksPerDay = 86_400L * perSecond;
+                long shifted = ticks + offsetMinutes * 60L * perSecond;
+                int days = days(in, at + timeBytes);
+                while (shifted < 0) {
+                    shifted += ticksPerDay;
+                    days--;
+                }
+                while (shifted >= ticksPerDay) {
+                    shifted -= ticksPerDay;
+                    days++;
+                }
+                yield date(days) + " " + time(shifted, scale) + " " + offset(offsetMinutes);
             }
             case TdsTypes.GUID -> guid(in, at);
             default -> {

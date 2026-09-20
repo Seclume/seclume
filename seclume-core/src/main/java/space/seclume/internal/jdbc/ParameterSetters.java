@@ -116,22 +116,61 @@ public interface ParameterSetters extends PreparedStatement {
         setParameter(index, value);
     }
 
+    /**
+     * A date in a given calendar's time zone.
+     *
+     * <p>These three used to refuse any calendar but the JVM's, which sounded
+     * careful and was wrong: it is <b>the</b> way Hibernate writes an
+     * {@code Instant} or an {@code OffsetDateTime} - it hands the driver a
+     * {@code Timestamp} and a calendar in UTC and expects the fields to be
+     * shifted into that zone. Refusing meant that an entity with an
+     * {@code Instant} in it could not be saved at all.
+     *
+     * <p>The shift is the whole of it: the value names a point on the time
+     * line, the column has no zone, so what is written are the wall-clock
+     * fields that point has <b>in the calendar's zone</b>. Reading does the
+     * same in reverse - see {@code ReadOnlyResultSet}.
+     */
     @Override
     default void setDate(int index, Date value, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        setParameter(index, value);
+        if (value == null || isDefaultCalendar(calendar)) {
+            setParameter(index, value);
+            return;
+        }
+        setParameter(index, java.time.LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(value.getTime()),
+                calendar.getTimeZone().toZoneId()).toLocalDate());
     }
 
     @Override
     default void setTime(int index, Time value, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        setParameter(index, value);
+        if (value == null || isDefaultCalendar(calendar)) {
+            setParameter(index, value);
+            return;
+        }
+        setParameter(index, java.time.LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(value.getTime()),
+                calendar.getTimeZone().toZoneId()).toLocalTime());
     }
 
     @Override
     default void setTimestamp(int index, Timestamp value, Calendar calendar) throws SQLException {
-        requireDefaultCalendar(calendar);
-        setParameter(index, value);
+        if (value == null || isDefaultCalendar(calendar)) {
+            setParameter(index, value);
+            return;
+        }
+        // With the offset, not as bare fields: a column that has a zone -
+        // Oracle's "timestamp with time zone", PostgreSQL's timestamptz -
+        // would otherwise read them in the session's zone and move the value
+        // by the machine's offset. A column without a zone takes the fields
+        // and drops the offset, which is what the calendar asked for.
+        setParameter(index, value.toInstant().atZone(calendar.getTimeZone().toZoneId())
+                .toOffsetDateTime());
+    }
+
+    /** Whether the calendar asks for anything the plain value does not already say. */
+    private static boolean isDefaultCalendar(Calendar calendar) {
+        return calendar == null || calendar.getTimeZone().equals(TimeZone.getDefault());
     }
 
     @Override
@@ -154,19 +193,6 @@ public interface ParameterSetters extends PreparedStatement {
     @Override
     default void setNString(int index, String value) throws SQLException {
         setParameter(index, value);
-    }
-
-    /**
-     * A foreign calendar asks for a time zone conversion this driver does not
-     * perform. Silently skipping it would be a data error that only shows up
-     * months later.
-     */
-    private static void requireDefaultCalendar(Calendar calendar) throws SQLException {
-        if (calendar != null && !calendar.getTimeZone().equals(TimeZone.getDefault())) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume sends dates and times in the JVM's time zone - pass an "
-                    + "OffsetDateTime if you need a specific zone");
-        }
     }
 
     // ---- streams: deliberately not ---------------------------------------

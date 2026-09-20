@@ -57,12 +57,19 @@ class TdsParametersTest {
                 hex(parameters));
     }
 
-    /** NULL travels as an nvarchar with the length that means "nothing". */
+    /**
+     * NULL travels as an nvarchar with the length that means "nothing".
+     *
+     * <p>The declared width is the full 4000 and not the value's, here as
+     * everywhere: a compiled statement keeps its declaration, and one
+     * compiled for {@code nvarchar(1)} truncates every later row to a single
+     * character without saying so.
+     */
     @Test
     void writesNullAsAnEmptyNvarchar() throws SQLException {
         TdsParameters parameters = new TdsParameters();
         parameters.set(1, null);
-        assertEquals("@P0 nvarchar(1)", parameters.declaration());
+        assertEquals("@P0 nvarchar(4000)", parameters.declaration());
         assertEquals(NAME_P0 + "00" + "e7" + "0200" + "0000000000" + "ffff",
                 hex(parameters));
     }
@@ -71,7 +78,7 @@ class TdsParametersTest {
     void writesTextAsUtf16() throws SQLException {
         TdsParameters parameters = new TdsParameters();
         parameters.set(1, "Ja");
-        assertEquals("@P0 nvarchar(2)", parameters.declaration());
+        assertEquals("@P0 nvarchar(4000)", parameters.declaration());
         assertEquals(NAME_P0 + "00" + "e7" + "0400" + "0000000000"
                 + "0400" + "4a006100",
                 hex(parameters));
@@ -134,7 +141,7 @@ class TdsParametersTest {
         parameters.set(1, 1);
         parameters.set(2, "a");
         parameters.set(3, true);
-        assertEquals("@P0 int,@P1 nvarchar(1),@P2 bit", parameters.declaration());
+        assertEquals("@P0 int,@P1 nvarchar(4000),@P2 bit", parameters.declaration());
         assertEquals(3, parameters.count());
     }
 
