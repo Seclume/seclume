@@ -5,6 +5,8 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLTransientConnectionException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -13,6 +15,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Supplier;
 import java.util.logging.Logger;
 
 import javax.sql.DataSource;
@@ -461,9 +464,51 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         // This is where the call to the secret source happens - every time anew.
         Connection connection = source.getConnection();
         PoolEntry entry = new PoolEntry(connection);
+        entry.credentialDeadline(credentialDeadline());
         entries.add(entry);
         created.increment();
         return entry;
+    }
+
+    /**
+     * When a connection opened right now would stop being able to authenticate.
+     *
+     * <p>Answered by whatever {@code PoolSettings.credentialExpiry} was given,
+     * and by nothing at all when it was not set - which is the default, and
+     * keeps this pool what its module comment says it is: something that knows
+     * {@code DataSource} and nothing about seclume's secret sources. The
+     * driver side of the wiring lives in the Spring starter, which knows both.
+     *
+     * <p>Static passwords answer {@link Long#MAX_VALUE} and nothing changes.
+     * A dynamic credential - Vault's database engine, an RDS IAM token -
+     * answers with a real moment, and the pool then replaces the connection
+     * <b>before</b> that rather than finding out afterwards. Without this,
+     * dynamic credentials mean an authentication failure at an unpredictable
+     * time in a running application, which is why most deployments that could
+     * use them do not.
+     *
+     * <p>The margin is subtracted here rather than at the point of use so that
+     * the deadline stored in the entry is already the moment to act on.
+     */
+    private long credentialDeadline() {
+        Supplier<Instant> expiry = settings.getCredentialExpiry();
+        if (expiry == null) {
+            return Long.MAX_VALUE;
+        }
+        Instant validUntil;
+        try {
+            validUntil = expiry.get();
+        } catch (RuntimeException e) {
+            // A source that cannot say is treated as one that does not expire:
+            // the pool behaves as it did before, rather than churning.
+            return Long.MAX_VALUE;
+        }
+        if (validUntil == null) {
+            return Long.MAX_VALUE;
+        }
+        Duration left = Duration.between(Instant.now(), validUntil)
+                .minus(settings.getCredentialMargin());
+        return System.nanoTime() + Math.max(0, left.toNanos());
     }
 
     /**
@@ -482,6 +527,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     void renew(PoolEntry entry) throws SQLException {
         Connection fresh = source.getConnection();
         Connection old = entry.replaceConnection(fresh);
+        entry.credentialDeadline(credentialDeadline());
         renewed.increment();
         try {
             old.close();
@@ -590,7 +636,11 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                     && entry.ageNanos(now) > settings.getMaxLifetime().toNanos();
             boolean idleTooLong = spare > 0 && !settings.getIdleTimeout().isZero()
                     && entry.idleNanos(now) > settings.getIdleTimeout().toNanos();
-            if (tooOld || idleTooLong) {
+            // The credential, not the connection, is what ran out here - and
+            // an idle connection whose password has lapsed is worse than no
+            // connection, because it looks usable right up to the moment it
+            // is handed to somebody.
+            if (tooOld || idleTooLong || entry.credentialLapsed(now)) {
                 retire(entry);
                 spare--;
                 continue;

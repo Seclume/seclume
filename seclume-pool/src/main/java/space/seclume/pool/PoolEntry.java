@@ -33,6 +33,21 @@ final class PoolEntry {
     private volatile Connection connection;
     private final long createdAt = System.nanoTime();
     /**
+     * When the credential this connection was opened with stops working, as a
+     * {@code nanoTime} deadline, or {@link Long#MAX_VALUE} for a password that
+     * does not expire.
+     *
+     * <p>A deadline rather than an {@code Instant} because it is read on the
+     * borrow path: a long comparison costs nothing, and {@code Instant.now()}
+     * on every handout would be a clock call in the hot loop for a question
+     * whose answer changes once an hour.
+     *
+     * <p>Set when the entry is created and again when its connection is
+     * rebuilt - both go through the secret source, so both get whatever
+     * credential is current.
+     */
+    private volatile long credentialDeadline = Long.MAX_VALUE;
+    /**
      * A fresh entry starts <b>reserved</b>, not free.
      *
      * <p>Since the pool has no separate list of free connections and reads the
@@ -143,6 +158,16 @@ final class PoolEntry {
 
     long ageNanos(long now) {
         return now - createdAt;
+    }
+
+    /** @see #credentialDeadline */
+    void credentialDeadline(long nanoTimeDeadline) {
+        this.credentialDeadline = nanoTimeDeadline;
+    }
+
+    /** Whether the credential behind this connection has lapsed, or is about to. */
+    boolean credentialLapsed(long now) {
+        return credentialDeadline != Long.MAX_VALUE && now - credentialDeadline >= 0;
     }
 
     /** When it was last handed back - the ordering the pool hands out by. */

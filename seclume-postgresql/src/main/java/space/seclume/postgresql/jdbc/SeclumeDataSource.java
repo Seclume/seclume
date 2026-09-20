@@ -14,6 +14,9 @@ import space.seclume.postgresql.PgSession;
 import space.seclume.internal.jdbc.HostList;
 import space.seclume.internal.jdbc.ResultLimit;
 import space.seclume.internal.jdbc.TlsMode;
+import java.time.Instant;
+
+import space.seclume.secret.ExpiringCredentials;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretProviders;
 
@@ -30,7 +33,7 @@ import space.seclume.secret.SecretProviders;
  * {@link #setSecretProvider(SecretProvider)} or {@link #setProperty} with
  * {@code provider} and {@code path}.
  */
-public final class SeclumeDataSource implements DataSource {
+public final class SeclumeDataSource implements DataSource, ExpiringCredentials {
 
     private final Map<String, String> properties = new LinkedHashMap<>();
     private String host = "127.0.0.1";
@@ -173,7 +176,7 @@ public final class SeclumeDataSource implements DataSource {
         if (user == null || user.isBlank()) {
             throw new SQLException("no user configured - seclume does not guess it");
         }
-        SecretProvider provider = secret != null ? secret : SecretProviders.of(properties);
+        SecretProvider provider = resolvedSecret();
         PgSession.Settings settings = new PgSession.Settings(host, port, database, user,
                 provider, applicationName, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
@@ -259,4 +262,40 @@ public final class SeclumeDataSource implements DataSource {
     public boolean isWrapperFor(Class<?> iface) {
         return iface.isInstance(this);
     }
+
+    /**
+     * When the credential this data source hands out stops working.
+     *
+     * <p>Only passed on: the answer belongs to the secret provider, and only a
+     * dynamic one has an answer at all. A password in a file says
+     * {@code null}, which every caller has to read as "it does not expire".
+     *
+     * <p>It exists so a pool can retire connections before their credential
+     * lapses rather than after. The pool itself knows nothing about secret
+     * providers and is not going to; the Spring starter joins the two.
+     */
+    @Override
+    public Instant credentialsValidUntil() {
+        SecretProvider provider = resolvedSecret();
+        return provider instanceof ExpiringCredentials expiring
+                ? expiring.credentialsValidUntil() : null;
+    }
+
+    /**
+     * The provider in use, built from the properties if none was set.
+     *
+     * <p>Built <b>once</b> and kept. It used to be built inside
+     * {@code getConnection}, which was harmless for a file and wrong for
+     * anything with a lease: a fresh Vault provider per connection means a
+     * fresh database user per connection, each with a lease of its own, and a
+     * pool of sixteen leaves hundreds behind. One provider per data source is
+     * also what the Spring path always did.
+     */
+    private synchronized SecretProvider resolvedSecret() {
+        if (secret == null) {
+            secret = SecretProviders.of(properties);
+        }
+        return secret;
+    }
+
 }

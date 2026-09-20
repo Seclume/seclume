@@ -18,6 +18,7 @@ import org.springframework.core.env.Environment;
 
 import space.seclume.pool.PoolSettings;
 import space.seclume.pool.SeclumePool;
+import space.seclume.secret.ExpiringCredentials;
 
 /**
  * The auto-configuration.
@@ -200,6 +201,16 @@ public class SeclumeAutoConfiguration {
                                           BeanFactory beans) {
             DataSource source = SeclumeDataSources.create(name, properties, beans);
             PoolSettings settings = poolSettings(name, properties.getPool());
+            // The one place that knows both halves. The pool deliberately
+            // knows nothing about secret sources - see its module comment -
+            // and the driver's DataSource knows nothing about pooling. Here
+            // both are in hand, so a credential with an expiry (Vault's
+            // database engine, an RDS IAM token) can tell the pool when to
+            // replace its connections. A static password answers null and
+            // nothing changes.
+            if (source instanceof ExpiringCredentials expiring) {
+                settings.setCredentialExpiry(expiring::credentialsValidUntil);
+            }
             SeclumePool pool = new SeclumePool(source, settings);
             if (settings.isWarmup()) {
                 try {
@@ -231,6 +242,9 @@ public class SeclumeAutoConfiguration {
             }
             if (pool.getMaxLifetime() != null) {
                 settings.setMaxLifetime(pool.getMaxLifetime());
+            }
+            if (pool.getCredentialMargin() != null) {
+                settings.setCredentialMargin(pool.getCredentialMargin());
             }
             if (pool.getKeepaliveTime() != null) {
                 settings.setKeepaliveTime(pool.getKeepaliveTime());

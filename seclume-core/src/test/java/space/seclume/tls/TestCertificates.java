@@ -26,12 +26,12 @@ import java.util.concurrent.TimeUnit;
  * committed private key would be the wrong file in this repository of all
  * repositories.
  */
-final class TestCertificates implements AutoCloseable {
+public final class TestCertificates implements AutoCloseable {
 
-    static final String PASSWORD = "seclume-test";
+    public static final String PASSWORD = "seclume-test";
 
     /** A certificate and the keystore holding its private key and chain. */
-    record Issued(X509Certificate certificate, Path keystore) {
+    public record Issued(X509Certificate certificate, Path keystore) {
     }
 
     private final Path directory;
@@ -50,7 +50,7 @@ final class TestCertificates implements AutoCloseable {
     }
 
     /** Whether this JDK ships the tool everything here is built with. */
-    static boolean available() {
+    public static boolean available() {
         return Files.isExecutable(keytoolPath());
     }
 
@@ -59,7 +59,7 @@ final class TestCertificates implements AutoCloseable {
         return Path.of(System.getProperty("java.home"), "bin", windows ? "keytool.exe" : "keytool");
     }
 
-    static TestCertificates generate() throws Exception {
+    public static TestCertificates generate() throws Exception {
         Path directory = Files.createTempDirectory("seclume-certs");
         String keytool = keytoolPath().toString();
         Path caStore = directory.resolve("ca.p12");
@@ -84,7 +84,7 @@ final class TestCertificates implements AutoCloseable {
     }
 
     /** The anchors a client should be given to accept what {@link #issue} produces. */
-    KeyStore trustStore() {
+    public KeyStore trustStore() {
         return trustStore;
     }
 
@@ -95,7 +95,7 @@ final class TestCertificates implements AutoCloseable {
      * it can be handed to a {@code KeyManagerFactory} and serve as a TLS
      * server identity - which needs the chain, not just the key.
      */
-    Issued issue(String alias, String... extensions) throws Exception {
+    public Issued issue(String alias, String... extensions) throws Exception {
         return issue(alias, false, extensions);
     }
 
@@ -106,7 +106,7 @@ final class TestCertificates implements AutoCloseable {
      * CertificateVerify with P-256 and nothing else, because that is the curve
      * it can sign with off the heap.
      */
-    Issued issueEc(String alias, String... extensions) throws Exception {
+    public Issued issueEc(String alias, String... extensions) throws Exception {
         return issue(alias, true, extensions);
     }
 

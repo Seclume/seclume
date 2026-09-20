@@ -1,6 +1,8 @@
 package space.seclume.pool;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.function.Supplier;
 
 /**
  * The settings of a pool.
@@ -22,6 +24,34 @@ public final class PoolSettings {
     private Duration connectionTimeout = Duration.ofSeconds(30);
     private Duration idleTimeout = Duration.ofMinutes(10);
     private Duration maxLifetime = Duration.ofMinutes(30);
+    /**
+     * How long before a dynamic credential expires a connection is retired.
+     *
+     * <p>Only has an effect when the underlying {@code DataSource} reports an
+     * expiry at all - see {@code ExpiringCredentials}. A static password in a
+     * file never does, and then this setting does nothing.
+     *
+     * <p>A minute is generous on purpose. The cost of retiring early is one
+     * handshake; the cost of retiring late is an authentication failure in a
+     * working application, and those two are not the same size.
+     */
+    private Duration credentialMargin = Duration.ofMinutes(1);
+
+    /**
+     * Where the pool learns when the current credential stops working.
+     *
+     * <p>{@code null} by default, and then nothing about this pool changes -
+     * which is the right default for a password in a file, and keeps this
+     * module free of any knowledge of seclume's secret sources.
+     *
+     * <p>Set it to {@code () -> dataSource.credentialsValidUntil()} for a
+     * driver {@code DataSource} that implements
+     * {@code space.seclume.secret.ExpiringCredentials}; the Spring starter
+     * does that itself. It is asked once per connection opened, not per
+     * handout, so it may do real work - though a provider that fetches on
+     * every call would be the wrong kind of provider anyway.
+     */
+    private Supplier<Instant> credentialExpiry;
     private Duration keepaliveTime = Duration.ZERO;
     private Duration validationTimeout = Duration.ofSeconds(5);
     private Duration validationBypassWindow = Duration.ofMillis(500);
@@ -98,6 +128,26 @@ public final class PoolSettings {
 
     public void setMaxLifetime(Duration maxLifetime) {
         this.maxLifetime = requireNonNegative(maxLifetime, "maxLifetime");
+    }
+
+    /** @see #credentialMargin */
+    public Duration getCredentialMargin() {
+        return credentialMargin;
+    }
+
+    /** @see #credentialMargin */
+    public void setCredentialMargin(Duration credentialMargin) {
+        this.credentialMargin = requireNonNegative(credentialMargin, "credentialMargin");
+    }
+
+    /** @see #credentialExpiry */
+    public Supplier<Instant> getCredentialExpiry() {
+        return credentialExpiry;
+    }
+
+    /** @see #credentialExpiry */
+    public void setCredentialExpiry(Supplier<Instant> credentialExpiry) {
+        this.credentialExpiry = credentialExpiry;
     }
 
     /** How often an idle connection is nudged; 0 switches it off. */
@@ -267,6 +317,7 @@ public final class PoolSettings {
                 + ", connectionTimeout=" + connectionTimeout
                 + ", idleTimeout=" + idleTimeout
                 + ", maxLifetime=" + maxLifetime
+                + ", credentialMargin=" + credentialMargin
                 + ", keepaliveTime=" + keepaliveTime
                 + ", leakDetectionThreshold=" + leakDetectionThreshold
                 + ", warmup=" + warmup + "]";

@@ -46,7 +46,7 @@ public final class SecretProviders {
             throw new IllegalArgumentException(
                     "no secret provider configured - set 'provider' to one of "
                     + "file, env-file, unix-socket, process, dpapi, credential-manager, "
-                    + "rds-iam, encrypted");
+                    + "rds-iam, encrypted, vault");
         }
         int maxLength = maxLength(settings);
         return switch (kind.toLowerCase(Locale.ROOT)) {
@@ -80,9 +80,22 @@ public final class SecretProviders {
                     of(nested(settings, "cipher-")),
                     of(nested(settings, "key-")),
                     value(settings, "aad"));
+            // HashiCorp Vault over HTTPS, with the answer parsed in native
+            // memory. "token-" says where the Vault token comes from - it is
+            // a secret too and gets a provider of its own, not a property.
+            case "vault" -> new VaultSecretProvider(
+                    required(settings, "address", "vault"),
+                    required(settings, "path", "vault"),
+                    settings.getOrDefault("field", "password"),
+                    of(nested(settings, "token-")),
+                    value(settings, "namespace"),
+                    !"false".equalsIgnoreCase(settings.getOrDefault("verify", "true")),
+                    Integer.parseInt(settings.getOrDefault("timeout-millis", "10000")),
+                    maxLength);
             default -> throw new IllegalArgumentException(
                     "unknown secret provider '" + kind + "' - known are file, env-file, "
-                    + "unix-socket, process, dpapi, credential-manager, rds-iam, encrypted");
+                    + "unix-socket, process, dpapi, credential-manager, rds-iam, encrypted, "
+                    + "vault");
         };
     }
 

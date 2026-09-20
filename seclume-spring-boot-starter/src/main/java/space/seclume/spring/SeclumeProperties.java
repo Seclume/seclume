@@ -199,6 +199,12 @@ public class SeclumeProperties {
         private Duration connectionTimeout;
         private Duration idleTimeout;
         private Duration maxLifetime;
+        /**
+         * How long before a dynamic credential expires a connection is
+         * retired. Only has an effect when the secret provider reports an
+         * expiry at all - Vault's database engine does, a file does not.
+         */
+        private Duration credentialMargin;
         private Duration keepaliveTime;
         private Duration validationTimeout;
         private Duration validationBypassWindow;
@@ -253,6 +259,16 @@ public class SeclumeProperties {
 
         public void setMaxLifetime(Duration maxLifetime) {
             this.maxLifetime = maxLifetime;
+        }
+
+        /** @see #credentialMargin */
+        public Duration getCredentialMargin() {
+            return credentialMargin;
+        }
+
+        /** @see #credentialMargin */
+        public void setCredentialMargin(Duration credentialMargin) {
+            this.credentialMargin = credentialMargin;
         }
 
         public Duration getKeepaliveTime() {

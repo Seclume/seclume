@@ -74,6 +74,7 @@ Never from the URL and never from a `String`. Pick a provider:
 | `credential-manager` | the Windows Credential Manager |
 | `rds-iam` | an AWS RDS IAM token, signed locally rather than fetched |
 | `encrypted` | an AES-GCM ciphertext, decrypted straight into native memory; the key comes from another provider |
+| `vault` | HashiCorp Vault over HTTPS, answer parsed in native memory; dynamic credentials with their lease |
 | `callback` | your own code, handed native memory to write into |
 
 `encrypted` is for the case where the password may not stand in the configuration in the
@@ -84,6 +85,34 @@ machine. Both halves are Base64; the ciphertext is `[12-byte nonce][ciphertext][
 the key is 16, 24 or 32 bytes, and **a nonce is used once**. The optional `aad` binds a
 ciphertext to where it belongs, so the reporting database's secret cannot be pasted over the
 production one and quietly work.
+
+### Dynamic credentials, and the half that is usually missing
+
+`vault` reads both engines — a static secret under `secret/data/...` and a **dynamic database
+credential** under `database/creds/...`, where Vault creates a database user with a lease.
+The HTTP and the JSON are seclume's own (`SecretFetch`, `JsonOff`), so the answer lands in
+native memory and only the field asked for is copied out; every JSON library would have made
+the password a `String` first.
+
+```properties
+seclume.datasources.main.secret.provider=vault
+seclume.datasources.main.secret.address=https://vault.internal:8200
+seclume.datasources.main.secret.path=database/creds/app
+seclume.datasources.main.secret.token-provider=file
+seclume.datasources.main.secret.token-path=/var/run/secrets/vault-token
+```
+
+Fetching the credential is the easy half and every client does it. The half that decides
+whether dynamic credentials are usable is what happens an hour later, when the password a
+pooled connection was opened with expires *while the connection is idle*. Normally nothing
+happens — until an authentication error appears in a running application at an hour nobody
+chose. The usual workaround is to set `maxLifetime` shorter than the TTL by hand, in a second
+place, and to remember it when the TTL changes.
+
+Here the credential says when it stops and the pool retires connections before that, one
+minute early by default (`seclume.datasources.main.pool.credential-margin`). Each connection
+carries the credential it was opened with, so a rotation does not empty the pool: the old
+connections run out on their own schedule while new ones start on the new one.
 
 ### One line instead of four
 
