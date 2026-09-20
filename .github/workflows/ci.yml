@@ -125,6 +125,14 @@ jobs:
           done
           echo "SQL Server did not open port 1433" >&2
           exit 1
+      # The image brings no database of its own, and the XA tests need one:
+      # a distributed transaction is enlisted per database, so master will
+      # not do.
+      - name: Create the test database
+        run: |
+          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
+          sql="if db_id('seclume_test') is null create database seclume_test"
+          docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -Q "$sql" -P "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
       - run: ./mvnw -B -pl seclume-sqlserver -am test
       - if: always()
