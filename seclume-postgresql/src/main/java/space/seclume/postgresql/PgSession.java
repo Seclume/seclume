@@ -867,7 +867,7 @@ public final class PgSession implements AutoCloseable {
      * Parse had failed - a typo in the SQL is enough - was still deallocated
      * when it was closed, and because that rides along with the next statement,
      * the error surfaced on an innocent query some way away: {@code 26000,
-     * prepared statement "zl_1" does not exist}. To the pool that is a
+     * prepared statement "seclume_1" does not exist}. To the pool that is a
      * connection failing a health check for no reason anybody could see.
      *
      * <p>Close needs no Sync of its own; the CloseComplete travels with

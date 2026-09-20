@@ -181,7 +181,7 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
         Idle idle = takePlan(sql);
         PgPreparedStatement statement = idle == null
                 ? new PgPreparedStatement(this, sql,
-                        "zl_" + statementCounter.incrementAndGet(), null)
+                        "seclume_" + statementCounter.incrementAndGet(), null)
                 : new PgPreparedStatement(this, sql, idle.name(), idle.described());
         open.add(statement);
         return statement;
@@ -269,7 +269,7 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
         Idle idle = takePlan(statement);
         PgCallableStatement prepared = idle == null
                 ? new PgCallableStatement(this, call,
-                        "zl_" + statementCounter.incrementAndGet(), null)
+                        "seclume_" + statementCounter.incrementAndGet(), null)
                 : new PgCallableStatement(this, call, idle.name(), idle.described());
         open.add(prepared);
         return prepared;

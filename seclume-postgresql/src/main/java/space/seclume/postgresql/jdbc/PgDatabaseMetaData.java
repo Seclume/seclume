@@ -144,8 +144,16 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
                        case when a.attidentity <> '' then 'YES'
                             when pg_get_expr(ad.adbin, ad.adrelid) like 'nextval(%%' then 'YES'
                             else 'NO' end as "IS_AUTOINCREMENT",
-                       case when a.attgenerated <> '' then 'YES' else 'NO' end as "IS_GENERATEDCOLUMN",
-                       a.atttypid as "ZL_TYPE_OID"
+                       -- attgenerated arrived in PostgreSQL 12, and a server of
+                       -- the same family can be older: YugabyteDB 2024.1 answers
+                       -- "column a.attgenerated does not exist" and every call to
+                       -- getColumns fails, which takes Hibernate's validation and
+                       -- Flyway with it. Reading the row as json asks for the
+                       -- field by name at run time instead of by column at parse
+                       -- time, so the query is the same one everywhere.
+                       case when coalesce(to_jsonb(a) ->> 'attgenerated', '') <> ''
+                            then 'YES' else 'NO' end as "IS_GENERATEDCOLUMN",
+                       a.atttypid as "SECLUME_TYPE_OID"
                 from pg_catalog.pg_attribute a
                 join pg_catalog.pg_class c on c.oid = a.attrelid
                 join pg_catalog.pg_namespace n on n.oid = c.relnamespace

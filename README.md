@@ -106,6 +106,9 @@ authentication is the fallback for everything not in a domain.
   because none of the four servers has a type it could point at.
 - **Distributed transactions (XA)** in all four, off by default.
 - **Failover on connect** across a host list.
+- **CockroachDB and YugabyteDB** on the PostgreSQL driver, each with a password: CockroachDB
+  over TLS with SCRAM-SHA-256, YugabyteDB with md5. The tests assert which method the server
+  asked for, so neither can quietly stop asking.
 
 **Spring Data and JPA**
 
@@ -149,8 +152,6 @@ rather than staying silent.
 
 ## What it does not do yet
 
-- CockroachDB and YugabyteDB are exercised in CI, but without authentication, so that is not
-  yet evidence that the driver serves them.
 - Moving a live session from one host to another. The drivers hold their own protocol and TLS
   state, which is what such a move needs; the transport it needs is developed separately and
   is not part of this distribution.
@@ -180,7 +181,8 @@ The aim is not "fast enough" but faster than the established Java drivers.
 Everything that needs no database runs; everything that needs one skips itself and says why.
 How to bring the four databases up, and how to point the tests at servers elsewhere, is in
 [TESTING.md](TESTING.md). CI runs the same suite against PostgreSQL 15 and 18, MySQL 8.4,
-MariaDB 11.4, SQL Server 2022 and Oracle Free 23ai on every push.
+MariaDB 11.4, SQL Server 2022, Oracle Free 23ai, CockroachDB 24.1 and YugabyteDB 2024.1 on
+every push.
 
 ## Where the protocol knowledge came from
 

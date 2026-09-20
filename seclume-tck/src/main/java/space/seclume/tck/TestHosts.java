@@ -85,6 +85,54 @@ public final class TestHosts {
     }
 
     /**
+     * A server of the PostgreSQL family, named by a short key.
+     *
+     * <p>CockroachDB and YugabyteDB speak the same wire protocol, and the
+     * point of testing against them is to find out whether "the same" holds
+     * all the way down to the login. Each is described by four properties
+     * under its own key - {@code seclume.crdb.*}, {@code seclume.yb.*} - so a
+     * machine that has one and not the other simply says so and the tests for
+     * the missing one skip themselves.
+     *
+     * <pre>
+     *   seclume.crdb.host=db.example.invalid
+     *   seclume.crdb.port=26257
+     *   seclume.crdb.user=seclume_test       # the default
+     *   seclume.crdb.database=seclume_test   # the default
+     *   seclume.crdb.passwordFile=.local-crdb-password   # the default
+     * </pre>
+     */
+    public record Server(String key, String host, int port, String user, String database,
+                         String passwordFile) {
+    }
+
+    /**
+     * What is configured for that key, with the defaults filled in.
+     *
+     * @param key          {@code crdb}, {@code yb}, or any other short name
+     * @param defaultPort  the port that server usually listens on
+     */
+    public static Server server(String key, int defaultPort) {
+        return new Server(key,
+                System.getProperty("seclume." + key + ".host", database()),
+                Integer.getInteger("seclume." + key + ".port", defaultPort),
+                System.getProperty("seclume." + key + ".user", "seclume_test"),
+                System.getProperty("seclume." + key + ".database", "seclume_test"),
+                System.getProperty("seclume." + key + ".passwordFile",
+                        ".local-" + key + "-password"));
+    }
+
+    /**
+     * Whether that server was configured at all.
+     *
+     * <p>A host of its own is the signal. Without one the key falls back to
+     * the main test host, which is almost certainly running something else.
+     */
+    public static boolean isConfigured(String key) {
+        return System.getProperty("seclume." + key + ".host") != null;
+    }
+
+    /**
      * Reads the machine's own file, if it has one.
      *
      * <p>A value already given on the command line wins: the file is the

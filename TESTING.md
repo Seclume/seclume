@@ -76,6 +76,11 @@ PostgreSQL has three of its own, because it is the one that usually runs somewhe
 the rest: `seclume.pg.host`, `seclume.pg.port` and `seclume.pg.passwordFile` — the last names
 *which* file to read, so a second instance can be tested without disturbing the first.
 
+CockroachDB and YugabyteDB are described the same way, each under a key of its own, and each
+is only tried when its `host` is set — a machine that has one and not the other simply says
+so. The user, the database and the password file all default to
+`seclume_test` / `seclume_test` / `.local-<key>-password`.
+
 Nothing matching `.local-*` is checked in:
 
 ```properties
@@ -83,15 +88,49 @@ seclume.test.host=db.example.invalid
 seclume.pg.host=db.example.invalid
 seclume.pg.port=5433
 seclume.pg.passwordFile=.local-pgtls-password
+seclume.crdb.host=db.example.invalid
+seclume.crdb.port=26257
+seclume.yb.host=db.example.invalid
+seclume.yb.port=5433
+```
+
+### Bringing those two up
+
+Both have to be started **with authentication**, or the tests prove nothing and say so.
+
+CockroachDB has no unencrypted port, so its certificates are made before the node starts.
+The image's entrypoint refuses a listen address that is not loopback — a limitation of that
+wrapper script, not of the server — so the binary is called directly:
+
+```
+podman volume create crdb-certs
+img=cockroachdb/cockroach:v24.1.5
+certs="--certs-dir=/certs --ca-key=/certs/ca.key"
+podman run --rm -v crdb-certs:/certs:Z $img cert create-ca $certs
+podman run --rm -v crdb-certs:/certs:Z $img cert create-node localhost 127.0.0.1 0.0.0.0 <this host> $certs
+podman run --rm -v crdb-certs:/certs:Z $img cert create-client root $certs
+podman run -d --name seclume-crdb -v crdb-certs:/certs:Z -p 26257:26257   --entrypoint /cockroach/cockroach $img start-single-node   --certs-dir=/certs --listen-addr=0.0.0.0:26257 --store=/tmp/crdb
+podman exec seclume-crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257   -e "create user seclume_test with password '…'; create database seclume_test;
+      grant all on database seclume_test to seclume_test;"
+```
+
+YugabyteDB needs one flag, and its YSQL listens on the container's own address rather than on
+loopback — which is what `hostname -i` is for:
+
+```
+podman run -d --name seclume-yb -p 5434:5433 yugabytedb/yugabyte:2024.1.3.0-b105   bin/yugabyted start --daemon=false --ysql_enable_auth=true
+ip=$(podman exec seclume-yb hostname -i)
+podman exec -e PGPASSWORD=yugabyte seclume-yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte   -c "create user seclume_test with password '…'"   -c "create database seclume_test owner seclume_test"
 ```
 
 ## CI
 
 `.github/workflows/ci.yml` runs the same tests against real servers on every push —
 PostgreSQL 15 and 18, MySQL 8.4 and MariaDB 11.4, SQL Server 2022, Oracle Free 23ai, and
-CockroachDB and YugabyteDB for the claim that the PostgreSQL driver serves them too. That last
-pair is reachable without a password, so the tests that need one skip there; the job is not
-evidence yet and the workflow says so.
+CockroachDB 24.1 and YugabyteDB 2024.1 for the claim that the PostgreSQL driver serves them
+too. Those two demand a password like the rest, and the tests assert which method the server
+asked for — SCRAM-SHA-256 over TLS for CockroachDB, md5 for YugabyteDB — so a server that
+quietly stopped asking would fail the job rather than pass it.
 
 If a run of yours has no server, it stays green and proves less. That is deliberate: a suite
 that fails on a laptop teaches people to ignore it.

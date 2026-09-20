@@ -177,23 +177,13 @@ jobs:
   # protocol. What is checked here is not a new driver but the claim that the
   # existing one serves them - a test run instead of a driver.
   #
-  # Both are reachable without a password, so the tests that need one skip
-  # themselves. That is honest rather than useful, and it is the reason this
-  # job is not evidence yet: see the README.
-  postgres-compatible:
+  # Both now demand a password, which is what makes these jobs evidence rather
+  # than decoration. They demand different ones: CockroachDB has no
+  # unencrypted port at all and authenticates with SCRAM-SHA-256, YugabyteDB
+  # with md5. The tests assert which, so a server that quietly stopped asking
+  # would fail here instead of passing.
+  cockroachdb:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: cockroachdb
-            image: cockroachdb/cockroach:latest-v24.1
-            command: start-single-node --insecure
-            port: 26257
-          - name: yugabytedb
-            image: yugabytedb/yugabyte:latest
-            command: bin/yugabyted start --daemon=false
-            port: 5433
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -201,14 +191,60 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
-      - name: Start ${{ matrix.name }}
+      # A secure CockroachDB needs its certificates before it starts, so they
+      # are made into a throwaway volume first. The image's entrypoint refuses
+      # a listen address that is not loopback - a restriction of that wrapper
+      # script and not of the server - so the binary is called directly.
+      - name: Start CockroachDB with certificates and a password
         run: |
-          docker run -d --name ${{ matrix.name }} \
-            -p ${{ matrix.port }}:${{ matrix.port }} \
-            ${{ matrix.image }} ${{ matrix.command }}
-          sleep 45
-      # Where the server is comes in the way TestHosts reads it - a system
-      # property, not an environment variable of its own invention.
-      - run: ./mvnw -B -pl seclume-postgresql -am test -Dseclume.pg.port=${{ matrix.port }}
+          set -e
+          image=cockroachdb/cockroach:v24.1.5
+          certs="--certs-dir=/certs --ca-key=/certs/ca.key"
+          docker volume create crdb-certs
+          docker run --rm -v crdb-certs:/certs "$image" cert create-ca $certs
+          docker run --rm -v crdb-certs:/certs "$image" cert create-node localhost 127.0.0.1 0.0.0.0 $certs
+          docker run --rm -v crdb-certs:/certs "$image" cert create-client root $certs
+          docker run -d --name crdb -v crdb-certs:/certs -p 26257:26257 --entrypoint /cockroach/cockroach "$image" start-single-node --certs-dir=/certs --listen-addr=0.0.0.0:26257 --advertise-addr=127.0.0.1:26257 --store=/tmp/crdb
+          pw="${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          for i in $(seq 1 30); do
+            if docker exec crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257 -e "select 1" >/dev/null 2>&1; then break; fi
+            sleep 3
+          done
+          docker exec crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257 -e "create user seclume_test with password '$pw'; create database seclume_test; grant all on database seclume_test to seclume_test;"
+      - run: printf '%s' "${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-crdb-password
+      - run: ./mvnw -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Cockroach' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.crdb.host=127.0.0.1
       - if: always()
-        run: docker rm -f ${{ matrix.name }}
+        run: rm -f .local-crdb-password; docker rm -f crdb || true
+
+  yugabytedb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      # --ysql_enable_auth is what turns password authentication on. Without
+      # it the server lets anyone in, and the job proves nothing. YSQL listens
+      # on the container's own address rather than on loopback, which is why
+      # the readiness check asks the container where it is.
+      - name: Start YugabyteDB with authentication
+        run: |
+          set -e
+          docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2024.1.3.0-b105 bin/yugabyted start --daemon=false --ysql_enable_auth=true
+          pw="${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}"
+          for i in $(seq 1 40); do
+            ip=$(docker exec yb hostname -i | tr -d '\r' | awk '{print $1}')
+            if [ -n "$ip" ] && docker exec -e PGPASSWORD=yugabyte yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte -c "select 1" >/dev/null 2>&1; then
+              docker exec -e PGPASSWORD=yugabyte yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte -c "create user seclume_test with password '$pw'" -c "create database seclume_test owner seclume_test"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "YugabyteDB never accepted a login" >&2
+          exit 1
+      - run: printf '%s' "${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-yb-password
+      - run: ./mvnw -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Yugabyte' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.yb.host=127.0.0.1
+      - if: always()
+        run: rm -f .local-yb-password; docker rm -f yb || true
