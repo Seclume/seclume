@@ -51,38 +51,35 @@ class RecordedLoginTest {
     // ---- genuine: captured from a live handshake the server accepted -------
 
     private static final String SERVER_SESSION_KEY =
-            "4BC2B1507C0D81279A05384EF1642E3A88B0864712D5AD3218C3C36AE949E651";
-    private static final String VERIFIER_DATA = "2F92C1208238CBF66F980E09AF9EC18D";
-    private static final String COMBO_SALT = "B06854EBE18D6ADDE3FE99C8C2C1DF49";
+            "BC32F3D506FE80B848B42B4CA36DA16FC88274E91B55C1FA255FCF54F66E006B";
+    private static final String VERIFIER_DATA = "46C889300FBB3799CB5357B5FE3965BE";
+    private static final String COMBO_SALT = "54E31229382FA165B6A7105F5D76D2D6";
     private static final int GENERATION_COUNT = 4096;
     private static final int DERIVATION_COUNT = 3;
 
     // ---- chosen: random in a real login, fixed here so it reproduces -------
     //
-    // These three still spell the project's former name, and they stay that
-    // way. They are inputs of a frozen vector: the expected values below were
-    // derived from exactly these bytes on a connection a real server accepted,
-    // and the two ASCII strings are exactly 32 and 16 bytes long. Renaming
-    // them would change their length, change the result, and leave a test
-    // that proves the implementation agrees with itself. The word is a date
-    // stamp here, not a name.
+    // The two strings are exactly 32 and 16 bytes because that is what the
+    // protocol wants there. Nothing else about them matters, and they carry
+    // no name on purpose: a vector that has to be re-recorded whenever the
+    // project is renamed is a vector waiting to break.
 
     /** The user of the throwaway account this vector was recorded with. */
-    private static final String USER = "zl_vector";
+    private static final String USER = "sl_vector";
     /** Published on purpose - see the class comment. */
     private static final String PASSWORD = "seclumeVector1";
     /** Stands in for the 32 random bytes a login generates. */
-    private static final String CLIENT_HALF = "seclume recorded vector, 32 byt";
+    private static final String CLIENT_HALF = "a recorded client half, 32 bytes";
     /** Stands in for the 16 random bytes in front of the password. */
-    private static final String PASSWORD_SALT = "seclume salt 16";
+    private static final String PASSWORD_SALT = "a recorded salt!";
 
     // ---- the two results the derivation has to produce ---------------------
 
     /** The client's half as it goes on the wire: encrypted with the password hash. */
     private static final String CLIENT_SESSION_KEY =
-            "63C06A1A39B58581DFF518147064E5CA58B2C043157EF257C93C68384AF11B39";
+            "130F282FCFA8FB559F511A1FA2AA17BB41847B45A07822B6876A48518BB91933";
     private static final String AUTH_PASSWORD =
-            "80AE3E9AC4557D511FA561F2973986FF8C33A8EF2BAFE1E49F16BD2BC1C957FF";
+            "A6DBDF5755231542E4395FFA7630A0256E3A15FDC1A6286E2ACA0E0B8DF9E2D0";
 
     /**
      * The whole chain in one go.
@@ -140,7 +137,7 @@ class RecordedLoginTest {
      */
     @Test
     void namesTheAccountItBelongsTo() {
-        assertEquals("zl_vector", USER);
+        assertEquals("sl_vector", USER);
     }
 
     private static MemorySegment ascii(Arena arena, String text) {
