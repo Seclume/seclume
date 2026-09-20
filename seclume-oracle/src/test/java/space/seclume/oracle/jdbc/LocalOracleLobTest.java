@@ -34,8 +34,8 @@ import space.seclume.RoundTrips;
  * LOBs, against a <b>real</b> Oracle.
  *
  * <p>This is the one that decides. The layout of a locator in a row and the
- * shape of function 96 were read off a recording of the reference client; a
- * synthetic test would only prove that the recording was copied correctly.
+ * shape of function 96 were not obvious from the specification of anything else; a synthetic test
+ * would only prove that the expectation was copied correctly.
  * Only the server can say whether the call is right - and with Oracle a wrong
  * field is not an error message but silence.
  *

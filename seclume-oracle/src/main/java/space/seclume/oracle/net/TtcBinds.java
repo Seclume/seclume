@@ -19,9 +19,10 @@ import space.seclume.internal.WireBuffer;
  * {@code ROW_DATA} byte. Both are written here so that the two lists cannot
  * drift apart.
  *
- * <p>The shapes are taken from a recorded exchange with Oracle Free 23ai
- * ({@code insert into ... values (:1, :2)} with a number and a string), not
- * from a description. A number describes itself with a buffer of 22 bytes and
+ * <p>The shapes are derived from {@code python-oracledb} 4.0.2 (UPL-1.0 or
+ * Apache-2.0; see {@code PROVENANCE.md}) and held by byte-level unit tests
+ * ({@code insert into ... values (:1, :2)} with a number and a string).
+ * A number describes itself with a buffer of 22 bytes and
  * no character set, a string with four bytes per character and character set
  * 873.
  */
@@ -76,7 +77,7 @@ public final class TtcBinds {
     /**
      * A LOB handed over as a locator rather than as a value.
      *
-     * <p>The descriptor and the value were both measured, for a CLOB and for a
+     * <p>The descriptor and the value are covered for a CLOB and for a
      * BLOB; they differ only in the type and in the character set, which a BLOB
      * leaves at zero. The value carries the same „two bytes plus the locator"
      * shape that the LOB calls use.
@@ -91,11 +92,11 @@ public final class TtcBinds {
 
     /**
      * The buffer size the server is told for a locator: 112, whatever the
-     * locator itself is long. Measured, and the same for both kinds.
+     * locator itself is long. The same for both kinds.
      */
     private static final long LOCATOR_BUFFER = 112;
 
-    /** Measured in both recorded locator binds; not decoded further. */
+    /** The same in both kinds of locator bind; not decoded further. */
     private static final long LOCATOR_CONTINUATION = 0x02000000L;
 
     /** A fresh, empty list of bind variables. */
@@ -117,8 +118,8 @@ public final class TtcBinds {
     /**
      * A bind the <b>server</b> fills - the {@code into} of a DML returning.
      *
-     * <p>Measured against the reference client: such a bind is described like
-     * any other, with the same flag byte, and simply carries <b>no value</b> in
+     * <p>Such a bind is described like any other, with the same flag byte,
+     * and simply carries <b>no value</b> in
      * the row data. The server knows it is an output from the statement text.
      * The answer then arrives as a {@code ROW_DATA} message in front of
      * everything else - see {@code TtcResult#returned}.
@@ -156,17 +157,16 @@ public final class TtcBinds {
     /**
      * A place the server writes into.
      *
-     * <p>{@code placeholder} is the part that had to be measured, and the two
-     * cases genuinely differ. A {@code returning into} bind carries
-     * <b>nothing</b> in the row data - that was measured when generated keys
-     * were built. A bind of a PL/SQL call carries a <b>length of zero</b>: the
-     * recording of {@code begin p(:1, :2); end;} ends in
+     * <p>{@code placeholder} is the awkward part, and the two cases genuinely
+     * differ. A {@code returning into} bind carries <b>nothing</b> in the row
+     * data. A bind of a PL/SQL call carries a <b>length of zero</b>: the
+     * answer to {@code begin p(:1, :2); end;} ends in
      * {@code 07 02 C1 16 00}, where the {@code 07} opens the values, the
      * {@code 02 C1 16} is the input 21 and the last {@code 00} is the output's
      * empty value. Leaving it out makes the message one byte short, and Oracle
      * answers a short message by waiting for the rest - the session sits in
      * {@code SQL*Net more data from client} and the client waits for an answer
-     * that will never come. See {@code docs/protocol/oracle.md}.
+     * that will never come.
      */
     private record Output(int type, boolean placeholder) {
     }
@@ -375,7 +375,7 @@ public final class TtcBinds {
     /**
      * A locator as a bind value.
      *
-     * <p>Measured: the size as a number, the same size as a single byte, then
+     * <p>The size as a number, the same size as a single byte, then
      * two bytes naming the locator's own length, then the locator. The two
      * extra bytes are the same ones the LOB calls put in front of a locator.
      */

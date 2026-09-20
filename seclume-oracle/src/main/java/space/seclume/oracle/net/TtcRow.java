@@ -204,7 +204,7 @@ public final class TtcRow {
      * locator that names it on the server.
      *
      * <p>The shape is <b>not the same for every client</b>, which is the trap
-     * here. Measured against two connections to the same server:
+     * here:
      *
      * <pre>
      *   this driver        number 114 | 114 | 0 | 112 | locator

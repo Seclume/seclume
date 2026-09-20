@@ -249,7 +249,7 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
      *
      * <p>What makes it safe at all is that a long parameter now leaves the
      * driver in pieces: without {@code NsChannel.sendSplit} the server would
-     * simply close the connection. See {@code docs/protocol/oracle-lob.md}.
+     * simply close the connection.
      */
     @Override
     public void setCharacterStream(int index, java.io.Reader reader) throws SQLException {

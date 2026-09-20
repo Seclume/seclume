@@ -19,7 +19,7 @@ import space.seclume.secret.FileSecretProvider;
  * The complete login to a <b>real</b> Oracle instance.
  *
  * <p>This is the test Oracle owed the project. Every step before it could only
- * be cross-checked against the JCA or against a recording; here the server
+ * be cross-checked against the JCA or against a known answer; here the server
  * itself says whether the derivation is right - and with a password it does not
  * forgive a single wrong byte in.
  *

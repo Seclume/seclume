@@ -404,9 +404,8 @@ class OraStatement implements Statement, TtcResult.RowHandler {
 
     /**
      * Accepted and remembered, but without effect: this state reads a result in
-     * one go. Cursors in chunks are recorded in
-     * {@code docs/protocol/oracle.md} as an open point - a silent failure
-     * would be worse here than an honest "not yet".
+     * one go. Cursors in chunks are an open point - a silent failure would
+     * be worse here than an honest "not yet".
      */
     @Override
     public void setFetchSize(int rows) throws SQLException {

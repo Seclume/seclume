@@ -18,8 +18,8 @@ import space.seclume.internal.WireBuffer;
  * {@code AUTH_VFR_DATA} the server puts the <b>verifier type</b> in there, and
  * that decides which of the two password schemes applies.
  *
- * <p>Read off a recorded handshake of {@code python-oracledb} 4.0.2 against
- * Oracle Free 23ai; see {@code docs/protocol/oracle.md}.
+ * <p>Derived from {@code python-oracledb} 4.0.2, which Oracle publishes
+ * under UPL-1.0 or Apache-2.0; see {@code PROVENANCE.md}.
  */
 public final class TtcParameters {
 

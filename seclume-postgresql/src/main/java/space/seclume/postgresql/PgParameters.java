@@ -21,7 +21,7 @@ import space.seclume.internal.WireBuffer;
  * it covers every type the server knows without the driver having to bring a
  * binary representation for each single one - and what it does not speak it
  * cannot encode wrongly either. The binary format is added type by type where
- * it pays off, and is noted in {@code docs/protocol/postgresql.md} as an open
+ * it pays off, and is noted in {@code PROVENANCE.md} as an open
  * point.
  *
  * <p>No value is built into the SQL text. Parameters go over the wire as
@@ -122,7 +122,7 @@ public final class PgParameters {
         } else {
             throw new IllegalArgumentException(
                     "seclume does not know how to send a " + value.getClass().getName()
-                    + " - convert it yourself, or open the type in docs/protocol/postgresql.md");
+                    + " - convert it yourself, or ask for the type");
         }
         return text.getBytes(StandardCharsets.UTF_8); // seclume-allow: user payload, not a database password
     }

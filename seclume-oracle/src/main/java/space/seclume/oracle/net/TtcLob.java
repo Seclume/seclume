@@ -12,12 +12,10 @@ import space.seclume.internal.WireBuffer;
  * carries a <b>locator</b>, 112 bytes that name the value on the server, and
  * the contents are fetched with a call of their own. This class is that call.
  *
- * <p>Every number here was measured, not guessed: a run of
- * {@code python-oracledb} with {@code debug output} against Oracle Free
- * 23ai, with the same read done three times over values of different size so
- * that the field carrying the length had to move. The recording is in
- * {@code docs/protocol/oracle-lob.md}, the findings in
- * {@code docs/protocol/oracle-lob.md}.
+ * <p>Derived from {@code python-oracledb} 4.0.2 (UPL-1.0 or Apache-2.0; see
+ * {@code PROVENANCE.md}) and pinned down in the unit tests: the same read
+ * over values of three different sizes, so that the field carrying the
+ * length has to move and a wrong offset cannot pass unnoticed.
  *
  * <p>Two of those findings shape this code:
  *
@@ -41,8 +39,8 @@ public final class TtcLob {
     /**
      * Write into a LOB.
      *
-     * <p>The same frame as a read, with two differences that were measured
-     * rather than reasoned: the byte that says „an amount follows" is zero, and
+     * <p>The same frame as a read, with two differences that are not obvious
+     * from the read: the byte that says „an amount follows" is zero, and
      * behind the locator sits a {@code LOB_DATA} message — the very message
      * type in which a read answer arrives. It travels both ways.
      */
@@ -52,12 +50,11 @@ public final class TtcLob {
      * Ask how long a LOB is.
      *
      * <p>The same message as a read, with the code changed and offset and
-     * amount at zero - every byte of it accounted for against a recording, not
-     * reasoned by analogy. The answer carries the length behind the returned
+     * amount at zero - every byte of it accounted for individually, rather
+     * than by analogy with the read. The answer carries the length behind the returned
      * locator.
      *
-     * <p>Two more codes are measured and written down in
-     * {@code docs/protocol/oracle-lob.md} but not built: write (0x0040) and
+     * <p>Two more codes are known but not built: write (0x0040) and
      * create temporary (0x0110).
      */
     public static final int OP_GET_LENGTH = 0x0001;
@@ -68,8 +65,8 @@ public final class TtcLob {
     /**
      * How much longer the descriptor is than the locator it announces.
      *
-     * <p>Two bytes. Visible in the recordings as 114 for a persistent locator
-     * of 112 and 40 for a temporary one of 38 - which is what identified both
+     * <p>Two bytes: 114 for a persistent locator of 112, and 40 for a
+     * temporary one of 38 - which is what tells both
      * the constant and the fact that the locator length is not one.
      */
     private static final int DESCRIPTOR_EXTRA = 2;
@@ -104,11 +101,10 @@ public final class TtcLob {
      * Creates a temporary LOB on the server and returns nothing - the locator
      * comes back in the answer.
      *
-     * <p>The message is transcribed from a recording rather than reasoned out.
-     * Between the header and the trailing character set sit seventeen bytes
-     * that are the same in every recorded create; they are written as they were
-     * measured, because a field one does not understand is not a field one may
-     * shorten. Only two things vary, and both were seen varying: a flag that is
+     * <p>Between the header and the trailing character set sit seventeen
+     * bytes that are constant for every create. They are written out in full,
+     * because a field one does not understand is not a field one may shorten.
+     * Only two things vary: a flag that is
      * 1 for a CLOB and 0 for a BLOB, and the type - 112 or 113.
      *
      * <p>The locator that comes back is <b>38 bytes</b>, not the 112 of a
@@ -131,10 +127,9 @@ public final class TtcLob {
     }
 
     /**
-     * The bytes between the header and the type of a create call, exactly as
-     * they were recorded. Not decoded field by field on purpose: they never
-     * changed across the recordings, and inventing names for them would suggest
-     * an understanding that is not there.
+     * The bytes between the header and the type of a create call. Not decoded
+     * field by field on purpose: they are constant, and inventing names for
+     * them would suggest an understanding that is not there.
      */
     private static final int[] CREATE_TEMPORARY_PREFIX = {
         0x00, 0x01, 0x01, 0x28, 0x00, 0x01, 0x0a, 0x00, 0x00,
@@ -156,7 +151,7 @@ public final class TtcLob {
      *
      * <p>A short payload announces its length in one byte; anything longer goes
      * as a chain of chunks of 32767 bytes, closed by a zero length. Both forms
-     * were measured — and the chunked one is exactly what the driver already
+     * are accepted — and the chunked one is exactly what the driver already
      * writes for a long bind value, which is a good sign rather than a
      * coincidence: it is the same convention throughout this protocol.
      *
@@ -187,7 +182,7 @@ public final class TtcLob {
         channel.sendData();
     }
 
-    /** How much goes into one chunk - measured as 0x7fff in the recording. */
+    /** How much goes into one chunk: 0x7fff. */
     private static final int CHUNK_SIZE = 32767;
 
     /** The largest payload length that fits in a single length byte. */
@@ -196,7 +191,7 @@ public final class TtcLob {
     /**
      * Free a temporary LOB.
      *
-     * <p>Five bytes wide in the recording, `04 00 08 01 11` — the code 0x0111
+     * <p>Five bytes wide, `04 00 08 01 11` — the code 0x0111
      * with something in the upper half that is not decoded and therefore
      * written as it was seen.
      */
@@ -205,7 +200,7 @@ public final class TtcLob {
     /**
      * Frees a temporary LOB on the server.
      *
-     * <p>In the recording this rides as a <b>piggyback</b> (message type 17) on
+     * <p>This rides as a <b>piggyback</b> (message type 17) on
      * the next request, which costs no round trip. Sent on its own it is a
      * plain function message — the frame is identical, only the type differs.
      * That it works standalone is not an assumption: the test asks the server
@@ -218,7 +213,7 @@ public final class TtcLob {
         channel.sendData();
     }
 
-    /** The message itself - separate so that it can be compared against a recording. */
+    /** The message itself - separate so that a unit test can check its bytes. */
     public static void putRead(WireBuffer out, int sequence, WireBuffer source, int at,
                                int locatorLength, long offset, long amount) {
         put(out, sequence, OP_READ, source, at, locatorLength, offset, amount, true);

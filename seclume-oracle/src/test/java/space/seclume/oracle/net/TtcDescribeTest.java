@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import space.seclume.internal.WireBuffer;
 
 /**
- * The column description, against a <b>recorded</b> answer.
+ * The column description, against a known answer.
  *
  * <p>The bytes come from a {@code python-oracledb} exchange with Oracle Free
  * 23ai for {@code select 42 as answer, 'abc' as text from dual}. Two things in
@@ -26,18 +26,18 @@ import space.seclume.internal.WireBuffer;
  */
 class TtcDescribeTest {
 
-    /** The answer of the recording, without the packet header and data flags. */
-    private static final String RECORDED =
+    /** The answer, without the packet header and data flags. */
+    private static final String EXPECTED =
             "10179778C2F43A22195C26D0F8A724BB1E90787E090708072D010501028202"
             + "000081010200000000000000000106010606414E5357455200000000000000"
             + "00000060800000010300000000020369010103023FFE010401040454455854"
             + "0000010100000000000000010707787E090708072D00021FE8010201020006";
 
     @Test
-    void readsTheColumnsOfTheRecordedAnswer() {
-        byte[] bytes = new byte[RECORDED.length() / 2];
+    void readsTheColumnsOfTheAnswer() {
+        byte[] bytes = new byte[EXPECTED.length() / 2];
         for (int i = 0; i < bytes.length; i++) {
-            bytes[i] = (byte) Integer.parseInt(RECORDED.substring(i * 2, i * 2 + 2), 16);
+            bytes[i] = (byte) Integer.parseInt(EXPECTED.substring(i * 2, i * 2 + 2), 16);
         }
         try (WireBuffer in = new WireBuffer(bytes.length + 16)) {
             for (byte b : bytes) {

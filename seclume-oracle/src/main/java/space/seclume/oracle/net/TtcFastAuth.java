@@ -15,22 +15,22 @@ import space.seclume.internal.WireBuffer;
  * <p>It is also the only way that works. Sent on its own after the classic
  * negotiation, the first login stage is answered by the server with two MARKER
  * packets - a no without a reason. The message is byte for byte the same in
- * both cases; only the wrapper differs. See {@code docs/protocol/oracle.md}.
+ * both cases; only the wrapper differs. See {@code PROVENANCE.md}.
  *
  * <p>The wrapper:
  *
  * <pre>
  *   1   message type = 34
- *   4   01 01 00 01     - observed, meaning not established
+ *   4   01 01 00 01     - meaning not established
  *   2   06 00           - protocol version 6, end of the list
  *   n   the driver name, with a terminating zero
- *   6   00 00 00 00 00 0d - observed, meaning not established
+ *   6   00 00 00 00 00 0d - meaning not established
  *   n   the data-type message, exactly as on its own
  *   n   the first login stage, exactly as on its own
  * </pre>
  *
- * <p>The two byte runs marked "observed" are taken from a recorded handshake
- * and are not interpreted here. That is the same treatment the fixed fields of
+ * <p>The two byte runs whose meaning is not established are written out as
+ * they stand and are not interpreted here. That is the same treatment the fixed fields of
  * the CONNECT packet get: written down as seen, marked as seen, and checked
  * against a live server - which is worth more than a plausible-sounding
  * explanation.

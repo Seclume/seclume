@@ -12,7 +12,7 @@ import java.lang.foreign.ValueLayout;
  * are the chain up to (not including) a trust anchor. Reading them all is
  * this class's job; deciding whether they chain to something trusted, and
  * whether the leaf's name matches the host connected to, is not - see
- * {@code docs/handover.md}.
+ * the project notes.
  */
 public final class CertificateMessage {
 

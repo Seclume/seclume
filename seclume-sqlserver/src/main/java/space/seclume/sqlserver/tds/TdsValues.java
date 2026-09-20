@@ -411,7 +411,7 @@ public final class TdsValues {
      * <p>The collation would say which code page applies; this driver reads it
      * as Latin-1, which is right for the default collations and wrong for none
      * of the ASCII range. Anything beyond that belongs in an {@code nvarchar}
-     * column - and is noted in {@code docs/protocol/sqlserver.md} as an open
+     * column - and is noted in {@code PROVENANCE.md} as an open
      * point rather than silently guessed.
      */
     private static String ascii(WireBuffer in, int at, int length) {

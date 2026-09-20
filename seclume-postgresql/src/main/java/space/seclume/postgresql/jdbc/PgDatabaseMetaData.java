@@ -35,7 +35,7 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
      *
      * <p>Hibernate reads this column when {@code ddl-auto=validate} compares
      * the schema, and a driver that answers 0 everywhere makes every column
-     * look wrong. See {@code docs/roadmap.md}.
+     * look wrong. See the README.
      *
      * <p>Mapped by OID rather than by type name: the name depends on the
      * search path and on how the type was written, the OID does not.

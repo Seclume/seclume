@@ -361,8 +361,8 @@ class MyStatement implements Statement, MySession.RowHandler {
 
     /**
      * Accepted and remembered, but without effect: this state fetches every
-     * result in one go. Cursors in chunks are recorded in
-     * {@code docs/protocol/mysql.md} as an open point - a silent failure would
+     * result in one go. Cursors in chunks are
+     * an open point, named in the README - a silent failure would
      * be worse here than an honest "not yet".
      */
     @Override

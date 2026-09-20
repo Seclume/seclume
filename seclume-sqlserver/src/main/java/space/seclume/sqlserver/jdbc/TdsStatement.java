@@ -409,7 +409,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     /**
      * Accepted and remembered, but without effect: this state reads a result in
      * one go. Cursors in chunks are recorded in
-     * {@code docs/protocol/sqlserver.md} as an open point - a silent failure
+     * {@code PROVENANCE.md} as an open point - a silent failure
      * would be worse here than an honest "not yet".
      */
     @Override

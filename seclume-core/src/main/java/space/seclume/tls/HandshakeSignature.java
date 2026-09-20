@@ -17,7 +17,7 @@ import java.util.Arrays;
  *
  * <p>The signature itself is verified through the JCA
  * ({@link Signature#getInstance "RSASSA-PSS"}), not a hand-rolled RSA-PSS -
- * per {@code docs/tls.md}'s "what is ours and what is borrowed": this is a
+ * per the TLS design's "what is ours and what is borrowed": this is a
  * public-key operation over public data, and there is nothing here that
  * needs to stay off the heap.
  *

@@ -211,7 +211,7 @@ public final class MyChannel implements AutoCloseable {
             // happen here yet.
             throw new IOException(
                     "the server sent a payload split across packets - seclume does not "
-                    + "reassemble split payloads yet (see docs/protocol/mysql.md)");
+                    + "reassemble split payloads yet");
         }
         return length == 0 ? -1 : (in.getByte(in.position()) & 0xff);
     }

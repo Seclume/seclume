@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>There are no official vectors - the scheme is not specified,
  * it is derived from python-oracledb v4.0.2 (see
- * {@code docs/protocol/oracle.md}). The proof therefore runs through an
+ * {@code PROVENANCE.md}). The proof therefore runs through an
  * independent recomputation: the same rule, a different implementation.
  *
  * <p>What that shows and what it does not: it shows that the rule is computed

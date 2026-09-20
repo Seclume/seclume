@@ -10,7 +10,7 @@ import java.security.cert.X509Certificate;
 /**
  * DER bytes off a {@code Certificate} message, turned into a
  * {@link X509Certificate} - through the JDK's own parser and nothing this
- * project wrote, per {@code docs/tls.md}'s "what is ours and what is
+ * project wrote, per the TLS design's "what is ours and what is
  * borrowed": a certificate is not a secret, it goes out on the wire to
  * anyone who connects, and a hand-rolled X.509 reader would be a place for a
  * parsing bug to become a security bug for no offsetting benefit.

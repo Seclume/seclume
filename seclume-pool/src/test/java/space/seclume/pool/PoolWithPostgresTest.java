@@ -101,7 +101,7 @@ class PoolWithPostgresTest {
      * The server kills the session while it lies in the pool - and the
      * application sees nothing of it.
      *
-     * <p>This is what stage 1 of {@code docs/resilience.md} is worth in
+     * <p>This is what stage 1 of the resilience notes is worth in
      * practice: after a restart or a rolling update the connections in the
      * pool are dead, and the first user afterwards did nothing wrong. The pool
      * asks a connection that has been lying around whether it is still there,

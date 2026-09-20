@@ -13,7 +13,7 @@ import java.util.Locale;
  * (RFC 6125, and RFC 2818 for the IP case).
  *
  * <p><b>Why this is ours when path validation is borrowed.</b>
- * {@code docs/tls.md} puts certificate validation in the JCA's hands, and
+ * the TLS design puts certificate validation in the JCA's hands, and
  * {@link CertificateTrust} keeps it there. The JDK does have this check too -
  * {@code sun.security.util.HostnameChecker} - but every public way in goes
  * through an {@code SSLSocket} or {@code SSLEngine}:

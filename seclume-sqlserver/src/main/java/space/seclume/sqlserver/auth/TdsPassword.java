@@ -17,7 +17,7 @@ import space.seclume.internal.Utf;
  * protects against nothing; it only keeps the password from standing in the
  * packet verbatim. A capture without TLS is equivalent to the password itself.
  * TDS provides for encrypting the login packet, and the driver has to use it -
- * see {@code docs/protocol/sqlserver.md}.
+ * see {@code PROVENANCE.md}.
  *
  * <p>What this class does achieve is something else: the whole path from the
  * password to the finished field runs in native memory. The obvious one-liner

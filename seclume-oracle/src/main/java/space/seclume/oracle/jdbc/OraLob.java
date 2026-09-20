@@ -27,7 +27,7 @@ import space.seclume.oracle.net.TtcLob;
  * 4096 characters, not the other 195 904.
  *
  * <p>Oracle counts from 1, and the offset and amount of a read are fields of
- * the call - both measured, see {@code docs/protocol/oracle-lob.md}. A read
+ * the call. A read
  * past the end yields nothing, which is how the streams below know they are
  * done - they never ask for a length. There is an operation for the length
  * (0x0001) and {@link #length} uses it, but a stream that asked first would pay
@@ -75,7 +75,7 @@ final class OraLob implements AutoCloseable {
         return value;
     }
 
-    /** Oracle sends character data as UTF-16, big-endian - measured, not assumed. */
+    /** Oracle sends character data as UTF-16, big-endian. */
     private static String text(WireBuffer value) {
         int bytes = value.position();
         StringBuilder out = new StringBuilder(bytes / 2); // seclume-allow: user payload as text, not a secret
@@ -111,9 +111,8 @@ final class OraLob implements AutoCloseable {
      *
      * <p>This used to read the whole thing and count, which was correct and
      * needlessly expensive. Oracle has an operation for it (0x0001); the
-     * message is the one a read uses, with offset and amount at zero. Measured
-     * against a recording, every byte of it - see
-     * {@code docs/protocol/oracle-lob.md}.
+     * message is the one a read uses, with offset and amount at zero - every
+     * byte of it covered by a unit test.
      */
     long length() throws SQLException {
         if (freed) {

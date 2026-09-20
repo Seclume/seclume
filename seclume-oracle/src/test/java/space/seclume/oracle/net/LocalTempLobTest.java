@@ -26,7 +26,7 @@ import space.seclume.oracle.OracleSession;
 /**
  * Temporary LOBs on the server, against a <b>real</b> Oracle.
  *
- * <p>The create call is transcribed from a recording rather than reasoned out,
+ * <p>The create call is written out field by field rather than reasoned out,
  * so only the server can say whether it is right - and with Oracle a wrong
  * field is not an error message but silence. The check uses the length call,
  * which is already proven: a freshly created LOB has to report zero.

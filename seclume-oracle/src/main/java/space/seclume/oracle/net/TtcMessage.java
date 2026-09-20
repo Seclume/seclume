@@ -8,7 +8,7 @@ package space.seclume.oracle.net;
  * connection and the packet sizes, TTC handles everything to do with the
  * database. A TTC exchange always starts with one of these type bytes.
  *
- * <p>Derived from python-oracledb v4.0.2; see {@code docs/protocol/oracle.md}.
+ * <p>Derived from python-oracledb v4.0.2; see {@code PROVENANCE.md}.
  */
 public final class TtcMessage {
 

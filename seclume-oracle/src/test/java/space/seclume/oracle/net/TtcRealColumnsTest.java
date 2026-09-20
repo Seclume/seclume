@@ -30,7 +30,7 @@ import space.seclume.internal.WireBuffer;
  *       more and is waiting to be asked.</li>
  * </ul>
  *
- * <p>Both recordings are exchanges with Oracle Free 23ai, taken off the wire
+ * <p>Both are exchanges with Oracle Free 23ai, produced
  * and not retyped: a hand-copied hexdump once lost three bytes and the test
  * that compared against it stayed green.
  */

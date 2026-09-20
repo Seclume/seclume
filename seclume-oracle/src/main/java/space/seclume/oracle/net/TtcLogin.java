@@ -41,7 +41,7 @@ import space.seclume.secret.SecretScope;
  * </ol>
  *
  * <p>Established by measurement, not by guessing: see
- * {@code docs/protocol/oracle.md} and {@code docs/protocol/oracle.md}.
+ * {@code PROVENANCE.md}.
  */
 public final class TtcLogin {
 
@@ -79,7 +79,7 @@ public final class TtcLogin {
         if (!challenge.is12c()) {
             throw new IOException("this server wants the 11g verifier (0x"
                     + Integer.toHexString(challenge.verifierType())
-                    + "), which seclume does not send - see docs/protocol/oracle.md");
+                    + "), which seclume does not send");
         }
         int keyLength = challenge.sessionKey().length() / 2;
         if (keyLength != O5Login12c.SESSION_KEY_LENGTH_32) {

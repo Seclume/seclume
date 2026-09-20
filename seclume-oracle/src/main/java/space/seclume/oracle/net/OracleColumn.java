@@ -57,7 +57,7 @@ public record OracleColumn(String name, int type, int precision, int scale,
     /**
      * {@code BOOLEAN}, which Oracle has had since 23ai.
      *
-     * <p>Measured rather than looked up: the type number is 252, and the
+     * <p>The type number is 252, and the
      * value is one byte per boolean - {@code 01} for true and {@code 00} for
      * false, with true arriving as two bytes where the second repeats the
      * first. Anything non-zero in the first byte is true, which is the

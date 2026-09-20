@@ -15,7 +15,7 @@ import space.seclume.internal.WireBuffer;
  * and the iteration counts, and above all with the <b>verifier type</b>, which
  * decides which of the two schemes applies - the 11g one or the 12c one.
  *
- * <p>The message layout, read off a recorded handshake:
+ * <p>The message layout:
  *
  * <pre>
  *   1   message type = 3 (FUNCTION)
@@ -113,9 +113,9 @@ public final class TtcAuth {
      * is not found, this fails loudly instead of interpreting bytes it does
      * not recognise.
      *
-     * <p>Recorded in {@code docs/protocol/oracle.md} as an open point: once
-     * the server's capabilities are needed, the two leading messages have to
-     * be parsed properly, and then this search disappears.
+     * <p>An open point: once the server's capabilities are needed, the two
+     * leading messages have to be parsed properly, and then this search
+     * disappears.
      */
     static Challenge readChallenge(NsChannel channel) throws IOException {
         int packetType = channel.nextPacket();

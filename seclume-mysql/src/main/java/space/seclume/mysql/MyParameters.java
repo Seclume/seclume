@@ -214,6 +214,6 @@ public final class MyParameters {
         }
         throw new IllegalArgumentException(
                 "seclume does not know how to send a " + value.getClass().getName()
-                + " - convert it yourself, or open the type in docs/protocol/mysql.md");
+                + " - convert it yourself, or ask for the type");
     }
 }

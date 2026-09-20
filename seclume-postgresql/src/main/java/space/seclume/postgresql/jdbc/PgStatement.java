@@ -405,7 +405,7 @@ class PgStatement implements Statement, PgSession.RowHandler {
     /**
      * Accepted and remembered, but without effect: this state fetches every
      * result in one go. Reading portals in chunks is recorded in
-     * {@code docs/protocol/postgresql.md} as an open point - a silent failure
+     * {@code PROVENANCE.md} as an open point - a silent failure
      * would be worse here than an honest "not yet".
      */
     @Override

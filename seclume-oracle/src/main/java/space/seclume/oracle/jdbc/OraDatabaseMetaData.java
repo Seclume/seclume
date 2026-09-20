@@ -825,8 +825,8 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
 
     /**
      * The protocol sends them, this driver does not hand them out yet -
-     * {@code getMoreResults} always answers false. Recorded in
-     * {@code docs/protocol/sqlserver.md}.
+     * {@code getMoreResults} always answers false. An open point, and named
+     * as one in the README rather than faked.
      */
     @Override
     public boolean supportsMultipleResultSets() {

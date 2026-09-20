@@ -10,7 +10,7 @@ import java.lang.foreign.ValueLayout;
  * <p>Two functions and no state. Extract turns key material of any shape into a
  * pseudorandom key of one hash length; expand turns that into as many bytes as
  * are asked for. TLS 1.3 is built almost entirely out of the pair, which is why
- * this is the first thing the TLS work needs - see {@code docs/tls.md}.
+ * this is the first thing the TLS work needs.
  *
  * <p><b>Everything stays in native memory.</b> Inputs and outputs are
  * {@link MemorySegment}s and nothing is copied to a {@code byte[]} on the way

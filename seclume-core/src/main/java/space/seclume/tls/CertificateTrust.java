@@ -14,7 +14,7 @@ import javax.net.ssl.X509TrustManager;
  * Does the server's certificate chain end at something this machine trusts,
  * and was it issued for the host we connected to.
  *
- * <p><b>The chain is not validated here.</b> {@code docs/tls.md} settled that
+ * <p><b>The chain is not validated here.</b> the TLS design settled that
  * before any of this was written: path validation is borrowed from the JCA,
  * because a certificate is public, it never travels, and a hand-written X.509
  * validator would be a security regression with nothing to show for it. So

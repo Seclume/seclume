@@ -12,10 +12,10 @@ import space.seclume.internal.WireBuffer;
  * Oracle has no separate parse and no separate fetch as long as the rows fit
  * into the answer - which is the shape worth building, not the three-step one.
  *
- * <p>The field list comes from {@code python-oracledb} 4.0.2, read as protocol
- * documentation and checked field by field against a recorded exchange; see
- * {@code docs/protocol/oracle.md}. Two details in it are the kind
- * nobody guesses:
+ * <p>The field list is derived from {@code python-oracledb} 4.0.2, Oracle's
+ * own thin driver, which Oracle publishes under UPL-1.0 or Apache-2.0 - see
+ * {@code PROVENANCE.md}. It is checked field by field by the unit tests. Two
+ * details in it are the kind nobody guesses:
  *
  * <ul>
  *   <li>From server version 23.1 on there is an <b>eight-byte token number</b>
@@ -39,8 +39,8 @@ public final class TtcQuery {
      * Commit as soon as the statement has run - Oracle's auto-commit.
      *
      * <p>One bit, not a second round trip: the difference between
-     * {@code 0x8029} and {@code 0x8129} in a recording of the same insert once
-     * with and once without {@code autocommit}.
+     * {@code 0x8029} and {@code 0x8129} for the same insert once with and
+     * once without {@code autocommit}.
      */
     private static final int OPTION_COMMIT = 0x0100;
 
@@ -60,8 +60,8 @@ public final class TtcQuery {
             OPTION_NOT_PLSQL | OPTION_EXECUTE | OPTION_PARSE;
 
     /**
-     * A bit the reference client sets on a PL/SQL block and on nothing else.
-     * Not decoded further; measured.
+     * A bit that belongs on a PL/SQL block and on nothing else. Not decoded
+     * further.
      */
     private static final int OPTION_PLSQL_BLOCK = 0x0400;
 
@@ -71,11 +71,10 @@ public final class TtcQuery {
      * <p>The difference from {@link #OPTIONS_UPDATE} is not a detail: the
      * mask there carries {@code OPTION_NOT_PLSQL}, whose name says what it
      * means, and a block sent with it makes the server answer
-     * {@code ORA-03146: invalid buffer length for TTC field}. Measured
-     * against python-oracledb calling the same procedure, which sends
-     * {@code 0x0429} - see {@code docs/protocol/oracle.md}.
+     * {@code ORA-03146: invalid buffer length for TTC field}. The mask a
+     * procedure call wants is {@code 0x0429}.
      *
-     * <p>The bind bit is <b>not</b> in here, although the measured mask has
+     * <p>The bind bit is <b>not</b> in here, although that mask has
      * it: it is added below for every statement that actually has binds, and
      * a block that has none must not carry it. Putting it in the constant
      * made {@code begin dbms_xa...; end;} - which binds nothing - fail with
@@ -89,7 +88,7 @@ public final class TtcQuery {
     private static final long MAX_LONG_LENGTH = 0x7fffffffL;
     /** The fixed length of the {@code al8i4} field. */
     private static final int AL8I4_LENGTH = 13;
-    /** Zero bytes between the last pointer and the statement text - observed. */
+    /** Zero bytes between the last pointer and the statement text. */
     private static final int TAIL_ZEROES = 15;
     /** Up to this length a byte string carries a single length byte. */
     private static final int SHORT_LENGTH = 252;
@@ -229,7 +228,7 @@ public final class TtcQuery {
         // the upper half of the registration id, al8pidmlrc, and from 12.2 on
         // the SQL signature and the SQL id. Which of those the reference client
         // writes is decided by capability flags we do not evaluate - so the
-        // count is taken from the recording rather than derived. All of them
+        // count is fixed rather than derived. All of them
         // are zero for a query without bind variables, so the number is the
         // only thing that matters.
         out.putZeroes(TAIL_ZEROES);
@@ -276,12 +275,12 @@ public final class TtcQuery {
      * the server answers with the prefetch anyway. On a <b>re-execution of an
      * existing cursor</b> it does not - it answers with no rows at all, and
      * every prepared query paid a fetch to get what should have come with the
-     * execute. Measured, not read: with the field at zero a second run cost
-     * two round trips, with it at the prefetch count it costs one.
+     * execute. With the field at zero a second run costs two round trips;
+     * with it at the prefetch count it costs one.
      *
-     * <p>It stays zero on a <b>first</b> execution, because that is what the
-     * reference client sends and what the recorded byte comparisons hold the
-     * driver to - there the server answers with rows regardless.
+     * <p>It stays zero on a <b>first</b> execution, which the byte-level unit
+     * tests hold the driver to - there the server answers with rows
+     * regardless.
      *
      * <p>Which of the thirteen are not zero depends on what the statement is,
      * and that is not a detail: a statement that returns no rows has to say
@@ -295,11 +294,10 @@ public final class TtcQuery {
         for (int i = 0; i < AL8I4_LENGTH; i++) {
             long value = switch (i) {
                 // One where the text is parsed, zero where an existing cursor
-                // is executed again - taken from a recording of both.
+                // is executed again.
                 case 0 -> cursorId == 0 ? 1 : 0;
-                // Zero on a first execution - that is what the reference
-                // client sends, and the recorded byte comparisons hold it
-                // there. On a re-execution the prefetch count goes in, which
+                // Zero on a first execution, which the byte-level unit tests
+                // hold it to. On a re-execution the prefetch count goes in, which
                 // is the whole point: see the javadoc above.
                 case AL8I4_ITERATIONS -> query
                         ? (cursorId == 0 ? 0 : prefetchRows) : iterations;

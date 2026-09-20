@@ -17,7 +17,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * The measurement that decides how TLS 1.3 gets its AEAD.
  *
- * <p>{@code docs/tls.md} leaves one question open, and everything above the
+ * <p>the TLS design leaves one question open, and everything above the
  * record layer depends on the answer: TLS 1.3 needs AES-GCM, this project's own
  * AES has none, and the choice is between writing GHASH - where a
  * data-dependent branch is a timing side channel nobody here would find by

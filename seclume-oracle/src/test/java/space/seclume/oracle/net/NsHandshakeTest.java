@@ -183,10 +183,10 @@ class NsHandshakeTest {
      * saying no without saying why.
      *
      * <p>So the next step is the FAST_AUTH wrapper, not more fiddling with
-     * this message. Recorded in {@code docs/protocol/oracle.md}; the test is
+     * this message. An open point; the test is
      * disabled rather than deleted, because it is the evidence.
      */
-    @org.junit.jupiter.api.Disabled("the server wants FAST_AUTH; see docs/protocol/oracle.md")
+    @org.junit.jupiter.api.Disabled("the server wants FAST_AUTH")
     @Test
     void theServerAnswersTheFirstLoginStage() throws Exception {
         try (NsChannel channel = NsChannel.connect(HOST, PORT, 10_000)) {

@@ -36,7 +36,7 @@ import java.util.Properties;
  * </pre>
  *
  * <p>The defaults are {@code localhost} and {@code 127.0.0.1:5432}, which is
- * where a container started from {@code docs/testing.md} listens. Tests that
+ * where a container started from {@code TESTING.md} listens. Tests that
  * find nothing there skip themselves rather than fail - see the
  * {@code Local...Test} classes.
  */

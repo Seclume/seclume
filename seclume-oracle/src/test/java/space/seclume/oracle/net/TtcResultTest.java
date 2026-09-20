@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 import space.seclume.internal.WireBuffer;
 
 /**
- * The whole answer to a query, against the <b>recording</b>.
+ * The whole answer to a query, against a known answer.
  *
  * <p>The bytes are a {@code python-oracledb} exchange with Oracle Free 23ai for
  * {@code select 42 as answer, 'abc' as text from dual}. Everything has to fall
@@ -21,7 +21,7 @@ import space.seclume.internal.WireBuffer;
  */
 class TtcResultTest {
 
-    private static final String RECORDED =
+    private static final String EXPECTED =
             "10179778C2F43A22195C26D0F8A724BB1E90787E090708072D01050102820200008101"
             + "0200000000000000000106010606414E5357455200000000000000000000608000000103"
             + "00000000020369010103023FFE01040104045445585400000101000000000000000107"
@@ -29,10 +29,10 @@ class TtcResultTest {
             + "02C12B03616263";
 
     @Test
-    void readsTheColumnsAndTheRowOfTheRecordedAnswer() throws Exception {
-        byte[] bytes = new byte[RECORDED.length() / 2];
+    void readsTheColumnsAndTheRowOfTheAnswer() throws Exception {
+        byte[] bytes = new byte[EXPECTED.length() / 2];
         for (int i = 0; i < bytes.length; i++) {
-            bytes[i] = (byte) Integer.parseInt(RECORDED.substring(i * 2, i * 2 + 2), 16);
+            bytes[i] = (byte) Integer.parseInt(EXPECTED.substring(i * 2, i * 2 + 2), 16);
         }
         try (WireBuffer in = new WireBuffer(bytes.length + 16)) {
             for (byte b : bytes) {

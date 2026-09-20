@@ -7,27 +7,27 @@ import org.junit.jupiter.api.Test;
 import space.seclume.internal.WireBuffer;
 
 /**
- * The LOB read call, compared byte for byte against a recording.
+ * The LOB read call, compared byte for byte against a known answer.
  *
  * <p>Oracle does not say what it dislikes; it goes quiet or answers something
  * else several round trips later. The only cheap way to be sure a message is
  * right is to build it and hold it against one the reference client sent -
  * this is the same method that found four faults in the login.
  *
- * <p>The recording is {@code docs/protocol/oracle-lob.md}, the first
+ * <p>The expected bytes are the first
  * call in it: reading a small CLOB from the beginning, everything at once.
  */
-class RecordedLobReadTest {
+class LobReadVectorTest {
 
     /**
-     * The TTC part of the recorded request - everything after the packet header.
+     * The TTC part of the request - everything after the packet header.
      *
-     * <p>Taken off the recording by machine, never by hand. A hand-copied
+     * <p>Produced by machine, never by hand. A hand-copied
      * hexdump in this project once lost three bytes and the test that compared
      * against it stayed green; this constant was wrong by one byte the first
      * time it was typed, and this very test caught it.
      */
-    private static final String RECORDED =
+    private static final String EXPECTED =
             "03600c0001017200000000000000010200000101000100000000000000700002"
             + "020c8280000200000001000000113547000122200001221f0002000203690000"
             + "5c030000080000036aa78962000000000000000000000000bdaecb7600000000"
@@ -36,10 +36,10 @@ class RecordedLobReadTest {
 
     @Test
     void buildsTheSameBytesAsTheReferenceClient() {
-        byte[] expected = unhex(RECORDED); // seclume-allow: a recorded packet, not a secret
+        byte[] expected = unhex(EXPECTED); // seclume-allow: a test vector, not a secret
         try (WireBuffer locator = new WireBuffer(TtcLob.LOCATOR_LENGTH);
              WireBuffer out = new WireBuffer(256)) {
-            // The locator sits in the recorded message itself: after the three
+            // The locator sits in the message itself: after the three
             // bytes of type, function and sequence, and the fixed fields.
             int locatorAt = expected.length - TtcLob.LOCATOR_LENGTH - 5;
             for (int i = 0; i < TtcLob.LOCATOR_LENGTH; i++) {
@@ -48,12 +48,12 @@ class RecordedLobReadTest {
 
             TtcLob.putRead(out, 0x0c, locator, 0, TtcLob.LOCATOR_LENGTH, 1, TtcLob.ALL);
 
-            assertEquals(hex(expected), hex(out), "the call does not match the recording");
+            assertEquals(hex(expected), hex(out), "the call does not match the expectation");
         }
     }
 
     private static byte[] unhex(String text) {
-        byte[] out = new byte[text.length() / 2]; // seclume-allow: a recorded packet, not a secret
+        byte[] out = new byte[text.length() / 2]; // seclume-allow: a test vector, not a secret
         for (int i = 0; i < out.length; i++) {
             out[i] = (byte) Integer.parseInt(text.substring(i * 2, i * 2 + 2), 16);
         }

@@ -23,7 +23,7 @@ package space.seclume.oracle.net;
  * flags; only then does the TTC content begin.
  *
  * <p>Derived from python-oracledb v4.0.2 ({@code impl/thin/packet.pyx},
- * {@code impl/thin/constants.pxi}); see {@code docs/protocol/oracle.md} for
+ * {@code impl/thin/constants.pxi}); see {@code PROVENANCE.md} for
  * licence and provenance.
  */
 public final class NsPacket {

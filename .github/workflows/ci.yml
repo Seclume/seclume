@@ -173,7 +173,7 @@ jobs:
   #
   # Both are reachable without a password, so the tests that need one skip
   # themselves. That is honest rather than useful, and it is the reason this
-  # job is not evidence yet: see docs/roadmap.md.
+  # job is not evidence yet: see the README.
   postgres-compatible:
     runs-on: ubuntu-latest
     strategy:

@@ -82,7 +82,7 @@ public final class MyConnection implements Connection, RoundTrips, Pipelined {
      * {@code closeScope0} while eight threads did nothing but borrow, query
      * and return, because every {@code createStatement}/{@code close} pair
      * freed a block. Keeping one turned 158 us per borrow-query-return into
-     * 63 - see docs/performance.md.
+     * 63 - see the performance notes.
      *
      * <p>At most one is kept, so a connection's memory stays bounded, and it
      * is freed for good when the connection closes - deterministically, as

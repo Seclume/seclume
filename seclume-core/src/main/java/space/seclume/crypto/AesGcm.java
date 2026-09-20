@@ -10,7 +10,7 @@ import java.lang.foreign.ValueLayout;
  * <p>The AEAD TLS 1.3 needs, written here rather than taken from the JCA for
  * one measured reason: through {@code Cipher} the traffic key is a
  * {@code byte[]} that shows up in a heap dump and that {@code SecretKeySpec}
- * will not let anybody wipe. See {@code AeadKeyTest} and {@code docs/tls.md}.
+ * will not let anybody wipe. See {@code AeadKeyTest}.
  *
  * <p>Twelve-byte nonces only, which is what TLS 1.3 uses and what GCM is
  * defined most simply for: the counter block is the nonce followed by the

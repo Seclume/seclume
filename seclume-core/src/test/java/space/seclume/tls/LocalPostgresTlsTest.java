@@ -16,7 +16,7 @@ import space.seclume.internal.Transport;
 
 /**
  * Our TLS 1.3 against a real PostgreSQL, carrying a real PostgreSQL
- * conversation - milestone 4 of {@code docs/tls.md}.
+ * conversation.
  *
  * <p>{@code ClientHandshakeTest} already proves the handshake against JSSE,
  * which is the stricter peer in one way: it verifies our Finished. This

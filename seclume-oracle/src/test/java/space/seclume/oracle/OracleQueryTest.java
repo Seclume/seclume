@@ -23,8 +23,8 @@ import space.seclume.secret.FileSecretProvider;
 /**
  * Statements against a <b>real</b> Oracle instance.
  *
- * <p>Everything up to here was checked against a recording. That proves the
- * driver reads what one client once sent - not that a server accepts what the
+ * <p>Everything up to here is checked against known answers. That proves
+ * the driver reads what it is given - not that a server accepts what the
  * driver sends. This is where that gets decided.
  *
  * <p>Deliberately with more than one row: the row header carries a bit vector
@@ -87,7 +87,7 @@ class OracleQueryTest {
      *
      * <p>The server answers with a first block of rows and waits for a fetch
      * call for the rest. How large that block is sits in the {@code al8i4}
-     * vector, which this driver still copies verbatim from a recording - so it
+     * vector, which this driver still writes out verbatim - so it
      * is currently two. Fetching beyond the first block is the next piece of
      * work; until then this test checks what does work, and it checks the part
      * that matters most: the second row.
@@ -180,12 +180,12 @@ class OracleQueryTest {
      *
      * <p>A real table column is described with a character set, a maximum size
      * and an object id where a computed column has zeroes, and the first
-     * parser read two fields that do not exist. On the recording it was built
+     * parser read two fields that do not exist. On the statement it was built
      * from - {@code select 42, 'abc' from dual} - every one of those fields
      * was zero and one byte wide, so the wrong reading fit the bytes exactly
      * and consumed the rows behind the description.
      *
-     * <p>What settled it was a recording over a table with a
+     * <p>What settled it was a query over a table with a
      * {@code NUMBER(9,2)}, a {@code VARCHAR2(40)} and a {@code DATE} side by
      * side, where no field is zero: the name length arrives three times in a
      * row - as a byte, as a number, and as the block in front of the letters.

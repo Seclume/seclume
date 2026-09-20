@@ -31,7 +31,7 @@ import space.seclume.crypto.HashAlgorithm;
  * verification be the verdict.
  *
  * <p>The signature verification itself is JCA ({@code RSASSA-PSS}), per
- * {@code docs/tls.md}'s "what is ours and what is borrowed" - only the
+ * the TLS design's "what is ours and what is borrowed" - only the
  * framing around it (message parsing, transcript hash, the signed content's
  * shape) is this project's own.
  *

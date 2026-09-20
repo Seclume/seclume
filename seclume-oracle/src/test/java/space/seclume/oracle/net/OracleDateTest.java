@@ -16,8 +16,8 @@ import space.seclume.internal.WireBuffer;
  * <p>The first vector is not invented: {@code 78 7e 09 08} is what a real
  * server sent for the eighth of September 2026 - century 0x78 is 120, so 20,
  * and year 0x7e is 126, so 26. Everything else follows the same rule, and the
- * round trip below checks the writer against the reader on values that no
- * recording covers.
+ * round trip below checks the writer against the reader over the whole
+ * range of values.
  */
 class OracleDateTest {
 

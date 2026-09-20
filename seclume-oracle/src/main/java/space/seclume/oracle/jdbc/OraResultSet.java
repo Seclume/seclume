@@ -67,8 +67,8 @@ public final class OraResultSet extends ReadOnlyResultSet {
     /**
      * The contents of a CLOB, as text.
      *
-     * <p>Oracle sends character LOBs in UTF-16, big-endian - measured, not
-     * assumed. The length is not asked for: it came with the row, so the
+     * <p>Oracle sends character LOBs in UTF-16, big-endian. The length is
+     * not asked for: it came with the row, so the
      * whole value costs exactly one round trip however large it is.
      */
     private String clobText(int column) throws SQLException {

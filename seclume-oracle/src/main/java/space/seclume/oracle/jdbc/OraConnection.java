@@ -76,7 +76,7 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     /**
      * One spare result block per connection, kept instead of freed.
      *
-     * <p>Measured, and it was the single most expensive thing in the whole
+     * <p>This was the single most expensive thing in the whole
      * driver under load: the block's memory lives in a <b>shared</b> arena -
      * it has to, because a pooled connection is opened on one thread and
      * closed on another - and closing a shared arena makes the JVM coordinate
@@ -84,7 +84,7 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
      * {@code closeScope0} while eight threads did nothing but borrow, query
      * and return, because every {@code createStatement}/{@code close} pair
      * freed a block. Keeping one turned 158 us per borrow-query-return into
-     * 63 - see docs/performance.md.
+     * 63 - see the performance notes.
      *
      * <p>At most one is kept, so a connection's memory stays bounded, and it
      * is freed for good when the connection closes - deterministically, as
@@ -532,8 +532,8 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
      *
      * <p>A server-side <b>temporary</b> LOB, the kind that goes to a PL/SQL
      * procedure, is a different thing and not this. The groundwork for it -
-     * the measured operation codes and the fact that a temporary locator is 38
-     * bytes rather than 112 - is in {@code docs/protocol/oracle-lob.md}.
+     * the operation codes and the fact that a temporary locator is 38 bytes
+     * rather than 112 - is in place.
      */
     @Override
     public Clob createClob() {

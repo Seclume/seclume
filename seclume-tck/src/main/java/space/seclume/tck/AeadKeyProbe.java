@@ -13,7 +13,7 @@ import space.seclume.secret.SecretScope;
 /**
  * Where an AES key ends up, depending on who does the encrypting.
  *
- * <p>This settles the open question of {@code docs/tls.md}. TLS 1.3 needs AEAD,
+ * <p>This settles the open question of {@code PROVENANCE.md}. TLS 1.3 needs AEAD,
  * our own AES has none, and the two ways out are to write GHASH or to let the
  * JCA do AES-GCM. The second is far less work and the argument against it is
  * that it puts the traffic key on the heap - which is an argument until somebody

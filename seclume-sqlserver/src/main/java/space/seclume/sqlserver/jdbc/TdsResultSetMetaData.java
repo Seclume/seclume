@@ -114,7 +114,7 @@ final class TdsResultSetMetaData implements ResultSetMetaData {
     /**
      * The collation would say it, and this driver skips the collation. Rather
      * than guess, it answers with the SQL Server default - and the open point
-     * is recorded in {@code docs/protocol/sqlserver.md}.
+     * is recorded in {@code PROVENANCE.md}.
      */
     @Override
     public boolean isCaseSensitive(int index) throws SQLException {

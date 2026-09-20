@@ -27,11 +27,9 @@ import space.seclume.internal.WireBuffer;
  *   1   a zero byte, the end of the list
  * </pre>
  *
- * <p><b>Where the values come from.</b> Not from guessing: a real handshake of
- * {@code python-oracledb} 4.0.2 (dual-licensed UPL 1.0 / Apache 2.0) against
- * Oracle Free 23ai was recorded and read out field by field. No source code was
- * taken over - the numbers are what goes over the wire, and the wire is the
- * documentation Oracle does not publish. See {@code docs/protocol/oracle.md}.
+ * <p><b>Where the values come from.</b> {@code python-oracledb} 4.0.2,
+ * Oracle's own thin driver, which Oracle publishes under UPL-1.0 or
+ * Apache-2.0. No source code was taken over; see {@code PROVENANCE.md}.
  *
  * <p>The type table says for every Oracle type which type the client wants it
  * converted into and how it is represented. The pattern is visible in the

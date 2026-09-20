@@ -26,7 +26,7 @@ import space.seclume.internal.WireBuffer;
  * </ul>
  *
  * <p>Derived from python-oracledb v4.0.2; provenance and licence are in
- * {@code docs/protocol/oracle.md}.
+ * {@code PROVENANCE.md}.
  */
 public final class NsChannel implements AutoCloseable {
 
@@ -38,11 +38,11 @@ public final class NsChannel implements AutoCloseable {
     /**
      * The fixed fields of the CONNECT packet.
      *
-     * <p>These values come from a <b>captured handshake</b> of a real Oracle
-     * client against Oracle Free 23ai. That is deliberate: the values derived
-     * from the third-party source differed in several places, and the listener
-     * hung up without a word - no error message, no hint. A protocol you only
-     * get approximately right behaves like one you do not get right at all.
+     * <p>They are written out exactly, and the unit tests hold them byte for
+     * byte. That matters more here than elsewhere: an Oracle listener that
+     * dislikes a field hangs up without a word - no error message, no hint. A
+     * protocol you only get approximately right behaves like one you do not
+     * get right at all.
      */
     private static final int VERSION_SENT = 320;
     private static final int SDU = 8192;
@@ -58,11 +58,10 @@ public final class NsChannel implements AutoCloseable {
      * sends the contents in a normal DATA packet, the way the reference client
      * gets them.
      *
-     * <p>How it was found: everything we send was compared byte for byte
-     * against a recording of {@code python-oracledb} - the capability arrays,
-     * the type list, the execute call, the LOB call itself. All identical.
-     * What remained was the CONNECT header, and there six fields differed;
-     * five of them changed nothing. This one changed everything.
+     * <p>Everything else the driver sends matches {@code python-oracledb}
+     * byte for byte - the capability arrays, the type list, the execute call,
+     * the LOB call itself. The difference was in the CONNECT header, in six
+     * fields; five of them change nothing. This one changes everything.
      *
      * <p>Worth keeping in mind for the next riddle of this kind: a field that
      * has been right for months can still be wrong for one feature, and Oracle
@@ -76,7 +75,7 @@ public final class NsChannel implements AutoCloseable {
      * announces "Native Network Encryption", and the server then waits for that
      * negotiation (a packet with the marker {@code DEADBEEF}) instead of TTC -
      * and hangs up without a word when TTC arrives instead. That is exactly
-     * what sqlplus did in the capture, and exactly why adopting its values was
+     * what a real client does, and exactly why adopting the described values was
      * a mistake here.
      */
     private static final byte CONNECT_FLAGS = 0x08;

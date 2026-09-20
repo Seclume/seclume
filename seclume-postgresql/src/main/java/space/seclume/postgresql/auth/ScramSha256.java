@@ -29,7 +29,7 @@ import space.seclume.internal.Entropy;
  * <p>Also not included: SASLprep. PostgreSQL applies it server-side to the
  * stored password; a password made of printable ASCII is unaffected by it. For
  * passwords with special characters from the Unicode range this is recorded in
- * {@code docs/protocol/postgresql.md} as a known gap - nothing is guessed
+ * {@code PROVENANCE.md} as a known gap - nothing is guessed
  * here.
  */
 public final class ScramSha256 implements AutoCloseable {

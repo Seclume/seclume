@@ -167,7 +167,7 @@ final class TdsDatabaseMetaData implements DatabaseMetaData {
      * <p>That is not cosmetic: Hibernate reads this column when
      * {@code ddl-auto=validate} compares the schema, and a driver that answers
      * {@code OTHER} everywhere makes every column look wrong. See
-     * {@code docs/roadmap.md}.
+     * the README.
      */
     @Override
     public ResultSet getColumns(String catalog, String schemaPattern, String tableNamePattern,
@@ -870,7 +870,7 @@ final class TdsDatabaseMetaData implements DatabaseMetaData {
     /**
      * The protocol sends them, this driver does not hand them out yet -
      * {@code getMoreResults} always answers false. Recorded in
-     * {@code docs/protocol/sqlserver.md}.
+     * {@code PROVENANCE.md}.
      */
     @Override
     public boolean supportsMultipleResultSets() {

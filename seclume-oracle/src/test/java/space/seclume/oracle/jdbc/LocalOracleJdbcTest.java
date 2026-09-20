@@ -94,8 +94,7 @@ class LocalOracleJdbcTest {
      * The driver adds the clause and one output bind per column, and reads
      * what comes back in front of the answer - a {@code ROW_DATA} message
      * without any column description, whose shape is known only because the
-     * driver chose the clause itself. All of it taken from a capture of the
-     * reference client, not from guessing.
+     * driver chose the clause itself.
      */
     @Test
     void generatedKeysComeBackFromAnInsert() throws Exception {

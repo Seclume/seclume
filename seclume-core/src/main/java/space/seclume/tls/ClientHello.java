@@ -10,7 +10,7 @@ import java.nio.ByteBuffer;
  * or SHA-384 and one X25519 or P-256 share, without PSK, early data or client certificates.
  * The caller owns generation and lifetime of the ephemeral private key; only
  * its public share belongs here. No JCA key generation or agreement is hidden
- * in this class. See {@code docs/tls.md} for the outstanding key-exchange work.
+ * in this class. See the TLS design for the outstanding key-exchange work.
  *
  * <p>The result includes the handshake header, but no record header. Feed these
  * exact bytes to the transcript and frame them as a plaintext handshake record.

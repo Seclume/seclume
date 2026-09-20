@@ -38,7 +38,7 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
      *
      * <p>Hibernate reads this column when {@code ddl-auto=validate} compares
      * the schema, and a driver that answers 0 everywhere makes every column
-     * look wrong. See {@code docs/roadmap.md}.
+     * look wrong. See the README.
      */
     private static final String SQL_TYPE_CASE = """
             case data_type

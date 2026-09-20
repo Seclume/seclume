@@ -21,7 +21,7 @@ import space.seclume.crypto.Pbkdf2;
  * today (19c, 21c, 23ai) gets this path.
  *
  * <p>The procedure, derived from python-oracledb v4.0.2 (see
- * {@code docs/protocol/oracle.md} - which also carries the licence and what
+ * {@code PROVENANCE.md} - which also carries the licence and what
  * was derived from which file):
  *
  * <ol>
@@ -219,10 +219,10 @@ public final class O5Login12c {
      * rounds, not four thousand: the expensive step has already happened, this
      * one only mixes in the session.
      *
-     * <p>Established by measurement, not by reading: the recorded handshake
-     * contains every value except the password, so the right derivation is the
-     * one that turns {@code AUTH_PASSWORD} back into the known password. See
-     * {@code docs/protocol/oracle.md} and {@code docs/protocol/oracle.md}.
+     * <p>A handshake carries every value except the password, so the right
+     * derivation is the one that turns {@code AUTH_PASSWORD} back into the
+     * known password - which is what the unit tests check. See
+     * {@code PROVENANCE.md}.
      *
      * @param out target for {@link #COMBO_KEY_LENGTH} bytes
      */

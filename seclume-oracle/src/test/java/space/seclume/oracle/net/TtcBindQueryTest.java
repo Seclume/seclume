@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import space.seclume.internal.WireBuffer;
 
 /**
- * Bind variables and DDL, byte for byte against a recording.
+ * Bind variables and DDL, byte for byte against a known answer.
  *
  * <p>The reference bytes are what {@code python-oracledb} 4.0.2 sent to Oracle
  * Free 23ai, lifted out of its packet log by a script - not copied by hand. A

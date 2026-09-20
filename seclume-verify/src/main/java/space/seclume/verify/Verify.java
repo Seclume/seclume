@@ -217,7 +217,7 @@ public final class Verify {
     private static String twoPhase(Connection connection) {
         String product = product(connection);
         if (!product.contains("postgresql")) {
-            return "XADataSource available - see docs/xa.md";
+            return "XADataSource available - see the XA notes";
         }
         try (Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery("show max_prepared_transactions")) {

@@ -12,7 +12,7 @@ import space.seclume.internal.WireBuffer;
  * Afterwards both sides know what the other can do.
  *
  * <p>Derived from python-oracledb v4.0.2 and checked against Oracle Free 23ai
- * see {@code docs/protocol/oracle.md}.
+ * see {@code PROVENANCE.md}.
  */
 public final class TtcProtocol {
 

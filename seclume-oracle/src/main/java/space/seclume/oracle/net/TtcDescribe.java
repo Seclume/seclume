@@ -8,15 +8,14 @@ import space.seclume.internal.WireBuffer;
 /**
  * The {@code DESCRIBE_INFO} message - what the server says about the columns.
  *
- * <p>Derived from {@code python-oracledb} 4.0.2 as protocol documentation and
- * checked against a recorded exchange with Oracle Free 23ai. Two things in it
- * differ from the reference client's field list, and both were found by the
- * bytes rather than by reading:
+ * <p>Derived from {@code python-oracledb} 4.0.2, Oracle's own thin driver,
+ * which Oracle publishes under UPL-1.0 or Apache-2.0 - see
+ * {@code PROVENANCE.md}. Two things in it are easy to get wrong:
  *
  * <ul>
  *   <li>The length that v7 wrote in front of the name is a <b>number</b>, not
- *       a single byte. On a recording where every field is zero and one byte
- *       wide the two are indistinguishable - which is how this parser was
+ *       a single byte. Where every field is zero and one byte wide the two
+ *       are indistinguishable - which is how this parser was
  *       wrong for a while without any test noticing.</li>
  *   <li>Behind the column name there are ten bytes for schema, type name,
  *       column position, the UDS flags and the fields that came with 23.1 -
@@ -24,9 +23,9 @@ import space.seclume.internal.WireBuffer;
  *       name is known and as a fixed run where it is not.</li>
  * </ul>
  *
- * <p>See {@code docs/protocol/oracle.md}. The message ends with a
- * trailer that carries the server's current date - which is what the date in
- * the recording turned out to be, not a message of its own.
+ * <p>The message ends with a
+ * trailer that carries the server's current date - which is what that date
+ * is, rather than a message of its own.
  */
 public final class TtcDescribe {
 
@@ -74,16 +73,16 @@ public final class TtcDescribe {
         reader.number();                               // dcbmnpr
         reader.number();                               // dcbmxpr
         if (reader.block() > 0) {                      // dcbqcky
-            // Measured, not derived: in the answer to a "select ... for
+            // In the answer to a "select ... for
             // update" this block is one byte long and holds 0x0D, and behind
             // it stands the row's rowid - thirteen bytes, length-prefixed.
             // A plain select has the block empty and nothing behind it.
             // Reading only the first block leaves the walk standing on the
             // rowid's length byte, which is no message type, so it stops and
             // the result looks empty: every pessimistic lock found no row.
-            // See docs/protocol/oracle.md, which records one row and
-            // three rows so that a per-row field can be told from a per-answer
-            // one - the last byte of the rowid counts 0, 1, 2 with the rows.
+            // A result of one row and one of three rows tell a per-row field
+            // from a per-answer one: the last byte of the rowid counts 0, 1, 2
+            // with the rows.
             reader.block();                            // the rowid itself
         }
         return new Parsed(List.copyOf(columns), reader.at());
@@ -118,9 +117,9 @@ public final class TtcDescribe {
         in.block();                                    // domain schema (23.1)
         in.block();                                    // domain name (23.1)
         in.number();                                   // number of annotations (23.1)
-        in.number();                                   // three more, zero here -
-        in.number();                                   // again observed rather than
-        in.number();                                   // derived
+        in.number();                                   // three more, zero here
+        in.number();
+        in.number();
         return new OracleColumn(name, type, precision, scale, bufferSize, maxSize,
                 charset, nullable);
     }

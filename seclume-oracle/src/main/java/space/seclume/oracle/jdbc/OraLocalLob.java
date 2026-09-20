@@ -32,10 +32,9 @@ import java.sql.SQLException;
  *
  * <p><b>What this is not.</b> A server-side temporary LOB, the kind you hand to
  * a PL/SQL procedure or write gigabytes into without holding them. That needs
- * three more calls of TTC function 96, and the operation codes for them are
- * measured and written down in {@code docs/protocol/oracle-lob.md} — together
- * with the catch that a temporary locator is <b>38 bytes, not 112</b>. Whoever
- * needs it will find the groundwork there rather than a guess here.
+ * three more calls of TTC function 96. The operation codes for them are
+ * known — together with the catch that a temporary locator is <b>38 bytes,
+ * not 112</b>.
  */
 final class OraLocalLob implements NClob, Blob {
 

@@ -10,7 +10,7 @@ import space.seclume.crypto.HashAlgorithm;
 /**
  * The key derivation of the Oracle login (O5LOGON), 11g path.
  *
- * <p>The procedure, as far as it is documented (see {@code docs/protocol/oracle.md}):
+ * <p>The procedure, as far as it is documented (see {@code PROVENANCE.md}):
  *
  * <ol>
  *   <li>The server sends {@code AUTH_SESSKEY} - its session key,
