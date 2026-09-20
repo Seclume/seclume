@@ -346,15 +346,79 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
     // not with an exception, because a tool that walks the metadata would
     // stumble over one where an empty list says the same thing.
 
+    /**
+     * The procedures and functions this user can see.
+     *
+     * <p>Oracle's package is what JDBC calls the catalog here - that is the
+     * mapping its own driver uses, and a call framework that reads a package
+     * name out of {@code PROCEDURE_CAT} and puts it back into
+     * {@code pkg.proc} has to find it there.
+     *
+     * <p><b>{@code all_procedures} has no {@code package_name} column</b>,
+     * unlike {@code all_arguments}: for a packaged procedure the package is
+     * in {@code object_name} and the member in {@code procedure_name}, and
+     * for a stand-alone one {@code procedure_name} is null and the procedure
+     * itself is {@code object_name}. Asking for a column that is not there
+     * fails the whole metadata lookup, and Spring then compiles the call as
+     * {@code {call P()}} - no parameters, no error anyone would connect to
+     * the catalog.
+     */
     @Override
-    public ResultSet getProcedures(String c, String s, String p) throws SQLException {
-        return empty();
+    public ResultSet getProcedures(String catalog, String schemaPattern, String namePattern)
+            throws SQLException {
+        return query("""
+                select case when procedure_name is null then null else object_name end
+                           as "PROCEDURE_CAT",
+                       owner as "PROCEDURE_SCHEM",
+                       nvl(procedure_name, object_name) as "PROCEDURE_NAME",
+                       null as "RESERVED_1", null as "RESERVED_2", null as "RESERVED_3",
+                       null as "REMARKS", 0 as "PROCEDURE_TYPE",
+                       nvl(procedure_name, object_name) as "SPECIFIC_NAME"
+                from all_procedures
+                where %s and %s
+                order by owner, nvl(procedure_name, object_name)
+                """.formatted(like("owner", schemaPattern),
+                        like("nvl(procedure_name, object_name)", namePattern)));
     }
 
+    /**
+     * The arguments of a procedure, which is what a call framework asks for.
+     *
+     * <p>Two details of {@code all_arguments} decide whether this is right:
+     * {@code data_level = 0}, because a record argument is listed again one
+     * row per field and those are not parameters of their own; and
+     * {@code position = 0}, which is a function's return value - JDBC counts
+     * it as parameter 1 by itself and marks it {@code procedureColumnReturn}.
+     *
+     * <p>Whether an argument may be null is not in the catalog, so it is
+     * reported as unknown rather than invented.
+     */
     @Override
-    public ResultSet getProcedureColumns(String c, String s, String p, String col)
-            throws SQLException {
-        return empty();
+    public ResultSet getProcedureColumns(String catalog, String schemaPattern,
+            String namePattern, String columnPattern) throws SQLException {
+        return query("""
+                select package_name as "PROCEDURE_CAT", owner as "PROCEDURE_SCHEM",
+                       object_name as "PROCEDURE_NAME",
+                       nvl(argument_name, ' ') as "COLUMN_NAME",
+                       case when position = 0 then 5
+                            when in_out = 'IN' then 1
+                            when in_out = 'IN/OUT' then 2
+                            when in_out = 'OUT' then 4
+                            else 0 end as "COLUMN_TYPE",
+                       %s as "DATA_TYPE", data_type as "TYPE_NAME",
+                       nvl(data_precision, nvl(data_length, 0)) as "PRECISION",
+                       nvl(data_length, 0) as "LENGTH", nvl(data_scale, 0) as "SCALE",
+                       10 as "RADIX", 2 as "NULLABLE", null as "REMARKS",
+                       null as "COLUMN_DEF", null as "SQL_DATA_TYPE",
+                       null as "SQL_DATETIME_SUB", data_length as "CHAR_OCTET_LENGTH",
+                       position as "ORDINAL_POSITION", '' as "IS_NULLABLE",
+                       object_name as "SPECIFIC_NAME"
+                from all_arguments
+                where data_level = 0 and %s and %s and %s
+                order by owner, object_name, position
+                """.formatted(SQL_TYPE_CASE, like("owner", schemaPattern),
+                        like("object_name", namePattern),
+                        like("nvl(argument_name, ' ')", columnPattern)));
     }
 
     @Override

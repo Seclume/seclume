@@ -777,4 +777,34 @@ class LocalOracleJdbcTest {
             statement.execute("drop procedure zl_minus");
         }
     }
+
+    /**
+     * The catalog describes a procedure, which is what a call framework reads.
+     *
+     * <p>All three modes in one procedure, and the names come back upper
+     * case because that is how Oracle stores an unquoted declaration. A bare
+     * {@code NUMBER} has no scale in the catalog, so it is described as
+     * {@code NUMERIC} rather than as an integer - the same answer
+     * {@code getColumns} gives for a bare NUMBER column.
+     */
+    @Test
+    void describesAProceduresParameters() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_described("
+                    + "n in number, doubled in out number, note out varchar2) as "
+                    + "begin doubled := n * 2; note := 'x'; end;");
+            List<String> described = new ArrayList<>();
+            try (ResultSet columns = connection.getMetaData()
+                    .getProcedureColumns(null, null, "ZL_DESCRIBED", null)) {
+                while (columns.next()) {
+                    described.add(columns.getString("COLUMN_NAME") + " "
+                            + columns.getShort("COLUMN_TYPE") + " "
+                            + columns.getInt("DATA_TYPE"));
+                }
+            }
+            assertEquals(List.of("N 1 2", "DOUBLED 2 2", "NOTE 4 12"), described);
+            statement.execute("drop procedure zl_described");
+        }
+    }
 }

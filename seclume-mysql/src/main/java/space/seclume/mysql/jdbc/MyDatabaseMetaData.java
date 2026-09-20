@@ -94,11 +94,16 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
      * same thing here.
      */
     private static String database(String catalog, String schemaPattern) {
+        return schema("table_schema", catalog, schemaPattern);
+    }
+
+    /** The same, for a view whose schema column is not called {@code table_schema}. */
+    private static String schema(String column, String catalog, String schemaPattern) {
         String name = catalog != null && !catalog.isEmpty() ? catalog : schemaPattern;
         if (name == null || name.isEmpty() || "%".equals(name)) {
-            return "table_schema = database()";
+            return column + " = database()";
         }
-        return "table_schema = " + literal(name);
+        return column + " = " + literal(name);
     }
 
     // ---- catalogs --------------------------------------------------------
@@ -341,15 +346,71 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
 
     // Information this driver does not give: empty rather than guessed.
 
+    /**
+     * The routines of a schema.
+     *
+     * <p>MySQL has no schema below a database, so the database is the
+     * catalog and the schema column is null - the same shape
+     * {@link #getTables} uses, for the same reason.
+     */
     @Override
-    public ResultSet getProcedures(String c, String s, String p) throws SQLException {
-        return empty();
+    public ResultSet getProcedures(String catalog, String schemaPattern, String namePattern)
+            throws SQLException {
+        return query("""
+                select routine_schema as `PROCEDURE_CAT`, null as `PROCEDURE_SCHEM`,
+                       routine_name as `PROCEDURE_NAME`, null as `RESERVED_1`,
+                       null as `RESERVED_2`, null as `RESERVED_3`,
+                       routine_comment as `REMARKS`,
+                       case routine_type when 'PROCEDURE' then 1 else 2 end
+                           as `PROCEDURE_TYPE`,
+                       specific_name as `SPECIFIC_NAME`
+                from information_schema.routines
+                where %s and %s
+                order by routine_schema, routine_name
+                """.formatted(schema("routine_schema", catalog, schemaPattern),
+                        like("routine_name", namePattern)));
     }
 
+    /**
+     * The parameters of a routine, which is what a call framework asks for.
+     *
+     * <p>{@code ordinal_position} is 0 for a function's return value and
+     * that is how it is recognised here - MySQL gives it no name and no
+     * mode. Everything else follows the mode column.
+     *
+     * <p>Nullability is reported as unknown rather than guessed: MySQL does
+     * not say whether a parameter may be null, and answering
+     * {@code procedureNullable} would be an invention.
+     */
     @Override
-    public ResultSet getProcedureColumns(String c, String s, String p, String col)
-            throws SQLException {
-        return empty();
+    public ResultSet getProcedureColumns(String catalog, String schemaPattern,
+            String namePattern, String columnPattern) throws SQLException {
+        return query("""
+                select specific_schema as `PROCEDURE_CAT`, null as `PROCEDURE_SCHEM`,
+                       specific_name as `PROCEDURE_NAME`,
+                       coalesce(parameter_name, '') as `COLUMN_NAME`,
+                       case when ordinal_position = 0 then 5
+                            when parameter_mode = 'IN' then 1
+                            when parameter_mode = 'INOUT' then 2
+                            when parameter_mode = 'OUT' then 4
+                            else 0 end as `COLUMN_TYPE`,
+                       %s as `DATA_TYPE`, dtd_identifier as `TYPE_NAME`,
+                       coalesce(character_maximum_length, numeric_precision, 0)
+                           as `PRECISION`,
+                       coalesce(character_maximum_length, numeric_precision, 0) as `LENGTH`,
+                       coalesce(numeric_scale, 0) as `SCALE`, 10 as `RADIX`,
+                       2 as `NULLABLE`, null as `REMARKS`, null as `COLUMN_DEF`,
+                       null as `SQL_DATA_TYPE`, null as `SQL_DATETIME_SUB`,
+                       character_octet_length as `CHAR_OCTET_LENGTH`,
+                       ordinal_position as `ORDINAL_POSITION`, '' as `IS_NULLABLE`,
+                       specific_name as `SPECIFIC_NAME`
+                from information_schema.parameters
+                where %s and %s and %s
+                order by specific_schema, specific_name, ordinal_position
+                """.formatted(SQL_TYPE_CASE,
+                        schema("specific_schema", catalog, schemaPattern),
+                        like("specific_name", namePattern),
+                        like("parameter_name", columnPattern)));
     }
 
     @Override

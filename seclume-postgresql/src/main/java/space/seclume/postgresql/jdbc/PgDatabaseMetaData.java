@@ -60,6 +60,11 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
                  when 1184 then 2014  -- timestamptz
                  else 1111
             end""";
+    /** The type mapping of {@link #getColumns}, for a column of oids of another name. */
+    private static String sqlTypeCase(String oidColumn) {
+        return SQL_TYPE_CASE.replace("a.atttypid", oidColumn);
+    }
+
     /** A literal for a query - single quotes doubled. */
     private static String literal(String value) {
         return "'" + value.replace("'", "''") + "'";
@@ -338,15 +343,86 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
 
     // Information this driver does not give: empty rather than guessed.
 
+    /** Procedures and functions, which PostgreSQL keeps in one table. */
     @Override
-    public ResultSet getProcedures(String c, String s, String p) throws SQLException {
-        return empty();
+    public ResultSet getProcedures(String catalog, String schemaPattern, String namePattern)
+            throws SQLException {
+        return query("""
+                select current_database() as "PROCEDURE_CAT", n.nspname as "PROCEDURE_SCHEM",
+                       p.proname as "PROCEDURE_NAME", null::text as "RESERVED_1",
+                       null::text as "RESERVED_2", null::text as "RESERVED_3",
+                       d.description as "REMARKS",
+                       (case p.prokind when 'p' then 1 else 2 end)::smallint
+                           as "PROCEDURE_TYPE",
+                       p.proname || '_' || p.oid as "SPECIFIC_NAME"
+                from pg_catalog.pg_proc p
+                join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+                left join pg_catalog.pg_description d on d.objoid = p.oid
+                where p.prokind in ('p','f') and %s and %s
+                order by 2, 3
+                """.formatted(like("n.nspname", schemaPattern),
+                        like("p.proname", namePattern)));
     }
 
+    /**
+     * The parameters of a procedure, which is what a call framework asks for.
+     *
+     * <p>PostgreSQL keeps them in three parallel arrays, and which ones is
+     * the part to get right: {@code proargtypes} holds only the <b>input</b>
+     * arguments, {@code proallargtypes} all of them - and the latter is null
+     * whenever there is no output. Reading the first alone loses every
+     * {@code OUT} parameter, which is exactly the half a call framework
+     * needs.
+     *
+     * <p>A function's return value is added as a row of its own at position
+     * 0, as JDBC asks. A function that returns a table has no such row: its
+     * columns are already in the arrays, with mode {@code t}.
+     */
     @Override
-    public ResultSet getProcedureColumns(String c, String s, String p, String col)
-            throws SQLException {
-        return empty();
+    public ResultSet getProcedureColumns(String catalog, String schemaPattern,
+            String namePattern, String columnPattern) throws SQLException {
+        String columnFilter = columnPattern == null || "%".equals(columnPattern)
+                ? "true" : "\"COLUMN_NAME\" like " + literal(columnPattern);
+        return query("""
+                with routines as (
+                    select p.oid, n.nspname, p.proname, p.prokind, p.prorettype,
+                           coalesce(p.proallargtypes, p.proargtypes::oid[]) as types,
+                           p.proargmodes as modes, p.proargnames as names
+                    from pg_catalog.pg_proc p
+                    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+                    where p.prokind in ('p','f') and %s and %s
+                ), described as (
+                    select r.nspname, r.proname, r.oid,
+                           coalesce(r.names[a.ord], '$' || a.ord) as "COLUMN_NAME",
+                           (case coalesce(r.modes[a.ord], 'i')
+                                 when 'o' then 4 when 'b' then 2 when 't' then 3
+                                 else 1 end)::smallint as "COLUMN_TYPE",
+                           a.type as type, a.ord::int as "ORDINAL_POSITION"
+                    from routines r
+                    join lateral unnest(r.types) with ordinality as a(type, ord) on true
+                    union all
+                    select r.nspname, r.proname, r.oid, '' as "COLUMN_NAME",
+                           5::smallint as "COLUMN_TYPE", r.prorettype as type,
+                           0 as "ORDINAL_POSITION"
+                    from routines r
+                    where r.prokind = 'f'
+                      and r.prorettype not in ('void'::regtype, 'record'::regtype)
+                )
+                select current_database() as "PROCEDURE_CAT", nspname as "PROCEDURE_SCHEM",
+                       proname as "PROCEDURE_NAME", "COLUMN_NAME", "COLUMN_TYPE",
+                       %s as "DATA_TYPE", format_type(type, null) as "TYPE_NAME",
+                       0 as "PRECISION", 0 as "LENGTH", 0::smallint as "SCALE",
+                       10::smallint as "RADIX", 2::smallint as "NULLABLE",
+                       null::text as "REMARKS", null::text as "COLUMN_DEF",
+                       null::int as "SQL_DATA_TYPE", null::int as "SQL_DATETIME_SUB",
+                       null::int as "CHAR_OCTET_LENGTH", "ORDINAL_POSITION",
+                       '' as "IS_NULLABLE", proname || '_' || oid as "SPECIFIC_NAME"
+                from described
+                where %s
+                order by 2, 3, 18
+                """.formatted(like("n.nspname", schemaPattern),
+                        like("p.proname", namePattern),
+                        sqlTypeCase("type"), columnFilter));
     }
 
     @Override

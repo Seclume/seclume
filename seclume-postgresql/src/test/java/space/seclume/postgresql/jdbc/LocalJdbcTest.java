@@ -1387,6 +1387,35 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * The catalog describes a procedure, which is what a call framework reads.
+     *
+     * <p>The {@code OUT} parameter is the point: PostgreSQL keeps the input
+     * arguments in one array and all of them in another, and a driver that
+     * reads the first one alone describes this procedure as having a single
+     * parameter - which is how Spring would then bind it.
+     */
+    @Test
+    void describesAProceduresParameters() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace procedure zl_described("
+                    + "in n int, inout doubled int, out note text) "
+                    + "language plpgsql as $$ begin doubled := n * 2; note := 'x'; end $$");
+            List<String> described = new ArrayList<>();
+            try (ResultSet columns = connection.getMetaData()
+                    .getProcedureColumns(null, null, "zl_described", null)) {
+                while (columns.next()) {
+                    described.add(columns.getString("COLUMN_NAME") + " "
+                            + columns.getShort("COLUMN_TYPE") + " "
+                            + columns.getInt("DATA_TYPE"));
+                }
+            }
+            assertEquals(List.of("n 1 4", "doubled 2 4", "note 4 12"), described);
+            statement.execute("drop procedure zl_described(int, int, text)");
+        }
+    }
+
     /** What is not a call is refused before anything reaches the server. */
     @Test
     void refusesSqlThatIsNotACall() throws Exception {

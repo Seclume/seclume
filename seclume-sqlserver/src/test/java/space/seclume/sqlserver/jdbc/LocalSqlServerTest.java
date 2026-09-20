@@ -809,4 +809,35 @@ class LocalSqlServerTest {
             statement.execute("drop procedure zl_minus");
         }
     }
+
+    /**
+     * The catalog describes a procedure, which is what a call framework reads.
+     *
+     * <p>SQL Server knows no {@code INOUT}: a parameter declared
+     * {@code output} can be read and written, and the catalog says
+     * {@code INOUT} for it. So the two outputs here both come back as
+     * {@code procedureColumnInOut}, and that is the server's answer rather
+     * than a shortcut of ours.
+     */
+    @Test
+    void describesAProceduresParameters() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("if object_id('zl_described') is not null "
+                    + "drop procedure zl_described");
+            statement.execute("create procedure zl_described @n int, @doubled int output, "
+                    + "@note varchar(10) output as set @doubled = @n * 2");
+            List<String> described = new ArrayList<>();
+            try (ResultSet columns = connection.getMetaData()
+                    .getProcedureColumns(null, null, "zl_described", null)) {
+                while (columns.next()) {
+                    described.add(columns.getString("COLUMN_NAME") + " "
+                            + columns.getShort("COLUMN_TYPE") + " "
+                            + columns.getInt("DATA_TYPE"));
+                }
+            }
+            assertEquals(List.of("@n 1 4", "@doubled 2 4", "@note 2 12"), described);
+            statement.execute("drop procedure zl_described");
+        }
+    }
 }

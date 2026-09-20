@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import javax.sql.DataSource;
@@ -15,6 +16,9 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.ConnectionCallback;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.simple.SimpleJdbcCall;
 import org.springframework.transaction.annotation.Transactional;
 
 import space.seclume.pool.SeclumePool;
@@ -145,5 +149,98 @@ abstract class SpringDataOnSeclumeTest {
     @Test
     void theDatabaseIsEmptyAgainAfterTheRollback() {
         assertEquals(0, customers.count(), "the rolled-back transaction left something");
+    }
+
+    /**
+     * A stored procedure, called the way an application calls one.
+     *
+     * <p>{@code SimpleJdbcCall} is what Spring users reach for, and it goes
+     * through {@code CallableStatement} - the escape syntax, an {@code OUT}
+     * parameter registered before the call and read after it. The four
+     * servers need four different {@code create procedure} statements and
+     * nothing else: the Java below is the same for all of them, which is the
+     * point.
+     *
+     * <p><b>Nothing is declared here.</b> Spring reads the procedure's
+     * parameters from {@code getProcedureColumns} and binds them by the name
+     * the server gave them, which is the path most applications take and the
+     * one that used to be impossible - all four drivers answered that call
+     * with an empty result until the catalog queries behind it were written.
+     */
+    @Test
+    void aStoredProcedureIsCalledThroughSimpleJdbcCall() {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        String product = jdbc.execute((ConnectionCallback<String>) connection ->
+                connection.getMetaData().getDatabaseProductName());
+
+        drop(jdbc, product);
+        jdbc.execute(createDouble(product));
+        try {
+            Map<String, Object> answer = new SimpleJdbcCall(jdbc)
+                    .withProcedureName("zl_spring_double")
+                    .execute(Map.of("n", 21));
+            assertEquals(42, doubled(answer).intValue(), "the procedure answered " + answer);
+        } finally {
+            drop(jdbc, product);
+        }
+    }
+
+    /**
+     * The output, whatever case the server names it in.
+     *
+     * <p>Oracle stores an unquoted declaration upper case and hands the name
+     * back that way, so the key is {@code DOUBLED} there and {@code doubled}
+     * on the other three. That is the server's doing, not the driver's, and
+     * an application meets it with any driver.
+     */
+    private static Number doubled(Map<String, Object> answer) {
+        for (Map.Entry<String, Object> entry : answer.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase("doubled")) {
+                return (Number) entry.getValue();
+            }
+        }
+        throw new AssertionError("no output called doubled in " + answer);
+    }
+
+    /** One procedure, four dialects - the only part of the test that differs. */
+    private static String createDouble(String product) {
+        String name = product.toLowerCase(java.util.Locale.ROOT);
+        if (name.contains("postgres")) {
+            return "create procedure zl_spring_double(in n int, inout doubled int) "
+                    + "language plpgsql as $$ begin doubled := n * 2; end $$";
+        }
+        if (name.contains("mysql") || name.contains("mariadb")) {
+            return "create procedure zl_spring_double(in n int, out doubled int) "
+                    + "begin set doubled = n * 2; end";
+        }
+        if (name.contains("microsoft") || name.contains("sql server")) {
+            return "create procedure zl_spring_double @n int, @doubled int output as "
+                    + "set @doubled = @n * 2";
+        }
+        if (name.contains("oracle")) {
+            return "create or replace procedure zl_spring_double"
+                    + "(n in number, doubled out number) as begin doubled := n * 2; end;";
+        }
+        throw new IllegalStateException("no procedure written for " + product);
+    }
+
+    /** Dropping something that may not be there differs per server as well. */
+    private static void drop(JdbcTemplate jdbc, String product) {
+        String name = product.toLowerCase(java.util.Locale.ROOT);
+        try {
+            if (name.contains("postgres")) {
+                jdbc.execute("drop procedure if exists zl_spring_double(int, int)");
+            } else if (name.contains("microsoft") || name.contains("sql server")) {
+                jdbc.execute("if object_id('zl_spring_double') is not null "
+                        + "drop procedure zl_spring_double");
+            } else if (name.contains("oracle")) {
+                jdbc.execute("begin execute immediate 'drop procedure zl_spring_double'; "
+                        + "exception when others then null; end;");
+            } else {
+                jdbc.execute("drop procedure if exists zl_spring_double");
+            }
+        } catch (org.springframework.dao.DataAccessException leftOver) {
+            throw new IllegalStateException("could not drop the test procedure", leftOver);
+        }
     }
 }

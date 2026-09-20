@@ -383,15 +383,78 @@ final class TdsDatabaseMetaData implements DatabaseMetaData {
     // not with an exception, because a tool that walks the metadata would
     // stumble over one where an empty list says the same thing.
 
+    /** The procedures and functions of the current database. */
     @Override
-    public ResultSet getProcedures(String c, String s, String p) throws SQLException {
-        return empty();
+    public ResultSet getProcedures(String catalog, String schemaPattern, String namePattern)
+            throws SQLException {
+        requireCurrentCatalog(catalog);
+        return query("""
+                select r.specific_catalog as [PROCEDURE_CAT],
+                       r.specific_schema as [PROCEDURE_SCHEM],
+                       r.specific_name as [PROCEDURE_NAME],
+                       cast(null as varchar(1)) as [RESERVED_1],
+                       cast(null as varchar(1)) as [RESERVED_2],
+                       cast(null as varchar(1)) as [RESERVED_3],
+                       cast(null as varchar(1)) as [REMARKS],
+                       cast(case r.routine_type when 'PROCEDURE' then 1 else 2 end as smallint)
+                           as [PROCEDURE_TYPE],
+                       r.specific_name as [SPECIFIC_NAME]
+                from information_schema.routines r
+                where %s and %s
+                order by r.specific_schema, r.specific_name
+                """.formatted(like("r.specific_schema", schemaPattern),
+                        like("r.specific_name", namePattern)));
     }
 
+    /**
+     * The parameters of a procedure, which is what a call framework asks for.
+     *
+     * <p>A scalar function's return value is the row with
+     * {@code ordinal_position = 0}; SQL Server leaves its name empty, and
+     * JDBC counts it as parameter 1 by itself. Everything else follows
+     * {@code parameter_mode}.
+     *
+     * <p>The table is aliased {@code c} because the shared type mapping is
+     * written against a column list of that name - the same mapping
+     * {@link #getColumns} uses, so a parameter and a column of one type are
+     * described identically.
+     */
     @Override
-    public ResultSet getProcedureColumns(String c, String s, String p, String col)
-            throws SQLException {
-        return empty();
+    public ResultSet getProcedureColumns(String catalog, String schemaPattern,
+            String namePattern, String columnPattern) throws SQLException {
+        requireCurrentCatalog(catalog);
+        return query("""
+                select c.specific_catalog as [PROCEDURE_CAT],
+                       c.specific_schema as [PROCEDURE_SCHEM],
+                       c.specific_name as [PROCEDURE_NAME],
+                       coalesce(c.parameter_name, '') as [COLUMN_NAME],
+                       cast(case when c.ordinal_position = 0 then 5
+                                 when c.parameter_mode = 'IN' then 1
+                                 when c.parameter_mode = 'INOUT' then 2
+                                 when c.parameter_mode = 'OUT' then 4
+                                 else 0 end as smallint) as [COLUMN_TYPE],
+                       %s as [DATA_TYPE], c.data_type as [TYPE_NAME],
+                       coalesce(c.character_maximum_length, c.numeric_precision, 0)
+                           as [PRECISION],
+                       coalesce(c.character_maximum_length, c.numeric_precision, 0)
+                           as [LENGTH],
+                       cast(coalesce(c.numeric_scale, 0) as smallint) as [SCALE],
+                       cast(10 as smallint) as [RADIX],
+                       cast(2 as smallint) as [NULLABLE],
+                       cast(null as varchar(1)) as [REMARKS],
+                       cast(null as varchar(1)) as [COLUMN_DEF],
+                       cast(null as int) as [SQL_DATA_TYPE],
+                       cast(null as int) as [SQL_DATETIME_SUB],
+                       c.character_octet_length as [CHAR_OCTET_LENGTH],
+                       c.ordinal_position as [ORDINAL_POSITION],
+                       '' as [IS_NULLABLE],
+                       c.specific_name as [SPECIFIC_NAME]
+                from information_schema.parameters c
+                where %s and %s and %s
+                order by c.specific_schema, c.specific_name, c.ordinal_position
+                """.formatted(SQL_TYPE_CASE, like("c.specific_schema", schemaPattern),
+                        like("c.specific_name", namePattern),
+                        like("c.parameter_name", columnPattern)));
     }
 
     @Override

@@ -820,4 +820,33 @@ class LocalMySqlTest {
             statement.execute("drop procedure zl_minus");
         }
     }
+
+    /**
+     * The catalog describes a procedure, which is what a call framework reads.
+     *
+     * <p>All three modes in one procedure: a driver that ignored the mode
+     * column would still describe an {@code IN}-only procedure correctly, so
+     * an output has to be in there for the test to mean anything.
+     */
+    @Test
+    void describesAProceduresParameters() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("drop procedure if exists zl_described");
+            statement.execute("create procedure zl_described("
+                    + "in n int, inout doubled int, out note varchar(10)) "
+                    + "begin set doubled = n * 2; set note = 'x'; end");
+            List<String> described = new ArrayList<>();
+            try (ResultSet columns = connection.getMetaData()
+                    .getProcedureColumns(null, null, "zl_described", null)) {
+                while (columns.next()) {
+                    described.add(columns.getString("COLUMN_NAME") + " "
+                            + columns.getShort("COLUMN_TYPE") + " "
+                            + columns.getInt("DATA_TYPE"));
+                }
+            }
+            assertEquals(List.of("n 1 4", "doubled 2 4", "note 4 12"), described);
+            statement.execute("drop procedure zl_described");
+        }
+    }
 }
