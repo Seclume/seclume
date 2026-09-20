@@ -46,7 +46,7 @@ public final class SecretProviders {
             throw new IllegalArgumentException(
                     "no secret provider configured - set 'provider' to one of "
                     + "file, env-file, unix-socket, process, dpapi, credential-manager, "
-                    + "rds-iam");
+                    + "rds-iam, encrypted");
         }
         int maxLength = maxLength(settings);
         return switch (kind.toLowerCase(Locale.ROOT)) {
@@ -72,9 +72,17 @@ public final class SecretProviders {
                     required(settings, "host", "rds-iam"),
                     Integer.parseInt(required(settings, "port", "rds-iam")),
                     required(settings, "db-user", "rds-iam"));
+            // Stored encrypted, decrypted straight into the target segment. Two
+            // inner sources rather than one, and they should not be the same
+            // place: "cipher-" says where the ciphertext is, "key-" where the
+            // key is. Both are Base64.
+            case "encrypted" -> new EncryptedSecretProvider(
+                    of(nested(settings, "cipher-")),
+                    of(nested(settings, "key-")),
+                    value(settings, "aad"));
             default -> throw new IllegalArgumentException(
                     "unknown secret provider '" + kind + "' - known are file, env-file, "
-                    + "unix-socket, process, dpapi, credential-manager");
+                    + "unix-socket, process, dpapi, credential-manager, rds-iam, encrypted");
         };
     }
 

@@ -73,7 +73,49 @@ Never from the URL and never from a `String`. Pick a provider:
 | `dpapi` | Windows DPAPI, bound to the executing account |
 | `credential-manager` | the Windows Credential Manager |
 | `rds-iam` | an AWS RDS IAM token, signed locally rather than fetched |
+| `encrypted` | an AES-GCM ciphertext, decrypted straight into native memory; the key comes from another provider |
 | `callback` | your own code, handed native memory to write into |
+
+`encrypted` is for the case where the password may not stand in the configuration in the
+clear but there is no secret store either. It is worth saying plainly what that buys: whoever
+can read the ciphertext can usually read the key file beside it. The gain is against copying,
+screenshots, backups and accidental commits - not against somebody who already has the
+machine. Both halves are Base64; the ciphertext is `[12-byte nonce][ciphertext][16-byte tag]`,
+the key is 16, 24 or 32 bytes, and **a nonce is used once**. The optional `aad` binds a
+ciphertext to where it belongs, so the reporting database's secret cannot be pasted over the
+production one and quietly work.
+
+### One line instead of four
+
+With the starter, `secret-uri` expands to the `secret.*` keys above - the same spelling the
+JDBC URL has always taken, so a deployment needs one environment variable per data source
+rather than four that have to agree:
+
+```properties
+seclume.datasources.main.secret-uri=file:/run/secrets/db
+seclume.datasources.main.secret-uri=env-file:/run/secrets/app.env?key=DB_PASSWORD
+seclume.datasources.main.secret-uri=credential-manager?target=AppDb
+seclume.datasources.main.secret-uri=encrypted:/run/secrets/db.enc?key-provider=dpapi&key-path=/run/secrets/kek&aad=main
+```
+
+Giving both `secret-uri` and `secret.*` for the same data source is refused rather than
+resolved by precedence.
+
+### The guard
+
+The starter also reads the whole `Environment` at startup and names the properties that hold a
+password in plain text - `spring.mail.password` and whatever an application invented for
+itself. It reports; it does not forbid, because for a good part of what it finds there is no
+off-heap alternative yet, and a guard that blocks what cannot be fixed gets switched off.
+**Names are logged, never values.**
+
+```properties
+seclume.secret-guard=warn                     # warn (default), fail, off
+seclume.secret-guard-allow=spring.mail.password
+```
+
+The allow-list is the point: it turns "we have three plaintext passwords and nobody knows"
+into three that are written down and decided on. It is meant to get shorter.
 
 Where it can be followed, the recommendation that makes all of this unnecessary is
 **operating-system integrated authentication** — Kerberos/SSPI, PostgreSQL `gss`, SQL Server

@@ -1,0 +1,6 @@
+# The environment post-processor is still registered here in Spring Boot 4.1;
+# only auto-configuration moved to META-INF/spring/*.imports. Checked against
+# spring-boot-4.1.1.jar rather than assumed - the interface also moved from
+# org.springframework.boot.env to org.springframework.boot in this version.
+org.springframework.boot.EnvironmentPostProcessor=\
+space.seclume.spring.SeclumeEnvironmentPostProcessor
