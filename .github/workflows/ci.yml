@@ -8,6 +8,12 @@ name: CI
 # Every job writes the password into a file and points the driver at that
 # file - the same path the library offers an application. No echo, and no
 # environment variable in the log.
+#
+# The literals below are not secrets and are not meant to look like any. Each
+# is the throwaway password of a container that is created for one job and
+# destroyed with it, reachable only from that job. A repository secret
+# overrides it where one is configured; the literal is the fallback so that a
+# fork can run the same suite without being given anything.
 
 on:
   push:

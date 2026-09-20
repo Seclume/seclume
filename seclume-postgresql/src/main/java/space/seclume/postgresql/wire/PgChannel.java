@@ -372,9 +372,8 @@ public final class PgChannel implements AutoCloseable {
      * objects that never noticed anything. Only the descriptor changed.
      *
      * <p>The old transport is <b>not</b> closed here. Closing it while the
-     * server may still retransmit is what answers that retransmission with a
-      * a design developed separately
-     * The caller closes it once the new one has taken over.
+     * server may still retransmit is what answers that retransmission with an
+     * RST. The caller closes it once the new one has taken over.
      */
     public void replaceTransport(space.seclume.internal.Transport replacement)
             throws IOException {
