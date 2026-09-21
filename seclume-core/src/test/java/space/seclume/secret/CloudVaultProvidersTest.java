@@ -36,6 +36,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import space.seclume.internal.AwsSigV4;
 import space.seclume.tls.TestCertificates;
 
 /**
@@ -245,6 +246,105 @@ class CloudVaultProvidersTest {
             assertEquals(64, signature.length(), "a SHA-256 signature is 64 hex characters");
             assertTrue(signature.matches("[0-9a-f]{64}"), signature);
         }
+    }
+
+    /**
+     * Temporary credentials: the session token is sent <b>and signed</b>.
+     *
+     * <p>Sending it is the easy half, and a test that only looked for the
+     * header would pass while the signature ignored it - which AWS rejects
+     * with a message that says nothing useful. So the expected
+     * {@code Authorization} is recomputed here from a canonical request
+     * built as an ordinary string, token and all, and compared with what the
+     * provider produced. The test may hold the token as a {@code String};
+     * the provider may not, and that difference is the whole feature.
+     */
+    @Test
+    void awsSignsTheSessionTokenAndNotOnlySendsIt() throws Exception {
+        String token = "FwoGZXIvYXdzEExampleSessionToken";
+        try (Endpoint endpoint = new Endpoint(200, "{\"SecretString\":\"x\"}");
+             AwsSecretsManagerSecretProvider provider = new AwsSecretsManagerSecretProvider(
+                     literal("wJalrXUtnFEMI/K7MDENG"), literal(token),
+                     "AKIAIOSFODNN7EXAMPLE", "eu-central-1", "prod/db", null,
+                     "127.0.0.1", endpoint.port(), false, 10_000, 512,
+                     Clock.fixed(Instant.parse("2026-09-20T12:00:00Z"), ZoneOffset.UTC))) {
+
+            read(provider);
+            String request = endpoint.requests.get(0);
+
+            assertTrue(request.contains("X-Amz-Security-Token: " + token),
+                    "the token was not sent: " + request);
+            assertTrue(request.contains("SignedHeaders=content-type;host;x-amz-date;"
+                    + "x-amz-security-token;x-amz-target"),
+                    "the token was not named in the signed headers: " + request);
+            assertEquals(expectedAuthorization(token), authorizationOf(request),
+                    "the signature does not cover the session token");
+        }
+    }
+
+    /** Without a token nothing changes - the regression guard for the above. */
+    @Test
+    void awsWithoutATokenSignsExactlyAsBefore() throws Exception {
+        try (Endpoint endpoint = new Endpoint(200, "{\"SecretString\":\"x\"}");
+             AwsSecretsManagerSecretProvider provider = aws(endpoint, null)) {
+
+            read(provider);
+            String request = endpoint.requests.get(0);
+            assertTrue(!request.contains("X-Amz-Security-Token"), request);
+            assertEquals(expectedAuthorization(null), authorizationOf(request));
+        }
+    }
+
+    /**
+     * What this request should carry, worked out independently.
+     *
+     * <p>Built the old way, by concatenation - which is exactly what the
+     * provider is no longer allowed to do. The two agreeing means the
+     * segment-assembled canonical request is byte for byte the one AWS
+     * expects, which is the only thing that can be checked from outside: a
+     * signature over a canonical request that is one character different is
+     * a perfectly well-formed signature.
+     */
+    private static String expectedAuthorization(String token) {
+        String stamp = "20260920T120000Z";
+        String day = "20260920";
+        String region = "eu-central-1";
+        String service = "secretsmanager";
+        // Without the port, because that is what goes on the wire: the Host
+        // header and the canonical request have to be the same string, and
+        // SecretFetch sends the bare name. Getting this wrong here was the
+        // first thing the no-token control caught, which is what it is for.
+        String host = "127.0.0.1";
+        String signedHeaders = token == null
+                ? "content-type;host;x-amz-date;x-amz-target"
+                : "content-type;host;x-amz-date;x-amz-security-token;x-amz-target";
+        String canonical = "POST\n/\n\n"
+                + "content-type:application/x-amz-json-1.1\n"
+                + "host:" + host + "\n"
+                + "x-amz-date:" + stamp + "\n"
+                + (token == null ? "" : "x-amz-security-token:" + token + "\n")
+                + "x-amz-target:secretsmanager.GetSecretValue\n\n"
+                + signedHeaders + "\n"
+                + AwsSigV4.sha256Hex("{\"SecretId\":\"prod/db\"}");
+        String scope = AwsSigV4.scope(day, region, service);
+        String toSign = AwsSigV4.ALGORITHM + "\n" + stamp + "\n" + scope + "\n"
+                + AwsSigV4.sha256Hex(canonical);
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] key = "wJalrXUtnFEMI/K7MDENG".getBytes(StandardCharsets.US_ASCII);
+            MemorySegment signature = AwsSigV4.sign(arena, target -> {
+                MemorySegment.copy(key, 0, target, ValueLayout.JAVA_BYTE, 0, key.length);
+                return key.length;
+            }, toSign, day, region, service);
+            return AwsSigV4.ALGORITHM + " Credential=AKIAIOSFODNN7EXAMPLE/" + scope
+                    + ", SignedHeaders=" + signedHeaders
+                    + ", Signature=" + AwsSigV4.hex(signature);
+        }
+    }
+
+    private static String authorizationOf(String request) {
+        int at = request.indexOf("Authorization: ");
+        assertTrue(at >= 0, request);
+        return request.substring(at + "Authorization: ".length(), request.indexOf("\r\n", at));
     }
 
     @Test

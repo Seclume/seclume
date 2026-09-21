@@ -85,6 +85,37 @@ public final class SecretScope implements AutoCloseable {
      * and released before the exception travels on.
      */
     public static SecretScope fromProvider(SecretProvider provider) {
+        // Every credential this library uses is fetched here, which makes it
+        // the one place worth recording - and the one place where it has to
+        // be said plainly what is recorded: that a fetch happened, from what
+        // kind of provider, how long it took, and when the credential
+        // expires. Never the secret, never its length, never a hash of it.
+        // A length is a fact about a password that an attacker is glad to
+        // have, and this class is the last place that should leak one.
+        space.seclume.jfr.SeclumeEvents.CredentialRotation event =
+                space.seclume.jfr.Observed.beginCredential();
+        boolean succeeded = false;
+        try {
+            SecretScope scope = read(provider);
+            succeeded = true;
+            return scope;
+        } finally {
+            space.seclume.jfr.Observed.endCredential(event,
+                    provider.getClass().getSimpleName(), expiryOf(provider), succeeded);
+        }
+    }
+
+    /** Seconds until the credential expires, or -1 when it does not. */
+    private static long expiryOf(SecretProvider provider) {
+        if (!(provider instanceof ExpiringCredentials expiring)) {
+            return -1;
+        }
+        java.time.Instant until = expiring.credentialsValidUntil();
+        return until == null ? -1
+                : java.time.Duration.between(java.time.Instant.now(), until).toSeconds();
+    }
+
+    private static SecretScope read(SecretProvider provider) {
         SecretScope scope = allocate(provider.maxSecretLength());
         try {
             int written = provider.writeSecret(scope.segment);

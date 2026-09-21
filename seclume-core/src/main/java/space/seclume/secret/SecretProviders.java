@@ -101,6 +101,14 @@ public final class SecretProviders {
             case "aws-secrets-manager", "awssecretsmanager" ->
                     new AwsSecretsManagerSecretProvider(
                             of(nested(settings, "key-")),
+                            // Optional, and only for temporary credentials.
+                            // It is signed as well as sent, which is why it
+                            // is a provider rather than a setting: a value
+                            // written here would be a String in the
+                            // configuration, which is the one thing this
+                            // library refuses everywhere else.
+                            nested(settings, "session-token-").isEmpty() ? null
+                                    : of(nested(settings, "session-token-")),
                             required(settings, "access-key-id", "aws-secrets-manager"),
                             required(settings, "region", "aws-secrets-manager"),
                             required(settings, "secret-id", "aws-secrets-manager"),

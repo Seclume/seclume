@@ -38,17 +38,25 @@ import space.seclume.internal.SecretFetch;
  * just a password. The inner document is parsed in the same segment the outer
  * one was unescaped into - no string in between.
  *
- * <h2>What it does not do, and why</h2>
+ * <h2>Temporary credentials</h2>
  *
- * <p><b>No session tokens</b> - only long-term access keys. A session token
- * (STS, IRSA, an instance role) has to be sent as {@code X-Amz-Security-Token}
- * <i>and</i> named in the signed headers, which means the token itself is part
- * of the canonical request: a string that is built, hashed and concatenated.
- * There is no way to sign it without putting it on the heap, and doing that
- * quietly would give up the guarantee in the one class whose job is to keep
- * it. Where only a session token is available, the honest answer today is
- * {@code rds-iam} for RDS, or a sidecar that writes the secret to a file this
- * library can read.
+ * <p>Session tokens work - STS, IRSA, an instance role - and getting there
+ * took a piece of work worth knowing about, because for a while this class
+ * said they did not.
+ *
+ * <p>A session token is not merely sent as {@code X-Amz-Security-Token}, it
+ * is <b>signed</b>: it appears inside the canonical request, which was an
+ * ordinary concatenated {@code String}. Supporting tokens that way would
+ * have put a credential on the heap in the one class whose job is to keep it
+ * off, so the gap was documented rather than quietly closed. The answer was
+ * to assemble the canonical request in native memory - see
+ * {@link space.seclume.internal.CanonicalRequest} - after which its SHA-256
+ * is a public hex digest and everything above that line can go back to being
+ * text. The token reaches the wire as a {@link SecretFetch.SecretHeader},
+ * which was already segment-valued.
+ *
+ * <p>It is read afresh for every request, because a session token expires
+ * and the provider behind it is where a newer one appears.
  */
 public final class AwsSecretsManagerSecretProvider implements SecretProvider {
 
@@ -56,6 +64,9 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
     private static final String TARGET = "secretsmanager.GetSecretValue";
     private static final String CONTENT_TYPE = "application/x-amz-json-1.1";
     private static final String SIGNED_HEADERS = "content-type;host;x-amz-date;x-amz-target";
+    /** Alphabetical, so the token sits between the date and the target. */
+    private static final String SIGNED_HEADERS_WITH_TOKEN =
+            "content-type;host;x-amz-date;x-amz-security-token;x-amz-target";
 
     private static final DateTimeFormatter STAMP =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
@@ -63,6 +74,15 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
             DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
 
     private final SecretProvider awsSecretKey;
+    /**
+     * Where the session token comes from, or {@code null} for long-term keys.
+     *
+     * <p>Read afresh for every request, unlike the access key id beside it:
+     * a session token expires, and the point of reading it from a provider
+     * is that the file or the agent behind it can hand out a newer one
+     * without this object being rebuilt.
+     */
+    private final SecretProvider sessionToken;
     private final String accessKeyId;
     private final String region;
     private final String secretId;
@@ -84,7 +104,21 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
      */
     public AwsSecretsManagerSecretProvider(SecretProvider awsSecretKey, String accessKeyId,
             String region, String secretId, String field, int maxLength) {
-        this(awsSecretKey, accessKeyId, region, secretId, field,
+        this(awsSecretKey, null, accessKeyId, region, secretId, field, maxLength);
+    }
+
+    /**
+     * The same with temporary credentials.
+     *
+     * @param sessionToken where the session token comes from, or {@code null}
+     *                     for a long-term access key. The token is signed as
+     *                     well as sent, and it never becomes a Java object on
+     *                     either path - see {@link CanonicalRequest}
+     */
+    public AwsSecretsManagerSecretProvider(SecretProvider awsSecretKey,
+            SecretProvider sessionToken, String accessKeyId, String region, String secretId,
+            String field, int maxLength) {
+        this(awsSecretKey, sessionToken, accessKeyId, region, secretId, field,
                 SERVICE + "." + region + ".amazonaws.com", 443, true, 10_000, maxLength,
                 Clock.systemUTC());
     }
@@ -93,7 +127,17 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
     public AwsSecretsManagerSecretProvider(SecretProvider awsSecretKey, String accessKeyId,
             String region, String secretId, String field, String host, int port, boolean verify,
             int timeoutMillis, int maxLength, Clock clock) {
+        this(awsSecretKey, null, accessKeyId, region, secretId, field, host, port, verify,
+                timeoutMillis, maxLength, clock);
+    }
+
+    /** The whole of it - for tests and for temporary credentials. */
+    public AwsSecretsManagerSecretProvider(SecretProvider awsSecretKey,
+            SecretProvider sessionToken, String accessKeyId, String region, String secretId,
+            String field, String host, int port, boolean verify, int timeoutMillis,
+            int maxLength, Clock clock) {
         this.awsSecretKey = awsSecretKey;
+        this.sessionToken = sessionToken;
         this.accessKeyId = accessKeyId;
         this.region = region;
         this.secretId = secretId;
@@ -119,11 +163,18 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
         String day = DAY.format(now);
 
         try (Arena arena = Arena.ofConfined();
-             SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE)) {
+             SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE);
+             // Temporary credentials only. Read afresh per request, because a
+             // session token expires and the provider behind it is where a
+             // newer one appears.
+             SecretScope token = sessionToken == null ? null
+                     : SecretScope.fromProvider(sessionToken)) {
 
             SecretFetch.Response response = SecretFetch.send(host, port, verify, timeoutMillis,
-                    "POST", "/", headers(stamp, authorization(arena, body, stamp, day)),
-                    List.of(), body, answer.segment());
+                    "POST", "/", headers(stamp, authorization(arena, body, stamp, day, token)),
+                    token == null ? List.of() : List.of(new SecretFetch.SecretHeader(
+                            "X-Amz-Security-Token", token.secret(), token.length())),
+                    body, answer.segment());
             if (!response.ok()) {
                 throw new SecretUnavailableException("AWS Secrets Manager answered "
                         + response.status() + " for " + secretId + ". 400 usually means the "
@@ -179,17 +230,38 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
      * goes over the wire in the clear. The only secret involved is the signing
      * key, and it stays inside {@link AwsSigV4#sign}.
      */
-    private String authorization(Arena arena, String body, String stamp, String day) {
+    private String authorization(Arena arena, String body, String stamp, String day,
+            SecretScope token) {
         String scope = AwsSigV4.scope(day, region, SERVICE);
-        String canonical = "POST\n/\n\n"
-                + "content-type:" + CONTENT_TYPE + "\n"
-                + "host:" + host + "\n"
-                + "x-amz-date:" + stamp + "\n"
-                + "x-amz-target:" + TARGET + "\n\n"
-                + SIGNED_HEADERS + "\n"
-                + AwsSigV4.sha256Hex(body);
-        String toSign = AwsSigV4.ALGORITHM + "\n" + stamp + "\n" + scope + "\n"
-                + AwsSigV4.sha256Hex(canonical);
+        String signedHeaders = token == null ? SIGNED_HEADERS : SIGNED_HEADERS_WITH_TOKEN;
+
+        // Assembled in native memory rather than concatenated, because with
+        // temporary credentials one of these lines is the session token -
+        // and a token that is signed as well as sent would otherwise spend
+        // the request on the heap. Everything after the hash is public
+        // again, so only this part has to be careful.
+        String canonicalHash;
+        try (space.seclume.internal.CanonicalRequest canonical =
+                new space.seclume.internal.CanonicalRequest(arena, canonicalCapacity(token))) {
+            canonical.text("POST\n/\n\n")
+                    .text("content-type:" + CONTENT_TYPE + "\n")
+                    .text("host:" + host + "\n")
+                    .text("x-amz-date:" + stamp + "\n");
+            if (token != null) {
+                // Alphabetical, which puts it before x-amz-target. Headers
+                // out of order sign perfectly cleanly and are rejected by
+                // AWS with nothing in the answer that says why.
+                canonical.text("x-amz-security-token:");
+                canonical.secret(token.secret(), token.length());
+                canonical.text("\n");
+            }
+            canonical.text("x-amz-target:" + TARGET + "\n\n")
+                    .text(signedHeaders + "\n")
+                    .text(AwsSigV4.sha256Hex(body));
+            canonicalHash = canonical.sha256Hex();
+        }
+
+        String toSign = AwsSigV4.ALGORITHM + "\n" + stamp + "\n" + scope + "\n" + canonicalHash;
 
         MemorySegment signature;
         try {
@@ -200,8 +272,20 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
                     + "the request to Secrets Manager cannot be signed without it", empty);
         }
         return AwsSigV4.ALGORITHM + " Credential=" + accessKeyId + "/" + scope
-                + ", SignedHeaders=" + SIGNED_HEADERS
+                + ", SignedHeaders=" + signedHeaders
                 + ", Signature=" + AwsSigV4.hex(signature);
+    }
+
+    /**
+     * Room for the canonical request, with the token if there is one.
+     *
+     * <p>Generous on purpose: running out would mean an exception in the
+     * middle of assembling something that has a credential in it, and the
+     * memory is freed a few microseconds later either way.
+     */
+    private int canonicalCapacity(SecretScope token) {
+        return 512 + host.length() + TARGET.length()
+                + (token == null ? 0 : token.length() + 32);
     }
 
     /** A secret's name may contain a slash or a colon, never a quote - but check. */
@@ -211,6 +295,12 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
 
     @Override
     public void close() {
-        awsSecretKey.close();
+        try {
+            awsSecretKey.close();
+        } finally {
+            if (sessionToken != null) {
+                sessionToken.close();
+            }
+        }
     }
 }
