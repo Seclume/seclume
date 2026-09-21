@@ -219,6 +219,20 @@ public final class BenchDatabase {
         Properties properties = new Properties();
         properties.setProperty("user", user);
         properties.setProperty("password", vendorPassword());
+        // Whatever else a particular run needs on the vendor side, named in
+        // one place so that a measurement says in its command line what it
+        // changed about the other driver:
+        //   -Dbench.vendor.properties=binaryTransfer=false,loggerLevel=OFF
+        // Nothing is set here by default, because a comparison in which one
+        // side is configured and the other is not measures the configuration.
+        String extra = System.getProperty("bench.vendor.properties", "");
+        for (String pair : extra.split(",")) {
+            int equals = pair.indexOf('=');
+            if (equals > 0) {
+                properties.setProperty(pair.substring(0, equals).trim(),
+                        pair.substring(equals + 1).trim());
+            }
+        }
         return properties;
     }
 

@@ -80,6 +80,10 @@ Never from the URL and never from a `String`. Pick a provider:
 | `gcp-secret-manager` | Google Secret Manager, Base64 payload decoded segment to segment |
 | `callback` | your own code, handed native memory to write into |
 
+**[PROVIDERS.md](PROVIDERS.md) is the full reference** — every setting of every provider, and
+the three differences that actually decide which one you want: whether the credential
+expires, whether it needs a second provider underneath, and what it costs per connection.
+
 `encrypted` is for the case where the password may not stand in the configuration in the
 clear but there is no secret store either. It is worth saying plainly what that buys: whoever
 can read the ciphertext can usually read the key file beside it. The gain is against copying,
@@ -153,11 +157,14 @@ none of the three SDKs is a dependency.
 Azure reports `attributes.exp` when a secret has one, so a rotating secret feeds the same
 pool machinery the Vault lease does.
 
-**One limitation, stated rather than worked around:** the AWS provider takes long-term access
-keys, not session tokens. A session token has to be sent *and signed*, which makes it part of
-the canonical request — a string that is built, hashed and concatenated. There is no way to
-sign it without putting it on the heap, and doing that quietly in this of all libraries would
-be dishonest. On RDS use `rds-iam`; otherwise a sidecar that writes the secret to a file.
+**AWS temporary credentials** — IRSA, an instance role, `AssumeRole` — work through
+`session-token-provider`, and getting there is worth a sentence because for a while this was
+documented as a gap. A session token is not merely sent as `X-Amz-Security-Token`, it is
+*signed*: it appears inside the canonical request, which was an ordinary concatenated
+`String`. Supporting it that way would have put a credential on the heap in the one library
+whose job is to keep it off, so the limitation was written down rather than quietly ignored.
+The fix turned out to be small — assemble the canonical request in native memory, hash it
+there, and everything above that line goes back to being text.
 
 ### One line instead of four
 
@@ -254,6 +261,39 @@ the result secure is lying by omission. On PostgreSQL the login is additionally 
 connection (SCRAM-SHA-256-PLUS), and when the server offers no binding the client says so
 rather than staying silent.
 
+**Which TLS carries it — a separate question**
+
+```properties
+jdbc:seclume:postgresql://db:5432/app?tls=require&tlsStack=seclume
+```
+
+| `tlsStack` | What provides the encryption |
+|---|---|
+| `jsse` | the JDK's `SSLEngine` — the default, and what every JDBC driver does |
+| `seclume` | this project's own TLS 1.3 client |
+
+Every mode above works on either, so this is not a security setting but a capability one. The
+own stack gives up resumption, TLS 1.2 and every key exchange group but P-256, and gains two
+things JSSE cannot offer at any price: **the traffic secrets never become Java objects**, and
+the encryption state can be frozen and taken up elsewhere — which is what a connection that
+survives moving host needs. The safe, boring one stays the default.
+
+**All four drivers are proven on it against real servers** — PostgreSQL and MySQL with
+channel binding, Oracle over a TCPS listener, SQL Server with `tds=8.0` below.
+
+**SQL Server needs `tds=8.0` as well**, and that is not a detail. Its ordinary handshake runs
+*inside* TDS packets and is TLS 1.2 by construction — TLS 1.3 moves handshake messages past
+the point where that nesting would have to invert. TDS 8.0 (Microsoft calls it strict
+encryption) puts TLS around the whole connection from the first byte instead:
+
+```properties
+jdbc:seclume:sqlserver://db:1433/app?tds=8.0&tlsStack=seclume
+```
+
+Proven against SQL Server 2025. **SQL Server 2022 on Linux does not accept strict encryption
+at all** — Microsoft's own driver fails against it the same way — so `tds=7.4` stays the
+default and nothing changes for anybody who does not ask.
+
 **Mutual TLS, with the client key off the heap too**
 
 A password held carefully while the private key that authenticates the *same* connection sits
@@ -264,24 +304,78 @@ a Java object: the key file goes through a secret provider into native memory,
 OpenSSL keeps it from there. Only the certificate chain and the signature — both public —
 are ordinary objects.
 
+Two settings say it, in a URL or in `application.properties`:
+
+```properties
+jdbc:seclume:postgresql://db:5432/app?tls=verify-full&tlsStack=seclume  &clientCert=/etc/tls/client.crt&clientKey-provider=file&clientKey-path=/etc/tls/client.key
+```
+
+The certificate is a path because it is public. The key is a **provider** — the same
+`clientKey-`-prefixed block accepts `vault`, `dpapi`, `encrypted` or anything else that works
+for a password, so the key can arrive the way the rest of your secrets do. Or hand one in
+directly, when the application builds it itself:
+
 ```java
 try (ClientIdentity me = new P256ClientIdentity(Path.of("/etc/tls/client.crt"),
                                                 SecretProviders.of(Map.of(
                                                     "provider", "file",
-                                                    "path", "/etc/tls/client.key")));
-     TlsConnection tls = ClientHandshake.connect(transport, host, trust, me)) {
-    ...
+                                                    "path", "/etc/tls/client.key")))) {
+    dataSource.setClientIdentity(me);
 }
 ```
 
-P-256 only, and refused rather than downgraded for anything else: an RSA client certificate
-would mean the JCA, and the JCA means the key on the heap.
+The identity is built **once per configuration** and shared. A pool of fifty connections
+loads one key, because loading it is what puts it in native memory and there it stays until
+the identity is closed.
 
-**What is not wired up yet:** this works on seclume's own TLS stack, which is also what the
-live-session move needs — but the four drivers still reach TLS through an `SSLEngine`, so a
-JDBC URL cannot ask for a client certificate this way yet. Doing so through JSSE would need a
-`KeyManager`, which puts the key back on the heap and gives up the only thing this is for. The
-two meet when the drivers move onto the own stack.
+Two things are refused rather than worked around. **P-256 only:** an RSA client certificate
+would mean the JCA, and the JCA means the key on the heap. And **`tlsStack=seclume` is
+required**, because presenting a certificate through the JDK's TLS needs a `KeyManager`,
+which hands out a `PrivateKey` — so that combination fails with a message saying so, instead
+of connecting quietly without the certificate the configuration asked for.
+
+**Where this does not reach:** nowhere, now — all four drivers can present a client
+certificate with the key off the heap. SQL Server needs `tds=8.0` with it, and Oracle a TCPS
+listener, for the reasons above.
+
+**Seeing what happened, without seeing the values**
+
+Flight Recorder events, and no runtime dependency for them: JFR is in the JDK, it is off until
+somebody starts a recording, and off it costs an `isEnabled()` the JIT folds away.
+
+```
+java -XX:StartFlightRecording=filename=app.jfr,settings=profile ...
+```
+
+| Event | What it answers |
+|---|---|
+| `space.seclume.ConnectionOpen` | how long a physical connect, TLS and login really take |
+| `space.seclume.TlsHandshake` | whether the slow part is the handshake and which stack ran it |
+| `space.seclume.Query` | which statements are slow — over 10 ms by default, lower it in the recording settings |
+| `space.seclume.PoolWait` | the one an operator wants when the app is slow and the database is idle |
+| `space.seclume.Failover` | which server stopped answering, and when |
+| `space.seclume.CredentialRotation` | that a secret was fetched, how long it took, and when it expires |
+| `space.seclume.StatementCache` | whether server-side plans are actually being reused |
+
+**A statement is named by its shape, never by its text:**
+
+```
+select * from customer where id = 42 and name = 'alice'
+select * from customer where id = ? and name = ?
+```
+
+That is `QueryFingerprint`, and it is the reason these events are safe to keep. A recording
+is written to a file, kept for weeks and handed to whoever is debugging — a longer life and a
+wider audience than a heap dump, which this library goes to some lengths about. So a value in
+a JFR event would be worse than one on the heap, not better. Literals of every quoting form
+each dialect has, numbers, and every placeholder spelling are replaced; `in (?, ?, ?)`
+collapses to `in (?)` so one query stays one entry. Where a dialect makes it ambiguous whether
+something is an identifier or a string — `"x"` in MySQL — the fingerprint gives up the
+identifier rather than risk the value.
+
+Not recorded anywhere: bind values, SQL text, secrets, or anything derived from a secret — not
+its length and not a hash. Nor the database user, which is not a secret and is not needed to
+diagnose anything here.
 
 **Beside the drivers**
 
