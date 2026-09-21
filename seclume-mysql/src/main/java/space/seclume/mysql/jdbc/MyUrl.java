@@ -62,7 +62,17 @@ final class MyUrl {
                     ResultLimit.of(parsed.size("maxResultBytes", 0),
                             parsed.size("maxResultRows", 0)),
                     space.seclume.internal.jdbc.TlsMode.of(
-                            parsed.option("tls", null)));
+                            parsed.option("tls", null)),
+                    space.seclume.internal.jdbc.TlsStack.of(
+                            parsed.option("tlsStack", null)),
+                    // A client certificate, when one is configured. Building
+                    // it here rather than per connection is deliberate - see
+                    // ClientIdentities: the key is loaded once and shared.
+                    space.seclume.tls.ClientIdentities.of(parsed.options()),
+                    // On by default, as in Connector/J: a tinyint(1) is a
+                    // boolean to every ORM that writes one. tinyInt1isBit=false
+                    // gives back the integer for whoever wants the raw column.
+                    parsed.flag("tinyInt1isBit", true));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

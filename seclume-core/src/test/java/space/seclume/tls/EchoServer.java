@@ -44,10 +44,28 @@ final class EchoServer implements AutoCloseable {
      * authentication as well, not only for the record layer.
      */
     static EchoServer start(SSLContext context, boolean needClientAuth) throws IOException {
+        return start(context, needClientAuth, null);
+    }
+
+    /**
+     * The same, willing to select one application protocol.
+     *
+     * <p>{@code null} means the server has no ALPN configured at all, which
+     * is a case worth being able to produce: a client that offers a protocol
+     * and is answered with silence has to refuse, and that refusal is only
+     * testable against a server that stays silent.
+     */
+    static EchoServer start(SSLContext context, boolean needClientAuth, String alpn)
+            throws IOException {
         SSLServerSocket socket = (SSLServerSocket) context.getServerSocketFactory()
                 .createServerSocket(0, 1, InetAddress.getLoopbackAddress());
         socket.setSoTimeout(60_000);
         socket.setNeedClientAuth(needClientAuth);
+        if (alpn != null) {
+            javax.net.ssl.SSLParameters parameters = socket.getSSLParameters();
+            parameters.setApplicationProtocols(new String[] {alpn});
+            socket.setSSLParameters(parameters);
+        }
         return new EchoServer(socket);
     }
 

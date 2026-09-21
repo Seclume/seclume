@@ -51,6 +51,29 @@ public final class ClientHello {
      */
     public static int write(MemorySegment out, long offset, MemorySegment random,
             MemorySegment sessionId, int group, MemorySegment publicShare, String serverName) {
+        return write(out, offset, random, sessionId, group, publicShare, serverName, null);
+    }
+
+    /**
+     * As above, offering one application protocol.
+     *
+     * <p>ALPN, and it is here for one reason: <b>TDS 8.0 requires it.</b> SQL
+     * Server's strict encryption puts TLS around the whole connection from
+     * the first byte, and the way it tells that apart from anything else
+     * arriving on port 1433 is the protocol name {@code tds/8.0} in this
+     * extension. Without it the server has no way to know what it is talking
+     * to, and says so by hanging up.
+     *
+     * <p>One name, not a list. A list is what a browser needs, and every
+     * entry on it is a branch afterwards; here the caller knows exactly which
+     * protocol it intends to speak and a second-choice answer would be no use
+     * to it.
+     *
+     * @param alpn the protocol name, ASCII, or null to omit the extension
+     */
+    public static int write(MemorySegment out, long offset, MemorySegment random,
+            MemorySegment sessionId, int group, MemorySegment publicShare, String serverName,
+            String alpn) {
         int shareLength = switch (group) {
             case X25519 -> 32;
             case SECP256R1 -> 65;
@@ -67,7 +90,9 @@ public final class ClientHello {
         int sessionLength = (int) sessionId.byteSize();
         // supported_versions (7), groups (8), signatures (18), certificate
         // signatures (24), key_share (10 + share), optional server_name (9 + name).
-        int extensions = 7 + 8 + 18 + 24 + 10 + shareLength + (name == null ? 0 : 9 + name.length());
+        int alpnLength = alpn == null ? 0 : 4 + 2 + 1 + alpn.length();
+        int extensions = 7 + 8 + 18 + 24 + 10 + shareLength
+                + (name == null ? 0 : 9 + name.length()) + alpnLength;
         int body = 2 + 32 + 1 + sessionLength + 2 + 4 + 1 + 1 + 2 + extensions;
         int length = Handshake.HEADER + body;
         // Validate the entire output range before writing anything.
@@ -109,8 +134,20 @@ public final class ClientHello {
         extension(buffer, Handshake.EXTENSION_KEY_SHARE, 6 + shareLength);
         buffer.putShort((short) (4 + shareLength)).putShort((short) group).putShort((short) shareLength);
         buffer.put(publicShare.asByteBuffer());
+
+        if (alpn != null) {
+            extension(buffer, EXTENSION_ALPN, 2 + 1 + alpn.length());
+            buffer.putShort((short) (1 + alpn.length()));
+            buffer.put((byte) alpn.length());
+            for (int i = 0; i < alpn.length(); i++) {
+                buffer.put((byte) alpn.charAt(i));
+            }
+        }
         return length;
     }
+
+    /** RFC 7301, application_layer_protocol_negotiation. */
+    public static final int EXTENSION_ALPN = 16;
 
     private static void signatures(ByteBuffer buffer) {
         buffer.putShort((short) 0x0804).putShort((short) 0x0805).putShort((short) 0x0806);

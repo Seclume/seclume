@@ -48,7 +48,12 @@ final class RecordStream implements AutoCloseable {
     record Incoming(int contentType, MemorySegment data, long offset, int length) {
     }
 
-    private final Transport transport;
+    /**
+     * Not final: when a connection's socket is rebuilt beneath it - a move
+     * within one process - this is the reference that would otherwise keep
+     * reading through the closed descriptor.
+     */
+    private Transport transport;
     private final Arena arena = Arena.ofShared();
     private final MemorySegment incoming;
     private final MemorySegment opened;
@@ -77,6 +82,11 @@ final class RecordStream implements AutoCloseable {
             writing.close();
         }
         writing = protection;
+    }
+
+    /** Puts a different transport underneath, keeping both keys as they are. */
+    void replaceTransport(Transport replacement) {
+        this.transport = replacement;
     }
 
     RecordProtection readProtection() {

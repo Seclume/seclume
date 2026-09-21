@@ -33,7 +33,7 @@ import javax.net.ssl.X509ExtendedTrustManager;
  * is also why the plaintext is never copied into a {@code byte[]} on the way —
  * it goes from the caller's buffer into {@code wrap} and no further.
  */
-public final class TlsChannel implements AutoCloseable {
+public final class TlsChannel implements TlsLayer {
 
     private static final ByteBuffer EMPTY = ByteBuffer.allocateDirect(0);
 
@@ -50,9 +50,13 @@ public final class TlsChannel implements AutoCloseable {
     private final ByteBuffer netIn;
     private final ByteBuffer appIn;
 
-    private TlsChannel(SSLEngine engine, Transport channel) {
+    /** What was offered, so the handshake can check what came back. */
+    private final String alpn;
+
+    private TlsChannel(SSLEngine engine, Transport channel, String alpn) {
         this.engine = engine;
         this.channel = channel;
+        this.alpn = alpn;
         SSLSession session = engine.getSession();
         this.netOut = ByteBuffer.allocateDirect(session.getPacketBufferSize());
         this.netIn = ByteBuffer.allocateDirect(session.getPacketBufferSize());
@@ -71,6 +75,18 @@ public final class TlsChannel implements AutoCloseable {
      */
     public static TlsChannel create(Transport channel, String host, int port, boolean verify)
             throws IOException {
+        return create(channel, host, port, verify, null);
+    }
+
+    /**
+     * The same, offering one application protocol.
+     *
+     * <p>JSSE will not tell us here whether the server took it - that is
+     * readable afterwards through {@code getApplicationProtocol}, and it is
+     * checked there rather than guessed at.
+     */
+    public static TlsChannel create(Transport channel, String host, int port, boolean verify,
+            String alpn) throws IOException {
         try {
             SSLContext context;
             if (verify) {
@@ -81,15 +97,22 @@ public final class TlsChannel implements AutoCloseable {
             }
             SSLEngine engine = context.createSSLEngine(host, port);
             engine.setUseClientMode(true);
-            if (verify) {
+            if (verify || alpn != null) {
                 SSLParameters parameters = engine.getSSLParameters();
+                if (alpn != null) {
+                    parameters.setApplicationProtocols(new String[] {alpn});
+                }
+                if (!verify) {
+                    engine.setSSLParameters(parameters);
+                    return new TlsChannel(engine, channel, alpn);
+                }
                 // Without this the certificate is checked against the trust
                 // store but not against the host that was dialled - which
                 // leaves exactly the hole the certificate was meant to close.
                 parameters.setEndpointIdentificationAlgorithm("HTTPS");
                 engine.setSSLParameters(parameters);
             }
-            return new TlsChannel(engine, channel);
+            return new TlsChannel(engine, channel, alpn);
         } catch (NoSuchAlgorithmException | KeyManagementException e) {
             throw new IOException("cannot set up TLS: " + e.getMessage(), e);
         }
@@ -139,9 +162,18 @@ public final class TlsChannel implements AutoCloseable {
         netIn.limit(0);
         appIn.clear();
         appIn.limit(0);
+        if (alpn != null && !alpn.equals(engine.getApplicationProtocol())) {
+            // Same refusal as the own stack makes, for the same reason: a
+            // protocol the server never agreed to shows up later as a
+            // connection that hangs, not as an error.
+            throw new IOException("this client offered the application protocol \"" + alpn
+                    + "\" and the server answered with \"" + engine.getApplicationProtocol()
+                    + "\" - carrying on would mean speaking a protocol it never agreed to");
+        }
     }
 
     /** Encrypts and sends everything remaining in {@code plain}. */
+    @Override
     public void write(ByteBuffer plain) throws IOException {
         while (plain.hasRemaining()) {
             netOut.clear();
@@ -160,6 +192,7 @@ public final class TlsChannel implements AutoCloseable {
      * @return how many bytes were put there, never zero unless the target was
      *         full; -1 when the peer closed the connection
      */
+    @Override
     public int read(ByteBuffer target) throws IOException {
         if (appIn.hasRemaining()) {
             return copyOut(target);
@@ -223,6 +256,7 @@ public final class TlsChannel implements AutoCloseable {
      * certificate is not verified, but it is still the certificate of this
      * connection, and that is all a binding needs.
      */
+    @Override
     public java.security.cert.X509Certificate peerCertificate() throws IOException {
         try {
             java.security.cert.Certificate[] chain = engine.getSession().getPeerCertificates();
@@ -251,6 +285,7 @@ public final class TlsChannel implements AutoCloseable {
      * it; against a plaintext one everything passed, because there is no second
      * reference to get wrong.
      */
+    @Override
     public void replaceTransport(Transport replacement) {
         this.channel = replacement;
     }
@@ -261,6 +296,26 @@ public final class TlsChannel implements AutoCloseable {
 
     public String cipherSuite() {
         return engine.getSession().getCipherSuite();
+    }
+
+    @Override
+    public String description() {
+        return protocol() + " / " + cipherSuite();
+    }
+
+    /**
+     * No. The engine holds the keys and the sequence numbers and will not
+     * give them up - see {@link TlsLayer#movable()}.
+     */
+    @Override
+    public boolean movable() {
+        return false;
+    }
+
+    /** The engine never owned the socket, so this is the same as closing. */
+    @Override
+    public void discard() {
+        close();
     }
 
     @Override

@@ -32,10 +32,11 @@ import javax.net.ssl.X509TrustManager;
  * argument here but the whole point: the login packet with the password passes
  * through these buffers, and a heap buffer would show up in a heap dump.
  */
-public final class TdsTls {
+public final class TdsTls implements space.seclume.internal.TlsLayer {
 
     private final SSLEngine engine;
-    private final space.seclume.internal.Transport channel;
+    /** Not final only so that {@link #replaceTransport} can do its job. */
+    private space.seclume.internal.Transport channel;
 
     private final ByteBuffer netOut;
     private final ByteBuffer netIn;
@@ -197,6 +198,7 @@ public final class TdsTls {
     // ---- after the handshake: TDS inside TLS -----------------------------
 
     /** Encrypts and sends; the plaintext stays in direct memory. */
+    @Override
     public void write(ByteBuffer plain) throws IOException {
         requireHandshake();
         while (plain.hasRemaining()) {
@@ -217,6 +219,7 @@ public final class TdsTls {
      *
      * @return how many bytes were read, or -1 at the end
      */
+    @Override
     public int read(ByteBuffer target) throws IOException {
         requireHandshake();
         if (appIn.hasRemaining()) {
@@ -270,6 +273,59 @@ public final class TdsTls {
         if (!handshakeDone) {
             throw new IOException("the TLS handshake has not finished");
         }
+    }
+
+    /**
+     * Protocol and cipher suite.
+     *
+     * <p>No stack marker, unlike the two layers in the core: there is only
+     * one implementation of this nesting and there is not going to be a
+     * second, because TLS 1.3 cannot be nested this way at all. That is what
+     * TDS 8.0 exists for.
+     */
+    @Override
+    public String description() {
+        return protocol() + " / " + cipherSuite();
+    }
+
+    /**
+     * No. The keys are inside an {@code SSLEngine}, which will not give them
+     * up - see {@link space.seclume.internal.TlsLayer#movable()}. On this
+     * driver that is doubly settled: the nesting is TLS 1.2 by construction.
+     */
+    @Override
+    public boolean movable() {
+        return false;
+    }
+
+    @Override
+    public java.security.cert.X509Certificate peerCertificate() throws IOException {
+        try {
+            java.security.cert.Certificate[] chain = engine.getSession().getPeerCertificates();
+            if (chain.length == 0
+                    || !(chain[0] instanceof java.security.cert.X509Certificate leaf)) {
+                throw new IOException("the server sent no X.509 certificate");
+            }
+            return leaf;
+        } catch (javax.net.ssl.SSLPeerUnverifiedException e) {
+            throw new IOException("the server sent no certificate: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public void replaceTransport(space.seclume.internal.Transport replacement) {
+        this.channel = replacement;
+    }
+
+    /** The engine never owned the socket, so this is the same as closing. */
+    @Override
+    public void discard() {
+        close();
+    }
+
+    @Override
+    public void close() {
+        engine.closeOutbound();
     }
 
     /** The negotiated protocol - for diagnostics. */

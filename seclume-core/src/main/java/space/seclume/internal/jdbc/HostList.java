@@ -154,6 +154,13 @@ public final class HostList {
                     e.addSuppressed(failure);
                 }
                 failure = e;
+                // Recorded here rather than where the connection finally
+                // succeeds, because the interesting fact is which server did
+                // not answer - and on a run where none of them does, that is
+                // the only place it is known.
+                Host next = hosts.get((index + 1) % hosts.size());
+                space.seclume.jfr.Observed.failover(host.toString(), next.toString(),
+                        e.getMessage());
             }
         }
         throw new SQLException("none of the " + hosts.size() + " servers could be reached ("

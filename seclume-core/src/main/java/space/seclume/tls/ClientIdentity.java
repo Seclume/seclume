@@ -20,8 +20,11 @@ import java.util.List;
  * <p>The certificate chain is equally public: it is sent in the clear in every
  * handshake, and there is nothing to gain by keeping it off the heap.
  *
- * <p>An identity is closed when the connection that used it is done with it,
- * and closing it releases the key.
+ * <p>Closing an identity releases the key. <b>A connection does not close the
+ * one it was handed</b>: an identity is loaded once and shared by everything
+ * configured the same way - see {@link ClientIdentities} - because the key
+ * lives in native memory for as long as the identity does, and a pool opening
+ * fifty connections must not load it fifty times. Whoever built it closes it.
  */
 public interface ClientIdentity extends AutoCloseable {
 

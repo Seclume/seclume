@@ -44,7 +44,8 @@ public final class TlsConnection implements Transport {
     private static final int NEW_SESSION_TICKET = Handshake.NEW_SESSION_TICKET;
     private static final int KEY_UPDATE = 24;
 
-    private final Transport underlying;
+    /** Not final: see {@link #replaceTransport}. */
+    private Transport underlying;
     private final RecordStream records;
     private final Arena arena = Arena.ofShared();
     private final MemorySegment scratch;
@@ -58,6 +59,10 @@ public final class TlsConnection implements Transport {
     private boolean frozen;
     private boolean endOfStream;
 
+    /** The server's leaf certificate, for channel binding; null after a thaw. */
+    private java.security.cert.X509Certificate peerCertificate;
+    private String description = "TLSv1.3";
+
     TlsConnection(Transport underlying, RecordStream records) {
         this.underlying = underlying;
         this.records = records;
@@ -67,6 +72,45 @@ public final class TlsConnection implements Transport {
         // A post-handshake message is small; a peer announcing a huge one is
         // not doing anything this connection needs to buffer.
         this.postHandshake = new HandshakeReassembler(1 << 16);
+    }
+
+    /** What the handshake settled on - filled in by {@link ClientHandshake}. */
+    void describe(java.security.cert.X509Certificate leaf, String cipherSuite) {
+        this.peerCertificate = leaf;
+        this.description = "TLSv1.3 / " + cipherSuite;
+    }
+
+    /**
+     * The server's certificate, or {@code null} when there is none to give.
+     *
+     * <p>Null in exactly two cases, and both are honest rather than
+     * accidental: a server that sent no certificate, and a connection that was
+     * thawed rather than handshaked here - the frozen state carries keys and
+     * sequence numbers, not the certificate, because nothing needs it again
+     * once the connection is running.
+     */
+    public java.security.cert.X509Certificate peerCertificate() {
+        return peerCertificate;
+    }
+
+    /** Protocol and cipher suite. */
+    public String description() {
+        return description;
+    }
+
+    /**
+     * Puts a different transport underneath, keeping the encryption state as
+     * it is.
+     *
+     * <p>The keys and the record sequence numbers have no interest in which
+     * descriptor carried them, so a socket rebuilt with the same sequence
+     * numbers carries on encrypted. Both references have to be told: this one
+     * for {@link #isOpen} and {@link #close}, and the record stream's for the
+     * bytes themselves.
+     */
+    public void replaceTransport(Transport replacement) {
+        this.underlying = replacement;
+        records.replaceTransport(replacement);
     }
 
     @Override
@@ -243,6 +287,30 @@ public final class TlsConnection implements Transport {
         if (closed) {
             throw new IOException("this connection is closed");
         }
+    }
+
+    /**
+     * Lets go of this connection's own memory, and leaves the socket alone.
+     *
+     * <p>For the one case where a second TLS session is brought up on a
+     * socket that is still in use: Oracle's TCPS listener hands the
+     * connection to a server process, which starts a handshake of its own.
+     * {@link #close()} would take the socket down with it and the successor
+     * would have nothing to talk through - which is how that showed up, as a
+     * {@code ClosedChannelException} in the middle of the second
+     * ClientHello.
+     *
+     * <p>No goodbye is sent, deliberately: the peer that would receive it is
+     * already gone, and the new one is waiting for a ClientHello.
+     */
+    public void discard() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        postHandshake.close();
+        records.close();
+        arena.close();
     }
 
     @Override

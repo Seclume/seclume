@@ -206,6 +206,64 @@ class MutualTlsTest {
         assertTrue(refused.getMessage().contains("P-256"), refused.getMessage());
     }
 
+    /**
+     * The same, reached the way a driver reaches it.
+     *
+     * <p>The tests above call {@link ClientHandshake} directly. A JDBC
+     * connection does not: it goes through {@code TlsLayers}, which picks a
+     * stack, and {@code SeclumeTls}, which adapts one. Those two are where a
+     * client identity can be dropped on the floor without anything failing -
+     * a server that merely <em>offers</em> to check a certificate accepts a
+     * connection that brings none. This server demands one, so it does not.
+     *
+     * <p>The server's own certificate is not checked here, which is what
+     * {@code tls=require} means and is the ordinary shape of this
+     * arrangement: a test or internal server identified by its client
+     * certificates rather than by a public CA.
+     */
+    @Test
+    void theDriverPathCarriesTheIdentity(@TempDir Path dir) throws Exception {
+        try (ClientIdentity identity = identity(dir);
+                EchoServer server = EchoServer.start(serverContext, true);
+                Transport socket = connectTo(server);
+                space.seclume.internal.TlsLayer tls = space.seclume.internal.TlsLayers.start(
+                        space.seclume.internal.jdbc.TlsStack.SECLUME, socket, HOSTNAME,
+                        server.port(), false, identity)) {
+
+            byte[] sent = "select 1".getBytes(StandardCharsets.US_ASCII);
+            tls.write(ByteBuffer.wrap(sent));
+            assertArrayEquals(sent, readExactly(tls, sent.length),
+                    "the server demanded a certificate and this path supplied it");
+        }
+    }
+
+    /**
+     * The negative control for the test above, and a decision in its own
+     * right.
+     *
+     * <p>A client certificate on the JSSE stack would need a
+     * {@code KeyManager}, which hands out a {@code PrivateKey} - the key back
+     * on the heap, which is the one thing none of this may do. The two ways
+     * to handle that are to ignore the identity or to refuse the
+     * combination. Ignoring it would connect, quietly, without the
+     * certificate the configuration asked for.
+     */
+    @Test
+    void aClientCertificateOnTheJdkStackIsRefusedRatherThanIgnored(@TempDir Path dir)
+            throws Exception {
+        try (ClientIdentity identity = identity(dir);
+                EchoServer server = EchoServer.start(serverContext, true);
+                Transport socket = connectTo(server)) {
+
+            IOException refused = assertThrows(IOException.class,
+                    () -> space.seclume.internal.TlsLayers.start(
+                            space.seclume.internal.jdbc.TlsStack.JSSE, socket, HOSTNAME,
+                            server.port(), false, identity));
+            assertTrue(refused.getMessage().contains("tlsStack=seclume"),
+                    "the message has to say what to do instead: " + refused.getMessage());
+        }
+    }
+
     // ------------------------------------------------------------- fixtures --
 
     /** The client identity as a deployment has it: a chain and a PEM key file. */
@@ -278,6 +336,18 @@ class MutualTlsTest {
     private static Transport connectTo(EchoServer server) throws IOException {
         return SocketTransport.wrap(java.nio.channels.SocketChannel.open(
                 new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port())));
+    }
+
+    private static byte[] readExactly(space.seclume.internal.TlsLayer tls, int length)
+            throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(length);
+        while (buffer.hasRemaining()) {
+            if (tls.read(buffer) < 0) {
+                throw new IOException("the connection closed after " + buffer.position()
+                        + " of " + length + " bytes");
+            }
+        }
+        return buffer.array();
     }
 
     private static byte[] readExactly(TlsConnection tls, int length) throws IOException {

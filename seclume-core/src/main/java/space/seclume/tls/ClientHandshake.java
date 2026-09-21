@@ -119,9 +119,35 @@ public final class ClientHandshake {
         return handshake(transport, host, null, identity);
     }
 
+    /**
+     * Connects, proves who the client is if asked, and offers one application
+     * protocol.
+     *
+     * <p>Named separately rather than folded into the calls above because
+     * ALPN changes what a failure means: a server that does not select the
+     * protocol is refused here, loudly, instead of being talked to in a
+     * language it did not agree to. Today that matters for exactly one
+     * caller - TDS 8.0, where {@code tds/8.0} is how SQL Server knows what
+     * arrived on its port.
+     *
+     * @param trust    the anchors, or null for encryption without authentication
+     * @param identity a client certificate, or null
+     * @param alpn     the protocol name to offer and to require back
+     */
+    public static TlsConnection connect(Transport transport, String host,
+            CertificateTrust trust, ClientIdentity identity, String alpn) throws IOException {
+        return handshake(transport, host, trust, identity, alpn);
+    }
+
     private static TlsConnection handshake(Transport transport, String host,
             CertificateTrust trust, ClientIdentity identity) throws IOException {
+        return handshake(transport, host, trust, identity, null);
+    }
+
+    private static TlsConnection handshake(Transport transport, String host,
+            CertificateTrust trust, ClientIdentity identity, String alpn) throws IOException {
         RecordStream records = new RecordStream(transport);
+        List<X509Certificate> serverChain = new ArrayList<>();
         boolean done = false;
         try (Arena arena = Arena.ofConfined();
                 NativeP256 keyExchange = NativeP256.generate();
@@ -137,7 +163,7 @@ public final class ClientHandshake {
 
             MemorySegment hello = arena.allocate(1024);
             int helloLength = ClientHello.write(hello, 0, random, sessionId,
-                    ClientHello.SECP256R1, publicShare, serverNameFor(host));
+                    ClientHello.SECP256R1, publicShare, serverNameFor(host), alpn);
             records.write((byte) 22, hello, 0, helloLength);
 
             // ---- ServerHello ------------------------------------------------
@@ -176,8 +202,8 @@ public final class ClientHandshake {
                         hash, schedule.serverHandshakeTrafficSecret(), keyLength));
 
                 // ---- the server's encrypted flight ------------------------
-                byte[] certificateRequest =
-                        readServerFlight(records, transcript, schedule, digest, hash, host, trust);
+                byte[] certificateRequest = readServerFlight(records, transcript, schedule,
+                        digest, hash, host, trust, serverChain, alpn);
 
                 // Everything through the server's Finished: the context for both
                 // the application secrets and our own Finished.
@@ -218,6 +244,12 @@ public final class ClientHandshake {
                         hash, schedule.clientApplicationTrafficSecret(), keyLength));
             }
             TlsConnection connection = new TlsConnection(transport, records);
+            // Kept for channel binding, which asks for the certificate long
+            // after the handshake that checked it - and for the preflight
+            // report, which has to be able to say what was actually agreed
+            // rather than what was offered.
+            connection.describe(serverChain.isEmpty() ? null : serverChain.get(0),
+                    facts.cipherSuite());
             done = true;
             return connection;
         } finally {
@@ -229,7 +261,7 @@ public final class ClientHandshake {
 
     /** What a ServerHello has to tell us, once it has been checked. */
     private record ServerHelloFacts(HashAlgorithm hash, int keyLength,
-            long keyShareAt, int keyShareLength) {
+            long keyShareAt, int keyShareLength, String cipherSuite) {
     }
 
     private static ServerHelloFacts readServerHello(MemorySegment serverHello,
@@ -282,7 +314,9 @@ public final class ClientHandshake {
         if (!seen[0]) {
             throw new IOException("the server sent no usable P-256 key share");
         }
-        return new ServerHelloFacts(hash, keyLength, share[0], (int) share[1]);
+        String name = suite == ClientHello.AES_256_GCM_SHA384
+                ? "TLS_AES_256_GCM_SHA384" : "TLS_AES_128_GCM_SHA256";
+        return new ServerHelloFacts(hash, keyLength, share[0], (int) share[1], name);
     }
 
     /**
@@ -296,9 +330,9 @@ public final class ClientHandshake {
      */
     private static byte[] readServerFlight(RecordStream records, TranscriptHash transcript,
             KeySchedule schedule, SecretScope digest, HashAlgorithm hash, String host,
-            CertificateTrust trust) throws IOException {
+            CertificateTrust trust, List<X509Certificate> chain, String alpn)
+            throws IOException {
         try (HandshakeReassembler flight = new HandshakeReassembler(1 << 20)) {
-            List<X509Certificate> chain = new ArrayList<>();
             boolean[] finished = {false};
             byte[][] certificateRequest = {null};
             IOException[] failure = {null};
@@ -319,8 +353,10 @@ public final class ClientHandshake {
                         int total = Handshake.HEADER + length;
                         long start = at - Handshake.HEADER;
                         switch (type) {
-                            case Handshake.ENCRYPTED_EXTENSIONS ->
-                                    transcript.update(message, start, total);
+                            case Handshake.ENCRYPTED_EXTENSIONS -> {
+                                checkSelectedProtocol(message, at, length, alpn);
+                                transcript.update(message, start, total);
+                            }
                             case Handshake.CERTIFICATE -> {
                                 readCertificates(message, at, length, chain);
                                 authenticate(chain, host, trust);
@@ -432,6 +468,51 @@ public final class ClientHandshake {
         }
         if (chain.isEmpty()) {
             throw new IOException("the server sent an empty certificate list");
+        }
+    }
+
+    /**
+     * Did the server agree to the protocol we offered.
+     *
+     * <p>Only asked when one was offered. A server that selects nothing has
+     * either ignored ALPN or does not support what was asked for, and in both
+     * cases carrying on would mean speaking a protocol the other end never
+     * agreed to - which for TDS 8.0 shows up as a connection that hangs
+     * rather than as an error, because the server is waiting for something
+     * else entirely.
+     */
+    private static void checkSelectedProtocol(MemorySegment message, long body, int length,
+            String alpn) throws IOException {
+        if (alpn == null) {
+            return;
+        }
+        if (length < 2) {
+            throw new IOException("the server sent no extensions, so it did not select \""
+                    + alpn + "\"");
+        }
+        int extensionsLength = Handshake.u16(message, body);
+        String[] selected = {null};
+        Handshake.extensions(message, body + 2, extensionsLength, (type, at, size) -> {
+            if (type != ClientHello.EXTENSION_ALPN || size < 3) {
+                return;
+            }
+            // ProtocolNameList: two bytes of list length, then one length-
+            // prefixed name. Exactly one, because exactly one was offered.
+            int nameLength = message.get(ValueLayout.JAVA_BYTE, at + 2) & 0xff;
+            if (nameLength > size - 3) {
+                return;
+            }
+            StringBuilder name = new StringBuilder(nameLength);
+            for (int i = 0; i < nameLength; i++) {
+                name.append((char) (message.get(ValueLayout.JAVA_BYTE, at + 3 + i) & 0xff));
+            }
+            selected[0] = name.toString();
+        });
+        if (!alpn.equals(selected[0])) {
+            throw new IOException("this client offered the application protocol \"" + alpn
+                    + "\" and the server answered with "
+                    + (selected[0] == null ? "none" : "\"" + selected[0] + "\"")
+                    + " - carrying on would mean speaking a protocol it never agreed to");
         }
     }
 

@@ -108,7 +108,25 @@ public final class TdsSession implements AutoCloseable {
     public record Settings(String host, int port, String database, String user,
                            SecretProvider secret, String applicationName,
                            int connectTimeoutMillis, boolean trustServerCertificate,
-                           HostList hosts, ResultLimit resultLimit) {
+                           HostList hosts, ResultLimit resultLimit,
+                           TdsVersion tdsVersion,
+                           space.seclume.internal.jdbc.TlsStack tlsStack,
+                           space.seclume.tls.ClientIdentity identity) {
+
+        /**
+         * With everything but the TDS version, which almost nobody sets.
+         *
+         * <p>7.4 and the JDK's TLS: what every SQL Server in service speaks,
+         * and what this driver did before 8.0 existed here.
+         */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean trustServerCertificate,
+                        HostList hosts, ResultLimit resultLimit) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    trustServerCertificate, hosts, resultLimit, TdsVersion.TDS_7_4,
+                    space.seclume.internal.jdbc.TlsStack.JSSE, null);
+        }
 
         /** Without a result limit - what a URL without the option means. */
         public Settings(String host, int port, String database, String user,
@@ -132,11 +150,18 @@ public final class TdsSession implements AutoCloseable {
                     trustServerCertificate, HostList.of(host, port));
         }
 
-        /** The same settings pointed at another server of the list. */
+        /**
+         * The same settings pointed at another server of the list.
+         *
+         * <p>Every component has to be carried across, including the ones
+         * added later - a single-host list goes through here too, so
+         * anything dropped here is dropped on every connection rather than
+         * only on failover.
+         */
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, trustServerCertificate, hosts,
-                    resultLimit);
+                    resultLimit, tdsVersion, tlsStack, identity);
         }
     }
 
@@ -174,6 +199,23 @@ public final class TdsSession implements AutoCloseable {
     }
 
     private static TdsSession openOne(Settings settings) throws SQLException {
+        // The expensive one: a physical connect, the TLS handshake and the
+        // login. Recorded around the whole of it, because that is the number
+        // a pool's warm-up time is made of. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.ConnectionOpen event =
+                space.seclume.jfr.Observed.beginConnect();
+        TdsSession opened = null;
+        try {
+            opened = connectAndLogIn(settings);
+            return opened;
+        } finally {
+            space.seclume.jfr.Observed.endConnect(event, "sqlserver",
+                    settings.host() + ":" + settings.port(), settings.database(),
+                    opened == null ? null : opened.tlsDescription(), opened != null);
+        }
+    }
+
+    private static TdsSession connectAndLogIn(Settings settings) throws SQLException {
         TdsChannel channel;
         try {
             channel = TdsChannel.connect(settings.host(), settings.port(),
@@ -196,20 +238,16 @@ public final class TdsSession implements AutoCloseable {
 
     private static TdsSession login(TdsChannel channel, Settings settings)
             throws IOException, SQLException {
-        PreLogin preLogin = new PreLogin();
-        preLogin.exchange(channel, Tds.ENCRYPT_ON);
-        if (!preLogin.supportsEncryption()) {
-            // Without TLS the password would go over the wire in the LOGIN7
-            // obfuscation, and that is a XOR, not encryption. seclume does
-            // not do that - a server that refuses TLS is refused in turn.
-            throw new SQLNonTransientConnectionException(
-                    "the server refuses encryption - seclume does not log in unencrypted",
-                    "08001");
+        if (settings.tdsVersion().wrapsTheConnection()) {
+            startStrictEncryption(channel, settings);
+            // The pre-login still happens - the server wants the version and
+            // the instance name - but it happens inside TLS, and its
+            // encryption byte is no longer a negotiation: that was settled
+            // before the first byte.
+            new PreLogin().exchange(channel, Tds.ENCRYPT_ON);
+        } else {
+            negotiateEncryption(channel, settings);
         }
-        TdsTls tls = TdsTls.create(channel.raw(), settings.host(), settings.port(),
-                settings.trustServerCertificate());
-        tls.handshake();
-        channel.useTls(tls);
 
         Login7.send(channel, new Login7.Settings(settings.host(), settings.database(),
                 settings.user(), settings.secret(), settings.applicationName(), "seclume"));
@@ -229,6 +267,49 @@ public final class TdsSession implements AutoCloseable {
         TdsSession session = new TdsSession(channel, response);
         session.setResultLimit(settings.resultLimit());
         return session;
+    }
+
+    /**
+     * TDS 7.4: negotiate in the clear, then run the handshake inside the
+     * pre-login packets.
+     */
+    private static void negotiateEncryption(TdsChannel channel, Settings settings)
+            throws IOException, SQLException {
+        PreLogin preLogin = new PreLogin();
+        preLogin.exchange(channel, Tds.ENCRYPT_ON);
+        if (!preLogin.supportsEncryption()) {
+            // Without TLS the password would go over the wire in the LOGIN7
+            // obfuscation, and that is a XOR, not encryption. seclume does
+            // not do that - a server that refuses TLS is refused in turn.
+            throw new SQLNonTransientConnectionException(
+                    "the server refuses encryption - seclume does not log in unencrypted",
+                    "08001");
+        }
+        TdsTls tls = TdsTls.create(channel.raw(), settings.host(), settings.port(),
+                settings.trustServerCertificate());
+        tls.handshake();
+        channel.useTls(tls);
+    }
+
+    /**
+     * TDS 8.0: TLS around everything, before a single TDS byte is written.
+     *
+     * <p>Nothing is negotiated in the clear here - not the encryption, not
+     * the pre-login. What tells the server that this is a TDS 8.0 client
+     * rather than something else that dialled port 1433 is the ALPN name
+     * {@code tds/8.0}, and a server that does not select it is refused by
+     * the handshake rather than talked to.
+     *
+     * <p>This is also the only route by which SQL Server reaches seclume's
+     * own TLS stack, and therefore the only route to a client certificate
+     * whose private key never becomes a Java object. The nesting 7.4 uses is
+     * TLS 1.2 by construction and can never carry a 1.3 client.
+     */
+    private static void startStrictEncryption(TdsChannel channel, Settings settings)
+            throws IOException {
+        channel.useTls(space.seclume.internal.TlsLayers.start(settings.tlsStack(),
+                channel.raw(), settings.host(), settings.port(),
+                !settings.trustServerCertificate(), settings.identity(), TdsVersion.ALPN));
     }
 
     // ---- statements ------------------------------------------------------
@@ -768,6 +849,11 @@ public final class TdsSession implements AutoCloseable {
 
     public int serverVersion() {
         return serverVersion;
+    }
+
+    /** What TLS this connection uses, or {@code null} without it. */
+    public String tlsDescription() {
+        return channel.tlsDescription();
     }
 
     /** The database the session is in. */

@@ -62,7 +62,10 @@ final class TdsUrl {
                     parsed.number("connectTimeout", 10_000),
                     parsed.flag("trustServerCertificate", false), parsed.hosts(),
                     ResultLimit.of(parsed.size("maxResultBytes", 0),
-                            parsed.size("maxResultRows", 0)));
+                            parsed.size("maxResultRows", 0)),
+                    space.seclume.sqlserver.tds.TdsVersion.of(parsed.option("tds", null)),
+                    space.seclume.internal.jdbc.TlsStack.of(parsed.option("tlsStack", null)),
+                    space.seclume.tls.ClientIdentities.of(parsed.options()));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

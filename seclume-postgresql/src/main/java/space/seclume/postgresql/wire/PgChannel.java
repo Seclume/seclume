@@ -35,7 +35,7 @@ public final class PgChannel implements AutoCloseable {
      * records, and the two places that touch the socket are the only ones that
      * have to know.
      */
-    private space.seclume.internal.TlsChannel tls;
+    private space.seclume.internal.TlsLayer tls;
     private final WireBuffer out = new WireBuffer(8 * 1024);
     private WireBuffer in = new WireBuffer(DEFAULT_BUFFER);
 
@@ -116,10 +116,33 @@ public final class PgChannel implements AutoCloseable {
      * point; what follows is the ordinary handshake.
      */
     public void startTls(String host, int port, boolean verify) throws IOException {
-        space.seclume.internal.TlsChannel started =
-                space.seclume.internal.TlsChannel.create(channel, host, port, verify);
-        started.handshake();
-        this.tls = started;
+        startTls(host, port, verify, space.seclume.internal.jdbc.TlsStack.JSSE);
+    }
+
+    /**
+     * The same, with a say in which TLS implementation carries it.
+     *
+     * @param stack {@code JSSE} for the JDK's engine, {@code SECLUME} for this
+     *              project's own TLS 1.3 client - see
+     *              {@link space.seclume.internal.jdbc.TlsStack}
+     */
+    public void startTls(String host, int port, boolean verify,
+            space.seclume.internal.jdbc.TlsStack stack) throws IOException {
+        startTls(host, port, verify, stack, null);
+    }
+
+    /**
+     * The same, proving who the client is as well.
+     *
+     * @param identity a client certificate to present if the server asks for
+     *                 one, or {@code null}. It is <b>not</b> closed here: it
+     *                 is shared by every connection configured the same way
+     */
+    public void startTls(String host, int port, boolean verify,
+            space.seclume.internal.jdbc.TlsStack stack,
+            space.seclume.tls.ClientIdentity identity) throws IOException {
+        this.tls = space.seclume.internal.TlsLayers.start(stack, channel, host, port, verify,
+                identity);
     }
 
     /** The server's certificate, or {@code null} without TLS - for channel binding. */
@@ -129,7 +152,7 @@ public final class PgChannel implements AutoCloseable {
 
     /** What TLS is in use, for the preflight report; {@code null} without it. */
     public String tlsDescription() {
-        return tls == null ? null : tls.protocol() + " / " + tls.cipherSuite();
+        return tls == null ? null : tls.description();
     }
 
     /**
@@ -342,6 +365,19 @@ public final class PgChannel implements AutoCloseable {
 
     // ---- moving the connection underneath ---------------------------------
 
+    /**
+     * Whether the encryption on this channel - if any - could travel to
+     * another machine.
+     *
+     * <p>True without TLS, because there is nothing to carry; true on
+     * seclume's own TLS stack, because its state is ours; false on the JDK's,
+     * because an {@code SSLEngine} will not give its keys up. See
+     * {@link space.seclume.internal.TlsLayer#movable()}.
+     */
+    public boolean encryptionCanTravel() {
+        return tls == null || tls.movable();
+    }
+
     /** Whether this channel runs inside TLS. */
     public boolean isEncrypted() {
         return tls != null;
@@ -393,6 +429,13 @@ public final class PgChannel implements AutoCloseable {
 
     @Override
     public void close() {
+        if (tls != null) {
+            // Says goodbye and releases the keys. On the own stack those are
+            // native memory this layer allocated, so skipping it would leak
+            // an arena per connection - the JSSE layer forgave that, which is
+            // why it went unnoticed for as long as there was only one stack.
+            tls.close();
+        }
         // The transport swallows its own close error - see Transport#close.
         channel.close();
         out.close();
@@ -400,6 +443,41 @@ public final class PgChannel implements AutoCloseable {
     }
 
     public boolean isOpen() {
-        return channel.isOpen();
+        return !released && channel.isOpen();
+    }
+
+    /**
+     * Whether this channel has been given up in favour of somebody else.
+     *
+     * <p>See {@link #release()}: the transport lives on, this object does not.
+     */
+    private boolean released;
+
+    /**
+     * Gives the channel up <b>without</b> closing the transport.
+     *
+     * <p>For the one case where the stream outlives the session object: a
+     * gateway that authenticated a database connection and now relays it to
+     * whichever web server is holding the slot. Closing here would close the
+     * very socket that is about to carry the conversation, and not closing at
+     * all would leak the two buffers, which are native memory this channel
+     * allocated.
+     *
+     * <p>Afterwards this channel reports itself closed, so a caller that kept
+     * a reference gets an error instead of writing into a stream somebody else
+     * now owns.
+     */
+    public void release() {
+        if (released) {
+            return;
+        }
+        released = true;
+        if (tls != null) {
+            // Let go of the keys, keep the socket - the same distinction
+            // TlsLayer.discard exists for.
+            tls.discard();
+        }
+        out.close();
+        in.close();
     }
 }

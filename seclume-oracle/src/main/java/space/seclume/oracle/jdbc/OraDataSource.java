@@ -42,6 +42,7 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
     private String user;
     private int connectTimeoutMillis = 10_000;
     private SecretProvider secret;
+    private space.seclume.tls.ClientIdentity identity;
     private PrintWriter logWriter;
     private HostList hosts;
     private long maxResultBytes;
@@ -111,6 +112,17 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
         this.secret = secret;
     }
 
+    /**
+     * A client identity directly, when the application builds it itself.
+     *
+     * <p>The alternative is to describe one in the properties -
+     * {@code clientCert} plus {@code clientKey-provider} and its settings -
+     * which is what {@link space.seclume.tls.ClientIdentities} reads.
+     */
+    public void setClientIdentity(space.seclume.tls.ClientIdentity identity) {
+        this.identity = identity;
+    }
+
     /** Provider settings as in {@code application.properties}. */
     public void setProperty(String key, String value) {
         properties.put(key, value);
@@ -147,6 +159,25 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
         return tls.name().toLowerCase(java.util.Locale.ROOT).replace('_', '-');
     }
 
+    /**
+     * Which TLS implementation carries the connection; {@code jsse} by
+     * default.
+     *
+     * <p>A separate decision from {@link #setTls}, which says how much
+     * encryption is asked for rather than who provides it. See
+     * {@link space.seclume.internal.jdbc.TlsStack}.
+     */
+    private space.seclume.internal.jdbc.TlsStack tlsStack =
+            space.seclume.internal.jdbc.TlsStack.JSSE;
+
+    public void setTlsStack(String stack) throws SQLException {
+        this.tlsStack = space.seclume.internal.jdbc.TlsStack.of(stack);
+    }
+
+    public String getTlsStack() {
+        return tlsStack.name().toLowerCase(java.util.Locale.ROOT);
+    }
+
     @Override
     public Connection getConnection() throws SQLException {
         if (user == null || user.isBlank()) {
@@ -159,7 +190,8 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
         OracleSession.Settings settings = new OracleSession.Settings(host, port, service,
                 user, provider, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
-                ResultLimit.of(maxResultBytes, maxResultRows), tls);
+                ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
+                resolvedIdentity());
         return new OraConnection(OracleSession.open(settings),
                 OraUrl.PREFIX + "//" + host + ":" + port + "/" + service);
     }
@@ -248,6 +280,20 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
             secret = SecretProviders.of(properties);
         }
         return secret;
+    }
+
+    /**
+     * The client identity in use, built from the properties if none was set.
+     *
+     * <p>Built once, like the secret provider and for a sharper version of
+     * the same reason: the private key is loaded into native memory and held
+     * there, so one per data source rather than one per connection.
+     */
+    private synchronized space.seclume.tls.ClientIdentity resolvedIdentity() {
+        if (identity == null) {
+            identity = space.seclume.tls.ClientIdentities.of(properties);
+        }
+        return identity;
     }
 
 }

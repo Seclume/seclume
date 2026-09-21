@@ -65,7 +65,13 @@ final class SeclumeUrl {
                     ResultLimit.of(parsed.size("maxResultBytes", 0),
                             parsed.size("maxResultRows", 0)),
                     space.seclume.internal.jdbc.TlsMode.of(
-                            parsed.option("tls", null)));
+                            parsed.option("tls", null)),
+                    space.seclume.internal.jdbc.TlsStack.of(
+                            parsed.option("tlsStack", null)),
+                    // A client certificate, when one is configured. Building
+                    // it here rather than per connection is deliberate - see
+                    // ClientIdentities: the key is loaded once and shared.
+                    space.seclume.tls.ClientIdentities.of(parsed.options()));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

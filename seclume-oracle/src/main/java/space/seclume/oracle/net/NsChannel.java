@@ -116,7 +116,7 @@ public final class NsChannel implements AutoCloseable {
      * speaks NS in the clear; a TCP listener never speaks TLS. So this is
      * decided before the first packet and not afterwards.
      */
-    private space.seclume.internal.TlsChannel tls;
+    private space.seclume.internal.TlsLayer tls;
 
     private NsChannel(space.seclume.internal.Transport channel) {
         this.channel = channel;
@@ -151,15 +151,49 @@ public final class NsChannel implements AutoCloseable {
      * @param verify whether the certificate and the host name are checked
      */
     public void startTls(String host, int port, boolean verify) throws IOException {
-        space.seclume.internal.TlsChannel started =
-                space.seclume.internal.TlsChannel.create(channel, host, port, verify);
-        started.handshake();
-        this.tls = started;
+        startTls(host, port, verify, space.seclume.internal.jdbc.TlsStack.JSSE);
+    }
+
+    /**
+     * The same, with a say in which TLS implementation carries it.
+     *
+     * @param stack {@code JSSE} for the JDK's engine, {@code SECLUME} for this
+     *              project's own TLS 1.3 client - see
+     *              {@link space.seclume.internal.jdbc.TlsStack}
+     */
+    public void startTls(String host, int port, boolean verify,
+            space.seclume.internal.jdbc.TlsStack stack) throws IOException {
+        startTls(host, port, verify, stack, null);
+    }
+
+    /**
+     * The same, proving who the client is as well.
+     *
+     * @param identity a client certificate to present if the server asks for
+     *                 one, or {@code null}. It is <b>not</b> closed here: it
+     *                 is shared by every connection configured the same way
+     */
+    public void startTls(String host, int port, boolean verify,
+            space.seclume.internal.jdbc.TlsStack stack,
+            space.seclume.tls.ClientIdentity identity) throws IOException {
+        if (tls != null) {
+            // A second handshake on the same socket. This happens exactly
+            // once, and only over TCPS: the listener answers the first
+            // CONNECT with RESEND and hands the socket to a server process,
+            // which starts a TLS session of its own. Carrying the old one on
+            // gets a plaintext fatal alert, because the new peer is waiting
+            // for a ClientHello and is being sent application data. See
+            // OracleSession.
+            tls.discard();
+            tls = null;
+        }
+        this.tls = space.seclume.internal.TlsLayers.start(stack, channel, host, port, verify,
+                identity);
     }
 
     /** What TLS this connection uses, or {@code null} without it. */
     public String tlsDescription() {
-        return tls == null ? null : tls.protocol() + " / " + tls.cipherSuite();
+        return tls == null ? null : tls.description();
     }
 
     /**
@@ -521,6 +555,12 @@ public final class NsChannel implements AutoCloseable {
 
     @Override
     public void close() {
+        if (tls != null) {
+            // Says goodbye and releases the keys. On the own stack those are
+            // native memory this layer allocated, so skipping it would leak
+            // an arena per connection.
+            tls.close();
+        }
         // The transport swallows its own close error - see Transport#close.
         channel.close();
         out.close();

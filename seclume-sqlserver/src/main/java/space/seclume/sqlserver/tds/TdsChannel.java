@@ -32,7 +32,7 @@ public final class TdsChannel implements AutoCloseable {
      * is {@code null} - and during the handshake the nesting is the other way
      * round, TLS records inside TDS packets, which {@link TdsTls} handles.
      */
-    private TdsTls tls;
+    private space.seclume.internal.TlsLayer tls;
 
     private TdsChannel(space.seclume.internal.Transport channel) {
         this.channel = channel;
@@ -67,12 +67,17 @@ public final class TdsChannel implements AutoCloseable {
      * <p>From here on the TDS packets sit inside TLS records; before, it was
      * the other way round. The caller has already run the handshake.
      */
-    public void useTls(TdsTls layer) {
+    public void useTls(space.seclume.internal.TlsLayer layer) {
         this.tls = layer;
     }
 
     public boolean isEncrypted() {
         return tls != null;
+    }
+
+    /** What TLS this connection uses, or {@code null} without it. */
+    public String tlsDescription() {
+        return tls == null ? null : tls.description();
     }
 
     // ---- writing ---------------------------------------------------------
