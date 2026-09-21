@@ -139,6 +139,14 @@ public final class TdsValues {
                 yield date(days) + " " + time(shifted, scale) + " " + offset(offsetMinutes);
             }
             case TdsTypes.GUID -> guid(in, at);
+            // Binary as hex, not as characters. Decoding the bytes of a
+            // varbinary through the ASCII path produced whatever those bytes
+            // happen to look like as text - for 00 01 02 FF 80 a string of
+            // control characters and a replacement character, which is not a
+            // representation of anything and loses the value. mssql-jdbc
+            // answers with uppercase hex and so does this now.
+            case TdsTypes.BINARY, TdsTypes.BIGBINARY, TdsTypes.VARBINARY,
+                 TdsTypes.BIGVARBINARY, TdsTypes.IMAGE -> hex(in, at, length);
             default -> {
                 if (TdsTypes.isUnicodeText(type)) {
                     yield utf16(in, at, length / 2);
@@ -375,6 +383,17 @@ public final class TdsValues {
         text.append(value);
     }
 
+    /** Uppercase hex, the way SQL Server and its own driver write binary. */
+    private static String hex(WireBuffer in, int at, int length) {
+        StringBuilder text = new StringBuilder(length * 2); // seclume-allow: a payload value, not a secret
+        for (int i = 0; i < length; i++) {
+            int value = in.getByte(at + i) & 0xff;
+            text.append(Character.toUpperCase(Character.forDigit(value >>> 4, 16)));
+            text.append(Character.toUpperCase(Character.forDigit(value & 0x0f, 16)));
+        }
+        return text.toString();
+    }
+
     /**
      * {@code uniqueidentifier}: the first three groups are little-endian, the
      * last two are not. A GUID printed the wrong way round still looks like a
@@ -388,8 +407,12 @@ public final class TdsValues {
                 text.append('-');
             } else {
                 int value = in.getByte(at + index) & 0xff;
-                text.append(Character.forDigit(value >>> 4, 16));
-                text.append(Character.forDigit(value & 0x0f, 16));
+                // Upper case: that is how SQL Server renders a
+                // uniqueidentifier and how mssql-jdbc reads one back, and a
+                // GUID that differs only in case still compares unequal as a
+                // string.
+                text.append(Character.toUpperCase(Character.forDigit(value >>> 4, 16)));
+                text.append(Character.toUpperCase(Character.forDigit(value & 0x0f, 16)));
             }
         }
         return text.toString();

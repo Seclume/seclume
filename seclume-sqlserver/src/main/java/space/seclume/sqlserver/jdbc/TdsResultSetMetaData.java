@@ -81,12 +81,25 @@ final class TdsResultSetMetaData implements ResultSetMetaData {
             // varchar(max): the server declares no length at all.
             return 0;
         }
+        // Digits before bytes. The size is the right answer only for the
+        // text and binary types, where the length is the precision; for a
+        // number or a date it is the wire width and has nothing to do with
+        // what getPrecision means.
+        int digits = TdsTypes.precisionOf(c.type(), c.size(), c.scale());
+        if (digits > 0) {
+            return digits;
+        }
         return TdsTypes.isUnicodeText(c.type()) ? c.size() / 2 : c.size();
     }
 
     @Override
     public int getScale(int index) throws SQLException {
-        return column(index).scale();
+        TdsColumn c = column(index);
+        // money and datetime carry a scale the wire never mentions - four
+        // places and three. Reporting 0 for them said the values were whole
+        // numbers, which they are not.
+        int declared = c.scale();
+        return declared > 0 ? declared : TdsTypes.scaleOf(c.type(), c.size());
     }
 
     @Override

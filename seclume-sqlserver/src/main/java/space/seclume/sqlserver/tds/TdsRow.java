@@ -287,6 +287,18 @@ public final class TdsRow {
         }
     }
 
+    /**
+     * The memory every cell of this row points into.
+     *
+     * <p>One buffer for the whole row, which is what lets a reader take the
+     * row over in a single copy. It holds even for a partially length
+     * prefixed value: those arrive in chunks and are compacted <b>in place</b>
+     * in this same buffer - see {@code readPlp}.
+     */
+    public java.lang.foreign.MemorySegment source() {
+        return in.segment();
+    }
+
     /** Where a cell sits in the buffer - for whoever takes the row over. */
     public int cellAt(int index) {
         return cells[index * 2];

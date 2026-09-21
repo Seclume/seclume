@@ -101,6 +101,23 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      * and not after it.
      */
     void collect(TdsSession session, Execution execution) throws SQLException {
+        // Every statement this driver runs passes here. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        boolean failed = true;
+        try {
+            collectInto(session, execution);
+            failed = false;
+        } finally {
+            space.seclume.jfr.Observed.endQuery(event, "sqlserver", collectingSql,
+                    space.seclume.QueryFingerprint.Dialect.SQLSERVER,
+                    block != null ? rowsCollected : Math.max(0, updateCount), failed);
+        }
+    }
+
+    /** How many rows the last collect took over - for the recording. */
+    private long rowsCollected;
+
+    private void collectInto(TdsSession session, Execution execution) throws SQLException {
         resultLimit = session.resultLimit();
         closeResult();
         // The statement is the handler itself. A lambda here would capture
@@ -118,6 +135,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
             collected = blockFor(stream.columns());
         }
         finishResult();
+        rowsCollected = collectedRows;
         block = results.isEmpty() ? null : results.get(0);
         if (capturingGeneratedKeys) {
             // The statement was sent as "<insert>;select scope_identity()", so

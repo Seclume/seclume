@@ -64,14 +64,14 @@ final class TdsDatabaseMetaData implements DatabaseMetaData {
                  when 'smalldatetime' then 93
                  when 'datetimeoffset' then 2014
                  when 'char' then 1
-                 when 'nchar' then 1
+                 when 'nchar' then -15
                  when 'uniqueidentifier' then 1
                  when 'varchar' then
                       case when c.character_maximum_length = -1 then -1 else 12 end
                  when 'nvarchar' then
-                      case when c.character_maximum_length = -1 then -1 else 12 end
+                      case when c.character_maximum_length = -1 then -16 else -9 end
                  when 'text' then -1
-                 when 'ntext' then -1
+                 when 'ntext' then -16
                  when 'binary' then -2
                  when 'varbinary' then
                       case when c.character_maximum_length = -1 then -4 else -3 end
@@ -177,11 +177,44 @@ final class TdsDatabaseMetaData implements DatabaseMetaData {
                 select c.table_catalog as [TABLE_CAT], c.table_schema as [TABLE_SCHEM],
                        c.table_name as [TABLE_NAME], c.column_name as [COLUMN_NAME],
                        %s as [DATA_TYPE], c.data_type as [TYPE_NAME],
-                       coalesce(c.character_maximum_length, c.numeric_precision, 0)
-                           as [COLUMN_SIZE],
+                       -- information_schema has a length for the character
+                       -- types and a precision for the numeric ones, and
+                       -- nothing at all for a bit, a date or a
+                       -- uniqueidentifier - so the catalogue answered 0 for
+                       -- those while ResultSetMetaData answered 1, 10 and 36.
+                       -- Third driver, same mistake; the widths are the
+                       -- printed ones. Hibernate and Flyway read this.
+                       coalesce(c.character_maximum_length, c.numeric_precision,
+                                case c.data_type
+                                     when 'bit' then 1
+                                     when 'uniqueidentifier' then 36
+                                     when 'date' then 10
+                                     when 'smalldatetime' then 16
+                                     when 'datetime' then 23
+                                     when 'time' then
+                                          8 + case when c.datetime_precision > 0
+                                                   then c.datetime_precision + 1 else 0 end
+                                     when 'datetime2' then
+                                          19 + case when c.datetime_precision > 0
+                                                    then c.datetime_precision + 1 else 0 end
+                                     when 'datetimeoffset' then
+                                          26 + case when c.datetime_precision > 0
+                                                    then c.datetime_precision + 1 else 0 end
+                                end,
+                                0) as [COLUMN_SIZE],
                        cast(null as int) as [BUFFER_LENGTH],
                        coalesce(c.numeric_scale, c.datetime_precision, 0) as [DECIMAL_DIGITS],
-                       10 as [NUM_PREC_RADIX],
+                       -- real and float are binary floating point, so their
+                       -- digits are counted in base two. Answering 10 for
+                       -- them said they were decimal, which they are not.
+                       case when c.data_type in ('real', 'float') then 2
+                            when c.data_type in ('tinyint', 'smallint', 'int',
+                                                 'bigint', 'decimal', 'numeric',
+                                                 'money', 'smallmoney') then 10
+                            -- A radix is a property of a number. For a date
+                            -- or a blob there is none, and saying 10 claimed
+                            -- there was.
+                            else null end as [NUM_PREC_RADIX],
                        case when c.is_nullable = 'YES' then 1 else 0 end as [NULLABLE],
                        cast(null as varchar(1)) as [REMARKS],
                        c.column_default as [COLUMN_DEF],

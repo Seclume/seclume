@@ -73,6 +73,82 @@ public final class TdsTypes {
     public static final int NTEXT = 0x63;
 
     /**
+     * How many decimal digits a column of this type holds.
+     *
+     * <p>Not the same as how many bytes it takes on the wire, and that is the
+     * whole reason this exists: {@code getPrecision} used to answer with the
+     * TDS size, so an {@code int} was 4 and a {@code bigint} 8 where JDBC and
+     * every other driver say 10 and 19. The differential run against
+     * mssql-jdbc found it on seven types at once, which is what a systematic
+     * mistake looks like.
+     *
+     * <p>{@code size} is the declared byte width and settles the {@code *N}
+     * variants, where one type code covers several widths - {@code INTN} is a
+     * tinyint, a smallint, an int or a bigint depending on it.
+     *
+     * @param scale the declared scale, needed by the types whose text form
+     *              grows with it
+     * @return the precision, or 0 when the type has none of its own and the
+     *         caller should fall back to the declared size
+     */
+    public static int precisionOf(int type, int size, int scale) {
+        return switch (type) {
+            case BIT, BITN -> 1;
+            case INT1 -> 3;
+            case INT2 -> 5;
+            case INT4 -> 10;
+            case INT8 -> 19;
+            case INTN -> switch (size) {
+                case 1 -> 3;
+                case 2 -> 5;
+                case 4 -> 10;
+                case 8 -> 19;
+                default -> 0;
+            };
+            case FLT4 -> 7;
+            case FLT8 -> 15;
+            case FLTN -> size == 4 ? 7 : 15;
+            // money is fixed at four decimal places; smallmoney is the same
+            // type in four bytes.
+            case MONEY -> 19;
+            case MONEY4 -> 10;
+            case MONEYN -> size == 4 ? 10 : 19;
+            case GUID -> 36;
+            case DATEN -> 10;                       // yyyy-MM-dd
+            case DATETIM4 -> 16;                    // smalldatetime, to the minute
+            case DATETIME -> 23;                    // ...and three fractional digits
+            case DATETIMN -> size == 4 ? 16 : 23;
+            // The text forms grow with the declared scale, and the point
+            // costs a character of its own.
+            case TIMEN -> 8 + (scale > 0 ? scale + 1 : 0);
+            case DATETIME2N -> 19 + (scale > 0 ? scale + 1 : 0);
+            case DATETIMEOFFSETN -> 26 + (scale > 0 ? scale + 1 : 0);
+            default -> 0;
+        };
+    }
+
+    /**
+     * The decimal places this type has by definition.
+     *
+     * <p>Only the two that carry one without saying so: {@code money} is
+     * always four places and {@code datetime} always three. Everything else
+     * either declares its scale on the wire or has none.
+     */
+    public static int scaleOf(int type, int size) {
+        return switch (type) {
+            case MONEY, MONEY4, MONEYN -> 4;
+            case DATETIME -> 3;
+            case DATETIMN -> size == 4 ? 0 : 3;
+            default -> 0;
+        };
+    }
+
+    /** Whether the type is binary floating point - radix 2 rather than 10. */
+    public static boolean isApproximate(int type) {
+        return type == FLT4 || type == FLT8 || type == FLTN;
+    }
+
+    /**
      * {@code sql_variant}: a value that carries its own type with it.
      *
      * <p>Rarer than the rest in application schemas and unavoidable in
@@ -160,9 +236,16 @@ public final class TdsTypes {
             case DATEN -> Types.DATE;
             case TIMEN -> Types.TIME;
             case GUID -> Types.CHAR;
-            case CHAR, BIGCHAR, NCHAR -> Types.CHAR;
-            case VARCHAR, BIGVARCHAR, NVARCHAR -> Types.VARCHAR;
-            case TEXT, NTEXT -> Types.LONGVARCHAR;
+            // The national types are their own JDBC types. Reporting an
+            // nvarchar as VARCHAR loses the one fact that distinguishes it,
+            // and an ORM that maps a national column by its type sees the
+            // wrong one.
+            case CHAR, BIGCHAR -> Types.CHAR;
+            case NCHAR -> Types.NCHAR;
+            case VARCHAR, BIGVARCHAR -> Types.VARCHAR;
+            case NVARCHAR -> Types.NVARCHAR;
+            case TEXT -> Types.LONGVARCHAR;
+            case NTEXT -> Types.LONGNVARCHAR;
             case XML -> Types.SQLXML;
             case BINARY, BIGBINARY -> Types.BINARY;
             case VARBINARY, BIGVARBINARY -> Types.VARBINARY;

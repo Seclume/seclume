@@ -634,12 +634,16 @@ class LocalSqlServerTest {
                 }
             }
             assertEquals(Types.INTEGER, found.get("id"));
-            assertEquals(Types.VARCHAR, found.get("name"));
+            // NVARCHAR, not VARCHAR: the national types are their own JDBC
+            // types and mssql-jdbc reports them as such. This test used to
+            // hold seclume's own earlier answer; the differential run showed
+            // it was seclume's alone. See seclume-diff.
+            assertEquals(Types.NVARCHAR, found.get("name"));
             assertEquals(Types.DECIMAL, found.get("amount"));
             assertEquals(Types.TIMESTAMP, found.get("created"));
             assertEquals(Types.BOOLEAN, found.get("flag"));
             assertEquals(Types.VARBINARY, found.get("raw"));
-            assertEquals(Types.LONGVARCHAR, found.get("big"));
+            assertEquals(Types.LONGNVARCHAR, found.get("big"));
             statement.execute("drop table zl_types");
         }
     }
