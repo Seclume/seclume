@@ -11,6 +11,9 @@ module seclume.pool {
 
     requires transitive java.sql;
     requires java.logging;
+    // Flight Recorder events of its own - a JDK module, so the pool keeps
+    // its promise of knowing DataSource and nothing else. See PoolEvents.
+    requires jdk.jfr;
 
     exports space.seclume.pool;
 }

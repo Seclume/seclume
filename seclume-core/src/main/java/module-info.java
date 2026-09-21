@@ -10,6 +10,14 @@ module seclume.core {
     // Only for the shared JDBC scaffolding; the core itself speaks no SQL.
     requires transitive java.sql;
 
+    // Flight Recorder events. A JDK module, so this adds no dependency in the
+    // sense that matters - and it is why the observability is JFR rather than
+    // a logging facade somebody would have to bring along.
+    // Transitive because the event types appear in the signatures Observed
+    // hands the drivers; without it every driver module would have to
+    // require jdk.jfr to name a type it only passes back.
+    requires transitive jdk.jfr;
+
     /** The small public surface every driver shares. */
     exports space.seclume;
     exports space.seclume.crypto;
@@ -24,4 +32,7 @@ module seclume.core {
     // replacement for JSSE, which stays the default.
     exports space.seclume.tls;
     exports space.seclume.internal.jdbc;
+
+    /** The Flight Recorder events, so the drivers and the pool can raise them. */
+    exports space.seclume.jfr;
 }

@@ -78,8 +78,56 @@ class PgStatement implements Statement, PgSession.RowHandler {
         checkOpen();
         PgSession session = connection.session();
         collectingSql = sql;
+        if (wantsBlocks()) {
+            runInBlocks(session, sql);
+            return;
+        }
+        decideStreaming(false);
         collect(session, handler -> session.simpleQuery(sql, handler));
     }
+
+    /**
+     * Whether this plain statement should go the long way round.
+     *
+     * <p>Only when the caller asked for a fetch size and there is a
+     * transaction to hold the portal. With the default of zero nothing here
+     * changes, which is the point: the simple protocol stays the fast path
+     * for the overwhelming majority of statements.
+     */
+    private boolean wantsBlocks() throws SQLException {
+        return fetchSize > 0 && !connection.getAutoCommit();
+    }
+
+    /**
+     * A plain statement, executed through the extended protocol so that a
+     * fetch size can mean something.
+     *
+     * <p>The simple protocol has no row limit: the server sends every row of
+     * the result and the driver has to take them all. So a
+     * {@code createStatement()} with a fetch size used to read a whole table
+     * into memory, where pgjdbc, Connector/J and ojdbc all hand back bounded
+     * memory - measured, not assumed, in {@code FetchSizeProbe}. An
+     * application that reads a large table the ordinary way would have had to
+     * find that out for itself, which is not a thing a drop-in replacement
+     * may ask of anybody.
+     *
+     * <p>The unnamed statement and portal are used, so nothing is left on the
+     * server: this is a one-shot execution, not a plan worth keeping. The
+     * blocks themselves are fetched by {@code fetchNextBlock}, the same code
+     * a prepared statement uses.
+     */
+    private void runInBlocks(PgSession session, String sql) throws SQLException {
+        session.parseLater(UNNAMED, sql);
+        decideStreaming(true);
+        beginExecution(session, NO_PARAMETERS, UNNAMED, executeLimit(), sql);
+    }
+
+    /** PostgreSQL's unnamed prepared statement and portal - not kept by the server. */
+    private static final String UNNAMED = "";
+
+    /** A plain statement has none, and the object is immutable in practice. */
+    private static final space.seclume.postgresql.PgParameters NO_PARAMETERS =
+            new space.seclume.postgresql.PgParameters(0);
 
     /** What the caller issues themselves - simple or extended protocol. */
     @FunctionalInterface
@@ -90,11 +138,17 @@ class PgStatement implements Statement, PgSession.RowHandler {
     /**
      * Whether this result is being read in blocks - see {@link #setFetchSize}.
      *
-     * <p>Two conditions, both from the protocol and not from caution: a fetch
-     * size only takes effect on a <b>prepared</b> statement, because only the
-     * extended protocol has a row limit at all, and only <b>inside a
-     * transaction</b>, because outside it the {@code Sync} ends the implicit
-     * transaction and takes the portal with it.
+     * <p>One condition from the protocol: only <b>inside a transaction</b>,
+     * because outside it the {@code Sync} ends the implicit transaction and
+     * takes the portal with it. A fetch size outside a transaction therefore
+     * cannot be honoured by anyone, and is ignored here as it is everywhere
+     * else.
+     *
+     * <p>It used to need a <b>prepared</b> statement as well, on the grounds
+     * that only the extended protocol has a row limit. That is true of the
+     * protocol and was the wrong conclusion for the driver: the answer is to
+     * take a plain statement through the extended protocol rather than to
+     * ignore what the caller asked for. See {@code runInBlocks}.
      */
     private boolean streaming;
 
@@ -164,6 +218,25 @@ class PgStatement implements Statement, PgSession.RowHandler {
      */
 
     void collect(PgSession session, Execution execution) throws SQLException {
+        // Every statement this driver runs passes here, both protocols, which
+        // is why the recording hangs off this method and not off the several
+        // entry points above it. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        boolean failed = true;
+        try {
+            collectInto(session, execution);
+            failed = false;
+        } finally {
+            space.seclume.jfr.Observed.endQuery(event, "postgresql", collectingSql,
+                    space.seclume.QueryFingerprint.Dialect.POSTGRESQL,
+                    block != null ? rowsCollected : Math.max(0, updateCount), failed);
+        }
+    }
+
+    /** How many rows the last collect took over - for the recording. */
+    private long rowsCollected;
+
+    private void collectInto(PgSession session, Execution execution) throws SQLException {
         closeResult();
         // The statement is the handler itself. A lambda here would capture the
         // session, a one-element array for the block and another for the
@@ -188,6 +261,7 @@ class PgStatement implements Statement, PgSession.RowHandler {
             collected = blockFor(fields);
         }
         block = collected;
+        rowsCollected = collectedRows;
         collecting = null;
         collected = null;
         resultSet = block == null ? null : new PgResultSet(block, this);

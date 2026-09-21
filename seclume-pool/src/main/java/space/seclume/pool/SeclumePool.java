@@ -238,7 +238,17 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         long now = System.nanoTime();
         PoolEntry entry = takeUsable(now, now + settings.getConnectionTimeout().toNanos());
         if (entry == null) {
-            entry = openOrWait(now + settings.getConnectionTimeout().toNanos());
+            // Only here: a borrow that found a free connection waited for
+            // nothing, and an event saying so on every call would drown the
+            // ones that mean something.
+            PoolEvents.Wait waiting = PoolEvents.beginWait();
+            boolean timedOut = true;
+            try {
+                entry = openOrWait(now + settings.getConnectionTimeout().toNanos());
+                timedOut = false;
+            } finally {
+                PoolEvents.endWait(waiting, settings.getName(), borrowed.sum(), timedOut);
+            }
         }
         entry.set(PoolEntry.State.IN_USE);
         boolean watched = !settings.getLeakDetectionThreshold().isZero();

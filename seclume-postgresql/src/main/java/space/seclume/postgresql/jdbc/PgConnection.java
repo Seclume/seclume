@@ -88,7 +88,16 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
 
     /** Takes an idle plan for this SQL, or null when there is none. */
     private Idle takePlan(String sql) {
-        return statementCacheSize == 0 ? null : idlePlans.remove(sql);
+        if (statementCacheSize == 0) {
+            return null;
+        }
+        Idle plan = idlePlans.remove(sql);
+        // Recorded by fingerprint, like everything else: a cache report that
+        // listed the statements by their text would carry every value in
+        // them, which is precisely the report nobody could then share.
+        space.seclume.jfr.Observed.statementCache(sql,
+                space.seclume.QueryFingerprint.Dialect.POSTGRESQL, plan != null);
+        return plan;
     }
 
     /**
