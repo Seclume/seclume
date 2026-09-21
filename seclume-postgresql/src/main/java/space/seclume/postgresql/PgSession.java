@@ -44,7 +44,36 @@ public final class PgSession implements AutoCloseable {
     public record Settings(String host, int port, String database, String user,
                            SecretProvider secret, String applicationName,
                            int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
-                           TlsMode tls) {
+                           TlsMode tls,
+                           space.seclume.internal.jdbc.TlsStack tlsStack,
+                           space.seclume.tls.ClientIdentity identity) {
+
+        /**
+         * Without a client certificate - what almost every connection is.
+         */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
+                        TlsMode tls, space.seclume.internal.jdbc.TlsStack tlsStack) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    hosts, resultLimit, tls, tlsStack, null);
+        }
+
+        /**
+         * With a TLS mode but the ordinary stack.
+         *
+         * <p>Which implementation carries TLS is a separate decision from how
+         * much TLS is asked for - see
+         * {@link space.seclume.internal.jdbc.TlsStack} - and almost nobody
+         * makes it, so it defaults here rather than at every call site.
+         */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
+                        TlsMode tls) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    hosts, resultLimit, tls, space.seclume.internal.jdbc.TlsStack.JSSE, null);
+        }
 
         /** Without a result limit - what a URL without the option means. */
         public Settings(String host, int port, String database, String user,
@@ -74,10 +103,18 @@ public final class PgSession implements AutoCloseable {
                     HostList.of(host, port));
         }
 
-        /** The same settings pointed at another server of the list. */
+        /**
+         * The same settings pointed at another server of the list.
+         *
+         * <p>Every component has to be carried across, including the ones
+         * added later. This one quietly dropped the TLS stack when it was
+         * added, and because a single-host list goes through here too, that
+         * was not a failover bug - it was every connection losing the choice.
+         */
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
-                    applicationName, connectTimeoutMillis, hosts, resultLimit, tls);
+                    applicationName, connectTimeoutMillis, hosts, resultLimit, tls, tlsStack,
+                    identity);
         }
     }
 
@@ -173,6 +210,23 @@ public final class PgSession implements AutoCloseable {
     }
 
     private static PgSession openOne(Settings settings) throws SQLException {
+        // The expensive one: a physical connect, the TLS handshake and the
+        // login. Recorded around the whole of it, because that is the number
+        // a pool's warm-up time is made of. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.ConnectionOpen event =
+                space.seclume.jfr.Observed.beginConnect();
+        PgSession opened = null;
+        try {
+            opened = connectAndLogIn(settings);
+            return opened;
+        } finally {
+            space.seclume.jfr.Observed.endConnect(event, "postgresql",
+                    settings.host() + ":" + settings.port(), settings.database(),
+                    opened == null ? null : opened.tlsDescription(), opened != null);
+        }
+    }
+
+    private static PgSession connectAndLogIn(Settings settings) throws SQLException {
         PgChannel channel;
         try {
             channel = PgChannel.connect(settings.host(), settings.port(),
@@ -214,7 +268,8 @@ public final class PgSession implements AutoCloseable {
                 }
                 return;
             }
-            channel.startTls(settings.host(), settings.port(), mode.verifies());
+            channel.startTls(settings.host(), settings.port(), mode.verifies(),
+                    settings.tlsStack(), settings.identity());
         } catch (IOException e) {
             throw new SQLNonTransientConnectionException(
                     "TLS to " + settings.host() + ":" + settings.port() + " failed: "
@@ -1208,10 +1263,10 @@ public final class PgSession implements AutoCloseable {
     private void writeBindAndExecute(String statement, PgParameters parameters)
             throws SQLException {
         WireBuffer out = channel.begin(PgProtocol.BIND);
-        out.putCString("");                       // unbenanntes Portal
+        out.putCString("");                       // the unnamed portal
         out.putCString(statement);
         parameters.write(out);
-        out.putShort((short) 0);                  // Ergebnis im Textformat
+        out.putShort((short) 0);                  // the result in text format
         channel.end();
 
         out = channel.begin(PgProtocol.EXECUTE);
@@ -1569,28 +1624,30 @@ public final class PgSession implements AutoCloseable {
     /**
      * Whether this connection could be handed to another machine.
      *
-     * <p>Two conditions, and the second is a limit of this library rather than
-     * of the idea.
+     * <p>Two conditions. The descriptor has to be ours - {@link
+     * #migrateInPlace()} explains why - and the encryption, if there is any,
+     * has to be state we can write down.
      *
-     * <p>The descriptor has to be ours - {@link #migrateInPlace()} explains
-     * why - and <b>the connection must not be encrypted</b>. Moving a session
-     * between nodes means writing its state down and reading it back somewhere
-     * else, and the TLS half of that state is inside an {@code SSLEngine}. The
-     * JDK hands out neither the keys nor the record sequence numbers: no method
-     * of {@code SSLSession} or {@code SSLEngine} is named for any of them, by
-     * design. An encrypted connection can therefore be frozen and thawed
-     * <b>in this process</b>, where the engine is an object that stays put, and
-     * cannot leave it.
+     * <p><b>The second condition used to be "no encryption at all", and that
+     * is no longer the same thing.</b> It was true while the drivers reached
+     * TLS only through an {@code SSLEngine}, which hands out neither the keys
+     * nor the record sequence numbers - no method of {@code SSLSession} or
+     * {@code SSLEngine} is named for any of them, by design. Such a
+     * connection can be frozen and thawed <b>in this process</b>, where the
+     * engine is an object that stays put, and cannot leave it.
      *
-     * <p>That restriction is meant to be temporary and the way out is known: a
-     * TLS 1.3 record layer of our own, with the JCA keeping the cryptography.
-      * Until then this method is the
-     * honest answer, and it is a method rather than a sentence in a document so
-     * that the code refuses rather than the reader remembers.
+     * <p>On {@code tlsStack=seclume} the state is ours, in memory we
+     * allocated, and it travels. So the honest answer now depends on which
+     * stack carries the connection rather than on whether it is encrypted,
+     * and the difference is asked of the layer itself - see
+     * {@link space.seclume.internal.TlsLayer#movable()}.
+     *
+     * <p>A method rather than a sentence in a document, so that the code
+     * refuses rather than the reader remembers.
      */
     public boolean canMoveBetweenNodes() {
         // the alternate transport, developed separately
-                && !channel.isEncrypted();
+                && channel.encryptionCanTravel();
     }
 
     /**
@@ -1664,6 +1721,67 @@ public final class PgSession implements AutoCloseable {
         } finally {
             channel.close();
         }
+    }
+
+    /**
+     * What an authenticated stream is, once it has left its session.
+     *
+     * <p>Three facts beside the socket, and each is here because a decoder
+     * cannot derive it: the server's {@code ParameterStatus} set - client
+     * encoding, date style, whether timestamps are integers - which a
+     * successor would otherwise have to guess and would guess wrong about
+     * dates; the backend's process id and secret, without which nothing can
+     * cancel a running query; and nothing else. The transaction status is not
+     * in here on purpose: it is in the next {@code ReadyForQuery}, which the
+     * stream carries anyway.
+     *
+     * @param stream the socket, still logged in, positioned at a message
+     *               boundary
+     */
+    public record Detached(space.seclume.internal.Transport stream,
+                           java.util.Map<String, String> parameters,
+                           int backendProcessId, int backendSecretKey) {
+    }
+
+    /**
+     * Hands the authenticated stream over and finishes this session object.
+     *
+     * <p>For a gateway that opens a database session with <b>its own</b>
+     * credential and then lets whichever web server currently holds the slot
+     * use it - see the cluster design. The point of that arrangement is that
+     * the credential never reaches the web server, so the stream it gets has
+     * to begin after the login, which is precisely what this hands out.
+     *
+     * <p>Two refusals rather than two surprises:
+     *
+     * <ul>
+     *   <li>not at a quiescent point - a stream with an answer half read is
+     *       not something anybody else can take over, and the check is the
+     *       same {@code isIdle} a freeze uses;
+     *   <li>encrypted - the keys are in this process and the bytes on that
+     *       socket are TLS records. Relaying them would need the keys to
+      *       travel too, which is a separate problem and a
+     *       different decision from this one. TLS to the database therefore
+     *       terminates at the gateway, which is also where the login happened.
+     * </ul>
+     *
+     * <p>Afterwards this session is finished: the channel reports itself
+     * closed, and the transport belongs to the caller.
+     */
+    public Detached detach() throws SQLException {
+        if (!channel.isIdle()) {
+            throw new SQLException("this session has work in flight - a stream can only be "
+                    + "handed over at a quiescent point", "25000");
+        }
+        if (channel.isEncrypted()) {
+            throw new SQLException("this session is encrypted - its keys are in this process, "
+                    + "so the stream cannot be handed to another one. Open the session "
+                    + "without TLS, or terminate TLS where the login happens", "0A000");
+        }
+        space.seclume.internal.Transport stream = channel.transport();
+        java.util.Map<String, String> snapshot = java.util.Map.copyOf(parameters);
+        channel.release();
+        return new Detached(stream, snapshot, backendProcessId, backendSecretKey);
     }
 
     /** Cancelling a running query needs this key. */
