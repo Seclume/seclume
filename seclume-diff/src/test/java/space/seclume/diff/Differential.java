@@ -217,6 +217,13 @@ final class Differential {
             String name = column.name();
             java.util.Map<String, String> a = mine.get(name);
             java.util.Map<String, String> b = theirs.get(name);
+            if (a == null && b == null) {
+                // Neither driver has a row for it. That is a question about
+                // the catalogue's name matching - Oracle folds unquoted names
+                // to upper case - and not a disagreement between the two, so
+                // it is not a finding.
+                continue;
+            }
             if (a == null || b == null) {
                 if (!isAllowed(name, "getColumns")) {
                     report(new Finding(name, "getColumns", "-", "both",
@@ -402,10 +409,55 @@ final class Differential {
                 "insert into " + table + " (" + names + ") values (" + marks + ")")) {
             for (int i = 0; i < columns.size(); i++) {
                 List<Object> values = columns.get(i).values();
-                insert.setObject(i + 1, row < values.size() ? values.get(row) : null);
+                Object value = row < values.size() ? values.get(row) : null;
+                if (value != null) {
+                    insert.setObject(i + 1, value);
+                } else {
+                    insert.setNull(i + 1, nullTypeOf(values));
+                }
             }
             insert.executeUpdate();
         }
+    }
+
+    /**
+     * Which type a null is bound as.
+     *
+     * <p>{@code setObject(i, null)} says nothing about the type, so the
+     * driver has to invent one - and against a typed column the invention can
+     * be refused. Both seclume and mssql-jdbc answer "Implicit conversion
+     * from data type nvarchar to varbinary is not allowed" for a null bound
+     * into a {@code varbinary}, which is agreement rather than a fault (see
+     * {@code NullBindProbe}) but stops the run either way.
+     *
+     * <p>So the type is taken from the column's own values: whatever class
+     * the non-null ones have says what a null in that column means. A column
+     * that is null all the way down falls back to {@code setObject}, because
+     * there is nothing to derive from and nothing being tested there either.
+     */
+    private static int nullTypeOf(List<Object> values) {
+        for (Object value : values) {
+            if (value == null) {
+                continue;
+            }
+            return switch (value) {
+                case byte[] ignored -> java.sql.Types.VARBINARY;
+                case String ignored -> java.sql.Types.VARCHAR;
+                case Integer ignored -> java.sql.Types.INTEGER;
+                case Long ignored -> java.sql.Types.BIGINT;
+                case Short ignored -> java.sql.Types.SMALLINT;
+                case Byte ignored -> java.sql.Types.TINYINT;
+                case Double ignored -> java.sql.Types.DOUBLE;
+                case Float ignored -> java.sql.Types.REAL;
+                case BigDecimal ignored -> java.sql.Types.DECIMAL;
+                case Boolean ignored -> java.sql.Types.BOOLEAN;
+                case java.sql.Date ignored -> java.sql.Types.DATE;
+                case java.sql.Timestamp ignored -> java.sql.Types.TIMESTAMP;
+                case java.sql.Time ignored -> java.sql.Types.TIME;
+                default -> java.sql.Types.OTHER;
+            };
+        }
+        return java.sql.Types.NULL;
     }
 
     private void truncate() throws SQLException {

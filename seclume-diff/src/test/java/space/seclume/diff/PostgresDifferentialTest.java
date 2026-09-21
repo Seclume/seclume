@@ -181,7 +181,7 @@ class PostgresDifferentialTest {
      * same column. The four below are differences of convention, and each one
      * says which driver is doing what.
      */
-    private static void allowTheKnownAndHonestDifferences(Differential differential) {
+    static void allowTheKnownAndHonestDifferences(Differential differential) {
         differential
                 .allow("c_bool.columnType",
                         "seclume answers Types.BOOLEAN (16), pgjdbc answers Types.BIT (-7). "

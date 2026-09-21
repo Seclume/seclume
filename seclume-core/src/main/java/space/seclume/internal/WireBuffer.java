@@ -416,9 +416,32 @@ public final class WireBuffer implements AutoCloseable {
         position += bytes;
     }
 
+    /**
+     * A message that stopped before it had said everything it promised.
+     *
+     * <p>Its own type, and not a bare {@code IllegalStateException}, so the
+     * protocol layers can tell the two cases apart: <b>the peer sent
+     * nonsense</b>, which is a connection error and belongs to the caller as
+     * a {@code SQLException}, and <b>this code has a bug</b>, which does not
+     * and must not be swallowed with it. Catching {@code RuntimeException} at
+     * a protocol boundary would hide the second inside the first, and the
+     * second is the one worth finding.
+     *
+     * <p>It stays an {@code IllegalStateException} so that anything already
+     * catching that keeps working.
+     */
+    public static final class Truncated extends IllegalStateException {
+
+        private static final long serialVersionUID = 1L;
+
+        Truncated(String message) {
+            super(message);
+        }
+    }
+
     private void require(int bytes) {
         if (position + bytes > limit) {
-            throw new IllegalStateException(
+            throw new Truncated(
                     "the message ends after " + limit + " bytes, but " + (position + bytes)
                     + " were needed - the server sent something unexpected");
         }
