@@ -197,6 +197,39 @@ public final class PgSession implements AutoCloseable {
     }
 
     /**
+     * Continues a session somebody else authenticated.
+     *
+     * <p>The opposite of {@link #detach()}, and the other half of the same
+     * arrangement: a gateway logs in with a credential this process never
+     * sees, and hands out the stream afterwards. A driver picking it up cannot
+     * do what a driver normally does first - there is no startup to run, the
+     * server is long past it - so what it would have learnt there arrives as
+     * an argument instead.
+     *
+     * <p>{@code parameters} is what the server announced while logging in:
+     * the client encoding, the date style, whether timestamps are integers. A
+     * decoder that guesses those is a decoder that is wrong about dates, which
+     * is why they are required rather than defaulted.
+     *
+     * <p><b>The stream has to be at a message boundary</b>, and the caller is
+     * the only one who can know that. There is no check here that could tell
+     * the difference between the middle of a message and the start of one -
+     * the first four bytes of a length look like anything else.
+     *
+     * @param stream a connection to a server that has already accepted a login
+     * @param parameters what that server announced while it did
+     */
+    public static PgSession resume(space.seclume.internal.Transport stream,
+                                   java.util.Map<String, String> parameters,
+                                   int backendProcessId, int backendSecretKey) {
+        PgSession session = new PgSession(PgChannel.over(stream));
+        session.parameters.putAll(parameters);
+        session.backendProcessId = backendProcessId;
+        session.backendSecretKey = backendSecretKey;
+        return session;
+    }
+
+    /**
      * Opens the connection and logs in.
      *
      * @throws SQLException if the server refuses or demands a method this
