@@ -198,7 +198,7 @@ class MySqlDifferentialTest {
      *
      * <p>What is left is one honest difference and one defect still open.
      */
-    private static void allowTheKnownAndHonestDifferences(Differential differential) {
+    static void allowTheKnownAndHonestDifferences(Differential differential) {
         differential
                 .allow("c_datetime.columnClassName",
                         "Connector/J returns java.time.LocalDateTime for a datetime and "
@@ -219,33 +219,14 @@ class MySqlDifferentialTest {
                         + "answers null. JDBC says null is returned where DECIMAL_DIGITS does "
                         + "not apply, and an integer arguably has zero of them rather than "
                         + "none. Both readings are current; seclume's is the same answer its "
-                        + "ResultSetMetaData gives.")
+                        + "ResultSetMetaData gives.");
 
-                // --- still wrong here, and the fix is not a one-liner -----
-                .knownDefect("c_bool.columnType",
-                        "tinyint(1) is how every ORM stores a boolean in MySQL, and "
-                        + "Connector/J maps it to BIT/Boolean by default (tinyInt1isBit). "
-                        + "seclume reports TINYINT/Integer, so getObject on a boolean column "
-                        + "hands back an Integer and a cast to Boolean fails - code that "
-                        + "works against Connector/J breaks here. Fixing it means a "
-                        + "connection property and a change in four places (getObject, the "
-                        + "three metadata answers, and the catalogue), which is why it is "
-                        + "recorded rather than rushed.")
-                .knownDefect("c_bool.columnTypeName", "the same defect.")
-                .knownDefect("c_bool.columnClassName", "the same defect.")
-                .knownDefect("c_bool.precision", "the same defect.")
-                .knownDefect("c_bool.getObject", "the same defect, on the value itself.")
-                .knownDefect("c_bool.getColumns.DATA_TYPE", "the same defect, in the catalogue.")
-                .knownDefect("c_bool.getColumns.TYPE_NAME", "the same defect.")
-                .knownDefect("c_bool.getColumns.COLUMN_SIZE", "the same defect.")
-                .knownDefect("c_text.precision",
-                        "getPrecision on a text column answers 65535 - the byte length MySQL "
-                        + "sends - where Connector/J answers 16383, the same length in utf8mb4 "
-                        + "characters. getPrecision on character data is defined in "
-                        + "characters. The division by bytes-per-character is already there "
-                        + "for varchar and does not fire for text, so this is a narrow fix "
-                        + "and only waits on finding out which charset id the server sends "
-                        + "for a text column rather than guessing at it.");
+        // Nothing stands under "still wrong here" any more. The two that did -
+        // tinyint(1) as a boolean and the character count of a text column -
+        // were fixed on 21.09.2026, and the entries went rather than being
+        // rewritten into allowances, which is the distinction this file is
+        // built on: an allowance is a difference both drivers may honestly
+        // have, a known defect is one of ours waiting for a fix.
     }
 
     private static Path locate() {

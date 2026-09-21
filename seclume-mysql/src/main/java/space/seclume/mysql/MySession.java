@@ -79,7 +79,57 @@ public final class MySession implements AutoCloseable {
     public record Settings(String host, int port, String database, String user,
                            SecretProvider secret, String applicationName,
                            int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
-                           HostList hosts, ResultLimit resultLimit, TlsMode tls) {
+                           HostList hosts, ResultLimit resultLimit, TlsMode tls,
+                           space.seclume.internal.jdbc.TlsStack tlsStack,
+                           space.seclume.tls.ClientIdentity identity,
+                           boolean tinyInt1isBit) {
+
+        /**
+         * With everything but the boolean mapping, which almost nobody sets.
+         *
+         * <p>It defaults to <b>on</b>, which is what Connector/J does: a
+         * {@code tinyint(1)} is how every ORM stores a boolean in MySQL, and a
+         * driver that hands back an {@code Integer} there breaks code that
+         * works against the vendor driver. See {@code MyTypes.isBooleanColumn}.
+         */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, tls, tlsStack, identity, true);
+        }
+
+        /**
+         * Without a client certificate - what almost every connection is.
+         */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, tls, tlsStack, null);
+        }
+
+        /**
+         * With a TLS mode but the ordinary stack.
+         *
+         * <p>Which implementation carries TLS is a separate decision from how
+         * much TLS is asked for - see
+         * {@link space.seclume.internal.jdbc.TlsStack} - and almost nobody
+         * makes it, so it defaults here rather than at every call site.
+         */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit, TlsMode tls) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, tls,
+                    space.seclume.internal.jdbc.TlsStack.JSSE, null);
+        }
 
         /** Without a result limit - what a URL without the option means. */
         public Settings(String host, int port, String database, String user,
@@ -114,11 +164,28 @@ public final class MySession implements AutoCloseable {
 
         /** The same settings pointed at another server of the list. */
         Settings at(HostList.Host server) {
+            // Every component, and that is not a formality: this method has
+            // already dropped a newly added one once, and because a missing
+            // component becomes a default rather than an error, the feature
+            // silently did nothing while every test stayed green.
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
-                    resultLimit, tls);
+                    resultLimit, tls, tlsStack, identity, tinyInt1isBit);
         }
     }
+
+    /**
+     * Whether a tinyint(1) is a boolean here - see
+     * {@link MyTypes#isBooleanColumn}.
+     *
+     * <p>A connection setting rather than a session state: it changes nothing
+     * on the wire and everything about what the result set answers.
+     */
+    public boolean tinyInt1isBit() {
+        return tinyInt1isBit;
+    }
+
+    private boolean tinyInt1isBit = true;
 
     /** Receives the rows - without a copy, straight from the receive buffer. */
     @FunctionalInterface
@@ -185,6 +252,24 @@ public final class MySession implements AutoCloseable {
     }
 
     private static MySession openOne(Settings settings) throws SQLException {
+        // The expensive one: a physical connect, the TLS handshake and the
+        // login. Recorded around the whole of it, because that is the number
+        // a pool's warm-up time is made of. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.ConnectionOpen event =
+                space.seclume.jfr.Observed.beginConnect();
+        MySession opened = null;
+        try {
+            opened = connectAndLogIn(settings);
+            opened.tinyInt1isBit = settings.tinyInt1isBit();
+            return opened;
+        } finally {
+            space.seclume.jfr.Observed.endConnect(event, "mysql",
+                    settings.host() + ":" + settings.port(), settings.database(),
+                    opened == null ? null : opened.tlsDescription(), opened != null);
+        }
+    }
+
+    private static MySession connectAndLogIn(Settings settings) throws SQLException {
         MyChannel channel;
         try {
             channel = MyChannel.connect(settings.host(), settings.port(),
@@ -272,7 +357,8 @@ public final class MySession implements AutoCloseable {
             out.putZeroes(23);                     // filler, as the protocol wants it
             channel.end();
             channel.flush();
-            channel.startTls(settings.host(), settings.port(), mode.verifies());
+            channel.startTls(settings.host(), settings.port(), mode.verifies(),
+                    settings.tlsStack(), settings.identity());
         } catch (IOException e) {
             throw new SQLNonTransientConnectionException(
                     "TLS to " + settings.host() + ":" + settings.port() + " failed: "
@@ -336,6 +422,16 @@ public final class MySession implements AutoCloseable {
         } catch (IOException e) {
             throw new SQLNonTransientConnectionException(
                     "the connection broke during the handshake", "08006", e);
+        } catch (WireBuffer.Truncated e) {
+            // Anything that can answer on the port reaches this parser before
+            // a single credential is exchanged, so it has to fail the way a
+            // library fails. A greeting that runs out mid-field used to come
+            // out as an IllegalStateException - not what a caller catches,
+            // and not something it could have done anything about. Found by
+            // pointing the driver at a server that sends an empty packet.
+            throw new SQLNonTransientConnectionException(
+                    "the server's greeting is not a MySQL handshake: " + e.getMessage(),
+                    "08001", e);
         }
     }
 

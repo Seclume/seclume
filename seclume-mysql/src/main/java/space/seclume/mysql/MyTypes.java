@@ -54,6 +54,25 @@ public final class MyTypes {
     private MyTypes() {
     }
 
+    /**
+     * Whether this column is the way MySQL stores a boolean.
+     *
+     * <p>MySQL has no boolean type: {@code boolean} is a synonym for
+     * {@code tinyint(1)}, and that is what Hibernate, Spring Data and every
+     * migration tool write. The wire carries a {@code TINY} whose declared
+     * display width is one, which is the only thing that tells it apart from
+     * an ordinary {@code tinyint} - so that is what is asked here, and the
+     * question is asked in one place because the answer has to be the same for
+     * the value, the result metadata and the catalogue.
+     *
+     * <p>Connector/J calls the switch {@code tinyInt1isBit} and has it on;
+     * this driver takes the name and the default from it, because the point of
+     * the mapping is that code moving from one to the other keeps working.
+     */
+    public static boolean isBooleanColumn(int type, long columnLength, boolean tinyInt1isBit) {
+        return tinyInt1isBit && type == TINY && columnLength == 1;
+    }
+
     public static int sqlType(int type, int flags) {
         boolean unsigned = (flags & FLAG_UNSIGNED) != 0;
         boolean binary = (flags & FLAG_BINARY) != 0;

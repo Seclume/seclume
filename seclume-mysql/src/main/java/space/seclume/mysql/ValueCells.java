@@ -27,6 +27,13 @@ public interface ValueCells {
     /** An unsigned number from {@code length} bytes, least significant first. */
     long unsignedAt(int at, int length);
 
+    /**
+     * The decimal integer written at {@code at} as text - see
+     * {@link space.seclume.internal.jdbc.TextNumber}, which explains why this
+     * is not a loop over {@link #byteAt(int)}.
+     */
+    long decimalAt(int at, int length);
+
     /** A slice of text at an absolute position. */
     String textAt(int at, int length);
 }

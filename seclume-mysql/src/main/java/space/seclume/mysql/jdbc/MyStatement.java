@@ -94,6 +94,26 @@ class MyStatement implements Statement, MySession.RowHandler {
      * read, not after it.
      */
     void collect(MySession session, Execution execution, boolean binary) throws SQLException {
+        // Every statement this driver runs passes here, text protocol and
+        // binary, which is why the recording hangs off this method rather
+        // than off the entry points above it. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        boolean failed = true;
+        try {
+            collectInto(session, execution, binary);
+            failed = false;
+        } finally {
+            space.seclume.jfr.Observed.endQuery(event, "mysql", collectingSql,
+                    space.seclume.QueryFingerprint.Dialect.MYSQL,
+                    block != null ? rowsCollected : Math.max(0, updateCount), failed);
+        }
+    }
+
+    /** How many rows the last collect took over - for the recording. */
+    private long rowsCollected;
+
+    private void collectInto(MySession session, Execution execution, boolean binary)
+            throws SQLException {
         resultLimit = session.resultLimit();
         closeResult();
         // The statement is the handler itself. A lambda here would capture
@@ -109,6 +129,7 @@ class MyStatement implements Statement, MySession.RowHandler {
             collected = blockFor(fields, binary);
         }
         MyResultBlock[] target = {collected};
+        rowsCollected = collectedRows;
         collecting = null;
         collected = null;
         block = target[0];
@@ -251,7 +272,7 @@ class MyStatement implements Statement, MySession.RowHandler {
             reusable = connection.takeSpareBlock();
         }
         if (reusable == null) {
-            reusable = new MyResultBlock(fields, binary);
+            reusable = new MyResultBlock(fields, binary, connection.tinyInt1isBit());
         } else {
             reusable.reset(fields, binary);
         }

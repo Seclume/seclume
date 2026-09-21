@@ -62,6 +62,17 @@ public final class MyConnection implements Connection, RoundTrips, Pipelined {
         return session;
     }
 
+    /**
+     * Whether a tinyint(1) is a boolean on this connection.
+     *
+     * <p>Without the open check the other accessor makes: this is asked while
+     * a result block is being built, where the connection is demonstrably open
+     * and a checked exception would only travel.
+     */
+    boolean tinyInt1isBit() {
+        return session.tinyInt1isBit();
+    }
+
     String url() {
         return url;
     }

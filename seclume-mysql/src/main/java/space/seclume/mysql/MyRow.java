@@ -270,6 +270,11 @@ public final class MyRow implements ValueCells {
     }
 
     @Override
+    public long decimalAt(int at, int length) {
+        return space.seclume.internal.jdbc.TextNumber.decimal(buffer, at, length);
+    }
+
+    @Override
     public long unsignedAt(int at, int length) {
         return unsigned(at, length);
     }

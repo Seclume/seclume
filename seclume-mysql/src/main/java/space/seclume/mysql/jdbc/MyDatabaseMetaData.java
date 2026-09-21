@@ -33,6 +33,28 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
     }
 
     /**
+     * The catalogue's half of the tinyint(1) question.
+     *
+     * <p>{@code MyTypes.isBooleanColumn} answers it for a result column, out
+     * of the display width on the wire; here the same question is asked of
+     * {@code information_schema}, where the declaration is the column type
+     * itself. The two have to agree - the differential run found three drivers
+     * in which the catalogue and the result set said different things about
+     * the same column, and this would have been a fourth.
+     */
+    private String isBooleanColumn() {
+        return connection.tinyInt1isBit() ? "column_type = 'tinyint(1)'" : "false";
+    }
+
+    /**
+     * The same question for a procedure parameter, where the declaration is
+     * called {@code dtd_identifier} instead of {@code column_type}.
+     */
+    private String isBooleanParameter() {
+        return connection.tinyInt1isBit() ? "dtd_identifier = 'tinyint(1)'" : "false";
+    }
+
+    /**
      * The type name from {@code information_schema} mapped to a
      * {@link java.sql.Types} value - as SQL, because it has to happen per row.
      *
@@ -147,7 +169,7 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
         return query("""
                 select table_schema as `TABLE_CAT`, null as `TABLE_SCHEM`,
                        table_name as `TABLE_NAME`, column_name as `COLUMN_NAME`,
-                       %s as `DATA_TYPE`,
+                       case when %s then -7 else %s end as `DATA_TYPE`,
                        -- data_type, not column_type. column_type is the
                        -- declaration - "tinyint(1)", "varbinary(32)" - where
                        -- TYPE_NAME is meant to be the type, and Connector/J
@@ -160,9 +182,10 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                        -- Built by concatenation rather than by stripping the
                        -- width out of column_type, so no regular expression
                        -- has to be right about enum('a(1)','b').
-                       upper(concat(data_type,
+                       if(%s, 'BIT',
+                          upper(concat(data_type,
                                if(locate('unsigned', column_type) > 0,
-                                  ' unsigned', ''))) as `TYPE_NAME`,
+                                  ' unsigned', '')))) as `TYPE_NAME`,
                        -- The temporal case is here for the same reason the
                        -- PostgreSQL driver grew one: information_schema has
                        -- no length for a date, so the catalogue answered 0
@@ -171,7 +194,8 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                        -- printed ones - 'YYYY-MM-DD' is ten characters, a
                        -- datetime nineteen, and a fractional part adds its
                        -- digits and the point.
-                       coalesce(character_maximum_length, numeric_precision,
+                       if(%s, 1,
+                          coalesce(character_maximum_length, numeric_precision,
                                 case data_type
                                      when 'date' then 10
                                      when 'year' then 4
@@ -185,7 +209,7 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                                           19 + if(datetime_precision > 0,
                                                   datetime_precision + 1, 0)
                                 end,
-                                0) as `COLUMN_SIZE`,
+                                0)) as `COLUMN_SIZE`,
                        null as `BUFFER_LENGTH`,
                        coalesce(numeric_scale, datetime_precision, 0) as `DECIMAL_DIGITS`,
                        10 as `NUM_PREC_RADIX`,
@@ -204,7 +228,8 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                 from information_schema.columns
                 where %s and %s and %s
                 order by table_schema, table_name, ordinal_position
-                """.formatted(SQL_TYPE_CASE, database(catalog, schemaPattern),
+                """.formatted(isBooleanColumn(), SQL_TYPE_CASE, isBooleanColumn(),
+                        isBooleanColumn(), database(catalog, schemaPattern),
                         like("table_name", tableNamePattern),
                         like("column_name", columnNamePattern)));
     }
@@ -430,20 +455,54 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                             when parameter_mode = 'INOUT' then 2
                             when parameter_mode = 'OUT' then 4
                             else 0 end as `COLUMN_TYPE`,
-                       %s as `DATA_TYPE`, dtd_identifier as `TYPE_NAME`,
-                       coalesce(character_maximum_length, numeric_precision, 0)
+                       case when %s then -7 else %s end as `DATA_TYPE`,
+                       -- The type, not the declaration, and not the raw
+                       -- dtd_identifier either: that carries the width and the
+                       -- lower case - "tinyint(1)", "int" - where TYPE_NAME is
+                       -- meant to be a type name, and Connector/J answers
+                       -- "BIT" and "INT". The same mistake getColumns made
+                       -- until the differential run found it; procedure
+                       -- parameters have no corpus yet, which is why this one
+                       -- survived longer.
+                       if(%s, 'BIT',
+                          upper(substring_index(dtd_identifier, '(', 1))) as `TYPE_NAME`,
+                       -- The character count, which is not what
+                       -- character_maximum_length holds for every type.
+                       -- information_schema says so itself: a varchar(40) has
+                       -- 40 there and 160 octets, a text has 65535 in both -
+                       -- so for the text family that column is a byte
+                       -- capacity wearing a character name. Dividing it by the
+                       -- charset's maxlen gives the characters, which is what
+                       -- JDBC asks for and what getColumns answers for the
+                       -- same type. Connector/J answers 0 here; an answer that
+                       -- is consistent with our own catalogue is worth more
+                       -- than one that agrees with a driver saying nothing.
+                       if(%s, 1,
+                          coalesce(character_maximum_length
+                                   -- div, not /: MySQL's slash gives a decimal
+                                   -- ("1.0000") and PRECISION is an integer.
+                                   div if(data_type in ('tinytext', 'text',
+                                                      'mediumtext', 'longtext'),
+                                        (select maxlen
+                                         from information_schema.character_sets cs
+                                         where cs.character_set_name =
+                                               p.character_set_name), 1),
+                                   numeric_precision, 0))
                            as `PRECISION`,
-                       coalesce(character_maximum_length, numeric_precision, 0) as `LENGTH`,
+                       if(%s, 1,
+                          coalesce(character_octet_length, numeric_precision, 0))
+                           as `LENGTH`,
                        coalesce(numeric_scale, 0) as `SCALE`, 10 as `RADIX`,
                        2 as `NULLABLE`, null as `REMARKS`, null as `COLUMN_DEF`,
                        null as `SQL_DATA_TYPE`, null as `SQL_DATETIME_SUB`,
                        character_octet_length as `CHAR_OCTET_LENGTH`,
                        ordinal_position as `ORDINAL_POSITION`, '' as `IS_NULLABLE`,
                        specific_name as `SPECIFIC_NAME`
-                from information_schema.parameters
+                from information_schema.parameters p
                 where %s and %s and %s
                 order by specific_schema, specific_name, ordinal_position
-                """.formatted(SQL_TYPE_CASE,
+                """.formatted(isBooleanParameter(), SQL_TYPE_CASE, isBooleanParameter(),
+                        isBooleanParameter(), isBooleanParameter(),
                         schema("specific_schema", catalog, schemaPattern),
                         like("specific_name", namePattern),
                         like("parameter_name", columnPattern)));

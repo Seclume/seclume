@@ -80,6 +80,14 @@ public final class MyResultSet extends ReadOnlyResultSet {
             case MyTypes.FLOAT -> text.isEmpty() ? text : Float.toString(Float.parseFloat(text));
             case MyTypes.DOUBLE -> text.isEmpty() ? text
                     : Double.toString(Double.parseDouble(text));
+            // And the same disagreement in the temporal types. On a
+            // datetime(6) whose fraction happens to be zero, the server sends
+            // ".000000" in the text protocol and leaves the field out
+            // altogether in the binary one - so the text path said
+            // "00:00:00.000000" and the binary path "00:00:00" for the same
+            // stored value. Only the all-zero fraction is dropped; a real one
+            // is six digits in both protocols already.
+            case MyTypes.DATETIME, MyTypes.TIMESTAMP, MyTypes.TIME -> withoutEmptyFraction(text);
             default -> text;
         };
     }
@@ -91,24 +99,12 @@ public final class MyResultSet extends ReadOnlyResultSet {
             // A bit column carries its bits in both protocols, not digits.
             return BinaryValues.toLong(block, column);
         }
-        int offset = block.offset(column);
-        int length = block.length(column);
-        boolean negative = false;
-        int i = 0;
-        if (length > 0 && block.byteAt(offset) == '-') {
-            negative = true;
-            i = 1;
+        try {
+            return block.decimalAt(block.offset(column), block.length(column));
+        } catch (NumberFormatException e) {
+            throw new SQLException("column " + (column + 1) + " is not an integer: "
+                    + stringAt(column), "22018");
         }
-        long value = 0;
-        for (; i < length; i++) {
-            int digit = (block.byteAt(offset + i) & 0xff) - '0';
-            if (digit < 0 || digit > 9) {
-                throw new SQLException("column " + (column + 1) + " is not an integer: "
-                        + stringAt(column), "22018");
-            }
-            value = value * 10 + digit;
-        }
-        return negative ? -value : value;
     }
 
     @Override
@@ -116,7 +112,18 @@ public final class MyResultSet extends ReadOnlyResultSet {
         if (block.isBinary()) {
             return BinaryValues.toDouble(block, column);
         }
-        return Double.parseDouble(stringAt(column));
+        return block.decimalDoubleAt(block.offset(column), block.length(column));
+    }
+
+    @Override
+    protected java.math.BigDecimal decimalAt(int column) throws SQLException {
+        if (block.isBinary()) {
+            // The binary protocol sends a decimal as text inside the row, but
+            // everything around it is binary - stringAt knows which, this does
+            // not.
+            return super.decimalAt(column);
+        }
+        return block.bigDecimalAt(block.offset(column), block.length(column));
     }
 
     @Override
@@ -159,6 +166,12 @@ public final class MyResultSet extends ReadOnlyResultSet {
     @Override
     protected Object objectAt(int column) throws SQLException {
         MySession.Field field = block.fields().get(column);
+        if (MyTypes.isBooleanColumn(field.type(), field.columnLength(), block.tinyInt1isBit())) {
+            // What every ORM meant when it wrote the column, and what
+            // Connector/J answers - code that casts the result to Boolean
+            // moves between the two drivers without a change.
+            return booleanAt(column);
+        }
         return switch (field.type()) {
             case MyTypes.TINY, MyTypes.SHORT, MyTypes.YEAR -> (int) longAt(column);
             case MyTypes.LONG, MyTypes.INT24 ->
@@ -199,6 +212,27 @@ public final class MyResultSet extends ReadOnlyResultSet {
         };
     }
 
+    /**
+     * Drops a fractional part that is nothing but zeros.
+     *
+     * <p>Deliberately narrow: {@code .000000} goes, {@code .100000} stays as
+     * it is. Trimming trailing zeros in general would turn one server
+     * rendering into another and lose the column's declared precision, which
+     * is a different change and not one this is for.
+     */
+    private static String withoutEmptyFraction(String text) {
+        int dot = text.indexOf('.');
+        if (dot < 0) {
+            return text;
+        }
+        for (int i = dot + 1; i < text.length(); i++) {
+            if (text.charAt(i) != '0') {
+                return text;
+            }
+        }
+        return text.substring(0, dot);
+    }
+
     /** {@code Time.valueOf} cannot do fractional seconds - it cuts them off. */
     private static String shortTime(String text) {
         int dot = text.indexOf('.');
@@ -224,7 +258,7 @@ public final class MyResultSet extends ReadOnlyResultSet {
 
     @Override
     protected ResultSetMetaData metaData() {
-        return new MyResultSetMetaData(block.fields());
+        return new MyResultSetMetaData(block.fields(), block.tinyInt1isBit());
     }
 
     /**

@@ -38,13 +38,23 @@ final class MyResultBlock implements ValueCells, AutoCloseable {
     private int columns;
     private boolean binary;
     private final WireBuffer data;
+    /** Reused by the BigDecimal path, which reads a char[] instead of a String. */
+    private char[] characters = new char[64]; // seclume-allow: user payload on its way to a number, not a secret
     /** Two entries per cell: start within the block and length (-1 = SQL NULL). */
     private int[] cells;
     private int rowCount;
     /** The row {@link ValueCells} currently refers to. */
     private int current;
 
-    MyResultBlock(List<MySession.Field> fields, boolean binary) {
+    private final boolean tinyInt1isBit;
+
+    /** Whether a tinyint(1) in this result is a boolean. */
+    boolean tinyInt1isBit() {
+        return tinyInt1isBit;
+    }
+
+    MyResultBlock(List<MySession.Field> fields, boolean binary, boolean tinyInt1isBit) {
+        this.tinyInt1isBit = tinyInt1isBit;
         this.data = new WireBuffer(8 * 1024);
         this.cells = new int[0];
         reset(fields, binary);
@@ -165,6 +175,24 @@ final class MyResultBlock implements ValueCells, AutoCloseable {
     @Override
     public byte byteAt(int at) {
         return data.getByte(at);
+    }
+
+    @Override
+    public long decimalAt(int at, int length) {
+        return space.seclume.internal.jdbc.TextNumber.decimal(data, at, length);
+    }
+
+    /** A double straight from the digits - see {@code TextNumber}. */
+    double decimalDoubleAt(int at, int length) {
+        return space.seclume.internal.jdbc.TextNumber.decimalDouble(data, at, length);
+    }
+
+    /** A BigDecimal out of a reused char[] rather than a fresh String. */
+    java.math.BigDecimal bigDecimalAt(int at, int length) {
+        if (characters.length < length) {
+            characters = new char[Math.max(length, characters.length * 2)]; // seclume-allow: user payload on its way to a number, not a secret
+        }
+        return space.seclume.internal.jdbc.TextNumber.bigDecimal(data, at, length, characters);
     }
 
     @Override
