@@ -391,9 +391,15 @@ diagnose anything here.
 
 ## What it does not do yet
 
-- Moving a live session from one host to another. The drivers hold their own protocol and TLS
-  state, which is what such a move needs; the transport it needs is developed separately and
-  is not part of this distribution.
+- **Moving a live session from one host to another.** It is being built, and not here. The
+  drivers hold their own protocol and TLS state - which is exactly what such a move needs, and
+  what no driver built on an `SSLEngine` can offer - so this repository carries the two seams
+  it takes: a logged-in stream can be handed over (`detach`) and picked up (`resume`). What
+  happens between those two ends is developed separately and is not part of this distribution.
+
+  When it is finished, what will be published here is the **evidence**, not the code: which
+  properties were shown, against which servers, with which numbers, and what each proof does
+  not establish. The same standard as everything else in this file.
 
 ---
 

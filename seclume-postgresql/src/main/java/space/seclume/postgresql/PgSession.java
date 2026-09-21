@@ -199,12 +199,11 @@ public final class PgSession implements AutoCloseable {
     /**
      * Continues a session somebody else authenticated.
      *
-     * <p>The opposite of {@link #detach()}, and the other half of the same
-     * arrangement: a gateway logs in with a credential this process never
-     * sees, and hands out the stream afterwards. A driver picking it up cannot
-     * do what a driver normally does first - there is no startup to run, the
-     * server is long past it - so what it would have learnt there arrives as
-     * an argument instead.
+     * <p>The opposite of {@link #detach()}: somewhere else logged in, and this
+     * process picks the stream up. A driver doing that cannot do what a driver
+     * normally does first - there is no startup to run, the server is long
+     * past it - so what it would have learnt there arrives as an argument
+     * instead.
      *
      * <p>{@code parameters} is what the server announced while logging in:
      * the client encoding, the date style, whether timestamps are integers. A
@@ -1779,11 +1778,11 @@ public final class PgSession implements AutoCloseable {
     /**
      * Hands the authenticated stream over and finishes this session object.
      *
-     * <p>For a gateway that opens a database session with <b>its own</b>
-     * credential and then lets whichever web server currently holds the slot
-     * use it - see the cluster design. The point of that arrangement is that
-     * the credential never reaches the web server, so the stream it gets has
-     * to begin after the login, which is precisely what this hands out.
+     * <p>For handing a logged-in connection to another holder: the login
+     * happens once, in the process that has the credential, and whoever
+     * receives the stream never needs one. What that is used for is not this
+     * class's business; what it owes is a stream that can be picked up, and
+     * {@link #resume} is the other end of it.
      *
      * <p>Two refusals rather than two surprises:
      *
@@ -1792,10 +1791,9 @@ public final class PgSession implements AutoCloseable {
      *       not something anybody else can take over, and the check is the
      *       same {@code isIdle} a freeze uses;
      *   <li>encrypted - the keys are in this process and the bytes on that
-     *       socket are TLS records. Relaying them would need the keys to
-      *       travel too, which is a separate problem and a
-     *       different decision from this one. TLS to the database therefore
-     *       terminates at the gateway, which is also where the login happened.
+     *       socket are TLS records. Handing them on would need the keys to
+     *       travel too, which is a different decision from this one. TLS to
+     *       the database therefore terminates where the login happened.
      * </ul>
      *
      * <p>Afterwards this session is finished: the channel reports itself
