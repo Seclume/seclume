@@ -66,6 +66,23 @@ class OraStatement implements Statement, TtcResult.RowHandler {
      */
     boolean run(String sql, space.seclume.oracle.net.TtcBinds binds)
             throws SQLException {
+        // Every statement this driver runs passes here, with binds and
+        // without. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        boolean failed = true;
+        try {
+            boolean hasResult = runInto(sql, binds);
+            failed = false;
+            return hasResult;
+        } finally {
+            space.seclume.jfr.Observed.endQuery(event, "oracle", sql,
+                    space.seclume.QueryFingerprint.Dialect.ORACLE,
+                    block != null ? collectedRows : Math.max(0, updateCount), failed);
+        }
+    }
+
+    private boolean runInto(String sql, space.seclume.oracle.net.TtcBinds binds)
+            throws SQLException {
         checkOpen();
         OracleSession session = connection.session();
         resultLimit = session.resultLimit();

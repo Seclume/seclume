@@ -345,6 +345,28 @@ public final class TtcRow {
         return cells[index * 2 + 1] < 0;
     }
 
+    /**
+     * Whether every cell of this row lies in the one message buffer.
+     *
+     * <p>Usually yes, and then a reader can take the whole row over in a
+     * single copy. It is not always: a row that spans two messages has its
+     * earlier cells moved into a buffer of their own (see the carry above), and
+     * then the cells are in two places and have to be copied one at a time.
+     */
+    public boolean inOneBuffer() {
+        for (int i = 0; i < columns.size(); i++) {
+            if (carried[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The message buffer - only meaningful while {@link #inOneBuffer()}. */
+    public java.lang.foreign.MemorySegment source() {
+        return in.segment();
+    }
+
     /** Where a cell sits in the buffer - for whoever takes the row over. */
     public int cellAt(int index) {
         return cells[index * 2];

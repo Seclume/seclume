@@ -63,18 +63,51 @@ final class OraResultSetMetaData implements ResultSetMetaData {
     @Override
     public String getColumnClassName(int index) throws SQLException {
         OracleColumn c = column(index);
-        if (c.type() == OracleColumn.TYPE_NUMBER) {
-            return c.scale() == 0 && c.precision() > 0 && c.precision() <= 9
-                    ? "java.lang.Long"
-                    : "java.math.BigDecimal";
-        }
-        return "java.lang.String";
+        // It used to answer java.lang.String for everything that was not a
+        // number - so a raw, a date and a timestamp all claimed to come back
+        // as text. getColumnClassName is a promise about what getObject
+        // returns, and an ORM reads it and then casts.
+        return switch (c.type()) {
+            case OracleColumn.TYPE_NUMBER -> c.scale() == 0 && c.precision() > 0
+                    && c.precision() <= 9 ? "java.lang.Long" : "java.math.BigDecimal";
+            case OracleColumn.TYPE_RAW, OracleColumn.TYPE_LONG_RAW -> "[B";
+            case OracleColumn.TYPE_DATE, OracleColumn.TYPE_TIMESTAMP -> "java.sql.Timestamp";
+            case OracleColumn.TYPE_TIMESTAMP_ZONE, OracleColumn.TYPE_TIMESTAMP_LOCAL ->
+                    "java.sql.Timestamp";
+            case OracleColumn.TYPE_BINARY_FLOAT -> "java.lang.Float";
+            case OracleColumn.TYPE_BINARY_DOUBLE -> "java.lang.Double";
+            case OracleColumn.TYPE_BOOLEAN -> "java.lang.Boolean";
+            case OracleColumn.TYPE_CLOB -> "java.sql.Clob";
+            case OracleColumn.TYPE_BLOB -> "java.sql.Blob";
+            default -> "java.lang.String";
+        };
     }
 
     @Override
     public int getPrecision(int index) throws SQLException {
         OracleColumn c = column(index);
-        return c.precision() > 0 ? c.precision() : c.maxSize();
+        if (c.precision() > 0) {
+            return c.precision();
+        }
+        // The temporal types have no declared precision and no maxSize
+        // either, so this used to answer 0 - "no width at all" - for every
+        // date and timestamp. The printed widths, the same ones the other
+        // three drivers report, so a date is 10 characters wherever it is
+        // read. ojdbc answers 7 for a DATE, which is its internal byte
+        // length rather than anything a caller can use.
+        return switch (c.type()) {
+            case OracleColumn.TYPE_DATE -> 19;
+            case OracleColumn.TYPE_TIMESTAMP, OracleColumn.TYPE_TIMESTAMP_ZONE,
+                 OracleColumn.TYPE_TIMESTAMP_LOCAL -> {
+                int scale = c.scale() == OracleColumn.SCALE_UNDECLARED ? 6 : c.scale();
+                yield 19 + (scale > 0 ? scale + 1 : 0);
+            }
+            // A raw declares its length in the buffer size when maxSize is
+            // not filled in; 0 said the column held nothing.
+            case OracleColumn.TYPE_RAW, OracleColumn.TYPE_LONG_RAW ->
+                    c.maxSize() > 0 ? c.maxSize() : c.bufferSize();
+            default -> c.maxSize();
+        };
     }
 
     @Override

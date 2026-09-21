@@ -520,7 +520,15 @@ class LocalOracleJdbcTest {
                         insert.setString(2, "row-" + i);
                         insert.addBatch();
                     }
+                    long before = RoundTrips.of(connection);
                     int[] counts = insert.executeBatch();
+                    // The number, not the intention: five hundred rows are one
+                    // wait for the server. A driver that fell back to a row at
+                    // a time would still pass every assertion below it and
+                    // cost five hundred - which is the whole difference over a
+                    // line with any latency in it.
+                    assertEquals(1, RoundTrips.of(connection) - before,
+                            "an array execution is one round trip, whatever the row count");
                     assertEquals(rows, counts.length, "one count per row");
                     for (int count : counts) {
                         assertEquals(1, count);

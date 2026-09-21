@@ -45,7 +45,35 @@ public final class OracleSession implements AutoCloseable {
     /** Connection settings. Not the password, only its source. */
     public record Settings(String host, int port, String service, String user,
                            SecretProvider secret, int connectTimeoutMillis, HostList hosts,
-                           ResultLimit resultLimit, TlsMode tls) {
+                           ResultLimit resultLimit, TlsMode tls,
+                           space.seclume.internal.jdbc.TlsStack tlsStack,
+                           space.seclume.tls.ClientIdentity identity) {
+
+        /**
+         * Without a client certificate - what almost every connection is.
+         */
+        public Settings(String host, int port, String service, String user,
+                        SecretProvider secret, int connectTimeoutMillis, HostList hosts,
+                        ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack) {
+            this(host, port, service, user, secret, connectTimeoutMillis, hosts,
+                    resultLimit, tls, tlsStack, null);
+        }
+
+        /**
+         * With a TLS mode but the ordinary stack.
+         *
+         * <p>Which implementation carries TLS is a separate decision from how
+         * much TLS is asked for - see
+         * {@link space.seclume.internal.jdbc.TlsStack} - and almost nobody
+         * makes it, so it defaults here rather than at every call site.
+         */
+        public Settings(String host, int port, String service, String user,
+                        SecretProvider secret, int connectTimeoutMillis, HostList hosts,
+                        ResultLimit resultLimit, TlsMode tls) {
+            this(host, port, service, user, secret, connectTimeoutMillis, hosts,
+                    resultLimit, tls, space.seclume.internal.jdbc.TlsStack.JSSE, null);
+        }
 
         /** Without a result limit - what a URL without the option means. */
         public Settings(String host, int port, String service, String user,
@@ -77,7 +105,7 @@ public final class OracleSession implements AutoCloseable {
         /** The same settings pointed at another listener of the list. */
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), service, user, secret,
-                    connectTimeoutMillis, hosts, resultLimit, tls);
+                    connectTimeoutMillis, hosts, resultLimit, tls, tlsStack, identity);
         }
 
         /** The {@code (DESCRIPTION=...)} the listener wants. */
@@ -125,6 +153,41 @@ public final class OracleSession implements AutoCloseable {
     }
 
     private static OracleSession openOne(Settings settings) throws SQLException {
+        // The expensive one: a physical connect, the TLS handshake and the
+        // login. Recorded around the whole of it, because that is the number
+        // a pool's warm-up time is made of. See space.seclume.jfr.
+        space.seclume.jfr.SeclumeEvents.ConnectionOpen event =
+                space.seclume.jfr.Observed.beginConnect();
+        OracleSession opened = null;
+        try {
+            opened = connectAndLogIn(settings);
+            return opened;
+        } finally {
+            space.seclume.jfr.Observed.endConnect(event, "oracle",
+                    settings.host() + ":" + settings.port(), settings.service(),
+                    opened == null ? null : opened.tlsDescription(), opened != null);
+        }
+    }
+
+    /**
+     * Connects, and starts over once if the listener asks.
+     *
+     * <p>A TCPS listener answers the first {@code CONNECT} with
+     * {@code RESEND} rather than {@code ACCEPT}. That is not a fault and not
+     * a retry after one - it is the ordinary course of events there, and a
+     * plaintext listener never does it, which is why it stayed invisible
+     * until there was a TCPS listener to test against.
+     *
+     * <p>What {@code RESEND} asks for is the whole connection again, not the
+     * packet again. Sending the packet a second time down the same socket
+     * gets a fatal {@code unexpected_message} alert, because by then the
+     * server has finished with that TLS session - which is the sort of thing
+     * only a real server tells you.
+     *
+     * <p>Once, and once only: a listener that asks twice is not negotiating,
+     * it is looping.
+     */
+    private static OracleSession connectAndLogIn(Settings settings) throws SQLException {
         NsChannel channel;
         try {
             channel = NsChannel.connect(settings.host(), settings.port(),
@@ -135,7 +198,8 @@ public final class OracleSession implements AutoCloseable {
         }
         if (settings.tls().demands()) {
             try {
-                channel.startTls(settings.host(), settings.port(), settings.tls().verifies());
+                channel.startTls(settings.host(), settings.port(),
+                        settings.tls().verifies(), settings.tlsStack(), settings.identity());
             } catch (IOException e) {
                 channel.close();
                 throw new SQLNonTransientConnectionException(
@@ -145,6 +209,26 @@ public final class OracleSession implements AutoCloseable {
         }
         try {
             int type = channel.sendConnect(settings.connectString());
+            if (type == NsPacket.TYPE_RESEND) {
+                // Over TCPS this is the ordinary course of events, not a
+                // fault: the listener has established the session - its own
+                // log says so - and handed the socket to a server process,
+                // which brings up a TLS session of its own. So the answer to
+                // RESEND is a second handshake on the same socket and then
+                // the same CONNECT again.
+                //
+                // The two wrong readings both fail in a way that says what
+                // they are. Resending the packet without a new handshake
+                // gets a plaintext fatal alert, because the new peer is
+                // waiting for a ClientHello. Opening a new TCP connection
+                // gets RESEND again, because a new connection starts at the
+                // listener. A plaintext listener never does any of this,
+                // which is why it stayed invisible until there was a TCPS
+                // one to test against.
+                channel.startTls(settings.host(), settings.port(),
+                        settings.tls().verifies(), settings.tlsStack(), settings.identity());
+                type = channel.sendConnect(settings.connectString());
+            }
             if (type != NsPacket.TYPE_ACCEPT) {
                 throw new SQLNonTransientConnectionException(
                         "the listener answered with " + NsPacket.typeName(type)

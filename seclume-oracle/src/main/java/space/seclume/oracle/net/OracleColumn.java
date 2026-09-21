@@ -15,7 +15,9 @@ package space.seclume.oracle.net;
  *                   which is how an untyped {@code null} in the select list is
  *                   described
  * @param maxSize  the declared size
- * @param charset  the character set, 873 = AL32UTF8; 0 for types without one
+ * @param charset  the character set, 873 = AL32UTF8, 2000 = AL16UTF16 (the
+ *                 national one, which is what an NVARCHAR2 arrives in); 0 for
+ *                 types without one
  * @param nullable whether the column may hold NULL
  */
 public record OracleColumn(String name, int type, int precision, int scale,
@@ -99,6 +101,14 @@ public record OracleColumn(String name, int type, int precision, int scale,
     /** A scale of -127 means "no scale was declared", not "no decimals". */
     public static final int SCALE_UNDECLARED = -127;
 
+    /** Oracle's national character set, AL16UTF16 - what an NVARCHAR2 is in. */
+    public static final int AL16UTF16 = 2000;
+
+    /** Whether this column is one of the national character types. */
+    public boolean isNational() {
+        return charset == AL16UTF16;
+    }
+
     /**
      * The matching {@link java.sql.Types} value.
      *
@@ -113,8 +123,12 @@ public record OracleColumn(String name, int type, int precision, int scale,
             case TYPE_NUMBER -> scale == 0 && precision > 0 && precision <= 9
                     ? java.sql.Types.INTEGER
                     : java.sql.Types.NUMERIC;
-            case TYPE_VARCHAR -> java.sql.Types.VARCHAR;
-            case TYPE_CHAR -> java.sql.Types.CHAR;
+            // Oracle sends the same wire type for varchar2 and nvarchar2;
+            // only the character set tells them apart. Reporting both as
+            // VARCHAR lost the distinction a national column exists for.
+            case TYPE_VARCHAR -> isNational()
+                    ? java.sql.Types.NVARCHAR : java.sql.Types.VARCHAR;
+            case TYPE_CHAR -> isNational() ? java.sql.Types.NCHAR : java.sql.Types.CHAR;
             case TYPE_DATE -> java.sql.Types.TIMESTAMP;
             case TYPE_TIMESTAMP -> java.sql.Types.TIMESTAMP;
             case TYPE_TIMESTAMP_ZONE, TYPE_TIMESTAMP_LOCAL ->
@@ -135,8 +149,8 @@ public record OracleColumn(String name, int type, int precision, int scale,
     public String typeName() {
         return switch (type) {
             case TYPE_NUMBER -> "NUMBER";
-            case TYPE_VARCHAR -> "VARCHAR2";
-            case TYPE_CHAR -> "CHAR";
+            case TYPE_VARCHAR -> isNational() ? "NVARCHAR2" : "VARCHAR2";
+            case TYPE_CHAR -> isNational() ? "NCHAR" : "CHAR";
             case TYPE_DATE -> "DATE";
             case TYPE_TIMESTAMP -> "TIMESTAMP";
             case TYPE_TIMESTAMP_ZONE -> "TIMESTAMP WITH TIME ZONE";

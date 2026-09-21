@@ -184,7 +184,54 @@ public final class OraResultSet extends ReadOnlyResultSet {
         if (OracleDate.isDate(description.type())) {
             return OracleDate.toText(block.data().segment(), at, length);
         }
-        return utf8(at, length);
+        // RAW as hex, not as characters. Running the bytes of a raw(32)
+        // through the text decoder produced whatever they happened to look
+        // like - for 00 01 02 FF 80 a string of control and replacement
+        // characters, which represents nothing and loses the value. ojdbc
+        // answers with uppercase hex.
+        if (description.type() == OracleColumn.TYPE_RAW
+                || description.type() == OracleColumn.TYPE_LONG_RAW) {
+            return hex(at, length);
+        }
+        // The national types arrive in AL16UTF16, not in the database
+        // character set. Decoding those bytes as UTF-8 turned "gruess" with
+        // umlauts into a string of NULs and replacement characters - every
+        // value of every NVARCHAR2 column, silently. The column has said
+        // which character set it is in all along; nothing asked it.
+        return description.charset() == AL16UTF16 ? utf16(at, length) : utf8(at, length);
+    }
+
+    /** Uppercase hex, the way Oracle and ojdbc render a raw. */
+    private String hex(int at, int length) {
+        StringBuilder text = new StringBuilder(length * 2); // seclume-allow: user payload requested as text, not a secret
+        for (int i = 0; i < length; i++) {
+            int value = block.data().getByte(at + i) & 0xff;
+            text.append(Character.toUpperCase(Character.forDigit(value >>> 4, 16)));
+            text.append(Character.toUpperCase(Character.forDigit(value & 0x0f, 16)));
+        }
+        return text.toString();
+    }
+
+    /** Oracle's national character set: UTF-16, big-endian, no BOM. */
+    private static final int AL16UTF16 = 2000;
+
+    /**
+     * The bytes of a national text column, decoded as UTF-16BE.
+     *
+     * <p>Surrogate pairs pass through as the two chars they already are -
+     * Java strings are UTF-16 too, so a pair needs no assembling, only
+     * copying. An odd trailing byte is dropped rather than throwing, for the
+     * same reason {@link #utf8} does not throw: a result set is no place to
+     * fail over one bad byte.
+     */
+    private String utf16(int at, int length) {
+        StringBuilder text = new StringBuilder(length / 2); // seclume-allow: user payload requested as text, not a secret
+        for (int i = 0; i + 1 < length; i += 2) {
+            int high = block.data().getByte(at + i) & 0xff;
+            int low = block.data().getByte(at + i + 1) & 0xff;
+            text.append((char) ((high << 8) | low));
+        }
+        return text.toString();
     }
 
     /**
@@ -323,6 +370,22 @@ public final class OraResultSet extends ReadOnlyResultSet {
         }
         if (OracleDate.isDate(description.type())) {
             return java.sql.Timestamp.valueOf(stringAt(column));
+        }
+        // A raw is bytes, and getColumnClassName promises [B. Returning the
+        // hex string instead made the metadata a lie and handed callers
+        // something they would have to parse back.
+        if (description.type() == OracleColumn.TYPE_RAW
+                || description.type() == OracleColumn.TYPE_LONG_RAW) {
+            return getBytes(column + 1);
+        }
+        if (description.type() == OracleColumn.TYPE_BINARY_FLOAT) {
+            return Float.valueOf((float) getDouble(column + 1));
+        }
+        if (description.type() == OracleColumn.TYPE_BINARY_DOUBLE) {
+            return Double.valueOf(getDouble(column + 1));
+        }
+        if (description.type() == OracleColumn.TYPE_BOOLEAN) {
+            return Boolean.valueOf(getBoolean(column + 1));
         }
         return stringAt(column);
     }
