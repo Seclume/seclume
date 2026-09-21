@@ -53,6 +53,33 @@ public final class PgConnection implements Connection, RoundTrips, Pipelined {
         this(session, url, SeclumeUrl.DEFAULT_STATEMENT_CACHE);
     }
 
+    /**
+     * A JDBC connection on a session this process did not open.
+     *
+     * <p>The companion to {@link PgSession#resume}: that one picks the stream
+     * up, this one puts the JDBC surface on it, so an application - Spring
+     * Data, Hibernate, anything holding a {@link Connection} - works on it
+     * without knowing where it came from.
+     *
+     * <p><b>{@code inTransaction} is a fact the driver cannot establish, and
+     * that is why it is an argument.</b> A stream handed over may be sitting
+     * inside an open transaction, and the JDBC surface has no way to ask: the
+     * server states its transaction status in every {@code ReadyForQuery}, but
+     * the next one arrives only after a statement has run, and by then this
+     * connection would already have behaved as though it knew. Saying
+     * {@code true} sets auto-commit off <b>without</b> announcing a
+     * {@code BEGIN}, because the transaction is already open and a second
+     * begin would be a warning and a lie. Saying {@code false} leaves
+     * auto-commit on, which is what JDBC promises a fresh connection.
+     *
+     * <p>Whoever hands the stream over knows which it is; nobody else does.
+     */
+    public static Connection resume(PgSession session, boolean inTransaction) {
+        PgConnection connection = new PgConnection(session, "jdbc:seclume:postgresql:resumed");
+        connection.autoCommit = !inTransaction;
+        return connection;
+    }
+
     PgConnection(PgSession session, String url, int statementCacheSize) {
         this.session = session;
         this.url = url;
