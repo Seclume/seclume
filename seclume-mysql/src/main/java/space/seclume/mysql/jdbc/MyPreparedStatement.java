@@ -28,7 +28,6 @@ final class MyPreparedStatement extends MyStatement implements ParameterSetters 
 
     private final String sql;
     private final MyParameters parameters = new MyParameters(8);
-    private MySession.Prepared prepared;
     private List<Object[]> batch;
     private boolean released;
 
@@ -44,12 +43,24 @@ final class MyPreparedStatement extends MyStatement implements ParameterSetters 
      * <p>A framework builds a new {@code PreparedStatement} for every call, so
      * without the cache every call pays a round trip to prepare something the
      * server has long known. See {@link MySession#prepareCached}.
+     *
+     * <p><b>Asked for on every execution, and never remembered here.</b> The
+     * plan belongs to the session's cache, which is bounded and drops the
+     * least recently used one - with a {@code COM_STMT_CLOSE} to the server.
+     * A statement object that had kept the plan it was given would therefore
+     * be holding a number the server has thrown away, and the next execution
+     * fails with <i>Unknown prepared statement handler</i> - not where the
+     * eviction happened, but in whatever ran next. That is reachable whenever
+     * a statement outlives sixty-four other texts on the same connection,
+     * which is ordinary for a pooled connection: the pool's own statement
+     * cache hands the same object out again days later.
+     *
+     * <p>The lookup is a map lookup and it also marks the plan as the most
+     * recently used one, so the plan of a statement that is executing cannot
+     * be the one evicted to make room.
      */
     private MySession.Prepared prepare() throws SQLException {
-        if (prepared == null) {
-            prepared = connection.session().prepareCached(sql);
-        }
-        return prepared;
+        return connection.session().prepareCached(sql);
     }
 
     // ---- executing -------------------------------------------------------
@@ -196,7 +207,8 @@ final class MyPreparedStatement extends MyStatement implements ParameterSetters 
     public ResultSetMetaData getMetaData() throws SQLException {
         checkOpen();
         List<MySession.Field> columns = prepare().fields();
-        return columns.isEmpty() ? null : new MyResultSetMetaData(columns);
+        return columns.isEmpty() ? null
+                : new MyResultSetMetaData(columns, connection.session().tinyInt1isBit());
     }
 
     @Override

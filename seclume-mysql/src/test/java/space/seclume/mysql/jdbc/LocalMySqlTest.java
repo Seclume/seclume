@@ -849,4 +849,48 @@ class LocalMySqlTest {
             statement.execute("drop procedure zl_described");
         }
     }
+
+    /**
+     * A statement that outlives its own plan.
+     *
+     * <p>The session keeps sixty-four plans and closes the least recently used
+     * one to make room. A {@code PreparedStatement} that had remembered the
+     * plan it was handed would go on quoting a number the server has thrown
+     * away, and the failure lands on whatever runs next: <i>Unknown prepared
+     * statement handler</i>, in a place with nothing to do with the cause.
+     *
+     * <p>It is not a contrived shape. The pool keeps statement objects across
+     * borrows, so any application whose connection sees more than sixty-four
+     * different statement texts reaches it - which is how it was found, as an
+     * intermittent Flyway failure in the Spring suite.
+     */
+    @Test
+    void aPlanTheCacheDroppedIsPreparedAgain() throws Exception {
+        try (Connection connection = connect();
+             PreparedStatement held = connection.prepareStatement("select 1 + ?")) {
+            held.setInt(1, 1);
+            try (ResultSet rows = held.executeQuery()) {
+                assertTrue(rows.next());
+                assertEquals(2, rows.getInt(1));
+            }
+
+            // More texts than the cache holds, so the plan above is evicted
+            // and closed on the server while this object still exists.
+            for (int i = 0; i < 80; i++) {
+                try (PreparedStatement other = connection.prepareStatement(
+                        "select " + i + " + ?")) {
+                    other.setInt(1, i);
+                    try (ResultSet rows = other.executeQuery()) {
+                        assertTrue(rows.next());
+                    }
+                }
+            }
+
+            held.setInt(1, 40);
+            try (ResultSet rows = held.executeQuery()) {
+                assertTrue(rows.next(), "the statement still works after its plan was dropped");
+                assertEquals(41, rows.getInt(1));
+            }
+        }
+    }
 }
