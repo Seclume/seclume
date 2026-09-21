@@ -37,6 +37,8 @@ public final class PgResultSet extends ReadOnlyResultSet {
      * has no business being in a result set.
      */
     private byte[] scratch = new byte[64]; // seclume-allow: user payload on its way to a String, not a secret
+    /** The same, for the values BigDecimal reads out of a char[]. */
+    private char[] characters = new char[64]; // seclume-allow: user payload on its way to a number, not a secret
 
 
     private int row;
@@ -95,32 +97,28 @@ public final class PgResultSet extends ReadOnlyResultSet {
     /** Without a {@code String} and without {@code parseLong} - straight from the bytes. */
     @Override
     protected long longAt(int column) throws SQLException {
-        int offset = block.offset(row, column);
-        int length = block.length(row, column);
-        boolean negative = false;
-        int i = 0;
-        if (length > 0 && block.byteAt(offset) == '-') {
-            negative = true;
-            i = 1;
+        try {
+            return block.decimalAt(block.offset(row, column), block.length(row, column));
+        } catch (NumberFormatException e) {
+            throw new SQLException("column " + (column + 1) + " is not an integer: "
+                    + stringAt(column), "22018");
         }
-        long value = 0;
-        for (; i < length; i++) {
-            int digit = (block.byteAt(offset + i) & 0xff) - '0';
-            if (digit < 0 || digit > 9) {
-                throw new SQLException("column " + (column + 1) + " is not an integer: "
-                        + stringAt(column), "22018");
-            }
-            value = value * 10 + digit;
-        }
-        return negative ? -value : value;
     }
 
     @Override
     protected double doubleAt(int column) {
-        // Without trim(): parseDouble strips whitespace itself, and the extra
-        // String was one allocation per value - at a thousand rows a thousand
-        // objects for nothing.
-        return Double.parseDouble(stringAt(column));
+        return space.seclume.internal.jdbc.TextNumber.decimalDouble(block.data(),
+                block.offset(row, column), block.length(row, column));
+    }
+
+    @Override
+    protected java.math.BigDecimal decimalAt(int column) {
+        int length = block.length(row, column);
+        if (characters.length < length) {
+            characters = new char[Math.max(length, characters.length * 2)]; // seclume-allow: user payload on its way to a number, not a secret
+        }
+        return space.seclume.internal.jdbc.TextNumber.bigDecimal(block.data(),
+                block.offset(row, column), length, characters);
     }
 
     @Override

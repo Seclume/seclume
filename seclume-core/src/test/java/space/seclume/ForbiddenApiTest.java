@@ -21,8 +21,7 @@ import org.junit.jupiter.api.Test;
  * That is a property one loses while writing a single line - {@code new
  * String(bytes)} is quickly typed and shows up in no functional test, because
  * everything keeps working. This test therefore checks the production source
- * against a list of forbidden
- * Konstrukte.
+ * against a list of forbidden constructs.
  *
  * <p>Where one of them demonstrably touches <b>no</b> secret - a configuration
  * name, an application salt - the line, or the one directly above it, carries
@@ -50,8 +49,8 @@ class ForbiddenApiTest {
             Map.entry("java.security.MessageDigest", "JCA takes input as byte[]"),
             Map.entry("BigInteger", "immutable and heap resident, cannot be zeroed"),
             Map.entry("HexFormat", "decodes from and to Strings"),
-            // Aimed at the call, not at the word: our own class
-            // Base64Off heisst nun einmal so.
+            // Aimed at the call, not at the word: our own class is called
+            // Base64Off, and that name is not going to change.
             Map.entry("java.util.Base64", "the JDK decoder works on Strings and heap arrays"),
             Map.entry("Base64.get", "the JDK decoder works on Strings and heap arrays"),
             Map.entry("ByteBuffer.allocate(", "a heap buffer defeats the direct read path"),

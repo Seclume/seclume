@@ -150,6 +150,15 @@ final class ResultBlock implements AutoCloseable {
     }
 
     /**
+     * The decimal integer at {@code position} - see
+     * {@link space.seclume.internal.jdbc.TextNumber}, which is where the eight
+     * bytes per access are explained.
+     */
+    long decimalAt(int position, int length) {
+        return space.seclume.internal.jdbc.TextNumber.decimal(data, position, length);
+    }
+
+    /**
      * Frees the native block. Called when the <b>statement</b> closes, not
      * when a {@code ResultSet} does: the next execution reuses this memory.
      */

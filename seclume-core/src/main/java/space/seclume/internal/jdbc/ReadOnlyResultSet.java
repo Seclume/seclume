@@ -304,7 +304,20 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final BigDecimal getBigDecimal(int columnIndex) throws SQLException {
-        String text = getString(columnIndex);
+        int column = check(columnIndex);
+        return lastWasNull ? null : decimalAt(column);
+    }
+
+    /**
+     * The column as a {@code BigDecimal}.
+     *
+     * <p>Through a {@code String}, which every driver can do and which is
+     * right wherever the value is not simply digits in the receive buffer. A
+     * driver whose text protocol puts it there overrides this and reads the
+     * bytes - see {@code space.seclume.internal.jdbc.TextNumber}.
+     */
+    protected BigDecimal decimalAt(int column) throws SQLException {
+        String text = stringAt(column);
         return text == null ? null : new BigDecimal(text.trim());
     }
 
