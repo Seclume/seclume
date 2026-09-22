@@ -28,14 +28,73 @@ public final class Observed {
 
     // ---- statements --------------------------------------------------------
 
-    /** A handle, or {@code null} when nobody is recording. */
-    public static SeclumeEvents.Query beginQuery() {
+    /**
+     * Who wants to be told about every statement, or {@code null}.
+     *
+     * <p>One listener, not a list. A second would be a plugin system, and a
+     * plugin system on the statement path is a cost every application pays so
+     * that one of them can have two tracers.
+     */
+    private static volatile StatementListener listener;
+
+    /**
+     * Installs the listener, or removes it with {@code null}.
+     *
+     * <p>Deliberately a static: a driver is reached through
+     * {@code DriverManager} and a URL, so there is no object an application
+     * could hand this to. Whoever installs one owns it for the process - see
+     * {@link StatementListener} for why this exists at all when the events
+     * already do.
+     */
+    public static void listen(StatementListener wanted) {
+        listener = wanted;
+    }
+
+    /** Whether anything is listening - for a caller that wants to know. */
+    public static boolean isListening() {
+        return listener != null;
+    }
+
+    /**
+     * One statement in flight: the recording's handle, the listener's, or
+     * both.
+     *
+     * <p>Both halves are nullable and usually both are absent, which is why
+     * {@link #beginQuery()} hands back {@code null} in that case rather than
+     * an empty object - the common path allocates nothing.
+     */
+    public static final class Statement {
+
+        private final SeclumeEvents.Query event;
+        private final StatementListener.Span span;
+
+        private Statement(SeclumeEvents.Query event, StatementListener.Span span) {
+            this.event = event;
+            this.span = span;
+        }
+    }
+
+    /**
+     * A handle, or {@code null} when nobody is recording and nobody is
+     * listening - which is what almost every call finds.
+     *
+     * <p>The kind is wanted here rather than only at the end because a
+     * listener opens a span now and a span is named when it opens. The
+     * recording needs it at the end, so the drivers pass it twice; the
+     * alternative was handing a listener a span it could not name.
+     */
+    public static Statement beginQuery(String kind) {
+        StatementListener watching = listener;
         SeclumeEvents.Query event = new SeclumeEvents.Query();
-        if (!event.isEnabled()) {
+        boolean recording = event.isEnabled();
+        if (!recording && watching == null) {
             return null;
         }
-        event.begin();
-        return event;
+        if (recording) {
+            event.begin();
+        }
+        return new Statement(recording ? event : null,
+                watching == null ? null : watching.begin(kind));
     }
 
     /**
@@ -45,24 +104,41 @@ public final class Observed {
      *            fingerprint is written, and only when the event will
      *            actually be committed
      */
-    public static void endQuery(SeclumeEvents.Query event, String kind, String sql,
+    public static void endQuery(Statement statement, String kind, String sql,
             QueryFingerprint.Dialect dialect, long rows, boolean failed) {
-        if (event == null) {
+        if (statement == null) {
             return;
         }
-        event.end();
-        if (!event.shouldCommit()) {
-            // Under the threshold. The fingerprint is never computed for the
-            // overwhelming majority of statements, which is the point of
-            // asking here rather than earlier.
+        SeclumeEvents.Query event = statement.event;
+        // The recording asks first, because it is the one with a threshold:
+        // an ordinary statement is under it and costs nothing more than the
+        // end() above.
+        boolean commits = false;
+        if (event != null) {
+            event.end();
+            commits = event.shouldCommit();
+        }
+        if (!commits && statement.span == null) {
+            // Under the threshold and nobody listening. The fingerprint is
+            // never computed for the overwhelming majority of statements,
+            // which is the point of asking here rather than earlier.
             return;
         }
-        event.kind = kind;
-        event.fingerprint = QueryFingerprint.of(sql, dialect);
-        event.fingerprintId = QueryFingerprint.idOf(sql, dialect);
-        event.rows = rows;
-        event.failed = failed;
-        event.commit();
+        // Computed once for both. A listener sees every statement, so with one
+        // installed this is no longer the rare path - which is the cost of
+        // tracing and is the caller's decision, not this method's.
+        String fingerprint = QueryFingerprint.of(sql, dialect);
+        if (commits) {
+            event.kind = kind;
+            event.fingerprint = fingerprint;
+            event.fingerprintId = QueryFingerprint.idOf(sql, dialect);
+            event.rows = rows;
+            event.failed = failed;
+            event.commit();
+        }
+        if (statement.span != null) {
+            statement.span.end(fingerprint, rows, failed);
+        }
     }
 
     /** A server-side plan looked up; cheap enough to record every time. */

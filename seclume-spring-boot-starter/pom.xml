@@ -78,6 +78,15 @@
       <version>1.15.4</version>
       <optional>true</optional>
     </dependency>
+    <!-- Tracing, also optional. The API only: a span is created against
+         whatever SDK the application already runs, and without one on the
+         class path this bean is never defined. -->
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-api</artifactId>
+      <version>1.66.0</version>
+      <optional>true</optional>
+    </dependency>
     <!-- Only so that javac can resolve the annotations on Spring's
          health classes; at runtime the Actuator brings them anyway. -->
     <dependency>
@@ -93,6 +102,13 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- An SDK that keeps its spans in memory, so a test can read them. -->
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-sdk-testing</artifactId>
+      <version>1.66.0</version>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

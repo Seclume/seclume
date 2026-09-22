@@ -88,6 +88,57 @@ public class SeclumeAutoConfiguration {
                     environment.getProperty("seclume.metrics.hikari-names", "false"));
             return new SeclumePoolMetrics(pools.stream().toList(), hikariNames);
         }
+
+        /**
+         * The Flight Recorder's events as meters - off unless asked for.
+         *
+         * <p>See {@link SeclumeQueryMetrics}: it starts a recording stream,
+         * which changes the state of the process it runs in, and a library
+         * does not do that on its own initiative. The bean is only defined
+         * when the property is set, so without it there is no thread and no
+         * stream.
+         */
+        @Bean(destroyMethod = "close")
+        @ConditionalOnMissingBean(SeclumeQueryMetrics.class)
+        @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+                name = "seclume.metrics.queries", havingValue = "true")
+        SeclumeQueryMetrics seclumeQueryMetrics(Environment environment) {
+            java.time.Duration threshold = environment.getProperty(
+                    "seclume.metrics.query-threshold", java.time.Duration.class,
+                    java.time.Duration.ofMillis(10));
+            int bound = environment.getProperty(
+                    "seclume.metrics.query-fingerprints", Integer.class, 100);
+            return new SeclumeQueryMetrics(threshold, bound);
+        }
+    }
+
+    /**
+     * Statements as spans - only with the OpenTelemetry API on the class
+     * path, an {@code OpenTelemetry} bean to hang them on, and the property
+     * set.
+     *
+     * <p>Three conditions rather than one because each removes a different
+     * surprise: without the API this class must not be looked at, without an
+     * SDK the spans would go nowhere, and without the property a library
+     * would have installed a process-wide listener on its own initiative.
+     * See {@link SeclumeTracing} for why tracing is the one thing here that
+     * needed a hook in the drivers at all.
+     */
+    @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.opentelemetry.api.OpenTelemetry")
+    static class TracingConfiguration {
+
+        @Bean(destroyMethod = "close")
+        @ConditionalOnMissingBean(SeclumeTracing.class)
+        @org.springframework.boot.autoconfigure.condition.ConditionalOnBean(
+                io.opentelemetry.api.OpenTelemetry.class)
+        @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+                name = "seclume.tracing", havingValue = "true")
+        SeclumeTracing seclumeTracing(io.opentelemetry.api.OpenTelemetry openTelemetry) {
+            SeclumeTracing tracing = new SeclumeTracing(openTelemetry);
+            tracing.install();
+            return tracing;
+        }
     }
 
     /** The health check - only when the health API is on the class path. */
