@@ -1182,6 +1182,47 @@ public final class OracleSession implements AutoCloseable {
         return closingCount;
     }
 
+    /**
+     * Gives every cursor this session holds back to the server, and waits
+     * until it has.
+     *
+     * <p>{@link #detach()} refuses while cursors are open - a successor that
+     * inherited the stream was never told their numbers, so the server would
+     * keep them until the session ends and a long-lived connection would
+     * walk into {@code ORA-01000}. Until now that refusal named an action
+     * nothing here offered: there was no way to close them, only to let the
+     * cache evict them one at a time.
+     *
+     * <p>Returning a cursor is a piggyback - function 105, riding in front of
+     * a real call, answering nothing of its own - so it needs a call to ride
+     * on. <b>A rollback is the one</b>: every other call Oracle understands
+     * parses a statement and opens a cursor, which would leave one behind and
+     * make this a loop rather than a method. It is sent even with nothing to
+     * roll back, because the point of it here is the freight and not the
+     * cargo.
+     *
+     * <p>Costs one round trip, and only when there is something to return.
+     */
+    public void releaseCursors() throws SQLException {
+        java.util.Set<Integer> given = new java.util.LinkedHashSet<>();
+        for (OpenCursor open : cursors.values()) {
+            given.add(open.id());
+        }
+        // And the one the last statement left standing, which is not always
+        // in the cache and is half of what detach() looks at.
+        given.add(openCursor);
+        cursors.clear();
+        openCursor = 0;
+        moreRows = false;
+        for (int id : given) {
+            giveCursorBack(id);
+        }
+        if (closingCount == 0) {
+            return;
+        }
+        endTransaction(TtcMessage.FUNCTION_ROLLBACK, "rollback");
+    }
+
     // ---- the pipeline block ----------------------------------------------
     //
     // Whether this works at all is a question about the server rather than
