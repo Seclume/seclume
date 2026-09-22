@@ -165,7 +165,7 @@ public final class Verify {
             try {
                 connection.setAutoCommit(false);     // PostgreSQL needs a transaction
                 try (PreparedStatement query = connection.prepareStatement(probe)) {
-                    query.setFetchSize(2);
+                    query.setFetchSize(BLOCK_FETCH);
                     long before = RoundTrips.of(connection);
                     int seen = 0;
                     try (ResultSet rows = query.executeQuery()) {
@@ -187,16 +187,42 @@ public final class Verify {
         }
     }
 
-    /** Ten rows without a table, spelled for this server. */
+    /**
+     * How many rows the probe asks for at a time, and over how many rows.
+     *
+     * <p>Both numbers are chosen to clear Oracle's prefetch. Its first block
+     * brings a hundred rows whatever the fetch size says - the fetch size
+     * governs the blocks <b>after</b> the first - so a probe over ten rows
+     * reported "the whole result came at once" for a driver that reads in
+     * blocks perfectly well. The probe was measuring its own size.
+     */
+    private static final int BLOCK_ROWS = 500;
+    private static final int BLOCK_FETCH = 50;
+
+    /** Enough rows without a table, spelled for this server. */
     private static String blockProbe(Connection connection) throws SQLException {
         String product = product(connection);
         if (product.contains("postgresql")) {
-            return "select n from generate_series(1, 10) as n";
+            return "select n from generate_series(1, " + BLOCK_ROWS + ") as n";
         }
         if (product.contains("oracle")) {
-            return "select level from dual connect by level <= 10";
+            return "select level from dual connect by level <= " + BLOCK_ROWS;
         }
-        return null;                                 // MySQL and SQL Server need a table
+        if (product.contains("mysql") || product.contains("mariadb")) {
+            // A recursive CTE, which MySQL has had since 8.0 and MariaDB
+            // since 10.2. The older note here said these two needed a table;
+            // that stopped being true years ago, and the consequence was a
+            // compatibility table saying "not probed" for half its columns.
+            return "with recursive n(x) as (select 1 union all "
+                    + "select x + 1 from n where x < " + BLOCK_ROWS + ") select x from n";
+        }
+        if (product.contains("sql server")) {
+            // The same, spelled without the keyword: T-SQL says `with`.
+            return "with n(x) as (select 1 union all "
+                    + "select x + 1 from n where x < " + BLOCK_ROWS
+                    + ") select x from n option (maxrecursion 0)";
+        }
+        return null;
     }
 
     /** Whether this driver can hand back the keys an insert generated. */
