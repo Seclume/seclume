@@ -242,7 +242,12 @@ public final class TtcLogin {
      * session that may not exist.
      */
     private static void readAnswer(NsChannel channel) throws IOException, SQLException {
-        int packetType = channel.nextPacket();
+        // A refused login arrives behind a marker handshake, like every other
+        // failure in this protocol - see NsChannel.answerMarkers. Without this
+        // the driver reported "the login failed" with SQLState 08001, which
+        // says the connection is at fault and sends a host list on to the next
+        // server, where the same password is refused again.
+        int packetType = channel.answerMarkers(channel.nextPacket());
         if (packetType != NsPacket.TYPE_DATA) {
             throw new IOException("expected a DATA packet after the login, got "
                     + NsPacket.typeName(packetType));
@@ -252,12 +257,64 @@ public final class TtcLogin {
         for (int at = in.position(); at < end; at++) {
             int type = in.getByte(at) & 0xff;
             if (type == TtcMessage.TYPE_ERROR) {
-                throw new SQLException("the server refused the login", "28000");
+                String said = serverSaid(in, at, end);
+                throw new SQLException(said == null
+                        ? "the server refused the login"
+                        : "the server refused the login: " + said, "28000");
             }
             if (type == TtcMessage.TYPE_PARAMETER) {
                 return;
             }
         }
         throw new IOException("the server neither confirmed nor refused the login");
+    }
+
+    /**
+     * The server's own sentence about why the login failed.
+     *
+     * <p><b>Why the text and not the field.</b> The number is in the message
+     * too - {@code 02 03 f9} is 1017 - and reading it would mean walking the
+     * fields of a TTC error, which is written for the errors a statement
+     * produces and has a different shape here. A parser that is slightly wrong
+     * about a failure turns it into a second failure, and the second one is
+     * the one nobody can diagnose. So this looks for the sentence the server
+     * already wrote, and finds it or gives up quietly.
+     *
+     * <p>The find checks itself: the byte in front of the text is its length,
+     * and the text starts with {@code ORA-}. If either does not hold, this was
+     * not the message and {@code null} is the honest answer.
+     *
+     * <p>Worth having because these are not the same problem:
+     * {@code ORA-01017} is a wrong password, {@code ORA-28000} a locked
+     * account, {@code ORA-28001} an expired one. Retrying helps with none of
+     * them and the right action differs for each, which an operator cannot
+     * choose from "the server refused the login".
+     */
+    private static String serverSaid(WireBuffer in, int from, int end) {
+        for (int at = from; at + 4 < end; at++) {
+            if (in.getByte(at) != 'O' || in.getByte(at + 1) != 'R'
+                    || in.getByte(at + 2) != 'A' || in.getByte(at + 3) != '-') {
+                continue;
+            }
+            if (at == 0) {
+                return null;
+            }
+            int length = in.getByte(at - 1) & 0xff;
+            if (length < 5 || at + length > end) {
+                return null;
+            }
+            int keep = in.position();
+            try {
+                in.position(at);
+                return in.readString(length).strip();
+            } catch (RuntimeException unreadable) {
+                // An error must never become a second error while it is being
+                // read. The caller still reports the refusal, without the why.
+                return null;
+            } finally {
+                in.position(keep);
+            }
+        }
+        return null;
     }
 }
