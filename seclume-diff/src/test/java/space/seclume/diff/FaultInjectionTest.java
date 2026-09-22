@@ -120,9 +120,16 @@ class FaultInjectionTest {
         String digits = "(select 0 n union all select 1 union all select 2 union all "
                 + "select 3 union all select 4 union all select 5 union all select 6 "
                 + "union all select 7 union all select 8 union all select 9)";
+        // Ordered, and the order is the whole point rather than tidiness.
+        // This is a cross join of a hundred thousand rows with a limit on it:
+        // without an order by, which two hundred of them come back and in
+        // which sequence is the server's to decide, and it does not decide
+        // the same way twice. The check below compares two runs with each
+        // other and called every difference a fragmentation fault - three
+        // runs out of four, on a driver that was doing nothing wrong.
         return "select a.n * 10000 + b.n * 1000 + c.n * 100 + d.n * 10 + e.n as i, "
                 + "repeat('x', 40) as padding from " + digits + " a, " + digits + " b, "
-                + digits + " c, " + digits + " d, " + digits + " e limit " + rows;
+                + digits + " c, " + digits + " d, " + digits + " e order by i limit " + rows;
     }
 
     private static Target sqlServer() {
@@ -139,9 +146,16 @@ class FaultInjectionTest {
     }
 
     private static String topRows(int rows) {
-        return "select top " + rows + " row_number() over (order by (select null)) as i, "
+        // The same reasoning as for MySQL: row_number() over (order by
+        // (select null)) numbers the rows in whatever order they arrive, and
+        // "top n" of an unordered cross join is not a fixed set. The outer
+        // order by makes the answer the same twice; the inner one cannot,
+        // because there is nothing in sys.all_objects worth ordering by.
+        return "select i, padding from (select top " + rows
+                + " row_number() over (order by (select null)) as i, "
                 + "replicate('x', 40) as padding "
-                + "from sys.all_objects a cross join sys.all_objects b";
+                + "from sys.all_objects a cross join sys.all_objects b) numbered "
+                + "order by i";
     }
 
     private static Target oracle() {
@@ -266,10 +280,32 @@ class FaultInjectionTest {
             List<String> fragmented = read(rows);
             if (!direct.equals(fragmented)) {
                 throw new AssertionError("the same query gave a different answer when the "
-                        + "bytes arrived one at a time: " + direct.size() + " rows direct, "
-                        + fragmented.size() + " fragmented");
+                        + "bytes arrived one at a time: " + difference(direct, fragmented));
             }
         }
+    }
+
+    /**
+     * Where two answers part company, in enough detail to act on.
+     *
+     * <p>The message this replaces printed the two row counts, which are
+     * equal whenever the difference is in a value rather than in a length -
+     * and that is the interesting half. A finding nobody can act on is worse
+     * than none: it gets looked at once, filed as flaky, and then the real
+     * one is filed the same way.
+     */
+    private static String difference(List<String> direct, List<String> fragmented) {
+        if (direct.size() != fragmented.size()) {
+            return direct.size() + " rows direct, " + fragmented.size() + " fragmented";
+        }
+        for (int i = 0; i < direct.size(); i++) {
+            if (!direct.get(i).equals(fragmented.get(i))) {
+                return "same length (" + direct.size() + " rows), first difference at row "
+                        + (i + 1) + ": direct \"" + direct.get(i) + "\", fragmented \""
+                        + fragmented.get(i) + "\"";
+            }
+        }
+        return "equal element by element, so the lists differ in a way this cannot show";
     }
 
     /**
