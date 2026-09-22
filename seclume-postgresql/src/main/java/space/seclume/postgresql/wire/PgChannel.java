@@ -363,11 +363,11 @@ public final class PgChannel implements AutoCloseable {
     }
 
 
-    // ---- moving the connection underneath ---------------------------------
+    // ---- replacing what is underneath -------------------------------------
 
     /**
-     * Whether the encryption on this channel - if any - could travel to
-     * another machine.
+     * Whether the encryption on this channel - if any - could be handed on
+     * with the stream.
      *
      * <p>True without TLS, because there is nothing to carry; true on
      * seclume's own TLS stack, because its state is ours; false on the JDK's,
@@ -456,12 +456,11 @@ public final class PgChannel implements AutoCloseable {
     /**
      * Gives the channel up <b>without</b> closing the transport.
      *
-     * <p>For the one case where the stream outlives the session object: a
-     * gateway that authenticated a database connection and now relays it to
-     * whichever web server is holding the slot. Closing here would close the
-     * very socket that is about to carry the conversation, and not closing at
-     * all would leak the two buffers, which are native memory this channel
-     * allocated.
+     * <p>For the one case where the stream outlives the session object: the
+     * connection was authenticated here and is handed on to whoever continues
+     * it. Closing here would close the very socket that is about to carry the
+     * conversation, and not closing at all would leak the two buffers, which
+     * are native memory this channel allocated.
      *
      * <p>Afterwards this channel reports itself closed, so a caller that kept
      * a reference gets an error instead of writing into a stream somebody else

@@ -221,7 +221,8 @@ class PgStatement implements Statement, PgSession.RowHandler {
         // Every statement this driver runs passes here, both protocols, which
         // is why the recording hangs off this method and not off the several
         // entry points above it. See space.seclume.jfr.
-        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        space.seclume.jfr.Observed.Statement event =
+                space.seclume.jfr.Observed.beginQuery("postgresql");
         boolean failed = true;
         try {
             collectInto(session, execution);

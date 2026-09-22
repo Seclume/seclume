@@ -229,6 +229,55 @@ public final class PgSession implements AutoCloseable {
     }
 
     /**
+     * Runs a statement that answers one row of one column, and hands back that
+     * value as text.
+     *
+     * <p>There is one caller - the host list asking a server what it is; see
+     * {@code space.seclume.internal.jdbc.ServerRole}. It is deliberately not a
+     * general query method: it takes no parameters, reads at most one value,
+     * and is meant for a question the driver asks on its own behalf rather
+     * than one an application asked for.
+     *
+     * @return the value, or {@code null} when the statement answered no rows
+     */
+    public String askOneValue(String sql) throws SQLException {
+        String[] answer = new String[1];
+        simpleQuery(sql, row -> {
+            if (answer[0] == null && row.columnCount() > 0 && !row.isNull(0)) {
+                answer[0] = row.getString(0);
+            }
+        });
+        return answer[0];
+    }
+
+    /**
+     * What this server says it is, for a host list that was told to look for
+     * one kind - see {@link space.seclume.internal.jdbc.TargetServer}.
+     *
+     * <p>One statement, run once, on a connection that is about to be kept or
+     * given back. A server that refuses the question answers
+     * {@code UNKNOWN} rather than failing the connect: an old version or an
+     * account without the right is not a reason to refuse a server that works.
+     */
+    private static final HostList.Roles<PgSession> ROLES = new HostList.Roles<>() {
+
+        @Override
+        public space.seclume.internal.jdbc.ServerRole of(PgSession session) throws SQLException {
+            try {
+                return space.seclume.internal.jdbc.ServerRole.read(session.askOneValue(
+                        space.seclume.internal.jdbc.ServerRole.POSTGRESQL));
+            } catch (SQLException refused) {
+                return space.seclume.internal.jdbc.ServerRole.UNKNOWN;
+            }
+        }
+
+        @Override
+        public void giveBack(PgSession session) {
+            session.close();
+        }
+    };
+
+    /**
      * Opens the connection and logs in.
      *
      * @throws SQLException if the server refuses or demands a method this
@@ -238,7 +287,11 @@ public final class PgSession implements AutoCloseable {
         // With one server this is a plain connect; with several it takes the
         // next one when a server cannot be reached. Nothing else fails over -
         // see HostList for why a rejected password does not.
-        return settings.hosts().open(server -> openOne(settings.at(server)));
+        // With several servers and a preference in the URL, each one is asked
+        // what it is before its connection is kept - see TargetServer. With
+        // one server, or none asked for, nothing is asked and this is the
+        // connect it always was.
+        return settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
     }
 
     private static PgSession openOne(Settings settings) throws SQLException {
@@ -264,6 +317,8 @@ public final class PgSession implements AutoCloseable {
             channel = PgChannel.connect(settings.host(), settings.port(),
                     settings.connectTimeoutMillis());
         } catch (IOException e) {
+            // Not brokenConnection: there is no channel yet to close, and a
+            // server that cannot be reached is 08001 rather than 08006.
             throw new SQLNonTransientConnectionException(
                     "cannot reach " + settings.host() + ":" + settings.port(), "08001", e);
         }
@@ -334,8 +389,14 @@ public final class PgSession implements AutoCloseable {
             authenticate(settings);
             waitForReady();
         } catch (IOException e) {
+            // 08001: the connection was being established, not lost in the
+            // middle of work. Without a SQLState this failure is invisible to
+            // everything that reacts to one - a host list would not move on to
+            // the next server, which is exactly what a failed startup should
+            // cause it to do.
+            channel.close();
             throw new SQLNonTransientConnectionException(
-                    "the connection failed during startup", "08006", e);
+                    "the connection failed during startup", "08001", e);
         }
     }
 
@@ -630,8 +691,7 @@ public final class PgSession implements AutoCloseable {
                 }
             }
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while running a statement", "08006", e);
+            throw brokenConnection("the connection broke while running a statement", e);
         }
     }
 
@@ -725,8 +785,7 @@ public final class PgSession implements AutoCloseable {
             runUntilReady(null);
             return fields;
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while preparing a statement", "08006", e);
+            throw brokenConnection("the connection broke while preparing a statement", e);
         }
     }
 
@@ -764,7 +823,7 @@ public final class PgSession implements AutoCloseable {
             out.putCString("");                       // the unnamed portal
             out.putCString(statement);
             parameters.write(out);
-            out.putShort((short) 0);                  // results as text
+            List<Field> asked = writeResultFormats(out, known);
             channel.end();
 
             if (known == null) {
@@ -797,13 +856,79 @@ public final class PgSession implements AutoCloseable {
                 // After the carried answers, before the rows: without a
                 // DESCRIBE nothing sets this, and what stands here otherwise
                 // belongs to whatever ran last on this connection.
-                fields = known;
+                //
+                // The formats are the ones just asked for, not the ones the
+                // first description carried. The type of a column is the
+                // server's to decide and cannot change underneath; the format
+                // is chosen per Bind and is ours. Handing the reader the old
+                // description meant it decoded binary bytes as digits - no
+                // exception, just "column 1 is not an integer: *", which is
+                // what this cost before it was written down.
+                fields = asked;
             }
             runUntilReady(handler);
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while running a prepared statement", "08006", e);
+            throw brokenConnection("the connection broke while running a prepared statement", e);
         }
+    }
+
+    /**
+     * Which columns to ask for in binary, one code per column.
+     *
+     * <p>Binary is not a mode this driver can turn on wholesale: whoever asks
+     * for it has to be able to decode every type that comes back, and a type
+     * asked for in binary and decoded as text is not an error anywhere - it is
+     * a wrong value. So the codes are written per column and only for the
+     * types {@code PgOids.readsBinary} names, which are the fixed-width ones
+     * where the saving is real and the layout is not open to interpretation.
+     * Everything else stays text, including {@code numeric} and the temporal
+     * types, whose binary forms are their own small specifications.
+     *
+     * <p><b>The first execution is always text</b>, because the column types
+     * are not known until the server has described them. That is not a
+     * limitation worth working around: a statement that runs once pays for one
+     * parse anyway, and the shape this exists for - a framework preparing once
+     * and executing many times - is binary from the second run on. The result
+     * shape cannot change underneath, which is what makes it safe to decide
+     * once; PostgreSQL refuses the execution with "cached plan must not change
+     * result type" rather than answering in a different shape.
+     */
+    private List<Field> writeResultFormats(WireBuffer out, List<Field> known) {
+        if (known == null || known.isEmpty() || !binaryResults) {
+            out.putShort((short) 0);              // all text
+            return known;
+        }
+        out.putShort((short) known.size());
+        List<Field> asked = new java.util.ArrayList<>(known.size());
+        for (Field field : known) {
+            boolean binary = space.seclume.postgresql.jdbc.PgOids.readsBinary(field.typeOid());
+            out.putShort(binary ? (short) 1 : (short) 0);
+            asked.add(binary == (field.format() == 1) ? field
+                    : new Field(field.name(), field.tableOid(), field.columnNumber(),
+                            field.typeOid(), field.typeLength(), field.typeModifier(),
+                            binary ? (short) 1 : (short) 0));
+        }
+        return List.copyOf(asked);
+    }
+
+    /**
+     * Whether this session asks for binary at all - on by default, and off for
+     * whoever needs the wire to be readable.
+     *
+     * <p>A switch rather than a constant because the two formats are the one
+     * place where "it works" and "it is correct" can come apart silently: a
+     * value decoded in the wrong format is a wrong number, not an exception.
+     * Turning it off is then the first thing to try, and the answer either
+     * changes or it does not.
+     */
+    private boolean binaryResults = true;
+
+    public void setBinaryResults(boolean wanted) {
+        this.binaryResults = wanted;
+    }
+
+    public boolean binaryResults() {
+        return binaryResults;
     }
 
     /**
@@ -922,8 +1047,7 @@ public final class PgSession implements AutoCloseable {
                 runUntilReady(null);
             }
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while setting the session up", "08006", e);
+            throw brokenConnection("the connection broke while setting the session up", e);
         }
     }
 
@@ -1064,8 +1188,7 @@ public final class PgSession implements AutoCloseable {
             pipelineCarried = 0;
             readPipelineAnswers(group, pipelineCount);
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while sending the pipeline", "08006", e);
+            throw brokenConnection("the connection broke while sending the pipeline", e);
         }
     }
 
@@ -1198,8 +1321,7 @@ public final class PgSession implements AutoCloseable {
             channel.flush();
             runUntilReady(handler);
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while reading the next block of rows", "08006", e);
+            throw brokenConnection("the connection broke while reading the next block of rows", e);
         }
     }
 
@@ -1225,8 +1347,7 @@ public final class PgSession implements AutoCloseable {
             runUntilReady(null);
             portalSuspended = false;
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while closing a portal", "08006", e);
+            throw brokenConnection("the connection broke while closing a portal", e);
         }
     }
 
@@ -1285,8 +1406,7 @@ public final class PgSession implements AutoCloseable {
                 readBatchAnswers(counts, start, sent);
             }
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while running a batch", "08006", e);
+            throw brokenConnection("the connection broke while running a batch", e);
         }
         return counts;
     }
@@ -1428,8 +1548,7 @@ public final class PgSession implements AutoCloseable {
             channel.flush();
             runUntilReady(null);
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection broke while closing a statement", "08006", e);
+            throw brokenConnection("the connection broke while closing a statement", e);
         }
     }
 
@@ -1644,6 +1763,23 @@ public final class PgSession implements AutoCloseable {
         return backendProcessId;
     }
 
+    /**
+     * The connection is gone, and the session with it.
+     *
+     * <p><b>Closing here is the point.</b> After an IO failure the protocol
+     * state is unknown - a half-read message, a statement whose answer never
+     * came - so every further call would fail the same way. Saying so through
+     * {@code isClosed()} is what lets a pool throw the connection away instead
+     * of handing it out again; without it a database that goes away for two
+     * seconds takes the pool with it for as long as requests keep arriving
+     * faster than the pool's validation window. Found by the chaos benchmark,
+     * where it happened on every request.
+     */
+    private SQLException brokenConnection(String what, IOException cause) {
+        channel.close();
+        return new SQLNonTransientConnectionException(what, "08006", cause);
+    }
+
     public boolean isOpen() {
         return channel.isOpen();
     }
@@ -1654,92 +1790,79 @@ public final class PgSession implements AutoCloseable {
     }
 
     /**
-     * Whether this connection could be handed to another machine.
+     * The transport carrying this session, for whoever may take it apart.
      *
-     * <p>Two conditions. The descriptor has to be ours - {@link
-     * #migrateInPlace()} explains why - and the encryption, if there is any,
-     * has to be state we can write down.
-     *
-     * <p><b>The second condition used to be "no encryption at all", and that
-     * is no longer the same thing.</b> It was true while the drivers reached
-     * TLS only through an {@code SSLEngine}, which hands out neither the keys
-     * nor the record sequence numbers - no method of {@code SSLSession} or
-     * {@code SSLEngine} is named for any of them, by design. Such a
-     * connection can be frozen and thawed <b>in this process</b>, where the
-     * engine is an object that stays put, and cannot leave it.
-     *
-     * <p>On {@code tlsStack=seclume} the state is ours, in memory we
-     * allocated, and it travels. So the honest answer now depends on which
-     * stack carries the connection rather than on whether it is encrypted,
-     * and the difference is asked of the layer itself - see
-     * {@link space.seclume.internal.TlsLayer#movable()}.
-     *
-     * <p>A method rather than a sentence in a document, so that the code
-     * refuses rather than the reader remembers.
+     * <p>One of the three methods a connection has to offer before anything
+     * else can move it: what it is on, whether it is at rest, and a way to put
+     * something else underneath. They are here and the moving is not, because
+     * a driver that also knows how to move a socket has taken a decision that
+     * belongs to whoever deploys it.
      */
-    public boolean canMoveBetweenNodes() {
-        // the alternate transport, developed separately
-                && channel.encryptionCanTravel();
+    public space.seclume.internal.Transport transport() {
+        return channel.transport();
     }
 
     /**
-     * Freezes this connection and thaws it again on a new socket.
+     * Whether the <b>driver</b> has nothing in flight.
      *
-      * <p>Within one process: the
-     * same session, the same server backend, a different descriptor. Nothing
-     * about the protocol state is serialised, because nothing about it moves -
-     * the parser, the prepared plans and the buffers are objects that never
-     * learn anything happened. What moves is the kernel's control block.
-     *
-     * <p>Both halves of the quiescent point are checked first, and they are two
-     * different things: {@link PgChannel#isIdle()} says this driver has nothing
-     * half-written or half-read, and {@code isQuiescent()} says the kernel has
-     * nothing unacknowledged or unread. A connection can satisfy one and not
-     * the other, and taking it apart then loses bytes silently.
-     *
-     * <p>Order, and it is the one PoC 0 paid for: thaw first, close the old
-     * socket afterwards. The other way round, a retransmission from the server
-     * arrives at a host with no socket for it and is answered with a RST.
-     *
-     * @throws SQLException if this connection is not on an FFM transport, is
-     *                      not idle, or the kernel refuses - CAP_NET_ADMIN is
-      * the descriptor itself
+     * <p>Half of the quiescent point, and only half: this says nothing
+     * half-written and nothing half-read on this side. What the kernel still
+     * holds - unacknowledged bytes, unread bytes - is the other half, and only
+     * the transport knows it. A connection can satisfy one and not the other,
+     * and taking it apart then loses bytes silently.
      */
-    public void migrateInPlace() throws SQLException {
-        // the alternate transport, developed separately
-                current)) {
-            throw new SQLException("moving a connection needs a descriptor of our own - "
-                    + "open it with transport=ffm", "0A000");
-        }
+    public boolean isIdle() {
+        return channel.isIdle();
+    }
+
+    /** Whether this session is carried by TLS at all. */
+    public boolean isEncrypted() {
+        return channel.isEncrypted();
+    }
+
+    /**
+     * Whether the encryption on this session, if any, is state we can write
+     * down.
+     *
+     * <p>The fourth question a mover has to ask, and the one whose answer
+     * changed. While the drivers reached TLS only through an
+     * {@code SSLEngine} it was always no: that class hands out neither the
+     * keys nor the record sequence numbers, by design, so such a connection
+     * can be frozen and thawed <b>in this process</b> - where the engine is an
+     * object that stays put - and cannot leave it. On this project's own TLS
+     * stack the state is ours, in memory we allocated, and it travels.
+     *
+     * <p>An unencrypted connection answers yes, because there is nothing to
+     * carry.
+     */
+    public boolean encryptionCanTravel() {
+        return channel.encryptionCanTravel();
+    }
+
+    /**
+     * Puts another transport under this session.
+     *
+     * <p>The protocol state does not move and does not need to: the parser,
+     * the prepared plans and the buffers are objects that never learn anything
+     * happened. What changes is where the bytes come from.
+     *
+     * <p><b>The old transport is not closed here.</b> Closing it while the
+     * server may still retransmit is what answers that retransmission with an
+     * RST, and the order in which the two happen is the caller's to get right
+     * - it differs between a move inside one machine and a move between two.
+     *
+     * @throws SQLException if the driver is not idle, which it checks; whether
+     *                      the kernel is, it cannot
+     */
+    public void replaceTransport(space.seclume.internal.Transport replacement)
+            throws SQLException {
         try {
-            if (!channel.isIdle()) {
-                throw new SQLException("the driver is not idle on this connection", "25000");
-            }
-        // connection state, developed separately
-            // The old socket has to go first, and this is the one place where
-            // that is true. Two sockets cannot hold the same four-tuple: the
-            // kernel refuses the thaw with EADDRNOTAVAIL while the old one is
-            // still there. Measured, not reasoned - errno 99, every time.
-            //
-            // Closing first is what PoC 0 warned against, and the warning still
-            // stands where it was made: across nodes, the address must stop
-            // routing to the old host before it lets go, or a retransmission
-            // finds no socket and is answered with a RST. Here the gap between
-            // close and thaw is microseconds against a retransmission timer of
-            // two hundred milliseconds, and the socket is closed in repair
-            // mode, which sends nothing. A move between nodes does not get to
-            // use this shortcut.
-            current.close();
-        // the alternate transport, developed separately
-        // the alternate transport, developed separately
-            channel.replaceTransport(thawed);
+            channel.replaceTransport(replacement);
         } catch (IOException e) {
-            throw new SQLNonTransientConnectionException(
-                    "the connection could not be moved: " + e.getMessage(), "08006", e);
+            throw brokenConnection("the transport could not be replaced: " + e.getMessage(), e);
         }
     }
 
-    /** Tells the server and hangs up. */
     @Override
     public void close() {
         try {

@@ -330,4 +330,27 @@ public final class PgOids {
             default -> false;
         };
     }
+
+    /**
+     * The types this driver reads in the binary format.
+     *
+     * <p>Deliberately short, and the shortness is the design. Asking for a
+     * type in binary and decoding it as text is not an error anywhere - it is
+     * a wrong value, silently - so the list holds only the fixed-width types
+     * whose layout is a number in network order and nothing else. A saving
+     * that costs a guess is not a saving.
+     *
+     * <p>Not here, and each for its own reason: {@code numeric} is a sequence
+     * of base-10000 digits with a sign and a weight, {@code timestamp} is
+     * microseconds since an epoch PostgreSQL picked for itself, and
+     * {@code text} in binary is the same bytes as in text. The first two are
+     * small specifications of their own and belong in their own step; the
+     * third would save nothing.
+     */
+    public static boolean readsBinary(int typeOid) {
+        return switch (typeOid) {
+            case BOOL, INT2, INT4, INT8, FLOAT4, FLOAT8 -> true;
+            default -> false;
+        };
+    }
 }

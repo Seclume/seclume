@@ -102,10 +102,15 @@ class PostgresDifferentialTest {
                         // and the two drivers have to agree on what came back.
                         new BigDecimal("0.0000005"),
                         null),
+                // The exponent forms and the round number are here because
+                // that is where the server's text and Java's part company:
+                // 1e+20 against 1.0E20, 1e-07 against 1.0E-7, and a real
+                // holding 1234567 that the server prints as 1.234567e+06.
                 Differential.Column.of("c_real", "real",
-                        0.0f, -0.0f, 1.5f, Float.MAX_VALUE, null),
+                        0.0f, -0.0f, 1.5f, 1e20f, 1e-7f, 1234567.0f, Float.MAX_VALUE, null),
                 Differential.Column.of("c_double", "double precision",
-                        0.0d, -0.0d, 1.0d / 3.0d, Double.MAX_VALUE, null)));
+                        0.0d, -0.0d, 1.0d / 3.0d, 1e20d, 1e-7d, 1234567.0d,
+                        Double.MAX_VALUE, null)));
     }
 
     /** Text, including the parts of it that are not ASCII. */
@@ -230,8 +235,15 @@ class PostgresDifferentialTest {
                         "pgjdbc renders Float.MAX_VALUE as \"3.4028235E38\" through a "
                         + "PreparedStatement and as \"3.4028235e+38\" through a Statement - "
                         + "Java's rendering in one protocol and the server's in the other. "
-                        + "seclume gives the server's in both. Agreeing with itself matters "
-                        + "more than agreeing with a driver that does not.")
+                        + "seclume now gives Java's in both, which agrees with pgjdbc's "
+                        + "binary path and not with its text one. Decided on 22.09.2026 and "
+                        + "not only for consistency here: PostgreSQL is the only one of the "
+                        + "four that sends a float as characters at all, so passing the "
+                        + "server's text on was never a rule the project could keep - the "
+                        + "other three receive four or eight bytes and have nothing to pass "
+                        + "on. It also removed a disagreement rather than causing one: a real "
+                        + "holding 1234567 arrived as \"1.234567e+06\" and pgjdbc answers "
+                        + "\"1234567.0\".")
                 .allow("c_double.getString", "the same, for double precision.");
     }
 

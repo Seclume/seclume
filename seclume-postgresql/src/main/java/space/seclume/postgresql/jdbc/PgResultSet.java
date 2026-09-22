@@ -82,8 +82,60 @@ public final class PgResultSet extends ReadOnlyResultSet {
         return block.isNull(row, column);
     }
 
+    /**
+     * The text of a column - and for the two float types, Java's text rather
+     * than the server's.
+     *
+     * <p>This is the only driver of the four that has a choice here: PostgreSQL
+     * sends a {@code real} as characters, the other three send four or eight
+     * bytes and there is no server rendering to pass on. So "pass the server's
+     * text through" was never a rule the project could keep - it was an
+     * accident of one protocol's text format, and it made the same value read
+     * back differently depending on which database it came from. Measured
+     * across all four: {@code 1e+20} here and {@code 1.0E20} everywhere else,
+     * {@code 1e-07} against {@code 1.0E-7}, {@code -0} against {@code -0.0}.
+     *
+     * <p>Rendering through {@link Float#toString} instead gives one answer
+     * everywhere, and it is the shortest text that reads back as the same
+     * float. It also fixes a disagreement with pgjdbc rather than causing one:
+     * a {@code real} holding 1234567 came out of the server as
+     * {@code 1.234567e+06}, where pgjdbc answers {@code 1234567.0} - so this
+     * driver did not have the vendor's rendering to begin with.
+     *
+     * <p>{@code numeric} is untouched. It is an exact decimal, the server's
+     * text is its value, and turning it into a {@code double} to print it
+     * would be the one conversion that loses something.
+     */
     @Override
     protected String stringAt(int column) {
+        int oid = block.fields().get(column).typeOid();
+        if (binaryAt(column)) {
+            // The bytes are a number, not text. Rendering them here keeps
+            // getString the same answer in both formats - which is the one
+            // promise a format switch must not break, and the reason this is
+            // not left to the caller.
+            try {
+                return switch (oid) {
+                    case PgOids.BOOL -> booleanAt(column) ? "t" : "f";
+                    case PgOids.FLOAT4 -> Float.toString((float) doubleAt(column));
+                    case PgOids.FLOAT8 -> Double.toString(doubleAt(column));
+                    default -> Long.toString(integerAt(column));
+                };
+            } catch (SQLException unreadable) {
+                throw new IllegalStateException(unreadable);
+            }
+        }
+        if (oid == PgOids.FLOAT4) {
+            return Float.toString((float) doubleAt(column));
+        }
+        if (oid == PgOids.FLOAT8) {
+            return Double.toString(doubleAt(column));
+        }
+        return rawText(column);
+    }
+
+    /** The bytes the server sent, as they were sent. */
+    private String rawText(int column) {
         int offset = block.offset(row, column);
         int length = block.length(row, column);
         if (scratch.length < length) {
@@ -94,9 +146,45 @@ public final class PgResultSet extends ReadOnlyResultSet {
         return new String(scratch, 0, length, StandardCharsets.UTF_8); // seclume-allow: user payload requested as text, not a secret
     }
 
+    /**
+     * Whether this column arrived as bytes rather than as digits.
+     *
+     * <p>Read from the server's own {@code RowDescription} and not from what
+     * was asked for. The two agree, and asking the answer rather than the
+     * question is the difference between a decoder that is right and one that
+     * is right as long as nothing else changes - a describe after a
+     * re-preparation, a server that declines the format, a portal somebody
+     * else bound.
+     */
+    private boolean binaryAt(int column) {
+        return block.fields().get(column).format() == 1;
+    }
+
+    /** A signed big-endian integer of the width the server sent. */
+    private long integerAt(int column) throws SQLException {
+        int offset = block.offset(row, column);
+        int length = block.length(row, column);
+        long value = 0;
+        for (int i = 0; i < length; i++) {
+            value = (value << 8) | (block.byteAt(offset + i) & 0xffL);
+        }
+        if (length > 0 && length < 8 && (block.byteAt(offset) & 0x80) != 0) {
+            // Sign-extend: a smallint of -1 arrives as two bytes, not eight.
+            value |= -1L << (length * 8);
+        }
+        if (length == 0 || length > 8) {
+            throw new SQLException("column " + (column + 1) + " arrived as " + length
+                    + " bytes, which is not an integer this driver reads", "22018");
+        }
+        return value;
+    }
+
     /** Without a {@code String} and without {@code parseLong} - straight from the bytes. */
     @Override
     protected long longAt(int column) throws SQLException {
+        if (binaryAt(column)) {
+            return integerAt(column);
+        }
         try {
             return block.decimalAt(block.offset(row, column), block.length(row, column));
         } catch (NumberFormatException e) {
@@ -107,6 +195,20 @@ public final class PgResultSet extends ReadOnlyResultSet {
 
     @Override
     protected double doubleAt(int column) {
+        if (binaryAt(column)) {
+            int length = block.length(row, column);
+            try {
+                long bits = integerAt(column);
+                // float4 and float8 are IEEE 754 in network order, which is
+                // exactly what the bits above are - only the width differs.
+                return length == 4
+                        ? Float.intBitsToFloat((int) bits)
+                        : Double.longBitsToDouble(bits);
+            } catch (SQLException impossible) {
+                // integerAt only refuses a width no float has.
+                throw new IllegalStateException("a float of " + length + " bytes", impossible);
+            }
+        }
         return space.seclume.internal.jdbc.TextNumber.decimalDouble(block.data(),
                 block.offset(row, column), block.length(row, column));
     }
@@ -124,6 +226,10 @@ public final class PgResultSet extends ReadOnlyResultSet {
     @Override
     protected boolean booleanAt(int column) {
         byte first = block.byteAt(block.offset(row, column));
+        if (binaryAt(column)) {
+            // One byte, and it is the value rather than a letter for it.
+            return first != 0;
+        }
         return first == 't' || first == 'T' || first == '1' || first == 'y' || first == 'Y';
     }
 
