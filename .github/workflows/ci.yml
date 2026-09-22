@@ -32,6 +32,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool -am test
 
   postgresql:
@@ -63,6 +71,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
       - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter -am test
       - if: always()
@@ -100,6 +116,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
       - run: ./mvnw -B -pl seclume-mysql -am test
       - if: always()
@@ -121,6 +145,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # The image brings no health check, and an open port is not one: the
       # listener is up long before the engine takes a login. The readiness
       # check is therefore the first thing that has to work anyway - creating
@@ -168,6 +200,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.ORA_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-oracle-password
       - run: ./mvnw -B -pl seclume-oracle -am test
       - if: always()
@@ -191,6 +231,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # A secure CockroachDB needs its certificates before it starts, so they
       # are made into a throwaway volume first. The image's entrypoint refuses
       # a listen address that is not loopback - a restriction of that wrapper
@@ -225,6 +273,14 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # --ysql_enable_auth is what turns password authentication on. Without
       # it the server lets anyone in, and the job proves nothing. YSQL listens
       # on the container's own address rather than on loopback, which is why
