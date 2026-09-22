@@ -377,6 +377,54 @@ Not recorded anywhere: bind values, SQL text, secrets, or anything derived from 
 its length and not a hash. Nor the database user, which is not a secret and is not needed to
 diagnose anything here.
 
+**The same events as metrics, for the dashboard that is already on the wall.** JFR is the
+better recording and is read by almost nobody, because reading it means somebody noticing a
+problem, dumping a file and opening a tool. So the Spring Boot starter can turn those events
+into Micrometer meters as they happen — `seclume.query.slow`, `seclume.statement.cache`,
+`seclume.connection.open`, `seclume.failover` — with no second instrumentation in the drivers
+and nothing in a meter that the events do not already carry.
+
+```properties
+seclume.metrics.queries=true
+seclume.metrics.query-threshold=10ms      # what counts as slow
+seclume.metrics.query-fingerprints=100    # how many shapes get a tag of their own
+```
+
+Off by default: it starts a Flight Recorder stream, which changes the state of the process it
+runs in. And the last line is not decoration — a tag per statement shape is what makes these
+meters worth having and is also the classic way to bring a metrics backend down. Beyond the
+bound, shapes are counted together under `other`: the totals stay right, the attribution
+stops.
+
+**Tracing is the one thing that needed a hook.** A span belongs to the request that caused it,
+and which request that is lives in the calling thread's context *while the statement runs* — a
+span built afterwards from a recording would have the right duration and no parent, which is
+not a worse trace but no trace. So `StatementListener` exists: one interface in the core, no
+dependency, a no-op until something installs one. With the OpenTelemetry API on the class path,
+an `OpenTelemetry` bean to hang spans on, and `seclume.tracing=true`, every statement becomes a
+CLIENT span on the request that ran it.
+
+What a span carries is the fingerprint, because that is the only form the listener is ever
+given — OpenTelemetry's own conventions ask for `db.statement` to be sanitised, and here it
+cannot be anything else. The span *name* is the operation alone, `SELECT`, `INSERT`: a span
+name is an index key in every backend that stores them.
+
+**Several servers, and which one to take.** A comma-separated host list fails over while
+connecting. With `targetServerType` it also knows *where* it is going:
+
+```properties
+jdbc:seclume:postgresql://db1,db2,db3/app?targetServerType=primary
+```
+
+Each server is asked what it is - one statement, and one an ordinary application account can
+run - and a server of the wrong kind is given back and the next one tried. Without it a driver
+takes whichever node answers first, which after a switchover is a standby: the connection
+succeeds and the first write fails, at the moment a cluster is least able to explain itself.
+
+A server that cannot answer is accepted rather than skipped. Refusing to connect over an
+unanswered question would turn a working cluster into an outage; a server that turns out to be
+the wrong kind at least fails with a sentence that says so.
+
 **Beside the drivers**
 
 - `seclume-pool` — a connection pool with no third-party dependency, fit for virtual threads,
