@@ -221,7 +221,26 @@ public final class PgSession implements AutoCloseable {
     public static PgSession resume(space.seclume.internal.Transport stream,
                                    java.util.Map<String, String> parameters,
                                    int backendProcessId, int backendSecretKey) {
-        PgSession session = new PgSession(PgChannel.over(stream));
+        return resume(stream, parameters, backendProcessId, backendSecretKey, null);
+    }
+
+    /**
+     * The same, for a stream that was encrypted when it was handed over.
+     *
+     * <p>{@code tls} is the layer {@link #detach()} handed out: the same TLS
+     * connection, still live, now under a different session. The server is
+     * told nothing and notices nothing.
+     *
+     * @param tls the encryption to continue under, or {@code null} for a
+     *            stream in the clear
+     */
+    public static PgSession resume(space.seclume.internal.Transport stream,
+                                   java.util.Map<String, String> parameters,
+                                   int backendProcessId, int backendSecretKey,
+                                   space.seclume.internal.TlsLayer tls) {
+        PgSession session = new PgSession(tls == null
+                ? PgChannel.over(stream)
+                : PgChannel.over(stream, tls));
         session.parameters.putAll(parameters);
         session.backendProcessId = backendProcessId;
         session.backendSecretKey = backendSecretKey;
@@ -1886,7 +1905,8 @@ public final class PgSession implements AutoCloseable {
      * encoding, date style, whether timestamps are integers - which a
      * successor would otherwise have to guess and would guess wrong about
      * dates; the backend's process id and secret, without which nothing can
-     * cancel a running query; and nothing else. The transaction status is not
+     * cancel a running query; and, when the stream was encrypted, the TLS
+     * layer that is still live on it. The transaction status is not
      * in here on purpose: it is in the next {@code ReadyForQuery}, which the
      * stream carries anyway.
      *
@@ -1895,7 +1915,15 @@ public final class PgSession implements AutoCloseable {
      */
     public record Detached(space.seclume.internal.Transport stream,
                            java.util.Map<String, String> parameters,
-                           int backendProcessId, int backendSecretKey) {
+                           int backendProcessId, int backendSecretKey,
+                           space.seclume.internal.TlsLayer tls) {
+
+        /** A stream that was in the clear, and therefore carries no encryption. */
+        public Detached(space.seclume.internal.Transport stream,
+                        java.util.Map<String, String> parameters,
+                        int backendProcessId, int backendSecretKey) {
+            this(stream, parameters, backendProcessId, backendSecretKey, null);
+        }
     }
 
     /**
@@ -1913,11 +1941,17 @@ public final class PgSession implements AutoCloseable {
      *   <li>not at a quiescent point - a stream with an answer half read is
      *       not something anybody else can take over, and the check is the
      *       same {@code isIdle} a freeze uses;
-     *   <li>encrypted - the keys are in this process and the bytes on that
-     *       socket are TLS records. Handing them on would need the keys to
-     *       travel too, which is a different decision from this one. TLS to
-     *       the database therefore terminates where the login happened.
+     *   <li>encrypted on the JDK's TLS - an {@code SSLEngine} does not hand
+     *       out its traffic secrets or its record sequence numbers, by
+     *       design, so there is nothing that could go with the stream and the
+     *       refusal stays.
      * </ul>
+     *
+     * <p>On seclume's own stack it does not refuse. The TLS layer is handed
+     * out with the socket, and {@link #resume(space.seclume.internal.Transport,
+     * java.util.Map, int, int, space.seclume.internal.TlsLayer) resume} takes
+     * it up - the same connection, a different session object, and a server
+     * that is told nothing.
      *
      * <p>Afterwards this session is finished: the channel reports itself
      * closed, and the transport belongs to the caller.
@@ -1927,15 +1961,17 @@ public final class PgSession implements AutoCloseable {
             throw new SQLException("this session has work in flight - a stream can only be "
                     + "handed over at a quiescent point", "25000");
         }
-        if (channel.isEncrypted()) {
-            throw new SQLException("this session is encrypted - its keys are in this process, "
-                    + "so the stream cannot be handed to another one. Open the session "
-                    + "without TLS, or terminate TLS where the login happens", "0A000");
+        if (channel.isEncrypted() && !channel.encryptionCanTravel()) {
+            throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
+                    + "cannot leave the SSLEngine that holds them - so the stream cannot be "
+                    + "handed to another session. Open it on seclume's own TLS stack, or "
+                    + "terminate TLS where the login happens", "0A000");
         }
         space.seclume.internal.Transport stream = channel.transport();
         java.util.Map<String, String> snapshot = java.util.Map.copyOf(parameters);
-        channel.release();
-        return new Detached(stream, snapshot, backendProcessId, backendSecretKey);
+        space.seclume.internal.TlsLayer tls = channel.tlsLayer();
+        channel.release(tls != null);
+        return new Detached(stream, snapshot, backendProcessId, backendSecretKey, tls);
     }
 
     /** Cancelling a running query needs this key. */

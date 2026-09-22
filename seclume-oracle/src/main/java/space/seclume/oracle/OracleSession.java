@@ -156,14 +156,23 @@ public final class OracleSession implements AutoCloseable {
      * @param stream the socket, still logged in, between calls
      */
     public record Detached(space.seclume.internal.Transport stream, int protocolVersion,
-                           int sequence, boolean inTransaction) {
+                           int sequence, boolean inTransaction,
+                           space.seclume.internal.TlsLayer tls) {
+
+        /** A stream that was in the clear, and therefore carries no encryption. */
+        public Detached(space.seclume.internal.Transport stream, int protocolVersion,
+                        int sequence, boolean inTransaction) {
+            this(stream, protocolVersion, sequence, inTransaction, null);
+        }
     }
 
     /**
      * Hands the authenticated stream over and finishes this session object.
      *
-     * <p>The fourth of four, and the two usual refusals - not mid-call, not
-     * encrypted - plus one of its own: an open cursor stays with the session
+     * <p>The fourth of four, and the two usual refusals - not mid-call, and
+     * not encrypted on the JDK's TLS, whose keys will not leave the
+     * {@code SSLEngine}; on seclume's own stack the encryption travels with
+     * the stream - plus one of its own: an open cursor stays with the session
      * that opened it, and a successor that inherited the stream without being
      * told the cursor id would leave it open until the session ends. Oracle
      * counts those, and runs out at {@code open_cursors}.
@@ -173,18 +182,21 @@ public final class OracleSession implements AutoCloseable {
             throw new SQLException("this session has work in flight - a stream can only be "
                     + "handed over between calls", "25000");
         }
-        if (channel.isEncrypted()) {
-            throw new SQLException("this session is encrypted - its keys are in this process, "
-                    + "so the stream cannot be handed to another one", "0A000");
+        if (channel.isEncrypted() && !channel.encryptionCanTravel()) {
+            throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
+                    + "cannot leave the SSLEngine that holds them - so the stream cannot be "
+                    + "handed to another session. Open it on seclume's own TLS stack, or "
+                    + "terminate TLS where the login happens", "0A000");
         }
         if (openCursor != 0 || !cursors.isEmpty()) {
             throw new SQLException("cursors are open on this session - close them before "
                     + "handing the stream over, or the server keeps them until it ends",
                     "25000");
         }
+        space.seclume.internal.TlsLayer tls = channel.tlsLayer();
         Detached detached = new Detached(channel.transport(), channel.protocolVersion(),
-                sequence, inTransaction);
-        channel.release();
+                sequence, inTransaction, tls);
+        channel.release(tls != null);
         return detached;
     }
 
@@ -201,7 +213,26 @@ public final class OracleSession implements AutoCloseable {
     public static OracleSession resume(space.seclume.internal.Transport stream,
                                        int protocolVersion, int sequence,
                                        boolean inTransaction) {
-        OracleSession session = new OracleSession(NsChannel.over(stream, protocolVersion));
+        return resume(stream, protocolVersion, sequence, inTransaction, null);
+    }
+
+    /**
+     * The same, for a stream that was encrypted when it was handed over.
+     *
+     * <p>{@code tls} is the layer {@link #detach()} handed out: the same TLS
+     * connection, still live, now under a different session. The server is
+     * told nothing and notices nothing.
+     *
+     * @param tls the encryption to continue under, or {@code null} for a
+     *            stream in the clear
+     */
+    public static OracleSession resume(space.seclume.internal.Transport stream,
+                                       int protocolVersion, int sequence,
+                                       boolean inTransaction,
+                                       space.seclume.internal.TlsLayer tls) {
+        OracleSession session = new OracleSession(tls == null
+                ? NsChannel.over(stream, protocolVersion)
+                : NsChannel.over(stream, protocolVersion, tls));
         session.sequence = sequence;
         session.inTransaction = inTransaction;
         session.autoCommit = !inTransaction;

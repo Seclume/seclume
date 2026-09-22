@@ -187,7 +187,13 @@ public final class MySession implements AutoCloseable {
      * @param stream the socket, still logged in, at a packet boundary
      */
     public record Detached(space.seclume.internal.Transport stream, int capabilities,
-                           long connectionId) {
+                           long connectionId, space.seclume.internal.TlsLayer tls) {
+
+        /** A stream that was in the clear, and therefore carries no encryption. */
+        public Detached(space.seclume.internal.Transport stream, int capabilities,
+                        long connectionId) {
+            this(stream, capabilities, connectionId, null);
+        }
     }
 
     /**
@@ -199,21 +205,24 @@ public final class MySession implements AutoCloseable {
      *
      * <p>Two refusals, for the same reasons as there. Not at a quiescent
      * point, because a stream with an answer half read cannot be taken over.
-     * And not while encrypted, because the keys are in this process and the
-     * records on that socket mean nothing anywhere else.
+     * And not while encrypted <b>on the JDK's TLS</b>, whose keys will not
+     * leave the {@code SSLEngine} that holds them. On seclume's own stack the
+     * encryption goes with the stream instead.
      */
     public Detached detach() throws SQLException {
         if (!channel.isIdle()) {
             throw new SQLException("this session has work in flight - a stream can only be "
                     + "handed over at a quiescent point", "25000");
         }
-        if (channel.isEncrypted()) {
-            throw new SQLException("this session is encrypted - its keys are in this process, "
-                    + "so the stream cannot be handed to another one. Open the session "
-                    + "without TLS, or terminate TLS where the login happens", "0A000");
+        if (channel.isEncrypted() && !channel.encryptionCanTravel()) {
+            throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
+                    + "cannot leave the SSLEngine that holds them - so the stream cannot be "
+                    + "handed to another session. Open it on seclume's own TLS stack, or "
+                    + "terminate TLS where the login happens", "0A000");
         }
-        Detached detached = new Detached(channel.transport(), capabilities, connectionId);
-        channel.release();
+        space.seclume.internal.TlsLayer tls = channel.tlsLayer();
+        Detached detached = new Detached(channel.transport(), capabilities, connectionId, tls);
+        channel.release(tls != null);
         return detached;
     }
 
@@ -228,8 +237,25 @@ public final class MySession implements AutoCloseable {
      */
     public static MySession resume(space.seclume.internal.Transport stream,
                                    int capabilities, long connectionId) {
-        return new MySession(MyChannel.over(stream), capabilities, "resumed",
-                connectionId, null);
+        return resume(stream, capabilities, connectionId, null);
+    }
+
+    /**
+     * The same, for a stream that was encrypted when it was handed over.
+     *
+     * <p>{@code tls} is the layer {@link #detach()} handed out: the same TLS
+     * connection, still live, now under a different session. The server is
+     * told nothing and notices nothing.
+     *
+     * @param tls the encryption to continue under, or {@code null} for a
+     *            stream in the clear
+     */
+    public static MySession resume(space.seclume.internal.Transport stream,
+                                   int capabilities, long connectionId,
+                                   space.seclume.internal.TlsLayer tls) {
+        return new MySession(tls == null
+                ? MyChannel.over(stream)
+                : MyChannel.over(stream, tls), capabilities, "resumed", connectionId, null);
     }
 
     /** The transport carrying this session, for whoever may take it apart. */

@@ -212,14 +212,25 @@ public final class TdsSession implements AutoCloseable {
      * @param stream the socket, still logged in, at a packet boundary
      */
     public record Detached(space.seclume.internal.Transport stream, int packetSize,
-                           String database, String serverName, int serverVersion) {
+                           String database, String serverName, int serverVersion,
+                           space.seclume.internal.TlsLayer tls) {
+
+        /** A stream that was in the clear, and therefore carries no encryption. */
+        public Detached(space.seclume.internal.Transport stream, int packetSize,
+                        String database, String serverName, int serverVersion) {
+            this(stream, packetSize, database, serverName, serverVersion, null);
+        }
     }
 
     /**
      * Hands the authenticated stream over and finishes this session object.
      *
      * <p>The third of the four, and the same two refusals: not at a quiescent
-     * point, and not while encrypted.
+     * point, and not while encrypted on the JDK's TLS. That second one used to
+     * put this driver out of reach entirely - TDS always encrypts the login,
+     * so there is no unencrypted state to hand over - which is why strict
+     * encryption on seclume's own stack is the route that makes it possible at
+     * all.
      *
      * <p>TDS adds one condition the others do not have. An explicit
      * transaction is not a state of the connection here but a <b>descriptor
@@ -234,9 +245,11 @@ public final class TdsSession implements AutoCloseable {
             throw new SQLException("this session has work in flight - a stream can only be "
                     + "handed over at a quiescent point (" + channel.inFlight() + ")", "25000");
         }
-        if (channel.isEncrypted()) {
-            throw new SQLException("this session is encrypted - its keys are in this process, "
-                    + "so the stream cannot be handed to another one", "0A000");
+        if (channel.isEncrypted() && !channel.encryptionCanTravel()) {
+            throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
+                    + "cannot leave the SSLEngine that holds them - so the stream cannot be "
+                    + "handed to another session. Open it on seclume's own TLS stack, or "
+                    + "terminate TLS where the login happens", "0A000");
         }
         if (!cursorColumns.isEmpty()) {
             throw new SQLException("a cursor is open on this session - whoever receives the "
@@ -250,9 +263,10 @@ public final class TdsSession implements AutoCloseable {
             throw new SQLException("this session is inside an explicit transaction, and its "
                     + "descriptor cannot be handed over - commit or roll back first", "25000");
         }
+        space.seclume.internal.TlsLayer tls = channel.tlsLayer();
         Detached detached = new Detached(channel.transport(), channel.packetSize(),
-                database, serverName, serverVersion);
-        channel.release();
+                database, serverName, serverVersion, tls);
+        channel.release(tls != null);
         return detached;
     }
 
@@ -266,8 +280,25 @@ public final class TdsSession implements AutoCloseable {
      */
     public static TdsSession resume(space.seclume.internal.Transport stream, int packetSize,
                                     String database, String serverName, int serverVersion) {
-        TdsSession session = new TdsSession(TdsChannel.over(stream), database,
-                serverName, serverVersion);
+        return resume(stream, packetSize, database, serverName, serverVersion, null);
+    }
+
+    /**
+     * The same, for a stream that was encrypted when it was handed over.
+     *
+     * <p>{@code tls} is the layer {@link #detach()} handed out: the same TLS
+     * connection, still live, now under a different session. The server is
+     * told nothing and notices nothing.
+     *
+     * @param tls the encryption to continue under, or {@code null} for a
+     *            stream in the clear
+     */
+    public static TdsSession resume(space.seclume.internal.Transport stream, int packetSize,
+                                    String database, String serverName, int serverVersion,
+                                    space.seclume.internal.TlsLayer tls) {
+        TdsSession session = new TdsSession(tls == null
+                ? TdsChannel.over(stream)
+                : TdsChannel.over(stream, tls), database, serverName, serverVersion);
         session.channel.packetSize(packetSize);
         return session;
     }

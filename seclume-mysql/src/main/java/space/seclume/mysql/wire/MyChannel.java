@@ -120,6 +120,48 @@ public final class MyChannel implements AutoCloseable {
         return new MyChannel(transport);
     }
 
+    /**
+     * A channel over a stream that already has a TLS layer on it.
+     *
+     * <p>The counterpart to {@link #tlsLayer()}: the stream was handed on
+     * while encrypted, and the encryption goes with it. The server is told
+     * nothing and notices nothing - the same TLS connection simply carries
+     * on, which is why the session on it survives.
+     */
+    public static MyChannel over(space.seclume.internal.Transport transport,
+            space.seclume.internal.TlsLayer tls) {
+        MyChannel channel = new MyChannel(transport);
+        channel.tls = tls;
+        return channel;
+    }
+
+    /**
+     * Whether the encryption on this channel - if any - could be handed on
+     * with the stream.
+     *
+     * <p>True without TLS, because there is nothing to carry; true on
+     * seclume's own TLS stack, because its state is ours; false on the JDK's,
+     * because an {@code SSLEngine} will not give its keys up. See
+     * {@link space.seclume.internal.TlsLayer#movable()}.
+     */
+    public boolean encryptionCanTravel() {
+        return tls == null || tls.movable();
+    }
+
+    /**
+     * The encryption on this channel, or {@code null} without TLS - for
+     * whoever continues the stream.
+     *
+     * <p>Handed out rather than described, and that is the whole of what this
+     * library does about it. What a caller then does with the layer - take it
+     * straight to another session, or write its state down and take it up
+     * somewhere else with {@code freeze} and {@code thaw} - is the caller's
+     * business and not a driver's.
+     */
+    public space.seclume.internal.TlsLayer tlsLayer() {
+        return tls;
+    }
+
     /** The transport carrying this channel - for whoever has to hand it on. */
     public space.seclume.internal.Transport transport() {
         return channel;
@@ -165,11 +207,22 @@ public final class MyChannel implements AutoCloseable {
      * native memory this channel allocated.
      */
     public void release() {
+        release(false);
+    }
+
+    /**
+     * The same, with a say over the encryption.
+     *
+     * <p>{@code keepEncryption} is for the one case where the TLS layer goes
+     * with the stream rather than staying behind: discarding it here would
+     * free the very keys the successor is about to read records with.
+     */
+    public void release(boolean keepEncryption) {
         if (released) {
             return;
         }
         released = true;
-        if (tls != null) {
+        if (tls != null && !keepEncryption) {
             tls.discard();
         }
         out.close();
