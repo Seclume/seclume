@@ -6,7 +6,7 @@
 
   <groupId>space.seclume</groupId>
   <artifactId>seclume-parent</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.9.0</version>
   <packaging>pom</packaging>
 
   <name>seclume</name>
@@ -40,6 +40,24 @@
     <tag>HEAD</tag>
   </scm>
 
+  <!-- GitHub Packages. Note for anybody reading this before adding the
+       repository to their own build: GitHub requires a token even to *read*
+       a public package, which is a property of the registry and not of this
+       project. Maven Central is the address for a dependency that should
+       just resolve. -->
+  <distributionManagement>
+    <repository>
+      <id>github</id>
+      <name>GitHub Packages</name>
+      <url>https://maven.pkg.github.com/Seclume/seclume</url>
+    </repository>
+    <snapshotRepository>
+      <id>github</id>
+      <name>GitHub Packages</name>
+      <url>https://maven.pkg.github.com/Seclume/seclume</url>
+    </snapshotRepository>
+  </distributionManagement>
+
   <!-- seclume-tcp-core is deliberately absent: the transport that moves a live
        session between hosts is developed and licensed separately. -->
   <modules>
@@ -67,7 +85,7 @@
     <maven.compiler.release>25</maven.compiler.release>
     <junit.version>5.11.4</junit.version>
     <!-- Reproducible builds: a fixed timestamp in the archives. -->
-    <project.build.outputTimestamp>2026-01-01T00:00:00Z</project.build.outputTimestamp>
+    <project.build.outputTimestamp>2026-09-22T19:06:51Z</project.build.outputTimestamp>
   </properties>
 
   <dependencyManagement>
@@ -120,7 +138,66 @@
           <artifactId>maven-jar-plugin</artifactId>
           <version>3.4.2</version>
         </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-source-plugin</artifactId>
+          <version>3.3.1</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-javadoc-plugin</artifactId>
+          <version>3.11.2</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-deploy-plugin</artifactId>
+          <version>3.1.3</version>
+        </plugin>
       </plugins>
     </pluginManagement>
   </build>
+
+  <profiles>
+    <!--
+      Sources and javadoc travel with a release, and only with a release: they
+      cost a minute of build time that an ordinary `mvn install` has no reason
+      to pay. Activated by `mvn -Prelease deploy`.
+
+      Javadoc is set to fail on nothing rather than on everything, deliberately.
+      The comments in this project are prose meant to be read in the source, and
+      a missing @param on a private helper is not a reason to stop a release.
+    -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <goals><goal>jar-no-fork</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <configuration>
+              <doclint>none</doclint>
+              <failOnError>false</failOnError>
+              <quiet>true</quiet>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <goals><goal>jar</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

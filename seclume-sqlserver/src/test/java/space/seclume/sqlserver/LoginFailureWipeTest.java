@@ -158,9 +158,7 @@ class LoginFailureWipeTest {
         long open = SecretScope.open();
         long read = SecretScope.allocations();
 
-        BreakableRelay relay = BreakableRelay.to(host, port);
-        int gone = relay.port();
-        relay.close();
+        int gone = aPortNobodyAnswers();
 
         assertThrows(SQLException.class,
                 () -> TdsSession.open(settings("127.0.0.1", gone,
@@ -169,6 +167,46 @@ class LoginFailureWipeTest {
         assertEquals(read, SecretScope.allocations(),
                 "the secret was read although there was nothing to log in to");
         assertEquals(open, SecretScope.open());
+    }
+
+    /**
+     * A loopback port that really is dead, proven by trying it.
+     *
+     * <p>Binding an ephemeral port and closing it again is the obvious way to
+     * get one, and it is wrong on a busy machine. Java opens a
+     * {@code ServerSocket} with {@code SO_REUSEADDR}, so binding
+     * {@code 127.0.0.1:P} succeeds even while something else holds
+     * {@code 0.0.0.0:P} - and when that something is docker's proxy for a
+     * service container, closing our listener leaves the port answering, on
+     * behalf of a real database. The connection then logs in, nothing is
+     * thrown, and the test fails claiming the driver read a secret it never
+     * read.
+     *
+     * <p>That is exactly what happened in CI and not once locally, because
+     * the collision needs the runner's random service port to land on the
+     * ephemeral one we drew. So the port is <b>probed</b> rather than assumed:
+     * a connect that is refused is the only evidence that nobody is there.
+     */
+    private static int aPortNobodyAnswers() throws IOException {
+        for (int attempt = 0; attempt < 20; attempt++) {
+            int candidate;
+            try (java.net.ServerSocket probe = new java.net.ServerSocket()) {
+                probe.bind(new java.net.InetSocketAddress(
+                        java.net.InetAddress.getLoopbackAddress(), 0));
+                candidate = probe.getLocalPort();
+            }
+            try (java.net.Socket knock = new java.net.Socket()) {
+                knock.connect(new java.net.InetSocketAddress(
+                        java.net.InetAddress.getLoopbackAddress(), candidate), 500);
+            } catch (IOException refused) {
+                return candidate;
+            }
+            // Somebody answered on a port we had just given up, so it was
+            // never ours alone. Draw another one.
+        }
+        throw new IOException("twenty ephemeral ports in a row were still answering "
+                + "after being closed - this machine has something bound to 0.0.0.0 "
+                + "across the ephemeral range");
     }
 
     private space.seclume.secret.SecretProvider wrongPassword() {
