@@ -429,6 +429,15 @@ public final class PgChannel implements AutoCloseable {
 
     @Override
     public void close() {
+        if (released) {
+            // Given up rather than ended: the socket belongs to whoever
+            // continues the conversation on it, and everything of this
+            // channel's own was let go in release(). Closing here would close
+            // the very connection that was just handed over - which is what it
+            // did, and what a session object closed after detach() then did to
+            // its own successor.
+            return;
+        }
         if (tls != null) {
             // Says goodbye and releases the keys. On the own stack those are
             // native memory this layer allocated, so skipping it would leak

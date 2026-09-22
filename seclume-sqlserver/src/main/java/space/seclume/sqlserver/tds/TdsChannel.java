@@ -349,6 +349,15 @@ public final class TdsChannel implements AutoCloseable {
 
     @Override
     public void close() {
+        if (released) {
+            // Given up rather than ended: the socket belongs to whoever
+            // continues the conversation on it, and everything of this
+            // channel's own was let go in release(). Closing here would close
+            // the very connection that was just handed over - which is what it
+            // did, and what a session object closed after detach() then did to
+            // its own successor.
+            return;
+        }
         // The transport swallows its own close error - see Transport#close.
         channel.close();
         out.close();
