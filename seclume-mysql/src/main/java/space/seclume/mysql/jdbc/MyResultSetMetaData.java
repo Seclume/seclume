@@ -56,7 +56,10 @@ final class MyResultSetMetaData implements ResultSetMetaData {
     @Override
     public int getColumnType(int column) throws SQLException {
         MySession.Field f = field(column);
-        return isBoolean(f) ? java.sql.Types.BIT : MyTypes.sqlType(f.type(), f.flags());
+        if (isBoolean(f)) {
+            return java.sql.Types.BIT;
+        }
+        return isLobFamily(f) ? lobSqlType(f) : MyTypes.sqlType(f.type(), f.flags());
     }
 
     @Override
@@ -87,18 +90,20 @@ final class MyResultSetMetaData implements ResultSetMetaData {
         if (isText(f)) {
             int bytesPerCharacter = bytesPerCharacter(f);
             length = length / bytesPerCharacter;
-            if (isLobFamily(f) && bytesPerCharacter > 1) {
-                // A second division, and the reason is in how the two families
-                // are declared. varchar(40) is forty CHARACTERS, and MySQL
-                // sends 160 for it in utf8mb4 - one division gives the forty.
-                // text is 65535 BYTES, and MySQL sends 262140 for it, so one
-                // division gives the byte capacity rather than a character
-                // count; the characters are 16383, which is what Connector/J
-                // answers and what getPrecision is defined as for character
-                // data. Measured against the server rather than reasoned out:
-                // mediumtext arrives as 67108860 and ends at 4194303, which
-                // is Connector/J's answer too.
-                length = length / bytesPerCharacter;
+            if (isLobFamily(f)) {
+                // Not arithmetic on the wire value. varchar(40) is forty
+                // CHARACTERS and arrives as 160 in utf8mb4, so one division
+                // gives the forty. text is 65535 BYTES and arrives as 262140,
+                // so the same division gives a byte capacity and the
+                // characters are 16383 - which is what getPrecision is
+                // defined as for character data, and what Connector/J
+                // answers. Doing that as a second division worked for three
+                // of the four sizes and not for longtext, whose capacity
+                // times four does not fit in the four bytes the field has:
+                // the server sends the byte count itself and the second
+                // division then took a factor of four off the answer. So the
+                // capacity is identified instead, and divided once.
+                length = lobCapacity(f) / bytesPerCharacter;
             }
         } else if (isDecimal(f) && length > 0) {
             // The field length of decimal(20,6) is 22: twenty digits, the
@@ -244,18 +249,64 @@ final class MyResultSetMetaData implements ResultSetMetaData {
      * {@code mediumtext}, which is exactly how a gap like this survives.
      */
     private static String lobTypeName(MySession.Field field) {
-        long bytes = field.columnLength() / bytesPerCharacter(field);
         boolean binary = field.charset() == 63;
-        if (bytes <= 255) {
+        long capacity = lobCapacity(field);
+        if (capacity == 255L) {
             return binary ? "TINYBLOB" : "TINYTEXT";
         }
-        if (bytes <= 65535) {
+        if (capacity == 65535L) {
             return binary ? "BLOB" : "TEXT";
         }
-        if (bytes <= 16777215) {
+        if (capacity == 16777215L) {
             return binary ? "MEDIUMBLOB" : "MEDIUMTEXT";
         }
         return binary ? "LONGBLOB" : "LONGTEXT";
+    }
+
+    /**
+     * Which of the four sizes this column was declared as, in <b>bytes</b>.
+     *
+     * <p>Everything about this family follows from that one number - the type
+     * name, the JDBC type code and the precision - so it is worked out once.
+     * The declared capacity is a round figure (255, 65535, 16777215,
+     * 4294967295) and what arrives on the wire is that capacity in bytes
+     * multiplied by the character width, except for {@code longtext}, where
+     * the product does not fit in the four bytes the field has and the server
+     * sends the byte count itself. Deriving the capacity and working from it
+     * avoids that exception entirely; arithmetic on the wire value does not,
+     * which is what the old precision was wrong about.
+     */
+    private static long lobCapacity(MySession.Field field) {
+        long bytes = field.columnLength() / bytesPerCharacter(field);
+        if (bytes <= 255) {
+            return 255L;
+        }
+        if (bytes <= 65535) {
+            return 65535L;
+        }
+        if (bytes <= 16777215) {
+            return 16777215L;
+        }
+        return 4294967295L;
+    }
+
+    /**
+     * The JDBC type of a text or blob column, which also depends on the size.
+     *
+     * <p>Connector/J answers {@code VARCHAR} for {@code tinytext} and
+     * {@code VARBINARY} for {@code tinyblob}, and the long forms for the other
+     * three. That is not an oddity to be matched for its own sake: 255 bytes
+     * is not long data, and a dialect or an ORM that branches on
+     * {@code LONGVARCHAR} treats such a column as a stream it has to be
+     * careful with. Found by putting all four sizes in the differential
+     * corpus, where previously only {@code text} and {@code blob} were.
+     */
+    private static int lobSqlType(MySession.Field field) {
+        boolean binary = field.charset() == 63;
+        if (lobCapacity(field) == 255L) {
+            return binary ? java.sql.Types.VARBINARY : java.sql.Types.VARCHAR;
+        }
+        return binary ? java.sql.Types.LONGVARBINARY : java.sql.Types.LONGVARCHAR;
     }
 
     /**

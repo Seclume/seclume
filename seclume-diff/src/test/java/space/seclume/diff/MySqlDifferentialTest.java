@@ -125,6 +125,14 @@ class MySqlDifferentialTest {
                         "", " ", "trailing ", "grüß", "€ 中文", null),
                 Differential.Column.of("c_text", "text",
                         "", "line\nbreak", "control", null),
+                // All four sizes, because MySQL sends one type code for the
+                // whole family and only the length tells them apart - a
+                // driver that reads that length wrongly reports the wrong one
+                // of the four, and every dialect that matches on the name is
+                // then looking at something else.
+                Differential.Column.of("c_tinytext", "tinytext", "", "abc", null),
+                Differential.Column.of("c_mediumtext", "mediumtext", "", "abc", null),
+                Differential.Column.of("c_longtext", "longtext", "", "abc", null),
                 // char(n) is right-padded on disk and trimmed on the way
                 // out - or not, depending on the driver.
                 Differential.Column.of("c_char", "char(8)", "", "abc", "12345678", null)));
@@ -219,7 +227,16 @@ class MySqlDifferentialTest {
                         + "answers null. JDBC says null is returned where DECIMAL_DIGITS does "
                         + "not apply, and an integer arguably has zero of them rather than "
                         + "none. Both readings are current; seclume's is the same answer its "
-                        + "ResultSetMetaData gives.");
+                        + "ResultSetMetaData gives.")
+                .allow("c_longtext.precision",
+                        "seclume answers 1073741823, Connector/J 536870911, and the honest "
+                        + "number is seclume's: a longtext holds 4294967295 bytes, which in "
+                        + "utf8mb4 is that many characters divided by four. Connector/J caps "
+                        + "the byte count at Integer.MAX_VALUE before dividing, which halves "
+                        + "the answer for this one type and for no other. Neither number is "
+                        + "reachable by an application that is not already in trouble, and "
+                        + "matching a cap that exists only to protect an int is not worth a "
+                        + "precision that is wrong by half.");
 
         // Nothing stands under "still wrong here" any more. The two that did -
         // tinyint(1) as a boolean and the character count of a text column -

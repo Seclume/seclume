@@ -83,14 +83,18 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                  when 'varchar' then 12
                  when 'enum' then 12
                  when 'set' then 12
-                 when 'tinytext' then -1
+                 -- 255 bytes is not long data, and Connector/J answers
+                 -- VARCHAR and VARBINARY for the two tiny forms. An ORM that
+                 -- branches on LONGVARCHAR treats such a column as a stream
+                 -- to be careful with, which it is not.
+                 when 'tinytext' then 12
                  when 'text' then -1
                  when 'mediumtext' then -1
                  when 'longtext' then -1
                  when 'json' then -1
                  when 'binary' then -2
                  when 'varbinary' then -3
-                 when 'tinyblob' then -4
+                 when 'tinyblob' then -3
                  when 'blob' then -4
                  when 'mediumblob' then -4
                  when 'longblob' then -4
@@ -195,6 +199,13 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                        -- datetime nineteen, and a fractional part adds its
                        -- digits and the point.
                        if(%s, 1,
+                          -- Capped, because COLUMN_SIZE is an int in the JDBC
+                          -- contract and longtext and longblob are declared as
+                          -- 4294967295 bytes. Reporting the true number meant
+                          -- getInt("COLUMN_SIZE") - which is how Hibernate and
+                          -- Flyway read it - was handed a value that does not
+                          -- fit. Connector/J caps it the same way.
+                          least(2147483647,
                           coalesce(character_maximum_length, numeric_precision,
                                 case data_type
                                      when 'date' then 10
@@ -209,7 +220,7 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
                                           19 + if(datetime_precision > 0,
                                                   datetime_precision + 1, 0)
                                 end,
-                                0)) as `COLUMN_SIZE`,
+                                0))) as `COLUMN_SIZE`,
                        null as `BUFFER_LENGTH`,
                        coalesce(numeric_scale, datetime_precision, 0) as `DECIMAL_DIGITS`,
                        10 as `NUM_PREC_RADIX`,
