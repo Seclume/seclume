@@ -130,7 +130,13 @@ public final class JdbcUrl {
         // Several servers, separated by commas, are allowed here: that is how
         // failover is configured, and the same spelling other drivers use.
         HostList hosts = HostList.parse(
-                hostPort.isEmpty() ? "127.0.0.1" : hostPort, defaultPort);
+                hostPort.isEmpty() ? "127.0.0.1" : hostPort, defaultPort)
+                // targetServerType=primary|secondary|any, the name pgjdbc
+                // uses. It belongs on the list rather than on the connection:
+                // it says which of these servers to take, and with one server
+                // it changes nothing and costs nothing.
+                .looking(space.seclume.internal.jdbc.TargetServer.of(
+                        options.get("targetServerType")));
         if (database.isEmpty()) {
             database = options.getOrDefault("database", "");
         }
