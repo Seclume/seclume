@@ -29,6 +29,24 @@
     </dependency>
     <dependency>
       <groupId>space.seclume</groupId>
+      <artifactId>seclume-mysql</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-sqlserver</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-oracle</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
       <artifactId>seclume-postgresql</artifactId>
       <version>${project.version}</version>
       <scope>test</scope>

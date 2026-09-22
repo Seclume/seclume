@@ -88,6 +88,63 @@ public final class BenchDatabase {
         return kind;
     }
 
+    public String host() {
+        return host;
+    }
+
+    public int port() {
+        return port;
+    }
+
+    /**
+     * The same database, reached through a list of two: something in front of
+     * it, and the server itself.
+     *
+     * <p>For measuring what a failure costs. The first entry is expected to
+     * die during the run; the second is where the driver has to end up, and
+     * how long that takes is the number being measured. See
+     * {@link ChaosBenchmark}.
+     */
+    public DataSource failoverSource(String firstHost, int firstPort) throws SQLException {
+        SecretProvider secret = new FileSecretProvider(passwordFile.toAbsolutePath(), 256);
+        String list = firstHost + ":" + firstPort + "," + host + ":" + port;
+        return switch (kind) {
+            case POSTGRESQL -> {
+                var source = new space.seclume.postgresql.jdbc.SeclumeDataSource();
+                source.setHosts(list);
+                source.setDatabase(database);
+                source.setUser(user);
+                source.setSecretProvider(secret);
+                yield source;
+            }
+            case MYSQL -> {
+                var source = new space.seclume.mysql.jdbc.MyDataSource();
+                source.setHosts(list);
+                source.setDatabase(database);
+                source.setUser(user);
+                source.setSecretProvider(secret);
+                yield source;
+            }
+            case SQLSERVER -> {
+                var source = new space.seclume.sqlserver.jdbc.TdsDataSource();
+                source.setHosts(list);
+                source.setDatabase(database);
+                source.setUser(user);
+                source.setSecretProvider(secret);
+                source.setTrustServerCertificate(true);
+                yield source;
+            }
+            case ORACLE -> {
+                var source = new space.seclume.oracle.jdbc.OraDataSource();
+                source.setHosts(list);
+                source.setService(database);
+                source.setUser(user);
+                source.setSecretProvider(secret);
+                yield source;
+            }
+        };
+    }
+
     /** {@code select 1} - spelled the way this server spells it. */
     public String selectOne() {
         return kind == Kind.ORACLE ? "select 1 from dual" : "select 1";

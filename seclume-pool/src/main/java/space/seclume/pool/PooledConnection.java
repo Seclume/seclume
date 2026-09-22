@@ -124,6 +124,20 @@ final class PooledConnection implements Connection {
                 broken = true;
             }
         }
+        if (!broken && isDelegateGone()) {
+            // The statement that killed it ran on the driver's own object and
+            // never came through this class, so nothing marked it - see the
+            // note on call(). Asking the driver costs nothing: a seclume
+            // connection knows its socket is gone without going to the server.
+            //
+            // Without this the pool parks a dead connection, and the next
+            // checkout hands it straight back out because it was returned a
+            // moment ago (see the validation window). The application then
+            // gets the same failure for as long as requests keep arriving,
+            // which is how a database that went away for two seconds took the
+            // pool with it. Found by ChaosBenchmark.
+            broken = true;
+        }
         pool.release(entry, broken);
     }
 
@@ -184,6 +198,23 @@ final class PooledConnection implements Connection {
      * <p>Repeated <b>once</b>. A second failure straight after is a server that
      * is gone, not a socket that was dropped, and retrying into that would turn
      * one error into a wait.
+     *
+     * <p><b>How far this reaches, so that it is not read as more.</b> Only
+     * calls on the connection itself come through here. A statement that has
+     * already been handed out runs on the driver's own object, so a server
+     * that goes away mid-statement is reported to the application and nothing
+     * is repeated - which is the right answer twice over: the pool does not
+     * know whether the server had already done the work, and repeating a
+     * prepared statement would mean having kept its parameter values
+     * somewhere, in a library whose whole point is not keeping values
+     * anywhere.
+     *
+     * <p>So the promise is "the next request works, this one fails", and
+     * {@code FailoverWithoutClusterTest} pins both halves of it against all
+     * four databases. What catches the common case is the check on the way out
+     * - see {@link PoolSettings#getValidationBypassWindow()} - which is also
+     * why that window is a trade and not an oversight: a connection returned
+     * shortly before its server went away goes out unchecked.
      */
     private <T> T call(SqlCall<T> action) throws SQLException {
         checkOpen();
@@ -214,6 +245,15 @@ final class PooledConnection implements Connection {
                 again.addSuppressed(e);
                 throw again;
             }
+        }
+    }
+
+    /** Whether the driver already knows the connection is gone - no round trip. */
+    private boolean isDelegateGone() {
+        try {
+            return delegate.isClosed();
+        } catch (SQLException cannotEvenSay) {
+            return true;
         }
     }
 
