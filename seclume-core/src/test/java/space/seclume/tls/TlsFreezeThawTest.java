@@ -39,10 +39,10 @@ import space.seclume.secret.SecretScope;
  * and the conversation stops - there is no way for this to pass by
  * accident.
  *
- * <p>Only the TLS half is moved here. The socket underneath stays the same
- * one, which is exactly the shape a real migration has: {@code tcp/Migration}
- * moves the connection, this moves the encryption on top of it, and the two
- * are deliberately separate formats because they are separate layers.
+ * <p>Only the TLS half is written down here; the socket underneath stays the
+ * same one. The two are separate on purpose, because they are separate
+ * layers: what the record layer knows is not what the socket knows, and a
+ * format that mixed them could be right about neither on its own.
  */
 @Timeout(120)
 class TlsFreezeThawTest {

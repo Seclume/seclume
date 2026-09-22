@@ -14,8 +14,9 @@ import space.seclume.tls.TlsConnection;
  * This project's own TLS 1.3 client, in the shape the drivers already speak.
  *
  * <p>A thin adapter and nothing more: {@link TlsConnection} is a
-  * {@link Transport} because that is the seam it goes into, and
- * {@link TlsLayer} is what the four protocols call. The two differ in one
+ * {@link Transport} because that is the seam anything other than a socket
+ * goes into, and {@link TlsLayer} is what the four protocols call. The two
+ * differ in one
  * place - a {@code Transport} may write part of a buffer, a {@code TlsLayer}
  * writes all of it - and that is the whole of what this class does.
  *

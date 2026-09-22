@@ -2,19 +2,24 @@ package space.seclume.internal;
 
 import java.io.IOException;
 import java.util.Locale;
+import java.util.ServiceLoader;
 
 /**
  * Which {@link Transport} a connection gets, and who decides.
  *
- * <p>Two exist: the {@link SocketTransport} over a {@code SocketChannel}, which
-  * is what every driver has always used, and another implementation over a
-  * descriptor of our own. The second
- * is <b>not</b> the default and will not become it by being newer.
+ * <p>This library opens one kind: the {@link SocketTransport} over a
+ * {@code SocketChannel}, which is what every driver has always used and what
+ * every driver gets unless somebody says otherwise. Anything else arrives as a
+ * {@link TransportProvider} on the class path and is asked for by name.
  *
  * <p>The system property {@code seclume.transport} decides, or the URL option
- * of the same name per connection. Values: {@code socket} (the default),
- * {@code ffm}, and {@code ffm-if-available} - the last one for a test run that
- * should use the new route on Linux and still pass everywhere else.
+ * of the same name per connection. {@code socket} is the default; a name
+ * ending in {@code -if-available} falls back to the socket where the provider
+ * says it cannot run here, which is what a test run across platforms needs.
+ *
+ * <p><b>An unknown name is an error, not a silent fallback.</b> Someone who
+ * asks for a transport and quietly gets another one debugs the wrong thing for
+ * an afternoon.
  */
 public final class Transports {
 
@@ -27,19 +32,34 @@ public final class Transports {
     /** The property read when a URL carries no preference. */
     public static final String PROPERTY = "seclume.transport";
 
+    private static final String IF_AVAILABLE = "-if-available";
+
     public static Transport open(String kind, String host, int port, int connectTimeoutMillis)
             throws IOException {
         String wanted = kind == null || kind.isBlank()
                 ? System.getProperty(PROPERTY, DEFAULT)
                 : kind;
-        return switch (wanted.toLowerCase(Locale.ROOT)) {
-            case "socket" -> SocketTransport.connect(host, port, connectTimeoutMillis);
-        // the alternate transport, developed separately
-        // the alternate transport, developed separately
-        // the alternate transport, developed separately
-                    : SocketTransport.connect(host, port, connectTimeoutMillis);
-            default -> throw new IOException("unknown transport '" + wanted
-                    + "' - expected socket, ffm or ffm-if-available");
-        };
+        String name = wanted.toLowerCase(Locale.ROOT);
+        boolean orSocket = name.endsWith(IF_AVAILABLE);
+        if (orSocket) {
+            name = name.substring(0, name.length() - IF_AVAILABLE.length());
+        }
+        if (DEFAULT.equals(name)) {
+            return SocketTransport.connect(host, port, connectTimeoutMillis);
+        }
+        for (TransportProvider provider : ServiceLoader.load(TransportProvider.class)) {
+            if (!name.equalsIgnoreCase(provider.name())) {
+                continue;
+            }
+            if (orSocket && !provider.available()) {
+                return SocketTransport.connect(host, port, connectTimeoutMillis);
+            }
+            return provider.connect(host, port, connectTimeoutMillis);
+        }
+        if (orSocket) {
+            return SocketTransport.connect(host, port, connectTimeoutMillis);
+        }
+        throw new IOException("unknown transport '" + wanted + "' - this library offers "
+                + DEFAULT + ", and nothing on the class path offers that name");
     }
 }

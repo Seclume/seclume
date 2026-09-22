@@ -8,28 +8,24 @@ import space.seclume.crypto.HashAlgorithm;
 import space.seclume.secret.SecretScope;
 
 /**
- * The encryption half of a connection, written down so that another process
- * or another machine can carry it on.
+ * The encryption half of a connection, written down.
  *
  * <p>This is the piece an {@code SSLEngine} cannot give you, and the reason
  * this package exists: no method of {@code SSLSession} or {@code SSLEngine}
  * is named for a traffic secret or a record sequence number, by design. Here
- * they are both, in a fixed format - shaped after {@code tcp/Migration}, for
- * the same reasons: fixed widths, big endian, a version that refuses rather
- * than half-understands, a length and a checksum.
+ * they are both, in a fixed format: fixed widths, big endian, a version that
+ * refuses rather than half-understands, a length and a checksum.
  *
- * <p><b>What travels, and why exactly this.</b> A traffic secret and a
+ * <p><b>What is written, and why exactly this.</b> A traffic secret and a
  * sequence number per direction, plus the cipher suite needed to use them.
  * Not the key and IV: those are one {@code HKDF-Expand-Label} away from the
- * secret, and deriving them again on the far side is cheaper than moving
- * them and keeps one representation of the truth. The <b>sequence numbers
+ * secret, and deriving them again from it is cheaper than writing them down
+ * as well, and keeps one representation of the truth. The <b>sequence numbers
  * are the subtle part</b> - a connection resumed with them reset to zero
  * looks entirely healthy until the first record, which the peer then refuses
  * with {@code bad_record_mac} and no further explanation.
  *
- * <p><b>This blob is key material.</b> {@code tcp/Migration} says its
- * carrier must be authenticated, because sequence numbers let somebody
- * inject into a session. This one is stronger: whoever reads these bytes can
+ * <p><b>This blob is key material.</b> Whoever reads these bytes can
  * decrypt and forge everything on the connection, in both directions. The
  * carrier must therefore be <b>confidential as well as authenticated</b>,
  * and the buffer it is written into should be one that gets wiped - a

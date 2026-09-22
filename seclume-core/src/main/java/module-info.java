@@ -26,6 +26,9 @@ module seclume.core {
     // Internal building blocks the driver modules need (randomness, encoding,
     // off-heap I/O). Not a stable contract for applications.
     exports space.seclume.internal;
+    // Another way of reaching a server may arrive on the class path; this
+    // library opens sockets and nothing else. See TransportProvider.
+    uses space.seclume.internal.TransportProvider;
 
     // The TLS 1.3 client of our own. Exported because the
     // drivers will need it; not a contract for applications, and not a

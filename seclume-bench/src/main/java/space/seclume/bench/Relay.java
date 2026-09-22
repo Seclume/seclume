@@ -10,16 +10,13 @@ import java.nio.channels.SocketChannel;
 /**
  * A TCP forwarder, to find out what one costs.
  *
-  * <p>Since 16.09.2026 the
- * measurement that decides more than it was meant to. The migration design
- * assumed this library owns its TLS state; it does not - it uses an
- * {@code SSLEngine}, whose keys and record sequence numbers no public API hands
- * out. One way around that is to put a relay beside the database: the driver's
- * connection to the relay carries no TLS, so a connection that moves has no TLS
- * state to move.
+ * <p>A relay beside the database is a shape that comes up whenever something
+ * has to sit between a driver and a server - and it is only worth considering
+ * if the extra hop is cheap. Measured here rather than assumed, because the
+ * assumption is usually "a forwarder costs nothing" and the answer decides
+ * whether a design is possible at all.
  *
- * <p>That road is only worth anything if the extra hop is cheap. This is the
- * thing to measure it with: deliberately the shape a real relay would have -
+ * <p>Deliberately the shape a real relay would have -
  * blocking channels, a thread per direction, {@code TCP_NODELAY} on both sides,
  * and a direct buffer that is allocated once - rather than the shape that
  * flatters it.

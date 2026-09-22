@@ -183,7 +183,7 @@ public final class RecordProtection implements AutoCloseable {
         return sequence;
     }
 
-    // ---- what a migration needs, and nothing more -------------------------
+    // ---- what writing a connection down needs, and nothing more -----------
     //
     // These three are package-private on purpose. Handing out a traffic
     // secret is the one operation that can undo everything this class is for,

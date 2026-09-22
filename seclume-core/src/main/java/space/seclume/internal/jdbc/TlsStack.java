@@ -17,7 +17,7 @@ import java.util.Locale;
  * resumes sessions, speaks TLS 1.2, and takes whatever key exchange the JDK
  * offers. {@link #SECLUME} gives up all of that for two things JSSE cannot
  * offer at any price: the traffic secrets never become Java objects, and the
- * encryption state can be frozen and taken up on another machine. Only a
+ * encryption state can be written down and taken up again. Only a
  * caller knows which of those matters more for their connection, so only a
  * caller decides - and the safe, boring one is the default.
  */

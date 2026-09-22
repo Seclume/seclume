@@ -17,55 +17,36 @@ import org.junit.jupiter.api.Test;
  */
 class TransportsTest {
 
-    /** An unknown name is refused, and the message says what is known. */
+    /**
+     * An unknown name is refused, and the message says what is on offer.
+     *
+     * <p>This library opens sockets. Anything else arrives as a
+     * {@link TransportProvider} on the class path, and when none answers to
+     * the name asked for, saying so is the whole job - somebody who asks for a
+     * transport and quietly gets another one debugs the wrong thing for an
+     * afternoon.
+     */
     @Test
-    void anUnknownTransportSaysWhatTheKnownOnesAre() {
+    void anUnknownTransportSaysWhatIsOnOffer() {
         IOException failure = assertThrows(IOException.class,
                 () -> Transports.open("quantum", "127.0.0.1", 1, 10));
         assertTrue(failure.getMessage().contains("socket"), failure.getMessage());
-        assertTrue(failure.getMessage().contains("ffm"), failure.getMessage());
+        assertTrue(failure.getMessage().contains("class path"), failure.getMessage());
     }
 
     /**
-     * Asking whether the FFM transport is available must not be what breaks.
+     * And "-if-available" falls back rather than failing.
      *
-     * <p>The first version answered this question by reading a constant out of
-      * a native implementation - which binds nine libc handles in its static
-     * initialiser, and on anything that is not Linux the first of them throws
-     * an {@code UnsatisfiedLinkError}. So the probe meant to answer „no, not
-     * here" was itself the failure, and {@code ffm-if-available} broke on
-     * exactly the systems it exists for. This test is that control, kept.
+     * <p>Which is what a test run across platforms needs: the name is asked
+     * for, nothing answers to it, and the connection is opened the ordinary
+     * way - here against a closed port, so it fails for that reason and no
+     * other.
      */
     @Test
-    void askingWhetherFfmIsAvailableWorksEverywhere() {
-        // the alternate transport, developed separately
-        assertEquals(System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT)
-        // the alternate transport, developed separately
-    }
-
-    /**
-     * And the fallback falls back rather than failing.
-     *
-     * <p>On Linux this connects to a closed port and fails for that reason; off
-     * Linux it has to reach the socket transport and fail for the same reason.
-     * Either way what must not happen is a linkage error.
-     */
-    @Test
-    void theFallbackReachesATransportOnEverySystem() {
+    void theFallbackReachesATransportWhenNobodyOffersTheName() {
         IOException failure = assertThrows(IOException.class,
-                () -> Transports.open("ffm-if-available", "127.0.0.1", 1, 200));
+                () -> Transports.open("something-if-available", "127.0.0.1", 1, 200));
         assertTrue(failure.getMessage() != null && !failure.getMessage().isBlank(),
                 "a refused connection should say something");
-    }
-
-    /** Explicitly asking for ffm off Linux is refused with a sentence, not a stack. */
-    @Test
-    void ffmOffLinuxIsRefusedWithAReason() {
-        // the alternate transport, developed separately
-            return;                                  // on Linux there is nothing to refuse
-        }
-        IOException failure = assertThrows(IOException.class,
-                () -> Transports.open("ffm", "127.0.0.1", 1, 10));
-        assertTrue(failure.getMessage().contains("Linux only"), failure.getMessage());
     }
 }

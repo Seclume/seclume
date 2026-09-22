@@ -257,8 +257,7 @@ public final class TlsConnection implements Transport {
 
     /**
      * Carries on a connection somebody else froze, over a transport that
-      * reaches the same peer - the far end of a handover,
-     * or of this project's own TCP stack having moved the socket.
+     * reaches the same peer.
      *
      * <p>The peer is told nothing and notices nothing: the keys and the
      * record sequence numbers continue exactly where they stopped. If any of

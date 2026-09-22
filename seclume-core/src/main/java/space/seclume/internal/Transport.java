@@ -12,12 +12,12 @@ import java.nio.ByteBuffer;
  * four methods.
  *
   * <p>It is not an abstraction for its own sake. Something other than a
-  * needs the descriptor itself: freezing a connection and
- * hands out its sequence numbers, and the ways to reach the descriptor inside
- * the JDK - reflection into {@code sun.nio.ch}, {@code jdk.internal.access} -
- * are the kind of grip that breaks with the next JDK. So the socket has to
- * become ours, which means opening it ourselves through FFM. That is a second
- * implementation of these four methods, and this is the seam it goes into.
+ * {@code SocketChannel} can carry a session - see the note on session
+ * mobility in the README - and the ways to reach a channel's descriptor
+ * inside the JDK, reflection into {@code sun.nio.ch} or
+ * {@code jdk.internal.access}, are the kind of grip that breaks with the next
+ * JDK. So a second implementation has to be possible from outside, and this
+ * is the seam it goes into - see {@link TransportProvider}.
  *
  * <p>The seam is worth having before the implementation exists, which is why it
  * lands on its own: it changes no behaviour, every existing test has to stay

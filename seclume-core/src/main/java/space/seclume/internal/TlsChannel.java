@@ -39,7 +39,7 @@ public final class TlsChannel implements TlsLayer {
 
     private final SSLEngine engine;
     /**
-     * Not final: when a connection is moved the socket underneath is rebuilt,
+     * Not final: the socket underneath can be replaced,
      * and this layer has to be told. It held the old one, and reads through a
      * closed descriptor fail in a way that looks like the server hung up - see
      * {@link #replaceTransport}.
