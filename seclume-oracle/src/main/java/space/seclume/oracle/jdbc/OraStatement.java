@@ -68,7 +68,8 @@ class OraStatement implements Statement, TtcResult.RowHandler {
             throws SQLException {
         // Every statement this driver runs passes here, with binds and
         // without. See space.seclume.jfr.
-        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        space.seclume.jfr.Observed.Statement event =
+                space.seclume.jfr.Observed.beginQuery("oracle");
         boolean failed = true;
         try {
             boolean hasResult = runInto(sql, binds);

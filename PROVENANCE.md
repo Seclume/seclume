@@ -46,6 +46,7 @@ the project's internal notes.
 | **Oracle's own documentation** on 12c password versions | vendor documentation | Confirms the PBKDF2 and final SHA-512 structure |
 | **A published 2012 analysis** of CVE-2012-3137 | a public mailing-list post describing the method in prose | Confirms the 11g key derivation and AES-192-CBC with a zero IV |
 | **Observation of a running server** | our own instance of Oracle Database Free, which we license | The fixed fields of the CONNECT packet, and several places where the derived values were wrong |
+| **Observation of `python-oracledb` on the wire** | its own debug output (`PYO_DEBUG_PACKETS=1`) against that instance — bytes, not code | The shape of the close-cursors piggyback: the message type, the function number, and that the piggyback carries the lower call number of the pair |
 
 **The method, and its limits, stated plainly.** Descriptions of behaviour were read; **no
 source code was taken**. The implementation works on `MemorySegment` rather than on Python

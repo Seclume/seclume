@@ -9,6 +9,7 @@ import space.seclume.oracle.net.NsChannel;
 import space.seclume.oracle.net.OracleColumn;
 import space.seclume.oracle.net.NsPacket;
 import space.seclume.oracle.net.TtcAuth;
+import space.seclume.oracle.net.TtcClose;
 import space.seclume.oracle.net.TtcFastAuth;
 import space.seclume.oracle.net.TtcLob;
 import space.seclume.oracle.net.TtcLogin;
@@ -138,6 +139,83 @@ public final class OracleSession implements AutoCloseable {
 
     private OracleSession(NsChannel channel) {
         this.channel = channel;
+        channel.piggyback(this::returnCursors);
+    }
+
+    /**
+     * What an authenticated Oracle stream is, once it has left its session.
+     *
+     * <p>Two facts beside the socket, and the second one is Oracle's alone.
+     * The protocol version decides whether a packet's length field takes two
+     * bytes or four - read it wrongly and the first packet is misframed. And
+     * <b>the sequence number</b>: every call carries one, the server checks
+     * it, and a session that resumes with the wrong number is refused by the
+     * server rather than by anything here. No other of the four databases
+     * counts its calls.
+     *
+     * @param stream the socket, still logged in, between calls
+     */
+    public record Detached(space.seclume.internal.Transport stream, int protocolVersion,
+                           int sequence, boolean inTransaction) {
+    }
+
+    /**
+     * Hands the authenticated stream over and finishes this session object.
+     *
+     * <p>The fourth of four, and the two usual refusals - not mid-call, not
+     * encrypted - plus one of its own: an open cursor stays with the session
+     * that opened it, and a successor that inherited the stream without being
+     * told the cursor id would leave it open until the session ends. Oracle
+     * counts those, and runs out at {@code open_cursors}.
+     */
+    public Detached detach() throws SQLException {
+        if (!channel.isIdle()) {
+            throw new SQLException("this session has work in flight - a stream can only be "
+                    + "handed over between calls", "25000");
+        }
+        if (channel.isEncrypted()) {
+            throw new SQLException("this session is encrypted - its keys are in this process, "
+                    + "so the stream cannot be handed to another one", "0A000");
+        }
+        if (openCursor != 0 || !cursors.isEmpty()) {
+            throw new SQLException("cursors are open on this session - close them before "
+                    + "handing the stream over, or the server keeps them until it ends",
+                    "25000");
+        }
+        Detached detached = new Detached(channel.transport(), channel.protocolVersion(),
+                sequence, inTransaction);
+        channel.release();
+        return detached;
+    }
+
+    /**
+     * Continues a session somebody else authenticated.
+     *
+     * <p>No CONNECT, no login, no type negotiation - the server settled all of
+     * that with whoever opened it. What cannot be derived is handed in: the
+     * protocol version, because it decides the framing, and the sequence
+     * number, because the server is counting.
+     *
+     * <p>The stream has to be between calls, and only the caller can know it.
+     */
+    public static OracleSession resume(space.seclume.internal.Transport stream,
+                                       int protocolVersion, int sequence,
+                                       boolean inTransaction) {
+        OracleSession session = new OracleSession(NsChannel.over(stream, protocolVersion));
+        session.sequence = sequence;
+        session.inTransaction = inTransaction;
+        session.autoCommit = !inTransaction;
+        return session;
+    }
+
+    /** The transport carrying this session, for whoever may take it apart. */
+    public space.seclume.internal.Transport transport() {
+        return channel.transport();
+    }
+
+    /** Whether the <b>driver</b> has nothing in flight - half the quiescent point. */
+    public boolean isIdle() {
+        return channel.isIdle();
     }
 
     /** What TLS this connection uses, or {@code null} without it. */
@@ -145,11 +223,64 @@ public final class OracleSession implements AutoCloseable {
         return channel.tlsDescription();
     }
 
+    /**
+     * Runs a statement that answers one row of one column, and hands back that
+     * value as text.
+     *
+     * <p>There is one caller - the host list asking a server what it is; see
+     * {@code space.seclume.internal.jdbc.ServerRole}. It is deliberately not a
+     * general query method: it takes no parameters, reads at most one value,
+     * and is meant for a question the driver asks on its own behalf rather
+     * than one an application asked for.
+     *
+     * @return the value, or {@code null} when the statement answered no rows
+     */
+    public String askOneValue(String sql) throws SQLException {
+        String[] answer = new String[1];
+        query(sql, row -> {
+            if (answer[0] == null) {
+                answer[0] = row.text(0);
+            }
+        });
+        return answer[0];
+    }
+
+    /**
+     * What this server says it is, for a host list that was told to look for
+     * one kind - see {@link space.seclume.internal.jdbc.TargetServer}.
+     *
+     * <p>One statement, run once, on a connection that is about to be kept or
+     * given back. A server that refuses the question answers
+     * {@code UNKNOWN} rather than failing the connect: an old version or an
+     * account without the right is not a reason to refuse a server that works.
+     */
+    private static final HostList.Roles<OracleSession> ROLES = new HostList.Roles<>() {
+
+        @Override
+        public space.seclume.internal.jdbc.ServerRole of(OracleSession session) throws SQLException {
+            try {
+                return space.seclume.internal.jdbc.ServerRole.read(session.askOneValue(
+                        space.seclume.internal.jdbc.ServerRole.ORACLE));
+            } catch (SQLException refused) {
+                return space.seclume.internal.jdbc.ServerRole.UNKNOWN;
+            }
+        }
+
+        @Override
+        public void giveBack(OracleSession session) {
+            session.close();
+        }
+    };
+
     /** Connects, opens and logs in - three steps that the server ties together. */
     public static OracleSession open(Settings settings) throws SQLException {
         // One listener: a plain connect. Several: the next one when a listener
         // cannot be reached - and only then, see HostList.
-        return settings.hosts().open(server -> openOne(settings.at(server)));
+        // With several servers and a preference in the URL, each one is asked
+        // what it is before its connection is kept - see TargetServer. With
+        // one server, or none asked for, nothing is asked and this is the
+        // connect it always was.
+        return settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
     }
 
     private static OracleSession openOne(Settings settings) throws SQLException {
@@ -193,6 +324,8 @@ public final class OracleSession implements AutoCloseable {
             channel = NsChannel.connect(settings.host(), settings.port(),
                     settings.connectTimeoutMillis());
         } catch (IOException e) {
+            // Not brokenConnection: there is no channel yet to close, and a
+            // listener that cannot be reached is 08001 rather than 08006.
             throw new SQLNonTransientConnectionException(
                     "cannot reach " + settings.host() + ":" + settings.port(), "08001", e);
         }
@@ -343,7 +476,7 @@ public final class OracleSession implements AutoCloseable {
             if (!autoCommit && !query) {
                 inTransaction = true;
             }
-            TtcQuery.send(channel, sequence++, sql, query ? PREFETCH_ROWS : 0, query, binds,
+            TtcQuery.send(channel, nextCall(), sql, query ? PREFETCH_ROWS : 0, query, binds,
                     cursorId, iterations, batch, autoCommit, plsql);
             TtcResult result = readAnswer(handler, known, returningCount);
             returningCount = 0;
@@ -367,7 +500,7 @@ public final class OracleSession implements AutoCloseable {
                 return result;
             }
             while (query && !result.isExhausted() && !result.isFailure() && cursor != 0) {
-                TtcFetch.send(channel, sequence++, cursor, PREFETCH_ROWS);
+                TtcFetch.send(channel, nextCall(), cursor, PREFETCH_ROWS);
                 TtcResult more = readAnswer(handler, columns);
                 rows += more.rowCount();
                 if (more.cursorId() != 0) {
@@ -382,9 +515,13 @@ public final class OracleSession implements AutoCloseable {
             moreRows = false;
             return result;
         } catch (IOException e) {
-            close();
-            throw new SQLNonTransientConnectionException(
-                    "the connection to the server broke: " + e.getMessage(), "08006", e);
+            // 08006, like every other broken connection here. Without a
+            // SQLState this failure is invisible to everything that reacts to
+            // one: a host list does not move on, a pool does not replace the
+            // connection, and an application cannot tell it from a syntax
+            // error. It was the only place in the driver missing it.
+            throw brokenConnection("the connection to the server broke: "
+                    + e.getMessage(), e);
         }
     }
 
@@ -428,8 +565,9 @@ public final class OracleSession implements AutoCloseable {
      * to know how much there is.
      */
     public long lobLength(WireBuffer locator, int at, int locatorLength) throws SQLException {
+        int call = nextCall();
         try (WireBuffer nothing = new WireBuffer(16)) {
-            exchangeLob(() -> TtcLob.sendLength(channel, sequence++, locator, at, locatorLength),
+            exchangeLob(() -> TtcLob.sendLength(channel, call, locator, at, locatorLength),
                     nothing);
             return reportedLobValue;
         }
@@ -444,8 +582,9 @@ public final class OracleSession implements AutoCloseable {
      */
     public WireBuffer createTemporaryLob(boolean character) throws SQLException {
         WireBuffer locator = new WireBuffer(64);
+        int call = nextCall();
         try (WireBuffer nothing = new WireBuffer(16)) {
-            exchangeLob(() -> TtcLob.sendCreateTemporary(channel, sequence++, character,
+            exchangeLob(() -> TtcLob.sendCreateTemporary(channel, call, character,
                     space.seclume.oracle.net.TtcDataTypes.CHARSET_AL32UTF8),
                     nothing, locator);
         } catch (SQLException | RuntimeException e) {
@@ -464,7 +603,8 @@ public final class OracleSession implements AutoCloseable {
     public void freeTemporaryLob(WireBuffer locator, int at, int locatorLength)
             throws SQLException {
         try (WireBuffer nothing = new WireBuffer(16)) {
-            exchangeLob(() -> TtcLob.sendFreeTemporary(channel, sequence++, locator, at,
+            int call = nextCall();
+            exchangeLob(() -> TtcLob.sendFreeTemporary(channel, call, locator, at,
                     locatorLength), nothing);
         }
     }
@@ -477,7 +617,8 @@ public final class OracleSession implements AutoCloseable {
     public void writeLob(WireBuffer locator, int at, int locatorLength, long offset,
                          WireBuffer data, int length) throws SQLException {
         try (WireBuffer nothing = new WireBuffer(16)) {
-            exchangeLob(() -> TtcLob.sendWrite(channel, sequence++, locator, at, locatorLength,
+            int call = nextCall();
+            exchangeLob(() -> TtcLob.sendWrite(channel, call, locator, at, locatorLength,
                     offset, data, length), nothing);
         }
     }
@@ -498,7 +639,8 @@ public final class OracleSession implements AutoCloseable {
     public void readLob(WireBuffer locator, int at, int locatorLength, long offset,
                         long amount, WireBuffer sink)
             throws SQLException {
-        exchangeLob(() -> TtcLob.sendRead(channel, sequence++, locator, at, locatorLength,
+        int call = nextCall();
+        exchangeLob(() -> TtcLob.sendRead(channel, call, locator, at, locatorLength,
                 offset, amount), sink);
     }
 
@@ -640,7 +782,7 @@ public final class OracleSession implements AutoCloseable {
                 // carried over belongs to its cursor, not to this one.
                 releaseCarried();
             }
-            TtcFetch.send(channel, sequence++, cursorId, rows);
+            TtcFetch.send(channel, nextCall(), cursorId, rows);
             TtcResult more = readAnswer(handler, columns);
             moreRows = !more.isExhausted() && !more.isFailure() && more.rowCount() > 0;
             return more;
@@ -870,6 +1012,11 @@ public final class OracleSession implements AutoCloseable {
     /** The cursor the server has for this text, or 0. */
     public int cursorFor(String sql) {
         OpenCursor open = cursors.get(sql);
+        // Recorded by fingerprint, like everything else: a cache report that
+        // listed the statements by their text would carry every value in
+        // them, which is precisely the report nobody could then share.
+        space.seclume.jfr.Observed.statementCache(sql,
+                space.seclume.QueryFingerprint.Dialect.ORACLE, open != null);
         return open == null ? 0 : open.id();
     }
 
@@ -884,10 +1031,21 @@ public final class OracleSession implements AutoCloseable {
         if (id == 0) {
             return;
         }
-        cursors.put(sql, new OpenCursor(id, columns));
+        OpenCursor replaced = cursors.put(sql, new OpenCursor(id, columns));
+        if (replaced != null && replaced.id() != id) {
+            // The same text on a different cursor: the server parsed afresh
+            // and the old number is now ours to give back.
+            giveCursorBack(replaced.id());
+        }
         if (cursors.size() > CURSOR_CACHE_SIZE) {
-            java.util.Iterator<String> oldest = cursors.keySet().iterator();
-            oldest.next();
+            java.util.Iterator<java.util.Map.Entry<String, OpenCursor>> oldest =
+                    cursors.entrySet().iterator();
+            // Dropping the entry is not closing the cursor. The server has no
+            // way of finding out that nobody will ask for this number again,
+            // counts it against open_cursors, and a connection that sees more
+            // distinct statements than this cache holds would die with
+            // ORA-01000 - which is what STATUS.md records having met once.
+            giveCursorBack(oldest.next().getValue().id());
             oldest.remove();
         }
     }
@@ -906,6 +1064,187 @@ public final class OracleSession implements AutoCloseable {
 
     public ResultLimit resultLimit() {
         return resultLimit;
+    }
+
+    /**
+     * The number for the next call - and the guard in front of every one.
+     *
+     * <p><b>Why the number.</b> Oracle numbers each call, so every send has to
+     * ask for one; a guard here therefore cannot be forgotten by a method
+     * written later. And it has to be somewhere, because the failure it
+     * prevents is the quiet kind: a call sent while earlier answers are still
+     * outstanding gets the <b>first outstanding answer</b> handed to it, not
+     * its own. No error, no hang - just a result belonging to another
+     * statement, which is the worst shape a defect can take in a driver.
+     *
+     * <p>The TDS side of this learnt the same lesson through a hang, which was
+     * the kinder version.
+     */
+    private int nextCall() throws SQLException {
+        flushPipeline();
+        return newCallNumber();
+    }
+
+    /**
+     * One call number - and the one in front of it, if something is waiting to
+     * ride along.
+     *
+     * <p>The order is the point. A piggyback travels <b>ahead of</b> the call
+     * it rides with and therefore carries the lower number; everywhere the
+     * number is taken before the packet is opened, the one for the piggyback
+     * has to be reserved here or the two would go out in the wrong order and
+     * the server would refuse the pair.
+     */
+    private int newCallNumber() {
+        if (closingCount > 0) {
+            reservedForCursors = sequence++;
+        }
+        return sequence++;
+    }
+
+    // ---- giving cursors back ---------------------------------------------
+
+    /** Cursor numbers the cache has dropped and the server has not been told about. */
+    private int[] closing = new int[8];   // seclume-allow: cursor numbers, not a secret
+    private int closingCount;
+
+    /**
+     * The call number reserved for the next piggyback, or {@code -1}.
+     *
+     * <p>See {@link #newCallNumber()}. Where the packet is opened before a
+     * number is taken - {@code endTransaction} is the one - none is reserved
+     * and the piggyback takes the next one itself, which is then still the
+     * lower of the two.
+     */
+    private int reservedForCursors = -1;
+
+    /**
+     * Writes the pending cursor returns at the head of a packet that is being
+     * built.
+     *
+     * <p>Hung off the channel rather than called at each send site, because
+     * this driver has six of those and a seventh written later would forget.
+     */
+    private void returnCursors(WireBuffer out) {
+        if (closingCount == 0) {
+            return;
+        }
+        int call = reservedForCursors >= 0 ? reservedForCursors : sequence++;
+        reservedForCursors = -1;
+        TtcClose.putPiggyback(out, call, closing, closingCount);
+        closingCount = 0;
+    }
+
+    /** Queues a cursor number the server should have back. */
+    private void giveCursorBack(int id) {
+        if (id == 0) {
+            return;
+        }
+        if (closingCount == closing.length) {
+            closing = java.util.Arrays.copyOf(closing, closing.length * 2);
+        }
+        closing[closingCount++] = id;
+    }
+
+    /** How many cursors are waiting to be given back - for the tests. */
+    public int cursorsWaitingToClose() {
+        return closingCount;
+    }
+
+    // ---- the pipeline block ----------------------------------------------
+    //
+    // Whether this works at all is a question about the server rather than
+    // about this code: Oracle numbers every call and this driver has always
+    // sent one and waited. Two calls in flight at once is therefore an
+    // experiment, and the answer is written down where the experiment is -
+    // see OraConnection.
+
+    private boolean pipelining;
+    /** How many calls have been sent whose answers nobody has read. */
+    private int pipelineGroup;
+    private long[] pipelineCounts = new long[0]; // seclume-allow: update counts, not a secret
+    private int pipelineCount;
+    private final java.util.List<String> pipelineSql = new java.util.ArrayList<>();
+
+    public void beginPipeline() {
+        pipelining = true;
+        pipelineGroup = 0;
+        pipelineCount = 0;
+        pipelineCounts = new long[16]; // seclume-allow: update counts, not a secret
+        pipelineSql.clear();
+    }
+
+    public boolean isPipelining() {
+        return pipelining;
+    }
+
+    /**
+     * Sends one call without waiting for its answer.
+     *
+     * @return {@link java.sql.Statement#SUCCESS_NO_INFO} - the count is not
+     *         known yet, and inventing one would be a lie
+     */
+    public long pipelineExecute(String sql, space.seclume.oracle.net.TtcBinds binds)
+            throws SQLException {
+        try {
+            releaseCarried();
+            if (!autoCommit) {
+                inTransaction = true;
+            }
+            TtcQuery.send(channel, newCallNumber(), sql, 0, false, binds, 0, 1, null,
+                    autoCommit, isPlsqlBlock(sql));
+            pipelineGroup++;
+            pipelineSql.add(sql);
+            if (pipelineGroup >= PIPELINE_CALLS) {
+                flushPipeline();
+            }
+            return java.sql.Statement.SUCCESS_NO_INFO;
+        } catch (IOException e) {
+            throw brokenConnection("the connection to the server broke: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * How many calls may be in flight at once.
+     *
+     * <p>Bounded for the reason every such buffer is: if both sides keep
+     * writing and neither reads, both socket buffers fill and both block.
+     */
+    private static final int PIPELINE_CALLS = 64;
+
+    /** Reads the answers to everything that was sent. */
+    public void flushPipeline() throws SQLException {
+        if (pipelineGroup == 0) {
+            return;
+        }
+        int group = pipelineGroup;
+        pipelineGroup = 0;
+        try {
+            for (int i = 0; i < group; i++) {
+                TtcResult result = readAnswer(null, java.util.List.of());
+                keep(pipelineCount + i, Math.max(result.rowCount(), 0));
+            }
+            pipelineCount += group;
+        } catch (IOException e) {
+            throw brokenConnection("the connection to the server broke: " + e.getMessage(), e);
+        }
+    }
+
+    public long[] endPipeline() throws SQLException {
+        flushPipeline();
+        pipelining = false;
+        long[] counts = java.util.Arrays.copyOf(pipelineCounts, pipelineCount);
+        pipelineCount = 0;
+        pipelineSql.clear();
+        return counts;
+    }
+
+    private void keep(int at, long count) {
+        if (at >= pipelineCounts.length) {
+            pipelineCounts = java.util.Arrays.copyOf(pipelineCounts,
+                    Math.max(pipelineCounts.length * 2, at + 8));
+        }
+        pipelineCounts[at] = count;
     }
 
     /** How often this session has waited for the server. */
@@ -950,22 +1289,29 @@ public final class OracleSession implements AutoCloseable {
      * looks like a hung network rather than a failed statement.
      */
     private int drainMarkers(int type) throws IOException {
-        boolean sawReset = false;
-        int current = type;
-        while (current == NsPacket.TYPE_MARKER) {
-            sawReset |= channel.markerType() == NsPacket.MARKER_RESET;
-            if (sawReset) {
-                channel.sendMarker(NsPacket.MARKER_RESET);
-                sawReset = false;
-            }
-            current = channel.nextPacket();
-        }
-        return current;
+        return channel.answerMarkers(type);
     }
 
     /** How many rows the last statement produced, across all blocks. */
     public long rowCount() {
         return rows;
+    }
+
+    /**
+     * The connection is gone, and the session with it.
+     *
+     * <p><b>Closing here is the point.</b> After an IO failure the protocol
+     * state is unknown - a half-read message, a statement whose answer never
+     * came - so every further call would fail the same way. Saying so through
+     * {@code isClosed()} is what lets a pool throw the connection away instead
+     * of handing it out again; without it a database that goes away for two
+     * seconds takes the pool with it for as long as requests keep arriving
+     * faster than the pool's validation window. Found by the chaos benchmark,
+     * where it happened on every request.
+     */
+    private SQLException brokenConnection(String what, IOException cause) {
+        channel.close();
+        return new SQLNonTransientConnectionException(what, "08006", cause);
     }
 
     public boolean isOpen() {

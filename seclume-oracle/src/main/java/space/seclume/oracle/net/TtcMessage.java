@@ -35,6 +35,17 @@ public final class TtcMessage {
      */
     public static final int TYPE_IO_VECTOR = 11;
 
+    /**
+     * A call that rides in front of another one in the same packet.
+     *
+     * <p>It has a function code and a call number like any other, and it
+     * produces <b>no answer of its own</b> - the answer to the call it
+     * travels with covers both. That is what makes it the right shape for
+     * housekeeping: giving a cursor back costs no round trip. See
+     * {@link TtcClose}.
+     */
+    public static final int TYPE_PIGGYBACK = 17;
+
     /** The description of a value. */
     public static final int TYPE_OAC = 13;
     /**

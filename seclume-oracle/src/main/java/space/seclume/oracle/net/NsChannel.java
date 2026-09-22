@@ -82,7 +82,7 @@ public final class NsChannel implements AutoCloseable {
     private static final int CROSS_FACILITY = 0x0bb3;
     private static final int LARGE_SDU = 0x20000020;
 
-    private final space.seclume.internal.Transport channel;
+    private space.seclume.internal.Transport channel;
     private final WireBuffer out = new WireBuffer(16 * 1024);
     private final WireBuffer in = new WireBuffer(32 * 1024);
 
@@ -250,7 +250,33 @@ public final class NsChannel implements AutoCloseable {
         out.rewind();
         out.putZeroes(NsPacket.HEADER_SIZE);
         out.putShort((short) 0);                       // data flags
+        if (piggyback != null) {
+            piggyback.writeInto(out);
+        }
         return out;
+    }
+
+    /**
+     * Something to write at the head of every DATA packet.
+     *
+     * <p>There is exactly one use of it - {@link TtcClose}, giving cursors
+     * back - and it is a hook rather than a call at each send site for the
+     * reason every such thing is: a driver has several places that send, and
+     * one of them written later would forget. See
+     * {@code OracleSession.nextCall}, which is the same argument about call
+     * numbers.
+     */
+    @FunctionalInterface
+    public interface Piggyback {
+        /** Writes nothing when there is nothing to say. */
+        void writeInto(WireBuffer out);
+    }
+
+    private Piggyback piggyback;
+
+    /** Sets what rides in front of the next calls, or {@code null} for none. */
+    public void piggyback(Piggyback writer) {
+        this.piggyback = writer;
     }
 
     /**
@@ -273,6 +299,38 @@ public final class NsChannel implements AutoCloseable {
         out.putByte((byte) markerType);
         writeHeader(out.position(), NsPacket.TYPE_MARKER, 0);
         flush();
+    }
+
+    /**
+     * Answers the server's markers and reads on until a packet that is not
+     * one.
+     *
+     * <p><b>Oracle does not simply send an error.</b> It sends a break marker
+     * and a reset marker and waits for the client to answer with a reset of
+     * its own; only then does the error arrive. A caller that does not know
+     * this sees a MARKER where it expected data and reports whatever it
+     * happens to be doing as broken - which is how a rejected password came
+     * to be reported as a failed connection, with the SQLState of one.
+     *
+     * <p>Here rather than in each caller because it is a property of this
+     * layer, and because two implementations of it drift: the login had none
+     * and the statement path had one for months.
+     *
+     * @param type the packet type just read
+     * @return the type of the first packet that was not a marker
+     */
+    public int answerMarkers(int type) throws IOException {
+        boolean sawReset = false;
+        int current = type;
+        while (current == NsPacket.TYPE_MARKER) {
+            sawReset |= markerType() == NsPacket.MARKER_RESET;
+            if (sawReset) {
+                sendMarker(NsPacket.MARKER_RESET);
+                sawReset = false;
+            }
+            current = nextPacket();
+        }
+        return current;
     }
 
     /** The kind of a marker packet, out of its body. */
@@ -400,8 +458,15 @@ public final class NsChannel implements AutoCloseable {
             java.lang.foreign.MemorySegment.copy(in.segment(), packetEnd,
                     in.segment(), 0, leftover);
         }
+        // What is behind the leftover is the packet just consumed - rows, a
+        // LOB, whatever the server sent. It stays in native memory until
+        // something longer happens to cover it, which after a long answer
+        // followed by a short one is never. The heap dump harness cannot see
+        // this buffer, so nothing else would have found it.
+        int keep = Math.max(leftover, 0);
+        in.segment().asSlice(keep, in.capacity() - keep).fill((byte) 0);
         in.rewind();
-        filled = Math.max(leftover, 0);
+        filled = keep;
         packetEnd = 0;
         fill(NsPacket.HEADER_SIZE);
         int length;
@@ -532,6 +597,63 @@ public final class NsChannel implements AutoCloseable {
         }
         in.limit(filled);
     }
+
+    /** A channel on a transport somebody else opened - see OracleSession#resume. */
+    public static NsChannel over(space.seclume.internal.Transport transport, int protocolVersion) {
+        NsChannel channel = new NsChannel(transport);
+        channel.protocolVersion = protocolVersion;
+        return channel;
+    }
+
+    /** Whether this connection is carried by TLS at all. */
+    public boolean isEncrypted() {
+        return tls != null;
+    }
+
+    /** The transport carrying this channel - for whoever has to hand it on. */
+    public space.seclume.internal.Transport transport() {
+        return channel;
+    }
+
+    /**
+     * Whether nothing is half-written and no packet is half-read.
+     *
+     * <p>{@code filled} beyond {@code packetEnd} is not work in flight: the
+     * socket delivers markers in pairs, and the second one waiting in the
+     * buffer belongs to this conversation. What would be in flight is a packet
+     * whose body has not arrived, and that cannot be the case between calls.
+     */
+    public boolean isIdle() {
+        return out.position() == 0;
+    }
+
+    /** Puts another transport under this channel; the old one is not closed. */
+    public void replaceTransport(space.seclume.internal.Transport replacement)
+            throws java.io.IOException {
+        if (!isIdle()) {
+            throw new java.io.IOException("this channel has " + out.position()
+                    + " bytes unsent");
+        }
+        this.channel = replacement;
+        if (tls != null) {
+            tls.replaceTransport(replacement);
+        }
+    }
+
+    /** Gives the channel up without closing the transport - see OracleSession#detach. */
+    public void release() {
+        if (released) {
+            return;
+        }
+        released = true;
+        if (tls != null) {
+            tls.discard();
+        }
+        out.close();
+        in.close();
+    }
+
+    private boolean released;
 
     public int protocolVersion() {
         return protocolVersion;
