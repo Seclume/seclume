@@ -175,6 +175,90 @@ public final class MySession implements AutoCloseable {
     }
 
     /**
+     * What an authenticated MySQL stream is, once it has left its session.
+     *
+     * <p>Beside the socket, the two facts a decoder cannot derive and would
+     * otherwise have learnt while logging in: the capabilities the two sides
+     * agreed on, and the connection id. The capabilities are not decoration -
+     * whether a result set ends with an EOF packet or with an OK wearing an
+     * EOF's header is a negotiated fact, and whoever reads the stream has to
+     * know which. The connection id is what a {@code KILL QUERY} needs.
+     *
+     * @param stream the socket, still logged in, at a packet boundary
+     */
+    public record Detached(space.seclume.internal.Transport stream, int capabilities,
+                           long connectionId) {
+    }
+
+    /**
+     * Hands the authenticated stream over and finishes this session object.
+     *
+     * <p>The MySQL half of the hand-over PostgreSQL already has: the login
+     * happens once, where the credential is, and whoever receives the stream
+     * never needs one.
+     *
+     * <p>Two refusals, for the same reasons as there. Not at a quiescent
+     * point, because a stream with an answer half read cannot be taken over.
+     * And not while encrypted, because the keys are in this process and the
+     * records on that socket mean nothing anywhere else.
+     */
+    public Detached detach() throws SQLException {
+        if (!channel.isIdle()) {
+            throw new SQLException("this session has work in flight - a stream can only be "
+                    + "handed over at a quiescent point", "25000");
+        }
+        if (channel.isEncrypted()) {
+            throw new SQLException("this session is encrypted - its keys are in this process, "
+                    + "so the stream cannot be handed to another one. Open the session "
+                    + "without TLS, or terminate TLS where the login happens", "0A000");
+        }
+        Detached detached = new Detached(channel.transport(), capabilities, connectionId);
+        channel.release();
+        return detached;
+    }
+
+    /**
+     * Continues a session somebody else authenticated.
+     *
+     * <p>No handshake to run - the server is long past it - so what a driver
+     * would have learnt there is handed in instead.
+     *
+     * <p>The stream has to be at a packet boundary, and only the caller can
+     * know that: the first three bytes of a length look like anything else.
+     */
+    public static MySession resume(space.seclume.internal.Transport stream,
+                                   int capabilities, long connectionId) {
+        return new MySession(MyChannel.over(stream), capabilities, "resumed",
+                connectionId, null);
+    }
+
+    /** The transport carrying this session, for whoever may take it apart. */
+    public space.seclume.internal.Transport transport() {
+        return channel.transport();
+    }
+
+    /** Whether the <b>driver</b> has nothing in flight - half the quiescent point. */
+    public boolean isIdle() {
+        return channel.isIdle();
+    }
+
+    /** Puts another transport under this session. */
+    public void replaceTransport(space.seclume.internal.Transport replacement)
+            throws SQLException {
+        try {
+            channel.replaceTransport(replacement);
+        } catch (IOException e) {
+            throw new SQLNonTransientConnectionException(
+                    "the transport could not be replaced: " + e.getMessage(), "08006", e);
+        }
+    }
+
+    /** What the two sides agreed on - see {@link Detached}. */
+    public int capabilities() {
+        return capabilities;
+    }
+
+    /**
      * Whether a tinyint(1) is a boolean here - see
      * {@link MyTypes#isBooleanColumn}.
      *
@@ -222,6 +306,55 @@ public final class MySession implements AutoCloseable {
      */
     private final java.util.LinkedHashMap<String, Prepared> plans =
             new java.util.LinkedHashMap<>(16, 0.75f, true);
+    /**
+     * Runs a statement that answers one row of one column, and hands back that
+     * value as text.
+     *
+     * <p>There is one caller - the host list asking a server what it is; see
+     * {@code space.seclume.internal.jdbc.ServerRole}. It is deliberately not a
+     * general query method: it takes no parameters, reads at most one value,
+     * and is meant for a question the driver asks on its own behalf rather
+     * than one an application asked for.
+     *
+     * @return the value, or {@code null} when the statement answered no rows
+     */
+    public String askOneValue(String sql) throws SQLException {
+        String[] answer = new String[1];
+        query(sql, row -> {
+            if (answer[0] == null && row.fields().size() > 0 && !row.isNull(0)) {
+                answer[0] = row.getString(0);
+            }
+        });
+        return answer[0];
+    }
+
+    /**
+     * What this server says it is, for a host list that was told to look for
+     * one kind - see {@link space.seclume.internal.jdbc.TargetServer}.
+     *
+     * <p>One statement, run once, on a connection that is about to be kept or
+     * given back. A server that refuses the question answers
+     * {@code UNKNOWN} rather than failing the connect: an old version or an
+     * account without the right is not a reason to refuse a server that works.
+     */
+    private static final HostList.Roles<MySession> ROLES = new HostList.Roles<>() {
+
+        @Override
+        public space.seclume.internal.jdbc.ServerRole of(MySession session) throws SQLException {
+            try {
+                return space.seclume.internal.jdbc.ServerRole.read(session.askOneValue(
+                        space.seclume.internal.jdbc.ServerRole.MYSQL));
+            } catch (SQLException refused) {
+                return space.seclume.internal.jdbc.ServerRole.UNKNOWN;
+            }
+        }
+
+        @Override
+        public void giveBack(MySession session) {
+            session.close();
+        }
+    };
+
     /** How many plans one connection keeps. */
     private static final int PLAN_CACHE_SIZE = 64;
     private final int capabilities;
@@ -248,7 +381,11 @@ public final class MySession implements AutoCloseable {
     public static MySession open(Settings settings) throws SQLException {
         // One server: a plain connect. Several: the next one when a server
         // cannot be reached - and only then, see HostList.
-        return settings.hosts().open(server -> openOne(settings.at(server)));
+        // With several servers and a preference in the URL, each one is asked
+        // what it is before its connection is kept - see TargetServer. With
+        // one server, or none asked for, nothing is asked and this is the
+        // connect it always was.
+        return settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
     }
 
     private static MySession openOne(Settings settings) throws SQLException {
@@ -757,6 +894,11 @@ public final class MySession implements AutoCloseable {
      */
     public Prepared prepareCached(String sql) throws SQLException {
         Prepared cached = plans.get(sql);
+        // Recorded by fingerprint, like everything else: a cache report that
+        // listed the statements by their text would carry every value in
+        // them, which is precisely the report nobody could then share.
+        space.seclume.jfr.Observed.statementCache(sql,
+                space.seclume.QueryFingerprint.Dialect.MYSQL, cached != null);
         if (cached != null) {
             return cached;
         }
@@ -1419,7 +1561,19 @@ public final class MySession implements AutoCloseable {
         return new MyException(context + ": " + message, sqlState, errorNumber);
     }
 
-    private static SQLException brokenConnection(IOException cause) {
+    /**
+     * The connection is gone, and the session with it.
+     *
+     * <p><b>Closing here is the point.</b> After an IO failure the protocol
+     * state is unknown - a half-read packet, a command whose answer never
+     * came - so every further call would fail the same way. Saying so through
+     * {@code isClosed()} is what lets a pool throw the connection away instead
+     * of handing it out again; without it a database that goes away for two
+     * seconds takes the pool with it for as long as requests keep arriving.
+     * Found by the chaos benchmark, where it happened on every request.
+     */
+    private SQLException brokenConnection(IOException cause) {
+        channel.close();
         return new SQLNonTransientConnectionException(
                 "the connection to the server broke", "08006", cause);
     }

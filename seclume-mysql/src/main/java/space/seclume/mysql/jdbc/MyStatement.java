@@ -97,7 +97,8 @@ class MyStatement implements Statement, MySession.RowHandler {
         // Every statement this driver runs passes here, text protocol and
         // binary, which is why the recording hangs off this method rather
         // than off the entry points above it. See space.seclume.jfr.
-        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        space.seclume.jfr.Observed.Statement event =
+                space.seclume.jfr.Observed.beginQuery("mysql");
         boolean failed = true;
         try {
             collectInto(session, execution, binary);
