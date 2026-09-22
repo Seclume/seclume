@@ -102,7 +102,8 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      */
     void collect(TdsSession session, Execution execution) throws SQLException {
         // Every statement this driver runs passes here. See space.seclume.jfr.
-        space.seclume.jfr.SeclumeEvents.Query event = space.seclume.jfr.Observed.beginQuery();
+        space.seclume.jfr.Observed.Statement event =
+                space.seclume.jfr.Observed.beginQuery("sqlserver");
         boolean failed = true;
         try {
             collectInto(session, execution);
