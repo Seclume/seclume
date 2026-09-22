@@ -26,15 +26,15 @@ import org.junit.jupiter.api.Test;
  * building one, which needs a toolchain this machine does not have. The
  * premise, though, is checkable here - and the first run of this test found
  * <b>two dynamic proxies</b>. So the claim was not true when it was written
- * down, and a native-image attempt would have run into them on its first
- * build.
+ * down. An image was built the same day and ran into neither of them, because
+ * nothing it reached used a pool or an XA connection - which is exactly the
+ * shape of a problem that waits for somebody else.
  *
- * <p>That is the value of this test and the reason it exists as an inventory
- * rather than a prohibition. What it forbids outright is everything that is
- * not there; what is there is named, one entry each, with what it would cost
- * an image. A third proxy turns this red, which is the part that matters:
- * reflection does not arrive in a rewrite, it arrives in one convenient line
- * somebody adds two years from now.
+ * <p>Both are written out now and the inventory below is empty. The test stays
+ * as an inventory rather than a prohibition: what it forbids outright is
+ * everything that is not there, and anything that arrives has to be named with
+ * what it would cost an image. Reflection does not come in a rewrite, it comes
+ * in one convenient line somebody adds two years from now.
  *
  * <p>Test sources are not looked at. A test may do as it likes; it is not
  * shipped, and no image is built from it.
@@ -42,21 +42,22 @@ import org.junit.jupiter.api.Test;
 class NoReflectionTest {
 
     /**
-     * The two places that would need an entry in a native image's
-     * configuration, and what they are.
+     * The places that would need an entry in a native image's configuration.
      *
-     * <p>Both are proxies over a JDBC interface, both for the same reason:
-     * the interface has around a hundred methods, every one of them has to
-     * reach the wrapped object, and a hand-written delegate that forgets one
-     * sends a call to a statement the caller believes is closed. GraalVM
-     * supports dynamic proxies but has to be told which interfaces in
-     * advance - so this is real work for an image and not a blocker.
+     * <p><b>Empty, and it was not always.</b> On 22.09.2026 this held two
+     * dynamic proxies - {@code CachedPreparedStatement} in the pool and the
+     * connection handle in {@code DriverXaConnection}. Both are written-out
+     * classes now.
+     *
+     * <p>They were not removed for the reason first given. A native image was
+     * built that day and a control run showed it building and running a
+     * dynamic proxy without being told anything, as long as the interface is a
+     * class literal - which theirs were. What the rewrite actually bought is
+     * the compiler: a concrete class saying {@code implements
+     * PreparedStatement} does not build with a method missing, so the risk the
+     * proxies existed to hide from moved out of a comment and into javac.
      */
-    private static final Set<String> PROXIES = Set.of(
-            "seclume-core/src/main/java/space/seclume/internal/jdbc/"
-                    + "DriverXaConnection.java",
-            "seclume-pool/src/main/java/space/seclume/pool/"
-                    + "CachedPreparedStatement.java");
+    private static final Set<String> PROXIES = Set.of();
 
     /**
      * Uses of {@code java.lang.reflect} that cost a native image nothing.
