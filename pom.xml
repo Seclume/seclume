@@ -6,7 +6,7 @@
 
   <groupId>space.seclume</groupId>
   <artifactId>seclume-parent</artifactId>
-  <version>0.9.0</version>
+  <version>0.10.0-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>seclume</name>
@@ -85,7 +85,7 @@
     <maven.compiler.release>25</maven.compiler.release>
     <junit.version>5.11.4</junit.version>
     <!-- Reproducible builds: a fixed timestamp in the archives. -->
-    <project.build.outputTimestamp>2026-09-22T19:06:51Z</project.build.outputTimestamp>
+    <project.build.outputTimestamp>2026-09-22T19:17:56Z</project.build.outputTimestamp>
   </properties>
 
   <dependencyManagement>

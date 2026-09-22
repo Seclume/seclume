@@ -3,6 +3,13 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Work towards 1.0.0. The three items under *Not yet* in 0.9.0 are what stands
+between here and that number: fuzzing the four wire parsers, generating the
+compatibility matrix from the run, and making the benchmark figures
+reproducible.
+
 ## [0.9.0] - 2026-09-22
 
 The first published artifact, and the version number is the point: **0.9.0 is
