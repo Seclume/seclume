@@ -107,6 +107,20 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
 
     @Override
     public long executeLargeUpdate() throws SQLException {
+        checkOpen();
+        TdsSession session = connection.session();
+        if (session.isPipelining() && !wantsGeneratedKeys && getFetchSize() <= 0) {
+            // Inside a pipeline block this is buffered rather than sent - see
+            // Pipeline. Generated keys and cursors are excluded because both
+            // need an answer of their own, and a block that quietly sent them
+            // anyway would be a block that sometimes saves a round trip and
+            // sometimes does not, which is worse than one that never does.
+            if (parameters.count() < parameterCount) {
+                throw new SQLException("the statement has " + parameterCount
+                        + " parameters but only " + parameters.count() + " were set");
+            }
+            return session.pipelineExecute(prepared, sql, parameters);
+        }
         run();
         return Math.max(getLargeUpdateCount(), 0);
     }

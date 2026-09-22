@@ -166,6 +166,24 @@ public final class TdsSession implements AutoCloseable {
     }
 
     private ResultLimit resultLimit = ResultLimit.NONE;
+
+    // ---- the pipeline block ----------------------------------------------
+    //
+    // The same machinery as the batch above, pointed at a different caller:
+    // the batch bundles one statement with many values, this bundles many
+    // statements. TDS allows both the same way - several RPCs in one message,
+    // separated by 0xff - so nothing new had to be invented for it.
+
+    private boolean pipelining;
+    /** How many RPCs are waiting in the send buffer. */
+    private int pipelineGroup;
+    /** Whether a message has been started that the next RPC continues. */
+    private boolean pipelineOpen;
+    private long[] pipelineCounts = new long[0]; // seclume-allow: update counts, not a secret
+    private int pipelineCount;
+    /** The statements in the group, so a failure can say which one it was. */
+    private final java.util.List<String> pipelineSql = new java.util.ArrayList<>();
+
     private final TdsChannel channel;
     private final String serverName;
     private final int serverVersion;
@@ -183,6 +201,144 @@ public final class TdsSession implements AutoCloseable {
     private java.util.List<TdsColumn> cursorColumns = java.util.List.of();
     private long updateCount = -1;
 
+    /**
+     * What an authenticated TDS stream is, once it has left its session.
+     *
+     * <p>Beside the socket, what the login settled and a decoder cannot
+     * derive: the packet size the two sides agreed on - write a larger one and
+     * the server closes the connection - the database the session is in, and
+     * the server's name and version, which decide how some types are read.
+     *
+     * @param stream the socket, still logged in, at a packet boundary
+     */
+    public record Detached(space.seclume.internal.Transport stream, int packetSize,
+                           String database, String serverName, int serverVersion) {
+    }
+
+    /**
+     * Hands the authenticated stream over and finishes this session object.
+     *
+     * <p>The third of the four, and the same two refusals: not at a quiescent
+     * point, and not while encrypted.
+     *
+     * <p>TDS adds one condition the others do not have. An explicit
+     * transaction is not a state of the connection here but a <b>descriptor
+     * the server hands out</b>, which every following request has to quote -
+     * so a stream handed over in the middle of one would be useless to
+     * whoever receives it: they would have to quote a number they were never
+     * told. Handing it over is therefore refused, rather than discovered
+     * later by a server complaining about a transaction that does not exist.
+     */
+    public Detached detach() throws SQLException {
+        if (!channel.isIdle()) {
+            throw new SQLException("this session has work in flight - a stream can only be "
+                    + "handed over at a quiescent point (" + channel.inFlight() + ")", "25000");
+        }
+        if (channel.isEncrypted()) {
+            throw new SQLException("this session is encrypted - its keys are in this process, "
+                    + "so the stream cannot be handed to another one", "0A000");
+        }
+        if (!cursorColumns.isEmpty()) {
+            throw new SQLException("a cursor is open on this session - whoever receives the "
+                    + "stream would be reading rows it never asked for", "25000");
+        }
+        if (pending != null) {
+            throw new SQLException("a session setting is waiting to ride along with the next "
+                    + "statement - handing the stream over now would lose it", "25000");
+        }
+        if (transactionDescriptor != 0) {
+            throw new SQLException("this session is inside an explicit transaction, and its "
+                    + "descriptor cannot be handed over - commit or roll back first", "25000");
+        }
+        Detached detached = new Detached(channel.transport(), channel.packetSize(),
+                database, serverName, serverVersion);
+        channel.release();
+        return detached;
+    }
+
+    /**
+     * Continues a session somebody else authenticated.
+     *
+     * <p>No LOGIN7 to send - the server is long past it - so what it answered
+     * with is handed in instead. The packet size is the one that matters
+     * immediately: it is negotiated, and a client writing a larger packet than
+     * was agreed has its connection closed without an error message.
+     */
+    public static TdsSession resume(space.seclume.internal.Transport stream, int packetSize,
+                                    String database, String serverName, int serverVersion) {
+        TdsSession session = new TdsSession(TdsChannel.over(stream), database,
+                serverName, serverVersion);
+        session.channel.packetSize(packetSize);
+        return session;
+    }
+
+    /** The transport carrying this session, for whoever may take it apart. */
+    public space.seclume.internal.Transport transport() {
+        return channel.transport();
+    }
+
+    /**
+     * Runs a statement that answers one row of one column, and hands back that
+     * value as text.
+     *
+     * <p>There is one caller - the host list asking a server what it is; see
+     * {@code space.seclume.internal.jdbc.ServerRole}. It is deliberately not a
+     * general query method: it takes no parameters, reads at most one value,
+     * and is meant for a question the driver asks on its own behalf rather
+     * than one an application asked for.
+     *
+     * @return the value, or {@code null} when the statement answered no rows
+     */
+    public String askOneValue(String sql) throws SQLException {
+        String[] answer = new String[1];
+        sqlBatch(sql, row -> {
+            if (answer[0] == null && row.columnCount() > 0 && !row.isNull(0)) {
+                answer[0] = row.text(0);
+            }
+        });
+        return answer[0];
+    }
+
+    /**
+     * What this server says it is, for a host list that was told to look for
+     * one kind - see {@link space.seclume.internal.jdbc.TargetServer}.
+     *
+     * <p>One statement, run once, on a connection that is about to be kept or
+     * given back. A server that refuses the question answers
+     * {@code UNKNOWN} rather than failing the connect: an old version or an
+     * account without the right is not a reason to refuse a server that works.
+     */
+    private static final HostList.Roles<TdsSession> ROLES = new HostList.Roles<>() {
+
+        @Override
+        public space.seclume.internal.jdbc.ServerRole of(TdsSession session) throws SQLException {
+            try {
+                return space.seclume.internal.jdbc.ServerRole.read(session.askOneValue(
+                        space.seclume.internal.jdbc.ServerRole.SQLSERVER));
+            } catch (SQLException refused) {
+                return space.seclume.internal.jdbc.ServerRole.UNKNOWN;
+            }
+        }
+
+        @Override
+        public void giveBack(TdsSession session) {
+            session.close();
+        }
+    };
+
+    /** Whether the <b>driver</b> has nothing in flight - half the quiescent point. */
+    public boolean isIdle() {
+        return channel.isIdle();
+    }
+
+    private TdsSession(TdsChannel channel, String database, String serverName,
+                       int serverVersion) {
+        this.channel = channel;
+        this.database = database;
+        this.serverName = serverName;
+        this.serverVersion = serverVersion;
+    }
+
     private TdsSession(TdsChannel channel, LoginResponse login) {
         this.channel = channel;
         this.serverName = login.serverName();
@@ -195,7 +351,11 @@ public final class TdsSession implements AutoCloseable {
     public static TdsSession open(Settings settings) throws SQLException {
         // One server: a plain connect. Several: the next one when a server
         // cannot be reached - and only then, see HostList.
-        return settings.hosts().open(server -> openOne(settings.at(server)));
+        // With several servers and a preference in the URL, each one is asked
+        // what it is before its connection is kept - see TargetServer. With
+        // one server, or none asked for, nothing is asked and this is the
+        // connect it always was.
+        return settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
     }
 
     private static TdsSession openOne(Settings settings) throws SQLException {
@@ -325,7 +485,7 @@ public final class TdsSession implements AutoCloseable {
      */
     public TokenStream sqlBatch(String sql, TokenStream.RowHandler handler) throws SQLException {
         try {
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             String waiting = takePending();
             if (waiting != null) {
@@ -358,7 +518,7 @@ public final class TdsSession implements AutoCloseable {
                            TokenStream.RowHandler handler) throws SQLException {
         flushPending();
         try {
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             out.putShortLe((short) 0xffff);
             out.putShortLe((short) PROC_SP_EXECUTESQL);
@@ -442,7 +602,7 @@ public final class TdsSession implements AutoCloseable {
                     + "than none. Without bind values the block cursor works.");
         }
         try {
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             out.putShortLe((short) 0xffff);
             out.putShortLe((short) PROC_SP_CURSOROPEN);
@@ -479,7 +639,7 @@ public final class TdsSession implements AutoCloseable {
     public long cursorFetch(int handle, int rows, TokenStream.RowHandler handler)
             throws SQLException {
         try {
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             out.putShortLe((short) 0xffff);
             out.putShortLe((short) PROC_SP_CURSORFETCH);
@@ -498,7 +658,7 @@ public final class TdsSession implements AutoCloseable {
     /** Gives a cursor back - a result set the caller stopped reading from. */
     public void cursorClose(int handle) throws SQLException {
         try {
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             out.putShortLe((short) 0xffff);
             out.putShortLe((short) PROC_SP_CURSORCLOSE);
@@ -568,7 +728,7 @@ public final class TdsSession implements AutoCloseable {
         flushPending();
         try {
             String declaration = parameters.declaration();
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             out.putShortLe((short) 0xffff);
             out.putShortLe((short) PROC_SP_PREPEXEC);
@@ -600,11 +760,12 @@ public final class TdsSession implements AutoCloseable {
 
     /** Gives a compiled statement back. One round trip, at statement close. */
     public void unprepare(int handle) throws SQLException {
+        flushPipeline();
         if (handle == 0) {
             return;
         }
         try {
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             out.putShortLe((short) 0xffff);
             out.putShortLe((short) PROC_SP_UNPREPARE);
@@ -662,7 +823,7 @@ public final class TdsSession implements AutoCloseable {
             while (at < count) {
                 int start = at;
                 int sent = 0;
-                WireBuffer out = channel.begin();
+                WireBuffer out = beginMessage();
                 putAllHeaders(out);
                 while (at < count && sent < BATCH_ROWS && out.position() < BATCH_BYTES) {
                     binder.bind(at);
@@ -721,7 +882,7 @@ public final class TdsSession implements AutoCloseable {
     public TokenStream transactionManager(int requestType, byte[] payload,
                                           TokenStream.RowHandler handler) throws SQLException {
         try {
-            WireBuffer out = channel.begin();
+            WireBuffer out = beginMessage();
             putAllHeaders(out);
             out.putShortLe((short) requestType);
             out.putShortLe((short) (payload == null ? 0 : payload.length));
@@ -751,6 +912,172 @@ public final class TdsSession implements AutoCloseable {
 
     public ResultLimit resultLimit() {
         return resultLimit;
+    }
+
+    /**
+     * From here on, an execution nobody is waiting for is buffered.
+     *
+     * <p>See {@link space.seclume.Pipeline} for what an application writes.
+     * Whether a transaction is open is checked one layer up, in the
+     * connection, because that is where auto-commit lives.
+     */
+    public void beginPipeline() {
+        pipelining = true;
+        pipelineGroup = 0;
+        pipelineOpen = false;
+        pipelineCount = 0;
+        pipelineCounts = new long[16]; // seclume-allow: update counts, not a secret
+        pipelineSql.clear();
+    }
+
+    public boolean isPipelining() {
+        return pipelining;
+    }
+
+    /**
+     * Buffers one execution of a prepared statement.
+     *
+     * <p>Only a statement the server has already compiled can be buffered: a
+     * first execution has to come back with a handle before anything can quote
+     * it, and that round trip cannot be avoided. So the first one goes out on
+     * its own - once per statement, not once per block - and every execution
+     * after it travels as a handle and its values.
+     *
+     * @return {@link java.sql.Statement#SUCCESS_NO_INFO} when it was buffered,
+     *         because the count is not known yet and inventing one would be a
+     *         lie; the real count when the execution had to go out at once
+     */
+    public long pipelineExecute(Prepared prepared, String sql, TdsParameters parameters)
+            throws SQLException {
+        if (!prepared.fits(parameters.declaration())) {
+            // Either never compiled, or compiled for other types than these
+            // values need. Both mean: send what is gathered, then compile.
+            flushPipeline();
+            if (prepared.isPrepared()) {
+                unprepare(prepared.handle());
+                prepared.handle = 0;
+            }
+            long count = prepExec(prepared, sql, parameters);
+            record(sql, count);
+            return count;
+        }
+        // Nothing here reaches the socket: writing into the send buffer cannot
+        // fail, and the only call that can - flushPipeline, at the bound
+        // below - reports for itself.
+        WireBuffer out;
+        if (!pipelineOpen) {
+            flushPending();
+            out = channel.begin();
+            putAllHeaders(out);
+            pipelineOpen = true;
+        } else {
+            out = channel.buffer();
+            out.putByte((byte) RPC_SEPARATOR);
+        }
+        out.putShortLe((short) 0xffff);
+        out.putShortLe((short) PROC_SP_EXECUTE);
+        out.putShortLe((short) 0);                // no options
+        TdsParameters.writeInt(out, "", prepared.handle());
+        parameters.writeAll(out);
+        pipelineGroup++;
+        pipelineSql.add(sql);
+        // Bounded for the reason the batch is bounded: if both sides keep
+        // writing and neither reads, both socket buffers fill and both block.
+        // The byte bound is the one that actually guards it.
+        if (pipelineGroup >= BATCH_ROWS || out.position() >= BATCH_BYTES) {
+            flushPipeline();
+        }
+        return java.sql.Statement.SUCCESS_NO_INFO;
+    }
+
+    /**
+     * Sends what is buffered and reads the answers.
+     *
+     * <p>Called at the end of the block - and by the driver itself before
+     * anything that really needs an answer, which is what keeps the block from
+     * handing out a number the server never gave.
+     */
+    public void flushPipeline() throws SQLException {
+        if (pipelineGroup == 0) {
+            pipelineOpen = false;
+            return;
+        }
+        int group = pipelineGroup;
+        int groupStart = pipelineCount;
+        pipelineGroup = 0;
+        pipelineOpen = false;
+        try {
+            channel.send(Tds.TYPE_RPC);
+            TokenStream answer = readAnswer(null, group);
+            long[] reported = answer.updateCounts();
+            for (int i = 0; i < group; i++) {
+                keep(groupStart + i, i < reported.length ? Math.max(reported[i], 0) : 0);
+            }
+            pipelineCount = groupStart + group;
+        } catch (IOException e) {
+            throw brokenConnection(e);
+        } catch (SQLException failed) {
+            // Which one failed matters more than that one of them did: a block
+            // of five inserts reporting only that something went wrong leaves
+            // the caller to find out by reading the table.
+            String which = groupStart < pipelineSql.size()
+                    ? pipelineSql.get(groupStart)
+                    : "(unknown)";
+            throw new SQLException("a statement in the pipeline block failed. The group held "
+                    + group + " statement(s), the first of them: " + which
+                    + ". Nothing in the group reported a count, so whether any of them ran has "
+                    + "to be established from the transaction, which is still open: "
+                    + failed.getMessage(), failed.getSQLState(), failed);
+        }
+    }
+
+    /**
+     * Ends the block and returns what the server reported, in order.
+     *
+     * @return one count per execution, in the order they were written
+     */
+    public long[] endPipeline() throws SQLException {
+        flushPipeline();
+        pipelining = false;
+        long[] counts = java.util.Arrays.copyOf(pipelineCounts, pipelineCount);
+        pipelineCount = 0;
+        pipelineSql.clear();
+        return counts;
+    }
+
+    /** A count that was known at once - the first execution of a statement. */
+    private void record(String sql, long count) {
+        pipelineSql.add(sql);
+        keep(pipelineCount, count);
+        pipelineCount++;
+    }
+
+    private void keep(int at, long count) {
+        if (at >= pipelineCounts.length) {
+            pipelineCounts = java.util.Arrays.copyOf(pipelineCounts,
+                    Math.max(pipelineCounts.length * 2, at + 8));
+        }
+        pipelineCounts[at] = count;
+    }
+
+    /**
+     * Starts a message - and sends what the pipeline block is holding first.
+     *
+     * <p><b>The one door, for a reason that cost an afternoon.</b>
+     * {@code channel.begin()} rewinds the send buffer, so calling it while
+     * buffered RPCs are sitting there does not merely lose them: the count of
+     * what is outstanding stays, and the next flush waits for answers to a
+     * message that was never sent. The symptom is a driver that hangs, and the
+     * cause is somewhere else entirely.
+     *
+     * <p>It was found by a query inside a block, because {@code sqlBatch} is
+     * the one method here that does not call {@code flushPending} - so a rule
+     * of the form "flush next to that" missed exactly the method that was
+     * built differently. A single entry point cannot be missed that way.
+     */
+    private WireBuffer beginMessage() throws SQLException {
+        flushPipeline();
+        return channel.begin();
     }
 
     /** How often this session has waited for the server. */

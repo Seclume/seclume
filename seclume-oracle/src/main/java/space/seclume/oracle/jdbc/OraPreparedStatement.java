@@ -64,6 +64,19 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
 
     @Override
     public long executeLargeUpdate() throws SQLException {
+        checkOpen();
+        if (connection.session().isPipelining() && keyColumns == null) {
+            // Inside a pipeline block this goes out without waiting for the
+            // answer - see Pipeline. Generated keys are excluded because
+            // Oracle returns them through output binds, which have to be read
+            // before the next call: a block that sent them anyway would hand
+            // one statement's keys to another.
+            if (parameters.count() < parameterCount) {
+                throw new SQLException("the statement has " + parameterCount
+                        + " parameters but only " + parameters.count() + " were set");
+            }
+            return connection.session().pipelineExecute(sql, parameters);
+        }
         run();
         return Math.max(getLargeUpdateCount(), 0);
     }

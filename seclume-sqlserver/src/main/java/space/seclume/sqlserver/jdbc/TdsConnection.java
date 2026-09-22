@@ -591,37 +591,48 @@ public final class TdsConnection implements Connection, RoundTrips, Pipelined {
     // ---- the pipeline block ---------------------------------------------
 
     /**
-     * The block is allowed here and saves nothing - yet.
+     * From here on, an update nobody is waiting for is buffered.
      *
-     * <p>{@link space.seclume.Pipeline} exists so that an
-     * application can write a unit of work once and have it cost one round
-     * trip where the protocol allows it. SQL Server answers every call
-     * of its own accord, so there is nothing to hold back: the statements go
-     * out as they always did and report their counts as they always did.
+     * <p>{@link space.seclume.Pipeline} exists so that an application can
+     * write a unit of work once and have it cost one round trip where the
+     * protocol allows it. TDS allows it: several RPCs travel in one message,
+     * separated by {@code 0xff}, which is how {@code executeBatch} has always
+     * sent its rows. The block points the same machinery at many statements
+     * instead of many values.
      *
-     * <p>Saying so is the point. A block that silently pretends to bundle
-     * would be worse than one that admits it does not - and the code stays
-     * portable either way.
+     * <p><b>What is not buffered</b>, because it cannot be: a query, a
+     * statement that asks for generated keys, and the first execution of a
+     * statement the server has not compiled yet - that one has to come back
+     * with a handle before anything can quote it. Each of those sends what is
+     * gathered first, so the order on the server is the order in the block.
      */
     @Override
     public void beginPipeline() throws SQLException {
         checkOpen();
+        if (getAutoCommit()) {
+            throw new SQLException("a pipeline block needs a transaction - in auto-commit "
+                    + "every statement would commit on its own, and a failure in the middle "
+                    + "would leave the ones before it standing. Call setAutoCommit(false) "
+                    + "first.", "25000");
+        }
+        session.beginPipeline();
     }
 
     @Override
     public long[] endPipeline() throws SQLException {
         checkOpen();
-        return new long[0]; // seclume-allow: no counts, because nothing was held back
+        return session.endPipeline();
     }
 
     @Override
     public boolean isPipelining() {
-        return false;
+        return session.isPipelining();
     }
 
     @Override
     public void flushPipeline() throws SQLException {
         checkOpen();
+        session.flushPipeline();
     }
 
     @Override

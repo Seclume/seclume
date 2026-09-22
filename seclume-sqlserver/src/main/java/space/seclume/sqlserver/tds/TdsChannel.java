@@ -17,7 +17,7 @@ import space.seclume.internal.WireBuffer;
  */
 public final class TdsChannel implements AutoCloseable {
 
-    private final space.seclume.internal.Transport channel;
+    private space.seclume.internal.Transport channel;
     private final WireBuffer out = new WireBuffer(16 * 1024);
     private final WireBuffer in = new WireBuffer(32 * 1024);
 
@@ -71,6 +71,66 @@ public final class TdsChannel implements AutoCloseable {
         this.tls = layer;
     }
 
+    /** A channel on a transport somebody else opened - see TdsSession#resume. */
+    public static TdsChannel over(space.seclume.internal.Transport transport) {
+        return new TdsChannel(transport);
+    }
+
+    /** The transport carrying this channel - for whoever has to hand it on. */
+    public space.seclume.internal.Transport transport() {
+        return channel;
+    }
+
+    /**
+     * Whether nothing is half-written on this side.
+     *
+     * <p>Only half the question, and in TDS the other half is not the
+     * channel's to answer. The receive buffer holds <b>one message</b> and is
+     * reset at the start of the next - so bytes left unread in it are not work
+     * in flight but a tail the caller chose to skip, which a login response
+     * routinely has. Nothing of them is still on the socket.
+     *
+     * <p>What cannot be seen from here is whether the caller is in the middle
+     * of a result it means to go on reading. That is the session's state, and
+     * {@code TdsSession#detach} asks it there.
+     */
+    public boolean isIdle() {
+        return out.position() == 0;
+    }
+
+    /** What is in flight, for an error message that can be acted on. */
+    public String inFlight() {
+        return out.position() + " bytes unsent, " + (messageLength - in.position())
+                + " of the last message unread";
+    }
+
+    /** Puts another transport under this channel; the old one is not closed. */
+    public void replaceTransport(space.seclume.internal.Transport replacement)
+            throws java.io.IOException {
+        if (!isIdle()) {
+            throw new java.io.IOException("this channel has work in flight");
+        }
+        this.channel = replacement;
+        if (tls != null) {
+            tls.replaceTransport(replacement);
+        }
+    }
+
+    /** Gives the channel up without closing the transport - see TdsSession#detach. */
+    public void release() {
+        if (released) {
+            return;
+        }
+        released = true;
+        if (tls != null) {
+            tls.discard();
+        }
+        out.close();
+        in.close();
+    }
+
+    private boolean released;
+
     public boolean isEncrypted() {
         return tls != null;
     }
@@ -86,6 +146,18 @@ public final class TdsChannel implements AutoCloseable {
     public WireBuffer begin() {
         out.rewind();
         out.putZeroes(Tds.HEADER_SIZE);
+        return out;
+    }
+
+    /**
+     * The message being written, for a caller adding to one it started.
+     *
+     * <p>Deliberately not {@link #begin()}: that one rewinds, which is right
+     * for a new message and would silently drop a half-written one. A caller
+     * that puts several RPCs into one message needs the second of them to
+     * continue rather than to restart.
+     */
+    public WireBuffer buffer() {
         return out;
     }
 
@@ -191,6 +263,15 @@ public final class TdsChannel implements AutoCloseable {
      * @return the message type; the buffer then stands at the content
      */
     public int receive() throws IOException {
+        // The previous answer is still lying here: rewinding moves the
+        // pointers and not the memory, so a long result followed by a short
+        // one left most of the long one in native memory indefinitely. It is
+        // rows rather than credentials, which is precisely what one does not
+        // want in a core dump - and the heap dump harness cannot see this
+        // buffer at all, so nothing else would have caught it.
+        if (filled > 0) {
+            in.segment().asSlice(0, Math.min(filled, in.capacity())).fill((byte) 0);
+        }
         in.rewind();
         // TDS is strictly alternating: one request, one answer. That is why the
         // receive buffer may start at zero for each message - nothing unread
