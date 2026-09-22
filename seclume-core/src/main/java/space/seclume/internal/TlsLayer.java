@@ -1,6 +1,7 @@
 package space.seclume.internal;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.security.cert.X509Certificate;
 
@@ -66,6 +67,50 @@ public interface TlsLayer extends AutoCloseable {
      * refuses rather than the reader remembers.
      */
     boolean movable();
+
+    /**
+     * How many bytes {@link #freeze} needs.
+     *
+     * <p>Ask before allocating, and allocate a
+     * {@link space.seclume.secret.SecretScope} rather than an array: what
+     * {@code freeze} writes is key material.
+     *
+     * @throws UnsupportedOperationException on a layer whose {@link #movable()}
+     *         is {@code false}
+     */
+    default int frozenLength() {
+        throw new UnsupportedOperationException(notMovable());
+    }
+
+    /**
+     * Writes this layer's encryption state out and gives the layer up,
+     * <b>without closing the transport underneath and without saying goodbye
+     * to the peer</b>.
+     *
+     * <p>Only at a quiet moment: with a record decrypted whose bytes nobody
+     * has read, freezing would drop them, and the implementation refuses
+     * rather than risks it.
+     *
+     * <p><b>What lands in {@code out} is the key to the connection, in both
+     * directions.</b> Whoever holds these bytes can read and forge everything
+     * on it, so the segment should be a
+     * {@link space.seclume.secret.SecretScope} - locked, wiped on close - and
+     * the carrier that takes them anywhere has to be confidential as well as
+     * authenticated.
+     *
+     * @return the number of bytes written
+     * @throws UnsupportedOperationException on a layer whose {@link #movable()}
+     *         is {@code false}
+     */
+    default int freeze(MemorySegment out, long offset) {
+        throw new UnsupportedOperationException(notMovable());
+    }
+
+    private static String notMovable() {
+        return "this TLS layer is an SSLEngine: it does not hand out its traffic secrets or "
+                + "its record sequence numbers, by design, so its state cannot be written "
+                + "down. Use seclume's own TLS stack for a connection that has to move";
+    }
 
     /**
      * Puts a different transport underneath, keeping the encryption state as

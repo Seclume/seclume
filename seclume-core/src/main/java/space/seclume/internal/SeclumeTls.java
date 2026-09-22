@@ -1,6 +1,7 @@
 package space.seclume.internal;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.security.cert.X509Certificate;
@@ -142,6 +143,34 @@ public final class SeclumeTls implements TlsLayer {
     @Override
     public void replaceTransport(Transport replacement) {
         connection.replaceTransport(replacement);
+    }
+
+    @Override
+    public int frozenLength() {
+        return connection.frozenLength();
+    }
+
+    @Override
+    public int freeze(MemorySegment out, long offset) {
+        return connection.freeze(out, offset);
+    }
+
+    /**
+     * Takes up a connection somebody else froze, over a transport that reaches
+     * the same peer.
+     *
+     * <p>The other end of {@link #freeze}. Nothing is negotiated and the peer
+     * is told nothing: the keys and the record sequence numbers carry on where
+     * they stopped, and if any of them is wrong the very next record fails its
+     * tag. There is no handshake to fail instead, which is why this is safe to
+     * attempt rather than dangerous to get wrong.
+     *
+     * @param in the bytes {@code freeze} wrote - key material, so a
+     *           {@link space.seclume.secret.SecretScope} and not an array
+     */
+    public static SeclumeTls thaw(Transport transport, MemorySegment in, long offset,
+            int available) {
+        return new SeclumeTls(TlsConnection.thaw(transport, in, offset, available));
     }
 
     /** The connection underneath - for whoever has to freeze it. */
