@@ -43,6 +43,21 @@ public final class TdsDataSource implements DataSource, ExpiringCredentials {
     private int connectTimeoutMillis = 10_000;
     private boolean trustServerCertificate;
     private SecretProvider secret;
+    private space.seclume.tls.ClientIdentity identity;
+    /**
+     * Which TDS version, and therefore where TLS sits. {@code 7.4} wraps the
+     * handshake inside TDS packets; {@code 8.0} is TLS from the first byte,
+     * which is the only version this library's own TLS stack can carry.
+     */
+    private space.seclume.sqlserver.tds.TdsVersion tdsVersion =
+            space.seclume.sqlserver.tds.TdsVersion.TDS_7_4;
+    /**
+     * Which TLS implementation carries the connection; {@code jsse} by
+     * default. A separate decision from how much encryption is asked for -
+     * see {@link space.seclume.internal.jdbc.TlsStack}.
+     */
+    private space.seclume.internal.jdbc.TlsStack tlsStack =
+            space.seclume.internal.jdbc.TlsStack.JSSE;
     private PrintWriter logWriter;
     private HostList hosts;
     private long maxResultBytes;
@@ -124,6 +139,38 @@ public final class TdsDataSource implements DataSource, ExpiringCredentials {
         this.secret = secret;
     }
 
+    /**
+     * A client identity directly, when the application builds it itself.
+     *
+     * <p>The alternative is to describe one in the properties -
+     * {@code clientCert} plus {@code clientKey-provider} and its settings -
+     * which is what {@link space.seclume.tls.ClientIdentities} reads.
+     */
+    public void setClientIdentity(space.seclume.tls.ClientIdentity identity) {
+        this.identity = identity;
+    }
+
+    /** {@code 7.4} or {@code 8.0} - see the field. */
+    public void setTds(String version) throws SQLException {
+        this.tdsVersion = space.seclume.sqlserver.tds.TdsVersion.of(version);
+    }
+
+    public String getTds() {
+        return tdsVersion == space.seclume.sqlserver.tds.TdsVersion.TDS_8_0 ? "8.0" : "7.4";
+    }
+
+    public void setTlsStack(String stack) throws SQLException {
+        try {
+            this.tlsStack = space.seclume.internal.jdbc.TlsStack.of(stack);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException(e.getMessage(), "08001", e);
+        }
+    }
+
+    public String getTlsStack() {
+        return tlsStack.name().toLowerCase(java.util.Locale.ROOT);
+    }
+
     /** Provider settings as in {@code application.properties}. */
     public void setProperty(String key, String value) {
         properties.put(key, value);
@@ -144,6 +191,14 @@ public final class TdsDataSource implements DataSource, ExpiringCredentials {
         this.connectTimeoutMillis = settings.connectTimeoutMillis();
         this.trustServerCertificate = settings.trustServerCertificate();
         this.hosts = settings.hosts();
+        // Everything the URL can say, or the same text means two different
+        // things depending on which of the two doors it came through. These
+        // three were missing, which is why a client certificate could be
+        // configured in a URL and not in a DataSource - the door Spring Boot
+        // uses.
+        this.tdsVersion = settings.tdsVersion();
+        this.tlsStack = settings.tlsStack();
+        this.identity = settings.identity();
     }
 
     @Override
@@ -155,7 +210,8 @@ public final class TdsDataSource implements DataSource, ExpiringCredentials {
         TdsSession.Settings settings = new TdsSession.Settings(host, port, database, user,
                 provider, applicationName, connectTimeoutMillis, trustServerCertificate,
                 hosts != null ? hosts : HostList.of(host, port),
-                ResultLimit.of(maxResultBytes, maxResultRows));
+                ResultLimit.of(maxResultBytes, maxResultRows), tdsVersion, tlsStack,
+                resolvedIdentity());
         return new TdsConnection(TdsSession.open(settings),
                 TdsUrl.PREFIX + "//" + host + ":" + port + "/" + database);
     }
@@ -246,4 +302,17 @@ public final class TdsDataSource implements DataSource, ExpiringCredentials {
         return secret;
     }
 
+    /**
+     * The client identity in use, built from the properties if none was set.
+     *
+     * <p>Built once, like the secret provider and for a sharper version of the
+     * same reason: the private key is loaded into native memory and held
+     * there, so one per data source rather than one per connection.
+     */
+    private synchronized space.seclume.tls.ClientIdentity resolvedIdentity() {
+        if (identity == null) {
+            identity = space.seclume.tls.ClientIdentities.of(properties);
+        }
+        return identity;
+    }
 }

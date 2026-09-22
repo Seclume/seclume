@@ -28,7 +28,7 @@ public final class MyChannel implements AutoCloseable {
     private static final int DEFAULT_BUFFER = 32 * 1024;
     private static final int HEADER = 4;
 
-    private final space.seclume.internal.Transport channel;
+    private space.seclume.internal.Transport channel;
 
     /**
      * TLS, once it has been switched on - see {@link #startTls}.
@@ -114,6 +114,69 @@ public final class MyChannel implements AutoCloseable {
     public String tlsDescription() {
         return tls == null ? null : tls.description();
     }
+
+    /** A channel on a transport somebody else opened - see MySession#resume. */
+    public static MyChannel over(space.seclume.internal.Transport transport) {
+        return new MyChannel(transport);
+    }
+
+    /** The transport carrying this channel - for whoever has to hand it on. */
+    public space.seclume.internal.Transport transport() {
+        return channel;
+    }
+
+    /**
+     * Whether the channel has nothing of its own in flight.
+     *
+     * <p>Nothing written and not yet flushed, and nothing received and not yet
+     * read. This is the protocol half of the quiescent point; what the kernel
+     * still holds is the other half, and only the transport knows it.
+     */
+    public boolean isIdle() {
+        return out.position() == 0 && in.position() == filled;
+    }
+
+    /**
+     * Puts another transport under this channel.
+     *
+     * <p>The old one is <b>not</b> closed here: closing it while the server
+     * may still retransmit is what answers that retransmission with an RST,
+     * and the order belongs to the caller.
+     */
+    public void replaceTransport(space.seclume.internal.Transport replacement)
+            throws java.io.IOException {
+        if (!isIdle()) {
+            throw new java.io.IOException("this channel has work in flight - "
+                    + out.position() + " bytes unsent, " + (filled - in.position())
+                    + " unread");
+        }
+        this.channel = replacement;
+        if (tls != null) {
+            tls.replaceTransport(replacement);
+        }
+    }
+
+    /**
+     * Gives the channel up without closing the transport.
+     *
+     * <p>For the one case where the stream outlives the session object.
+     * Closing here would close the very socket that is about to carry the
+     * conversation; not closing at all would leak the two buffers, which are
+     * native memory this channel allocated.
+     */
+    public void release() {
+        if (released) {
+            return;
+        }
+        released = true;
+        if (tls != null) {
+            tls.discard();
+        }
+        out.close();
+        in.close();
+    }
+
+    private boolean released;
 
     /** Whether the line is encrypted - some authentication paths depend on it. */
     public boolean isEncrypted() {
@@ -302,6 +365,6 @@ public final class MyChannel implements AutoCloseable {
     }
 
     public boolean isOpen() {
-        return channel.isOpen();
+        return !released && channel.isOpen();
     }
 }
