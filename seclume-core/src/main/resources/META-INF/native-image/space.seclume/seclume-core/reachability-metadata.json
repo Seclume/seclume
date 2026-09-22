@@ -1,0 +1,26 @@
+{
+  "comment": [
+    "What a GraalVM native image cannot work out for itself, and it is one thing.",
+    "MemoryLock calls mlock/munlock - on Windows VirtualLock/VirtualUnlock - through",
+    "the foreign linker, so that the pages holding a secret are never written to swap.",
+    "A downcall has to be registered at build time; without this entry the image builds",
+    "and then fails on the first connection with MissingForeignRegistrationError.",
+    "Found by building one on 22.09.2026 rather than by reasoning about it, and written",
+    "by GraalVM's own tracing agent rather than by hand - the signature below is jint",
+    "(void*, jlong), which is both mlock and munlock.",
+    "Nothing else is needed. The drivers are found through ServiceLoader, which an image",
+    "handles without help, and there is no reflection anywhere in the distribution -",
+    "see NoReflectionTest, which keeps it that way."
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "jlong"
+        ]
+      }
+    ]
+  }
+}

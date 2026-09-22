@@ -425,6 +425,20 @@ A server that cannot answer is accepted rather than skipped. Refusing to connect
 unanswered question would turn a working cluster into an outage; a server that turns out to be
 the wrong kind at least fails with a sentence that says so.
 
+**It builds as a GraalVM native image**, and connects from one. No JNI, no reflection, pure
+FFM - and two things an image has to be told, both of which ship with `seclume-core` so that
+nobody has to find out the hard way: the `mlock` downcall that keeps a secret's pages out of
+swap, and shared arena support, which every receive buffer here needs. Built from the jar with
+no flags:
+
+```
+native-image --no-fallback -jar seclume-verify.jar
+```
+
+Three milliseconds to start against fifty-eight on the JVM. And honestly: once a database
+connection is in the picture that is noise - the native image is for a process that starts
+often, not for one that then talks to a server over a network.
+
 **Beside the drivers**
 
 - `seclume-pool` — a connection pool with no third-party dependency, fit for virtual threads,
