@@ -45,6 +45,16 @@ public class InsertBenchmark {
     @Param({"500"})
     public int rows;
 
+    /**
+     * {@code default}: both drivers as they come. {@code rewrite}: both told
+     * to send a batch of inserts as multi-row inserts - Connector/J's
+     * {@code rewriteBatchedStatements}, pgjdbc's {@code reWriteBatchedInserts},
+     * seclume's {@code rewriteBatchedInserts}. Comparing one side's tuned
+     * setting with the other's default would measure the setting.
+     */
+    @Param({"default", "rewrite"})
+    public String batching;
+
     private BenchDatabase database;
     private Connection connection;
     private PreparedStatement insert;
@@ -52,10 +62,21 @@ public class InsertBenchmark {
     @Setup(Level.Trial)
     public void open() throws SQLException {
         database = BenchDatabase.fromSystemProperties();
-        connection = "seclume".equals(driver)
-                ? database.seclume().getConnection()
-                : DriverManager.getConnection(database.vendorUrl(),
-                        database.vendorProperties());
+        boolean rewrite = "rewrite".equals(batching);
+        if ("seclume".equals(driver)) {
+            javax.sql.DataSource source = database.seclume();
+            if (rewrite && source instanceof space.seclume.mysql.jdbc.MyDataSource mysql) {
+                mysql.setRewriteBatchedInserts(true);
+            }
+            connection = source.getConnection();
+        } else {
+            java.util.Properties properties = database.vendorProperties();
+            if (rewrite) {
+                properties.setProperty("rewriteBatchedStatements", "true");   // Connector/J
+                properties.setProperty("reWriteBatchedInserts", "true");      // pgjdbc
+            }
+            connection = DriverManager.getConnection(database.vendorUrl(), properties);
+        }
         connection.setAutoCommit(true);
         try (Statement statement = connection.createStatement()) {
             try {

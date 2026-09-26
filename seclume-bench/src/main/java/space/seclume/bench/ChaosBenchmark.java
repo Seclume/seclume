@@ -60,7 +60,7 @@ public final class ChaosBenchmark {
     /** What one run found. */
     public record Report(int requestsBefore, int requestsFailed, long failoverMillis,
                          int writesConfirmed, int writesInDoubt, int writesLost,
-                         long poolRecoveryMillis) {
+                         long poolRecoveryMillis, int reportedUnknown, int inDoubtUnreported) {
 
         @Override
         public String toString() {
@@ -71,9 +71,12 @@ public final class ChaosBenchmark {
                     writes confirmed          %d
                     writes in doubt           %d   (the client saw an error, the row is there)
                     writes lost               %d   (the client saw an error, the row is not)
-                    pool back to full         %d ms"""
+                    pool back to full         %d ms
+                    reported as unknown       %d   (08007 - the client was told it cannot know)
+                    in doubt and not told so  %d   (the number that has to be zero)"""
                     .formatted(requestsBefore, requestsFailed, failoverMillis,
-                            writesConfirmed, writesInDoubt, writesLost, poolRecoveryMillis);
+                            writesConfirmed, writesInDoubt, writesLost, poolRecoveryMillis,
+                            reportedUnknown, inDoubtUnreported);
         }
     }
 
@@ -114,6 +117,7 @@ public final class ChaosBenchmark {
 
                 List<Integer> attempted = new ArrayList<>();
                 List<Integer> confirmed = new ArrayList<>();
+                List<Integer> unknown = new ArrayList<>();
                 int failed = 0;
                 int before = 0;
                 long cutAt = 0;
@@ -122,7 +126,11 @@ public final class ChaosBenchmark {
                 boolean swallowed = false;
 
                 for (int n = 1; n <= rows; n++) {
-                    boolean ok = writeOne(pool, n);
+                    Outcome outcome = writeOne(pool, n);
+                    boolean ok = outcome == Outcome.CONFIRMED;
+                    if (outcome == Outcome.UNKNOWN) {
+                        unknown.add(n);
+                    }
                     attempted.add(n);
                     if (ok) {
                         confirmed.add(n);
@@ -163,34 +171,44 @@ public final class ChaosBenchmark {
                 List<Integer> present = rowsPresent(database);
                 int inDoubt = 0;
                 int lost = 0;
+                int unreported = 0;
                 for (int n : attempted) {
                     boolean clientSawSuccess = confirmed.contains(n);
                     boolean serverHasIt = present.contains(n);
                     if (!clientSawSuccess && serverHasIt) {
                         inDoubt++;
+                        // Applied, and the client was told only "failed" -
+                        // the case 08007 exists to make impossible.
+                        if (!unknown.contains(n)) {
+                            unreported++;
+                        }
                     } else if (!clientSawSuccess) {
                         lost++;
                     }
                 }
                 return new Report(before, failed, failover,
-                        confirmed.size(), inDoubt, lost, poolBack);
+                        confirmed.size(), inDoubt, lost, poolBack, unknown.size(), unreported);
             }
         }
     }
 
-    /** One write, reporting only whether the client was told it worked. */
-    private static boolean writeOne(SeclumePool pool, int n) {
+    /** What the client was told about one write. */
+    private enum Outcome { CONFIRMED, FAILED, UNKNOWN }
+
+    /** One write, reporting what the client was told - nothing more. */
+    private static Outcome writeOne(SeclumePool pool, int n) {
         try (Connection connection = pool.getConnection();
                 PreparedStatement insert = connection.prepareStatement(
                         "insert into zl_chaos (n) values (?)")) {
             insert.setInt(1, n);
             insert.executeUpdate();
-            return true;
+            return Outcome.CONFIRMED;
         } catch (SQLException failure) {
             if (System.getProperty("chaos.trace") != null) {
                 System.err.println("[chaos] row " + n + " failed: " + failure.getMessage());
             }
-            return false;
+            return failure instanceof space.seclume.TransactionResolutionUnknownException
+                    ? Outcome.UNKNOWN : Outcome.FAILED;
         }
     }
 

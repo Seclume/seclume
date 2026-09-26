@@ -57,4 +57,32 @@ class CommandLineTest {
         assertTrue(result.output().contains("what to do"),
                 "a failure without advice sends somebody guessing: " + result.output());
     }
+
+    /**
+     * {@code --json}: one document on stdout, and nothing else.
+     *
+     * <p>The "nothing else" is the assertion. A probe pipes this straight into
+     * a parser, so a single line of prose in front of the brace - a warning, a
+     * banner, an "opening connection..." - breaks it, and breaks it in the
+     * environment where nobody is watching.
+     */
+    @Test
+    void jsonPrintsADocumentAndNothingElse() throws Exception {
+        ChildJvm.Result result = ChildJvm.run(Verify.class,
+                List.of("--json", "jdbc:postgresql://host/db"), 60);
+        assertEquals(1, result.exitCode(), result.output());
+        String out = result.output().strip();
+        assertTrue(out.startsWith("{") && out.endsWith("}"),
+                "something else got printed beside the document: " + out);
+        assertTrue(out.contains("\"ok\": false"), out);
+        assertTrue(out.contains("\"status\": 1"), out);
+    }
+
+    /** The flag on its own is still a misuse, and still exit 2. */
+    @Test
+    void jsonWithoutAUrlIsStillAMisuse() throws Exception {
+        ChildJvm.Result result = ChildJvm.run(Verify.class, List.of("--json"), 60);
+        assertEquals(2, result.exitCode(), result.output());
+        assertTrue(result.output().contains("usage:"), result.output());
+    }
 }

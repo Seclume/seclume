@@ -24,6 +24,17 @@
   </properties>
 
   <dependencies>
+    <!--
+      The measuring rig has one thing worth a unit test: the record it writes
+      about a run. A benchmark page is read on trust, so the part that decides
+      what reaches it gets a control - see BenchRecordTest.
+    -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+
     <dependency>
       <groupId>space.seclume</groupId>
       <artifactId>seclume-postgresql</artifactId>

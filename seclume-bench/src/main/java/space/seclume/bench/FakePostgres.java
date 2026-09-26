@@ -53,7 +53,8 @@ public final class FakePostgres implements AutoCloseable {
 
     public FakePostgres(int port, int rows) throws IOException {
         this.rows = rows;
-        this.socket = new ServerSocket(port, 16, InetAddress.getLoopbackAddress());
+        // A benchmark stand-in on the loopback address.
+        this.socket = new ServerSocket(port, 16, InetAddress.getLoopbackAddress()); // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         Thread thread = new Thread(this::accept, "fake-postgres");
         thread.setDaemon(true);
         thread.start();

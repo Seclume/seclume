@@ -48,6 +48,9 @@ import space.seclume.tck.TestHosts;
  * test is where the event goes if a handle cache is ever built.
  */
 @Timeout(300)
+// Alone: it records events of the whole process, and a class running beside it
+// would put its own statements and logins into the recording.
+@org.junit.jupiter.api.parallel.Isolated
 class StatementCacheEventTest {
 
     private record Database(String name, String scheme, int port, String database, String user,

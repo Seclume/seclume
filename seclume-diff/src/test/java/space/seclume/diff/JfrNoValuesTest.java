@@ -57,6 +57,9 @@ import space.seclume.tck.TestHosts;
  * think to check.
  */
 @Timeout(300)
+// Alone: it records events of the whole process, and a class running beside it
+// would put its own statements and logins into the recording.
+@org.junit.jupiter.api.parallel.Isolated
 class JfrNoValuesTest {
 
     /** Long enough that finding it anywhere means something. */

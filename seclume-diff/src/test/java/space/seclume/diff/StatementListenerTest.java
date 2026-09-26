@@ -44,6 +44,9 @@ import space.seclume.tck.TestHosts;
  * what is being checked is the drivers, not the consumer.
  */
 @Timeout(300)
+// Alone: it records events of the whole process, and a class running beside it
+// would put its own statements and logins into the recording.
+@org.junit.jupiter.api.parallel.Isolated
 class StatementListenerTest {
 
     /** A value that has no business being in anything the listener sees. */

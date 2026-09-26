@@ -94,4 +94,26 @@ class VerifyTest {
                         new javax.net.ssl.SSLException("certificate unknown")));
         assertTrue(Verify.isTlsFailure(failure));
     }
+
+    /**
+     * A URL the driver refuses is not a network problem.
+     *
+     * <p>Found by reading this tool's own JSON output: a URL carrying
+     * {@code password=} came back with state {@code 08001} and the advice
+     * "check host, port and firewall". All three were fine and no server had
+     * been asked. The state was right and the sentence sent somebody to the
+     * wrong place, which is the worse of the two failures a diagnostic can
+     * have.
+     */
+    @Test
+    void aRefusedSettingIsNotReportedAsANetworkProblem() {
+        Report report = new Report();
+        assertEquals(1, Verify.run(
+                "jdbc:seclume:postgresql://127.0.0.1:1/db?user=app&password=hunter2", report));
+        String text = report.toString();
+        assertTrue(text.contains("refused before any server was asked"), text);
+        assertFalse(text.contains("firewall"),
+                "the network advice would send somebody checking three things that are "
+                        + "fine: " + text);
+    }
 }

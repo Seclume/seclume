@@ -11,6 +11,7 @@ import java.sql.Statement;
 
 import space.seclume.Pipelined;
 import space.seclume.RoundTrips;
+import space.seclume.Secured;
 
 /**
  * One connection, one report.
@@ -18,6 +19,12 @@ import space.seclume.RoundTrips;
  * <p>Run before anything else in a strange environment:
  *
  * <pre>{@code java -jar seclume-verify.jar "jdbc:seclume:postgresql://db:5432/app?user=app&provider=file&path=/run/secrets/db"}</pre>
+ *
+ * <p>With {@code --json} in front of the URL the same report comes out as one
+ * JSON object and nothing else - for a build step, or for a readiness probe
+ * that wants a field rather than a paragraph. The exit code does not change,
+ * because the exit code is the contract: <b>0</b> the connection stands,
+ * <b>1</b> it does not, <b>2</b> the tool was called wrongly.
  *
  * <p>What comes out is meant to be pasted into a ticket: which driver took the
  * URL, which server answered and in what version, where the secret comes from,
@@ -39,20 +46,113 @@ public final class Verify {
     }
 
     public static void main(String[] arguments) {
-        if (arguments.length != 1 || arguments[0].isBlank()) {
+        if (arguments.length == 2 && arguments[0].strip().equals("--migrate")) {
+            System.exit(Migrate.run(arguments[1].strip(), System.out, System.err));
+            return;
+        }
+        boolean json = false;
+        boolean printPin = false;
+        String url = null;
+        for (String argument : arguments) {
+            String value = argument.strip();
+            if (value.equals("--json")) {
+                json = true;
+            } else if (value.equals("--print-pin")) {
+                printPin = true;
+            } else if (url == null && !value.isBlank()) {
+                url = value;
+            } else {
+                url = null;
+                break;
+            }
+        }
+        if (url == null) {
             System.err.println("""
-                    usage: java -jar seclume-verify.jar "<jdbc url>"
+                    usage: java -jar seclume-verify.jar [--json] "<jdbc url>"
+                           java -jar seclume-verify.jar --print-pin "<jdbc url>"
+                           java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
 
                     The URL is the one the application uses, password included -
                     which is to say: not included. It names where the secret comes
-                    from, for example provider=file&path=/run/secrets/db.""");
+                    from, for example provider=file&path=/run/secrets/db.
+
+                    --json prints the same report as one JSON object on stdout and
+                    nothing else, for a pipeline or a readiness probe. The exit code
+                    is the same either way: 0 it stands, 1 it does not, 2 this was
+                    called wrongly.
+
+                    --print-pin connects once without checking the certificate, and
+                    prints the pin of the key the server presented - tlsPin=sha256/...
+                    for the URL - with the certificate's subject, issuer and expiry,
+                    to compare with what the server's owner says it should be.
+
+                    --migrate translates a pgjdbc, Connector/J, MariaDB, mssql-jdbc,
+                    Oracle thin or HikariCP configuration into seclume's, and names
+                    every unsafe setting in it. Password values are never read.
+                    Exit code 1 means unsafe settings were found.""");
             System.exit(2);
             return;
         }
+        if (printPin) {
+            System.exit(printPin(url));
+            return;
+        }
         Report report = new Report();
-        int status = run(arguments[0].strip(), report);
-        System.out.print(report);
+        int status = run(url, report);
+        System.out.print(json ? report.json(status) : report.toString());
         System.exit(status);
+    }
+
+    /**
+     * The pin of the server's key, from one connection that checks nothing -
+     * which is why what it prints has to be compared with what the server's
+     * owner says, before it is trusted.
+     */
+    static int printPin(String url) {
+        String unchecked = uncheckedTls(url);
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection(unchecked)) {
+            java.security.cert.X509Certificate presented =
+                    Secured.of(connection).serverCertificate();
+            if (presented == null) {
+                System.err.println("the server did not use TLS on this connection - there is "
+                        + "no certificate to pin");
+                return 1;
+            }
+            System.out.println("tlsPin=" + space.seclume.internal.TrustChoice.pinOf(presented));
+            System.out.println("  subject  " + presented.getSubjectX500Principal().getName());
+            System.out.println("  issuer   " + presented.getIssuerX500Principal().getName());
+            System.out.println("  expires  " + presented.getNotAfter().toInstant());
+            System.out.println("Unchecked: compare the pin with the server's owner before "
+                    + "putting it into the URL.");
+            return 0;
+        } catch (java.sql.SQLException e) {
+            System.err.println("could not connect: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    /** The URL with its own trust settings replaced by encryption without checking. */
+    static String uncheckedTls(String url) {
+        int question = url.indexOf('?');
+        int hash = url.indexOf('#');
+        String tail = hash < 0 ? "" : url.substring(hash);
+        String base = question < 0 ? (hash < 0 ? url : url.substring(0, hash))
+                : url.substring(0, question);
+        StringBuilder kept = new StringBuilder();
+        if (question >= 0) {
+            String query = hash < 0 ? url.substring(question + 1)
+                    : url.substring(question + 1, hash);
+            for (String option : query.split("&")) {
+                String key = option.contains("=") ? option.substring(0, option.indexOf('='))
+                        : option;
+                if (key.equalsIgnoreCase("tls") || key.equalsIgnoreCase("tlsPin")
+                        || key.equalsIgnoreCase("tlsRootCert") || option.isBlank()) {
+                    continue;
+                }
+                kept.append(kept.isEmpty() ? "" : "&").append(option);
+            }
+        }
+        return base + "?" + kept + (kept.isEmpty() ? "" : "&") + "tls=require" + tail;
     }
 
     /** Everything the report needs; separate so a test can read it back. */
@@ -77,6 +177,7 @@ public final class Verify {
         try (Connection connection = DriverManager.getConnection(url)) {
             report.line("connect", millis(System.nanoTime() - started) + " ms");
             server(connection, report);
+            capacity(connection, report);
             capabilities(connection, url, report);
             roundTrips(connection, report);
             report.title("verdict");
@@ -105,6 +206,22 @@ public final class Verify {
         }
     }
 
+    /** How many connections the server allows and has - see ServerCapacity. */
+    private static void capacity(Connection connection, Report report) {
+        try {
+            space.seclume.ServerCapacity.Capacity capacity =
+                    connection.unwrap(space.seclume.ServerCapacity.class).capacity();
+            report.line("capacity", capacity.known()
+                    ? capacity.allowed() + " connections allowed, " + capacity.inUse()
+                            + " in use, " + capacity.free() + " free"
+                    : "not visible to this user"
+                            + (capacity.allowed() >= 0 ? " (" + capacity.allowed()
+                                    + " allowed)" : ""));
+        } catch (SQLException | RuntimeException e) {
+            report.line("capacity", "not asked: " + e.getMessage());
+        }
+    }
+
     private static void server(Connection connection, Report report) throws SQLException {
         DatabaseMetaData meta = connection.getMetaData();
         report.title("server");
@@ -121,6 +238,7 @@ public final class Verify {
             throws SQLException {
         report.title("what this driver can do against this server");
         report.line("round trips counted", String.valueOf(RoundTrips.of(connection) >= 0));
+        security(report, connection);
 
         Pipelined pipelined = Pipelined.of(connection);
         String bundles = "no - this driver does not offer the block";
@@ -453,6 +571,25 @@ public final class Verify {
         return false;
     }
 
+    /**
+     * Whether the URL was refused before anything was dialled.
+     *
+     * <p>A setting the driver does not take - {@code password=} in the URL is
+     * the common one - arrives as an {@code IllegalArgumentException} wrapped
+     * in a connection failure, state {@code 08001}. Read by state alone that
+     * is "the server was not reached", which is true and useless: no server
+     * was ever asked.
+     */
+    static boolean isSettingFailure(Throwable failure) {
+        for (Throwable link = failure; link != null && link.getCause() != link;
+                link = link.getCause()) {
+            if (link instanceof IllegalArgumentException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** What to try next - the part a stack trace never tells anybody. */
     static String advice(SQLException failure) {
         String state = failure.getSQLState() == null ? "" : failure.getSQLState();
@@ -467,6 +604,15 @@ public final class Verify {
                     + "the URL. Point the JVM at a truststore that has it, or say so "
                     + "deliberately in the URL: sslmode/trustServerCertificate, per driver.";
         }
+        // Before anything about the network: the URL may never have been
+        // dialled. Found by reading this tool's own output - a URL carrying
+        // password= was answered with "check host, port and firewall", and
+        // somebody would have checked all three.
+        if (isSettingFailure(failure)) {
+            return "The URL was refused before any server was asked - see the cause above. "
+                    + "That is a setting in the URL, not the network: fix the option it "
+                    + "names and run this again.";
+        }
         if (state.startsWith("28")) {
             return "The server refused the login. The password comes from the source named "
                     + "above - check that source, not the URL.";
@@ -480,6 +626,32 @@ public final class Verify {
                     + "connection itself is fine.";
         }
         return "The server answered with the state above; that is what to look up.";
+    }
+
+    /**
+     * Two lines no JDBC method can produce.
+     *
+     * <p>{@link java.sql.DatabaseMetaData} will say the server's version and
+     * its keyword list, and has nothing whatever to say about how the password
+     * travelled or whether anything was encrypting it. Those are the two facts
+     * an operator wants before a migration and the two a table like this is
+     * usually silent about - see {@link Secured}.
+     *
+     * <p><b>Not fatal when absent.</b> A driver that is not one of these four
+     * cannot answer, and a report that refused to finish over it would be less
+     * useful than one that says so in a cell.
+     */
+    private static void security(Report report, Connection connection) {
+        try {
+            Secured secured = Secured.of(connection);
+            report.line("authentication", orDash(secured.authenticationMethod()));
+            String tls = secured.tlsDescription();
+            report.line("encryption", tls == null
+                    ? "none - this connection is in the clear" : tls);
+        } catch (SQLException notOurs) {
+            report.line("authentication", "-");
+            report.line("encryption", "-");
+        }
     }
 
     private static String isolationName(int level) {
