@@ -76,6 +76,9 @@ class PoolTest {
         settings.setMaximumPoolSize(max);
         settings.setConnectionTimeout(Duration.ofMillis(500));
         settings.setValidationTimeout(Duration.ofSeconds(1));
+        // Some tests end with a connection still out on purpose; the drain
+        // on close has a test of its own (ShutdownDrainTest).
+        settings.setShutdownTimeout(Duration.ZERO);
         return settings;
     }
 

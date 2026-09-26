@@ -17,19 +17,31 @@ package space.seclume.pool;
  * @param created        how many connections have been opened
  * @param retired        how many have been closed
  * @param timeouts       how often nobody got one in time
+ * @param prewarmed      how many replacements were opened before the
+ *                       connection they replace was retired - see
+ *                       {@code SeclumePool.prewarm}
  * @param leaksReported  how often a forgotten connection has been reported
  * @param renewed        how often a connection that broke while it was borrowed
  *                       was rebuilt underneath the application
  */
 public record PoolStatistics(String name, int total, int active, int idle, int waiting,
                              long borrowed, long created, long retired, long timeouts,
-                             long leaksReported, long renewed) {
+                             long leaksReported, long renewed, long prewarmed) {
+
+    /** The 0.9.0 form, without {@code prewarmed}: kept so that code built against it still links. */
+    public PoolStatistics(String name, int total, int active, int idle, int waiting,
+                          long borrowed, long created, long retired, long timeouts,
+                          long leaksReported, long renewed) {
+        this(name, total, active, idle, waiting, borrowed, created, retired, timeouts,
+                leaksReported, renewed, 0);
+    }
 
     @Override
     public String toString() {
         return "SeclumePool[" + name + ": total=" + total + ", active=" + active
                 + ", idle=" + idle + ", waiting=" + waiting + ", borrowed=" + borrowed
                 + ", created=" + created + ", retired=" + retired + ", timeouts=" + timeouts
-                + ", leaks=" + leaksReported + ", renewed=" + renewed + "]";
+                + ", leaks=" + leaksReported + ", renewed=" + renewed
+                + ", prewarmed=" + prewarmed + "]";
     }
 }

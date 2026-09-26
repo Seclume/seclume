@@ -88,7 +88,7 @@ class DelegationIsCompleteTest {
                 (proxy, method, args) -> method.getReturnType() == boolean.class
                         ? Boolean.FALSE : null);
         StatementCache cache = new StatementCache(4);
-        PreparedStatement handle = CachedPreparedStatement.wrap(cache, "select 1", nothing);
+        PreparedStatement handle = CachedPreparedStatement.wrap(cache, "select 1", nothing, null);
         handle.close();
         assertTrue(handle.isClosed(), "a closed handle should say it is closed");
         SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(

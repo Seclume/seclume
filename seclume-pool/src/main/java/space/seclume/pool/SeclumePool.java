@@ -161,6 +161,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     private final LongAdder renewed = new LongAdder();
     private final LongAdder timeouts = new LongAdder();
     private final LongAdder leaksReported = new LongAdder();
+    /** Replacements opened before the connection they replace was retired. */
+    private final LongAdder prewarmed = new LongAdder();
     /** How often the secret was rotated - see {@link #rotateSecret}. */
     private volatile long rotation;
 
@@ -170,6 +172,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     public SeclumePool(DataSource source, PoolSettings settings) {
         this.source = source;
         this.settings = settings;
+        this.keepaliveNanos = settings.getKeepaliveTime().toNanos();
         this.permits = new Semaphore(settings.getMaximumPoolSize());
         // More slots than connections, on purpose: threads pick their slot by
         // a hash, and eight threads in sixteen slots collide far more often
@@ -251,12 +254,50 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             }
         }
         entry.set(PoolEntry.State.IN_USE);
+        boolean withContext = settings.getSessionContext() != null && applySessionContext(entry);
         boolean watched = !settings.getLeakDetectionThreshold().isZero();
         entry.markBorrowed(watched ? now : 0,
                 watched ? new Throwable("this connection was borrowed here") : null);
         borrowed.increment();
-        return new PooledConnection(this, entry,
+        PooledConnection handle = new PooledConnection(this, entry,
                 entry.statements(settings.getStatementCacheSize()));
+        if (withContext) {
+            // Set, so to be reset on return - even when the borrower runs
+            // nothing and the context is still waiting to be sent.
+            handle.markUsed();
+        }
+        return handle;
+    }
+
+    /**
+     * Gives a borrowed connection the session context of the moment - see
+     * {@link PoolSettings#getSessionContext()}. A connection that cannot take
+     * it is not handed out: a request that expected its tenant to be set and
+     * runs without it is exactly the failure this exists to prevent.
+     */
+    private boolean applySessionContext(PoolEntry entry) throws SQLException {
+        java.util.Map<String, String> context = settings.getSessionContext().get();
+        if (context == null || context.isEmpty()) {
+            return false;
+        }
+        try {
+            Connection connection = entry.connection();
+            if (!connection.isWrapperFor(space.seclume.SessionContext.class)) {
+                throw new java.sql.SQLFeatureNotSupportedException(settings.getName()
+                        + ": a session context is configured, and this driver cannot set one");
+            }
+            space.seclume.SessionContext target =
+                    connection.unwrap(space.seclume.SessionContext.class);
+            for (java.util.Map.Entry<String, String> one : context.entrySet()) {
+                target.setSessionContext(one.getKey(), one.getValue());
+            }
+            return true;
+        } catch (SQLException | RuntimeException e) {
+            // Retired, not parked: part of the context may be set, and a
+            // connection that never reached a borrower is never reset.
+            release(entry, true);
+            throw e;
+        }
     }
 
     /**
@@ -321,6 +362,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         waiting.incrementAndGet();
         try {
             while (true) {
+                if (closed) {
+                    throw new SQLException("this pool is closed", "08003");
+                }
                 if (permits.tryAcquire()) {
                     try {
                         return newEntry();
@@ -470,9 +514,188 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         }
     }
 
+    /** How many times statements were found left open on a returned connection. */
+    private final java.util.concurrent.atomic.LongAdder statementLeaks =
+            new java.util.concurrent.atomic.LongAdder();
+
+    /**
+     * A borrower left statements open: logged the first ten times, then every
+     * thousandth - a leak in a hot path would otherwise be all the log says.
+     */
+    void statementsLeaked(java.util.List<space.seclume.OpenStatements.Opened> leaked) {
+        statementLeaks.increment();
+        long seen = statementLeaks.sum();
+        if (seen > 10 && seen % 1000 != 0) {
+            return;
+        }
+        StringBuilder text = new StringBuilder(settings.getName()).append(": ")
+                .append(leaked.size()).append(" statement(s) left open by the borrower, "
+                        + "closed on return (").append(seen).append(" time(s) so far)");
+        boolean traced = false;
+        for (space.seclume.OpenStatements.Opened one : leaked) {
+            text.append("\n  ").append(one.fingerprint() == null ? "(nothing run)"
+                    : one.fingerprint());
+            if (one.createdAt() != null) {
+                traced = true;
+                StackTraceElement[] trace = one.createdAt();
+                // The frames of the library itself first - the driver making
+                // the statement, the pool handing it through - then the caller.
+                int first = 0;
+                while (first < trace.length && library(trace[first].getClassName())) {
+                    first++;
+                }
+                for (int i = first; i < Math.min(trace.length, first + 6); i++) {
+                    text.append("\n      at ").append(trace[i]);
+                }
+            }
+        }
+        if (!traced) {
+            text.append("\n  (no stack traces: set leak-detection-threshold to see where "
+                    + "they were made)");
+        }
+        CAPACITY_LOG.log(System.Logger.Level.WARNING, text.toString());
+    }
+
+    /** Whether a frame belongs to the driver or the pool rather than to their caller. */
+    private static boolean library(String className) {
+        return className.equals("java.lang.Throwable")
+                || className.startsWith("space.seclume.postgresql.")
+                || className.startsWith("space.seclume.mysql.")
+                || className.startsWith("space.seclume.sqlserver.")
+                || className.startsWith("space.seclume.oracle.")
+                || className.startsWith("space.seclume.internal.")
+                || className.startsWith("space.seclume.pool.PooledConnection")
+                || className.startsWith("space.seclume.pool.CachedPreparedStatement")
+                || className.startsWith("jdk.proxy") || className.startsWith("java.lang.reflect.");
+    }
+
+    /** How many times statements were left open - for the tests and the metrics. */
+    long statementLeaks() {
+        return statementLeaks.sum();
+    }
+
+    /**
+     * How long an idle connection may sit before it is kept alive - the
+     * configured {@code keepaliveTime}, or less when the server closes idle
+     * sessions sooner than that; 0 for never.
+     */
+    private volatile long keepaliveNanos;
+
+    /**
+     * Keeps idle connections alive below the server's idle limit.
+     *
+     * <p>MySQL closes a session after {@code wait_timeout}, PostgreSQL after
+     * {@code idle_session_timeout}, Oracle after a profile's {@code IDLE_TIME}
+     * - and a pool keeps connections idle by design. The next borrower gets a
+     * connection the server has already closed, and "Communications link
+     * failure" is the first anybody hears of it. The limit is read here, once,
+     * and a keepalive of three quarters of it is used when the configured one
+     * is off or longer.
+     */
+    private void adoptIdleLimit(Connection connection) {
+        java.time.Duration limit;
+        try {
+            if (!connection.isWrapperFor(space.seclume.ServerIdleLimit.class)) {
+                return;
+            }
+            limit = connection.unwrap(space.seclume.ServerIdleLimit.class).idleLimit();
+        } catch (SQLException | RuntimeException notOffered) {
+            return;
+        }
+        long derived = keepaliveBelow(limit);
+        if (derived > 0 && (keepaliveNanos == 0 || keepaliveNanos > derived)) {
+            keepaliveNanos = derived;
+            CAPACITY_LOG.log(System.Logger.Level.INFO, settings.getName()
+                    + ": the server closes sessions idle for " + limit.toSeconds()
+                    + " s; idle connections are kept alive every "
+                    + java.util.concurrent.TimeUnit.NANOSECONDS.toSeconds(derived) + " s");
+        }
+    }
+
+    /** Three quarters of {@code limit}, at least one second; 0 for no limit. */
+    static long keepaliveBelow(java.time.Duration limit) {
+        if (limit == null || limit.isZero() || limit.isNegative()) {
+            return 0;
+        }
+        return Math.max(java.time.Duration.ofSeconds(1).toNanos(), limit.toNanos() / 4 * 3);
+    }
+
+    /** Whether the server's connection limit was looked at - once, at the first connection. */
+    private volatile boolean capacityChecked;
+
+    private static final System.Logger CAPACITY_LOG =
+            System.getLogger(SeclumePool.class.getName());
+
+    /**
+     * Says so in the log when this pool alone could fill what the server has
+     * left - "too many clients already" is otherwise found in production, the
+     * first time the deployment scales out.
+     */
+    private void warnAboutCapacity(Connection connection) {
+        space.seclume.ServerCapacity.Capacity capacity;
+        try {
+            if (!connection.isWrapperFor(space.seclume.ServerCapacity.class)) {
+                return;
+            }
+            capacity = connection.unwrap(space.seclume.ServerCapacity.class).capacity();
+        } catch (SQLException | RuntimeException notOffered) {
+            return;
+        }
+        String warning = capacityWarning(settings.getName(), settings.getMaximumPoolSize(),
+                capacity);
+        if (warning != null) {
+            CAPACITY_LOG.log(System.Logger.Level.WARNING, warning);
+        }
+    }
+
+    /** With leak detection on, statements record where they were made. */
+    private static void traceStatements(Connection connection) {
+        try {
+            if (connection.isWrapperFor(space.seclume.OpenStatements.class)) {
+                connection.unwrap(space.seclume.OpenStatements.class).traceStatements(true);
+            }
+        } catch (SQLException | RuntimeException notOffered) {
+            // a driver that cannot is simply not asked
+        }
+    }
+
+    /** The warning for a pool of {@code maximum} against {@code capacity}, or null. */
+    static String capacityWarning(String name, int maximum,
+                                  space.seclume.ServerCapacity.Capacity capacity) {
+        if (!capacity.known()) {
+            return null;
+        }
+        // This pool's own first connection is already counted in use.
+        int free = capacity.free() + 1;
+        int instances = Math.max(0, free / Math.max(1, maximum));
+        if (maximum <= free && instances >= 2) {
+            return null;
+        }
+        return name + ": up to " + maximum + " connections, and the server allows "
+                + capacity.allowed() + " with " + capacity.inUse() + " in use - room for "
+                + free + (maximum > free ? ": this pool alone can exhaust the server"
+                : ", which is " + instances + " instance(s) of this pool")
+                + ". Every further instance of the application needs " + maximum
+                + " more; scaling out is where \"too many clients\" comes from. "
+                + "A smaller maximumPoolSize, or a connection proxy in front, keeps it away.";
+    }
+
     private PoolEntry newEntry() throws SQLException {
         // This is where the call to the secret source happens - every time anew.
         Connection connection = source.getConnection();
+        if (!capacityChecked) {
+            capacityChecked = true;
+            warnAboutCapacity(connection);
+            adoptIdleLimit(connection);
+        }
+        if (!settings.getLeakDetectionThreshold().isZero()) {
+            traceStatements(connection);
+        }
+        if (closed) {
+            // Opened while the pool was closing: nobody would ever close it.
+            connection.close();
+            throw new SQLException("this pool is closed", "08003");
+        }
         PoolEntry entry = new PoolEntry(connection);
         entry.credentialDeadline(credentialDeadline());
         entries.add(entry);
@@ -499,8 +722,13 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      *
      * <p>The margin is subtracted here rather than at the point of use so that
      * the deadline stored in the entry is already the moment to act on.
+     *
+     * <p>Package-private rather than private so that the spread can be checked
+     * for being a spread. The alternative was a test that waits for a cohort
+     * to retire and infers the distribution from when it happened, which is
+     * slow and answers a question about timing rather than about the rule.
      */
-    private long credentialDeadline() {
+    long credentialDeadline() {
         Supplier<Instant> expiry = settings.getCredentialExpiry();
         if (expiry == null) {
             return Long.MAX_VALUE;
@@ -518,7 +746,13 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         }
         Duration left = Duration.between(Instant.now(), validUntil)
                 .minus(settings.getCredentialMargin());
-        return System.nanoTime() + Math.max(0, left.toNanos());
+        // And a random step further back, so a cohort opened in one burst does
+        // not reach its deadline in one housekeeping round - see
+        // PoolSettings.credentialSpread. Only ever earlier than the margin.
+        long spread = settings.getCredentialSpread().toNanos();
+        long jitter = spread <= 0 ? 0
+                : java.util.concurrent.ThreadLocalRandom.current().nextLong(spread);
+        return System.nanoTime() + Math.max(0, left.toNanos() - jitter);
     }
 
     /**
@@ -580,6 +814,99 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 && entry.ageNanos(System.nanoTime()) > settings.getMaxLifetime().toNanos();
     }
 
+    // ---- handing a connection on ------------------------------------------
+
+    /** Connections taken in by {@link #adopt}. */
+    private final LongAdder adopted = new LongAdder();
+    /** Connections given up by {@link #detach}. */
+    private final LongAdder detached = new LongAdder();
+
+    /**
+     * Gives up the connection behind a borrowed handle, <b>without closing
+     * it</b>, and returns it.
+     *
+     * <p>The seam for handing a live session to somebody else: the caller gets
+     * the driver's own connection - still logged in, in whatever transaction
+     * it is in - and the pool forgets it. Its cached statements are closed
+     * first, because a plan belongs to the session and the session is leaving,
+     * and the handle is closed, because nothing may reach the connection
+     * through it afterwards. The pool's slot is free again at once.
+     *
+     * <p>What happens to the connection afterwards is the caller's business;
+     * that the pool lets go of it cleanly is this method's.
+     *
+     * @param borrowed a handle this pool handed out and that is still open
+     */
+    public Connection detach(Connection borrowed) throws SQLException {
+        if (!(borrowed instanceof PooledConnection handle) || handle.pool() != this) {
+            throw new SQLException("this connection was not borrowed from " + settings.getName(),
+                    "08003");
+        }
+        if (handle.isGivenUp()) {
+            throw new SQLException("this connection was already returned or given up",
+                    "08003");
+        }
+        PoolEntry entry = handle.entry();
+        Connection connection = handle.giveUp();
+        entry.set(PoolEntry.State.CLOSED);
+        entry.closeStatements();
+        if (entries.remove(entry)) {
+            permits.release();
+        }
+        detached.increment();
+        if (waiting.get() > 0) {
+            Thread waiter = waiters.peek();
+            if (waiter != null) {
+                LockSupport.unpark(waiter);
+            }
+        }
+        return connection;
+    }
+
+    /**
+     * Takes a connection this pool did not open into it, as borrowed by the
+     * caller, and returns the handle.
+     *
+     * <p>The other end of {@link #detach}: a session taken over from somewhere
+     * else becomes one of this pool's connections. The handle knows what
+     * differs from the pool's defaults - an open transaction, another
+     * isolation - so that returning it puts things back as for any other
+     * borrow: rolled back if still open, settings reset. The defaults are the
+     * pool's own, read from a connection it opened, or JDBC's fresh-connection
+     * values when it has none yet.
+     *
+     * @throws SQLException when the pool is closed or already at
+     *                      {@code maximumPoolSize} - it does not grow past its
+     *                      size for a connection it was handed
+     */
+    public Connection adopt(Connection connection) throws SQLException {
+        if (closed) {
+            throw new SQLException("this pool is closed", "08003");
+        }
+        if (!permits.tryAcquire()) {
+            throw new SQLException(settings.getName() + " is full (" + totalCount() + " of "
+                    + settings.getMaximumPoolSize() + ") and does not grow past its size for "
+                    + "a connection it was handed", "08004");
+        }
+        PoolEntry template = entries.isEmpty() ? null : entries.get(0);
+        PoolEntry entry = template == null
+                ? new PoolEntry(connection, true, false, connection.getTransactionIsolation())
+                : new PoolEntry(connection, template.initialAutoCommit(),
+                        template.initialReadOnly(), template.initialIsolation());
+        entry.credentialDeadline(credentialDeadline());
+        entries.add(entry);
+        adopted.increment();
+        entry.set(PoolEntry.State.IN_USE);
+        boolean watched = !settings.getLeakDetectionThreshold().isZero();
+        entry.markBorrowed(watched ? System.nanoTime() : 0,
+                watched ? new Throwable("this connection was adopted here") : null);
+        borrowed.increment();
+        PooledConnection handle = new PooledConnection(this, entry,
+                entry.statements(settings.getStatementCacheSize()));
+        handle.adopted();
+        return handle;
+    }
+
     /** Closes a connection for good and removes it from the inventory. */
     private void retire(PoolEntry entry) {
         entry.set(PoolEntry.State.CLOSED);
@@ -602,12 +929,11 @@ public final class SeclumePool implements DataSource, AutoCloseable {
 
     /**
      * The housekeeping thread: replace old connections, close surplus idle
-     * schliessen, ruhende anstupsen, vergessene melden.
+     * ones, keep resting ones alive, report forgotten ones.
      *
      * <p>A single daemon thread that sleeps most of the time. It touches only
      * entries it can move from {@code IDLE} to {@code RESERVED} - it never
-     * pulls a borrowed connection out from under the
-     * Anwender weg.
+     * pulls a borrowed connection out from under its user.
      */
     private void housekeeping() {
         while (!closed) {
@@ -621,13 +947,70 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 return;
             }
             try {
+                prewarm();
                 sweepIdle();
+                markLapsedForReturn();
                 replenish();
                 reportLeaks();
             } catch (RuntimeException e) {
                 // Housekeeping must never die; the next round carries on.
                 Logger.getLogger(SeclumePool.class.getName())
                         .warning(settings.getName() + " - housekeeping failed: " + e);
+            }
+        }
+    }
+
+    /**
+     * Opens the replacements <b>before</b> the sweep takes the old ones away.
+     *
+     * <p>The order is the feature. {@code sweepIdle} retires and
+     * {@code replenish} refills, in that order and in the same round - so for
+     * the moment in between, a pool whose whole cohort has just lapsed is a
+     * pool with nothing in it, and every caller arriving in that moment pays a
+     * full handshake. With a dynamic credential that also means an HTTP round
+     * trip to Vault before the connection can even be opened.
+     *
+     * <p>So this runs first and opens one replacement per idle connection
+     * whose credential has lapsed. The sweep then retires the old ones into a
+     * pool that already holds their replacements.
+     *
+     * <p><b>Only into spare capacity.</b> A pool sitting at
+     * {@code maximumPoolSize} has nowhere to put a replacement, and taking a
+     * permit that is not free would be growing past the maximum an operator
+     * set. There it degrades to what it did before - retire, then refill - and
+     * that is said here rather than left to be discovered.
+     *
+     * <p>The entries are only looked at, not taken: a borrow in the meantime
+     * removes one and this round simply opens one fewer.
+     */
+    private void prewarm() {
+        if (suspended || settings.getCredentialExpiry() == null) {
+            return;
+        }
+        long now = System.nanoTime();
+        int lapsing = 0;
+        // Every entry, not only the ones sitting in the pool. A borrowed
+        // connection whose credential has lapsed is going to be retired the
+        // moment it comes back - see markLapsedForReturn - and its
+        // replacement is worth opening now for exactly the same reason as an
+        // idle one's.
+        for (PoolEntry entry : List.copyOf(entries)) {
+            if (entry.credentialLapsed(now) && !entry.isRetiringOnReturn()) {
+                lapsing++;
+            }
+        }
+        for (int i = 0; i < lapsing && !closed; i++) {
+            if (!permits.tryAcquire()) {
+                return;        // at the maximum: the sweep does it the old way
+            }
+            try {
+                park(newEntry());
+                prewarmed.increment();
+            } catch (SQLException cannot) {
+                // Stock keeping, not an order. Whoever actually needs a
+                // connection gets the failure in getConnection().
+                permits.release();
+                return;
             }
         }
     }
@@ -655,13 +1038,50 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 spare--;
                 continue;
             }
-            if (!settings.getKeepaliveTime().isZero()
-                    && entry.idleNanos(now) > settings.getKeepaliveTime().toNanos()
-                    && !isAlive(entry)) {
-                retire(entry);
-                continue;
+            long keepalive = keepaliveNanos;
+            if (keepalive > 0 && entry.quietNanos(now) > keepalive) {
+                // Measured from the last keepalive, not the return: otherwise
+                // every round after the first would ask again.
+                if (!isAlive(entry)) {
+                    retire(entry);
+                    continue;
+                }
+                entry.markKeptAlive();
             }
             park(entry);
+        }
+    }
+
+    /**
+     * Borrowed connections whose credential has lapsed: retired on the way
+     * back, rather than never.
+     *
+     * <p>{@code sweepIdle} can only retire a connection it finds sitting in
+     * the pool, and <b>a pool under load has none sitting</b>: a returned
+     * connection is claimed again long before housekeeping comes round. So
+     * the situation where an expired credential matters most - a busy
+     * application - was the one where nothing retired it, and the connection
+     * went out again until the server refused it.
+     *
+     * <p>Measured rather than reasoned. The rotation benchmark ran six
+     * threads on six connections across an expiry and reported four
+     * retirements and then nothing for thirty seconds; the two connections it
+     * never caught idle would have run on a dead credential indefinitely.
+     *
+     * <p>Marked rather than closed, because a borrowed connection has
+     * somebody's statement on it. {@code release} already honours the mark -
+     * it is the same one a secret rotation uses - so this adds no check to
+     * the return path and no round trip anywhere.
+     */
+    private void markLapsedForReturn() {
+        if (settings.getCredentialExpiry() == null) {
+            return;
+        }
+        long now = System.nanoTime();
+        for (PoolEntry entry : List.copyOf(entries)) {
+            if (entry.credentialLapsed(now)) {
+                entry.retireOnReturn();
+            }
         }
     }
 
@@ -678,6 +1098,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      * where it belongs - in {@code getConnection()}.
      */
     private void replenish() {
+        if (suspended) {
+            return;             // see suspend: nothing is opened until resume
+        }
         int missing = settings.getMinimumIdle() - idleCount();
         for (int i = 0; i < missing && !closed; i++) {
             if (!permits.tryAcquire()) {
@@ -767,7 +1190,15 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         text.append(settings.getName()).append(": ").append(totalCount()).append(" connections, ")
                 .append(activeCount()).append(" out, ").append(idleCount()).append(" free, ")
                 .append(waitingCount()).append(" waiting; maximum ")
-                .append(settings.getMaximumPoolSize()).append('\n');
+                .append(settings.getMaximumPoolSize());
+        long handedOn = detached.sum();
+        long takenIn = adopted.sum();
+        if (handedOn + takenIn > 0) {
+            // Only when it happened at all: a pool nobody hands anything on
+            // through should not report the seam in every line it writes.
+            text.append("; handed on ").append(handedOn).append(", taken in ").append(takenIn);
+        }
+        text.append('\n');
         int number = 0;
         for (PoolEntry entry : List.copyOf(entries)) {
             boolean out = entry.state() == PoolEntry.State.IN_USE;
@@ -836,7 +1267,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     public PoolStatistics statistics() {
         return new PoolStatistics(settings.getName(), totalCount(), activeCount(), idleCount(),
                 waitingCount(), borrowed.sum(), created.sum(), retired.sum(), timeouts.sum(),
-                leaksReported.sum(), renewed.sum());
+                leaksReported.sum(), renewed.sum(), prewarmed.sum());
     }
 
     public PoolSettings settings() {
@@ -845,19 +1276,105 @@ public final class SeclumePool implements DataSource, AutoCloseable {
 
     @Override
     public void close() {
+        close(settings.getShutdownTimeout());
+    }
+
+    /**
+     * Closes the pool, giving borrowed connections up to {@code drain} to come
+     * back first.
+     *
+     * <p>Shutting down on SIGTERM is where a pool used to cut a transaction in
+     * half: a scheduled job or a message listener still has its connection,
+     * and closing it under them turns a clean stop into a rollback and an
+     * error in the log, or - with a commit in flight - into an outcome
+     * nobody knows. So closing happens in order. Nothing new is lent, and
+     * waiting borrowers are told the pool is closed. Idle connections go at
+     * once. Borrowed ones are closed as they come back, and only those still
+     * out when {@code drain} is over are cut, and named in the log. The wait
+     * is bounded: a pool that waits for stragglers without a limit hangs the
+     * shutdown instead.
+     *
+     * @param drain how long to wait for borrowed connections; zero cuts them at once
+     */
+    public void close(java.time.Duration drain) {
         if (closed) {
             return;
         }
         closed = true;
         housekeeper.interrupt();
-        for (int i = 0; i < free.length(); i++) {
-            free.set(i, null);
+        for (Thread waiter : waiters) {
+            LockSupport.unpark(waiter);
         }
+        for (int i = 0; i < free.length(); i++) {
+            PoolEntry entry = free.getAndSet(i, null);
+            if (entry != null) {
+                retire(entry);
+            }
+        }
+        long deadline = System.nanoTime() + drain.toNanos();
+        while (borrowedCount() > 0 && System.nanoTime() - deadline < 0) {
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        int cut = 0;
         for (PoolEntry entry : List.copyOf(entries)) {
-            // Borrowed connections are closed along with the rest: a pool
-            // that waits for stragglers on shutdown hangs.
+            if (entry.state() == PoolEntry.State.IN_USE) {
+                cut++;
+            }
             retire(entry);
         }
+        if (cut > 0) {
+            CAPACITY_LOG.log(System.Logger.Level.WARNING, settings.getName() + ": closed with "
+                    + cut + " connection(s) still borrowed after waiting " + drain
+                    + " - whatever they were doing was cut off");
+        }
+    }
+
+    /** Set by suspend, cleared by resume: housekeeping opens nothing meanwhile. */
+    private volatile boolean suspended;
+
+    /**
+     * Gives up every connection without closing the pool - for a checkpoint
+     * (CRaC, Lambda SnapStart), which refuses to be taken while a socket is
+     * open, and which would otherwise keep each session's encryption keys in
+     * the image. Idle connections are closed at once, borrowed ones when they
+     * come back, and housekeeping opens no new ones until {@link #resume()}.
+     * A borrower in the meantime still gets a connection, opened afresh -
+     * with its secret fetched afresh, too.
+     */
+    public void suspend() {
+        suspended = true;
+        for (int i = 0; i < free.length(); i++) {
+            PoolEntry entry = free.getAndSet(i, null);
+            if (entry != null) {
+                retire(entry);
+            }
+        }
+        for (PoolEntry entry : List.copyOf(entries)) {
+            if (entry.state() == PoolEntry.State.IN_USE) {
+                entry.retireOnReturn();
+            }
+        }
+    }
+
+    /** After a restore: housekeeping fills the pool again, from new logins. */
+    public void resume() {
+        suspended = false;
+    }
+
+    /** Connections lent out right now. */
+    private int borrowedCount() {
+        int count = 0;
+        for (PoolEntry entry : List.copyOf(entries)) {
+            if (entry.state() == PoolEntry.State.IN_USE) {
+                count++;
+            }
+        }
+        return count;
     }
 
     public boolean isClosed() {
@@ -868,8 +1385,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
 
     /**
      * The route with a user and a password - refused, and with the reason.
-     * A pool that took a password per call could not
-     * einmal sinnvoll poolen.
+     * A pool that took a password per call could not pool at all: every
+     * call would be a login of its own.
      */
     @Override
     public Connection getConnection(String username, String password) throws SQLException {

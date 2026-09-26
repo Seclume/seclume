@@ -72,6 +72,12 @@ final class StatementCache {
             return false;
         }
         try {
+            // closeOnCompletion cannot be taken back - JDBC has no call for
+            // it - so a statement that was told it would close under the
+            // next borrower as soon as that one's result closed.
+            if (statement.isCloseOnCompletion()) {
+                return false;
+            }
             statement.clearParameters();
             statement.clearWarnings();
             statement.clearBatch();
@@ -86,6 +92,16 @@ final class StatementCache {
         }
         evictWhileTooLarge();
         return true;
+    }
+
+    /** Whether this very statement waits in the cache - it is not a leak then. */
+    boolean holds(java.sql.Statement statement) {
+        for (PreparedStatement cached : free.values()) {
+            if (cached == statement) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Everything the cache holds - when the connection itself goes. */

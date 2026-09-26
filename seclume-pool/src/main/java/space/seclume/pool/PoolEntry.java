@@ -47,6 +47,7 @@ final class PoolEntry {
      * credential is current.
      */
     private volatile long credentialDeadline = Long.MAX_VALUE;
+
     /**
      * A fresh entry starts <b>reserved</b>, not free.
      *
@@ -89,6 +90,18 @@ final class PoolEntry {
         this.initialAutoCommit = connection.getAutoCommit();
         this.initialReadOnly = connection.isReadOnly();
         this.initialIsolation = connection.getTransactionIsolation();
+    }
+
+    /**
+     * An entry for a connection this pool did not open - see
+     * {@link SeclumePool#adopt}. Its state now is not what a borrower should
+     * get back, so what it returns to is given, not read.
+     */
+    PoolEntry(Connection connection, boolean autoCommit, boolean readOnly, int isolation) {
+        this.connection = connection;
+        this.initialAutoCommit = autoCommit;
+        this.initialReadOnly = readOnly;
+        this.initialIsolation = isolation;
     }
 
     boolean initialAutoCommit() {
@@ -165,6 +178,12 @@ final class PoolEntry {
         this.credentialDeadline = nanoTimeDeadline;
     }
 
+    /** @see #credentialDeadline */
+    long credentialDeadline() {
+        return credentialDeadline;
+    }
+
+
     /** Whether the credential behind this connection has lapsed, or is about to. */
     boolean credentialLapsed(long now) {
         return credentialDeadline != Long.MAX_VALUE && now - credentialDeadline >= 0;
@@ -196,6 +215,18 @@ final class PoolEntry {
     void markBorrowed(long now, Throwable trace) {
         this.borrowedAt = now;
         this.borrowTrace = trace;
+    }
+
+    /** When the pool last kept this connection alive while it sat idle. */
+    private volatile long keptAliveAt;
+
+    /** Idle since the later of its return and its last keepalive. */
+    long quietNanos(long now) {
+        return now - Math.max(lastUsedAt, keptAliveAt);
+    }
+
+    void markKeptAlive() {
+        this.keptAliveAt = System.nanoTime();
     }
 
     void markReturned() {

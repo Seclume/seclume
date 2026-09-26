@@ -38,6 +38,28 @@ public final class PoolSettings {
     private Duration credentialMargin = Duration.ofMinutes(1);
 
     /**
+     * How far the retirements are spread out ahead of the margin.
+     *
+     * <p><b>Because a pool opens its connections in a burst.</b> Ten
+     * connections made in the same second by the same credential share an
+     * expiry to the second, so without this they all reach their deadline in
+     * one housekeeping round, are all retired at once, and the pool is briefly
+     * a fraction of its size - at which point every waiting caller pays a full
+     * handshake, and with Vault an HTTP round trip as well. The failure is not
+     * an outage and it is exactly the sort of thing that shows up as an
+     * unexplained latency spike on the hour.
+     *
+     * <p>So each connection's deadline is drawn at random from a window of
+     * this length <b>before</b> the margin, and the cohort retires over a
+     * stretch instead of in one go. Only ever earlier, never later: the margin
+     * remains the latest moment a connection may still be in use.
+     *
+     * <p>Defaults to the margin, which makes the window twice the margin wide
+     * in total. Zero puts the old behaviour back.
+     */
+    private Duration credentialSpread = Duration.ofMinutes(1);
+
+    /**
      * Where the pool learns when the current credential stops working.
      *
      * <p>{@code null} by default, and then nothing about this pool changes -
@@ -53,6 +75,8 @@ public final class PoolSettings {
      */
     private Supplier<Instant> credentialExpiry;
     private Duration keepaliveTime = Duration.ZERO;
+    private Duration shutdownTimeout = Duration.ofSeconds(10);
+    private Supplier<java.util.Map<String, String>> sessionContext;
     private Duration validationTimeout = Duration.ofSeconds(5);
     private Duration validationBypassWindow = Duration.ofMillis(500);
     private Duration leakDetectionThreshold = Duration.ZERO;
@@ -135,6 +159,16 @@ public final class PoolSettings {
         return credentialMargin;
     }
 
+    /** @see #credentialSpread */
+    public Duration getCredentialSpread() {
+        return credentialSpread;
+    }
+
+    /** @see #credentialSpread */
+    public void setCredentialSpread(Duration credentialSpread) {
+        this.credentialSpread = requireNonNegative(credentialSpread, "credentialSpread");
+    }
+
     /** @see #credentialMargin */
     public void setCredentialMargin(Duration credentialMargin) {
         this.credentialMargin = requireNonNegative(credentialMargin, "credentialMargin");
@@ -148,6 +182,35 @@ public final class PoolSettings {
     /** @see #credentialExpiry */
     public void setCredentialExpiry(Supplier<Instant> credentialExpiry) {
         this.credentialExpiry = credentialExpiry;
+    }
+
+    /**
+     * How long {@code close()} waits for borrowed connections to come back
+     * before it cuts them - see {@link SeclumePool#close(Duration)}. Ten
+     * seconds by default, inside the thirty a container platform usually
+     * gives a process between SIGTERM and SIGKILL; 0 cuts them at once.
+     */
+    public Duration getShutdownTimeout() {
+        return shutdownTimeout;
+    }
+
+    public void setShutdownTimeout(Duration shutdownTimeout) {
+        this.shutdownTimeout = requireNonNegative(shutdownTimeout, "shutdownTimeout");
+    }
+
+    /**
+     * What every borrowed connection is to carry as session context - the
+     * tenant of the current request, say - asked on each borrow; null or an
+     * empty map for none. See {@link space.seclume.SessionContext}: the value
+     * goes with the borrower's first statement where the protocol lets it,
+     * and the pool's reset on return takes it off again.
+     */
+    public Supplier<java.util.Map<String, String>> getSessionContext() {
+        return sessionContext;
+    }
+
+    public void setSessionContext(Supplier<java.util.Map<String, String>> sessionContext) {
+        this.sessionContext = sessionContext;
     }
 
     /** How often an idle connection is nudged; 0 switches it off. */
@@ -318,7 +381,9 @@ public final class PoolSettings {
                 + ", idleTimeout=" + idleTimeout
                 + ", maxLifetime=" + maxLifetime
                 + ", credentialMargin=" + credentialMargin
+                + ", credentialSpread=" + credentialSpread
                 + ", keepaliveTime=" + keepaliveTime
+                + ", shutdownTimeout=" + shutdownTimeout
                 + ", leakDetectionThreshold=" + leakDetectionThreshold
                 + ", warmup=" + warmup + "]";
     }

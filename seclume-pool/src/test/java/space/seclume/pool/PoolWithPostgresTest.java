@@ -259,6 +259,54 @@ class PoolWithPostgresTest {
         }
     }
 
+    /**
+     * closeOnCompletion cannot be taken back, so a statement told it must not
+     * reach the next borrower: its result closing would close the statement
+     * under somebody who never asked for that.
+     */
+    @Test
+    void aStatementToldToCloseOnCompletionIsNotCached() throws Exception {
+        PoolSettings settings = settings(1);
+        settings.setStatementCacheSize(8);
+        try (SeclumePool pool = new SeclumePool(dataSource(), settings);
+             Connection connection = pool.getConnection()) {
+            String sql = "select 5 where 5 = ?";
+            try (PreparedStatement told = connection.prepareStatement(sql)) {
+                told.closeOnCompletion();
+                told.setInt(1, 5);
+                // Not closed by the application: the handle goes back with the
+                // flag set, and the result is left for the handle's close.
+                told.executeQuery();
+            }
+            PreparedStatement next = connection.prepareStatement(sql);
+            assertFalse(next.isCloseOnCompletion(), "the flag came along to the next borrower");
+            next.setInt(1, 5);
+            try (ResultSet rows = next.executeQuery()) {
+                assertTrue(rows.next());
+            }
+            assertFalse(next.isClosed(), "closed under a borrower who did not ask for it");
+            next.close();
+        }
+    }
+
+    /** A network timeout one borrower set does not reach the next one. */
+    @Test
+    void aNetworkTimeoutEndsWithTheBorrow() throws Exception {
+        try (SeclumePool pool = new SeclumePool(dataSource(), settings(1))) {
+            try (Connection connection = pool.getConnection()) {
+                assertEquals(0, connection.getNetworkTimeout());
+                connection.setNetworkTimeout(Runnable::run, 700);
+                assertEquals(700, connection.getNetworkTimeout());
+            }
+            try (Connection connection = pool.getConnection();
+                 Statement statement = connection.createStatement()) {
+                assertEquals(0, connection.getNetworkTimeout(), "the timeout came along");
+                // And it really is gone underneath: a second is longer than 700 ms.
+                statement.execute("select pg_sleep(1)");
+            }
+        }
+    }
+
     /** What this session has prepared, as the server sees it. */
     private static int preparedOnServer(Connection connection) throws SQLException {
         try (Statement statement = connection.createStatement();

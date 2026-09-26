@@ -56,6 +56,9 @@ final class PooledConnection implements Connection {
     private boolean touchedAutoCommit;
     private boolean touchedReadOnly;
     private boolean touchedIsolation;
+    /** Set by the first setNetworkTimeout of this borrow, with what was there before. */
+    private boolean touchedNetworkTimeout;
+    private int initialNetworkTimeout;
     private boolean closed;
     private boolean broken;
 
@@ -107,6 +110,71 @@ final class PooledConnection implements Connection {
         this.autoCommitOn = initialAutoCommit;
         this.readOnly = initialReadOnly;
         this.isolation = initialIsolation;
+        front(this);
+    }
+
+    /**
+     * Tells the driver connection which handle its statements name as their
+     * connection - see {@link space.seclume.internal.jdbc.Fronted}. Without
+     * it, Spring's {@code queryForStream} closed the driver's connection
+     * behind the pool's back and the pool lost one connection per stream.
+     */
+    private void front(Connection handle) {
+        try {
+            if (delegate.isWrapperFor(space.seclume.internal.jdbc.Fronted.class)) {
+                delegate.unwrap(space.seclume.internal.jdbc.Fronted.class).front(handle);
+            }
+        } catch (SQLException | RuntimeException notOffered) {
+            // a driver that does not offer it hands out its own connection
+        }
+    }
+
+    /**
+     * For a handle over a connection taken over in the middle of its work:
+     * whatever differs from the pool's defaults counts as touched, so that the
+     * return puts it back - and an open transaction counts as work, so that
+     * nothing renews the connection underneath it.
+     */
+    void adopted() throws SQLException {
+        autoCommitOn = delegate.getAutoCommit();
+        touchedAutoCommit = autoCommitOn != initialAutoCommit;
+        readOnly = delegate.isReadOnly();
+        touchedReadOnly = readOnly != initialReadOnly;
+        isolation = delegate.getTransactionIsolation();
+        touchedIsolation = isolation != initialIsolation;
+        workSinceBoundary = !autoCommitOn;
+        used = true;
+    }
+
+    /**
+     * Gives the connection up for good - see {@link SeclumePool#detach}. The
+     * handle is closed afterwards; what it handed out goes with it.
+     */
+    Connection giveUp() {
+        closed = true;
+        if (handedOut != null) {
+            for (Statement statement : handedOut) {
+                try {
+                    statement.close();
+                } catch (SQLException ignored) {
+                    // it goes either way
+                }
+            }
+            handedOut.clear();
+        }
+        return delegate;
+    }
+
+    SeclumePool pool() {
+        return pool;
+    }
+
+    PoolEntry entry() {
+        return entry;
+    }
+
+    boolean isGivenUp() {
+        return closed;
     }
 
     // ---- Zurueckgeben ----------------------------------------------------
@@ -138,7 +206,57 @@ final class PooledConnection implements Connection {
             // pool with it. Found by ChaosBenchmark.
             broken = true;
         }
+        front(null);
         pool.release(entry, broken);
+    }
+
+    /**
+     * Statements the borrower left open are closed here, and said so: an
+     * unclosed statement holds a cursor on the server - ORA-01000 after
+     * enough of them - and outlives the request that forgot it. With leak
+     * detection on, the warning says where each one was made.
+     */
+    private void closeLeftStatements() {
+        java.util.List<space.seclume.OpenStatements.Opened> left;
+        try {
+            if (!delegate.isWrapperFor(space.seclume.OpenStatements.class)) {
+                return;
+            }
+            left = delegate.unwrap(space.seclume.OpenStatements.class).openStatements();
+        } catch (SQLException | RuntimeException notOffered) {
+            return;
+        }
+        java.util.List<space.seclume.OpenStatements.Opened> leaked = new java.util.ArrayList<>();
+        for (space.seclume.OpenStatements.Opened one : left) {
+            if (statements == null || !statements.holds(one.statement())) {
+                leaked.add(one);
+            }
+        }
+        if (leaked.isEmpty()) {
+            return;
+        }
+        for (space.seclume.OpenStatements.Opened one : leaked) {
+            try {
+                one.statement().close();
+            } catch (SQLException ignored) {
+                // closing anyway; the connection may be the next to go
+            }
+        }
+        pool.statementsLeaked(leaked);
+    }
+
+    /**
+     * The driver's {@link space.seclume.SessionReset}, or null. A foreign
+     * driver that does not offer it - or cannot even say so without throwing
+     * - is simply not asked: its connection goes back as it always did.
+     */
+    private space.seclume.SessionReset sessionReset() {
+        try {
+            return delegate.isWrapperFor(space.seclume.SessionReset.class)
+                    ? delegate.unwrap(space.seclume.SessionReset.class) : null;
+        } catch (SQLException | RuntimeException notOffered) {
+            return null;
+        }
     }
 
     /** Returns the connection to the state it was handed out in. */
@@ -159,6 +277,12 @@ final class PooledConnection implements Connection {
         if (touchedIsolation && delegate.getTransactionIsolation() != initialIsolation) {
             delegate.setTransactionIsolation(initialIsolation);
         }
+        // A timeout one borrower chose for its own work - HikariCP-style
+        // around a validation, or a short one for a quick lookup - would
+        // otherwise close the next borrower's long report half way.
+        if (touchedNetworkTimeout && delegate.getNetworkTimeout() != initialNetworkTimeout) {
+            delegate.setNetworkTimeout(Runnable::run, initialNetworkTimeout);
+        }
         // Only when something was actually asked of the connection: if
         // nothing was, nothing can have warned. The call looks free and is
         // not - on several drivers it is a synchronized method, and it sits on
@@ -166,11 +290,37 @@ final class PooledConnection implements Connection {
         if (used) {
             delegate.clearWarnings();
         }
+        // What a statement set beyond the transaction - a tenant, a
+        // search_path, a temporary table - would otherwise go to the next
+        // borrower. Only when the driver noted such a statement, so the
+        // ordinary return costs nothing. See space.seclume.SessionReset.
+        if (used) {
+            closeLeftStatements();
+        }
+        space.seclume.SessionReset session = used ? sessionReset() : null;
+        if (session != null) {
+            if (session.sessionStateChanged()) {
+                if (statements != null) {
+                    statements.closeAll();       // MySQL drops prepared statements with the rest
+                }
+                if (!session.resetSessionState()) {
+                    throw new SQLException("the session carries state that cannot be put "
+                            + "back - the connection is closed rather than lent again");
+                }
+            }
+        }
+    }
+
+    /** Counts as used - see SeclumePool: a session context was set on borrow. */
+    void markUsed() {
+        used = true;
     }
 
     @Override
     public boolean isClosed() {
-        return closed;
+        // Also closed when the pool cut the connection underneath - on
+        // shutdown after the drain - without this handle being returned.
+        return closed || entry.state() == PoolEntry.State.CLOSED;
     }
 
     private void checkOpen() throws SQLException {
@@ -380,7 +530,7 @@ final class PooledConnection implements Connection {
             return call(c -> c.prepareStatement(sql));
         }
         return call(c -> CachedPreparedStatement.wrap(statements, sql,
-                statements.take(c, sql)));
+                statements.take(c, sql), this));
     }
 
     @Override
@@ -649,6 +799,10 @@ final class PooledConnection implements Connection {
 
     @Override
     public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
+        if (!touchedNetworkTimeout) {
+            initialNetworkTimeout = call(Connection::getNetworkTimeout);
+            touchedNetworkTimeout = true;
+        }
         run(c -> c.setNetworkTimeout(executor, milliseconds));
     }
 

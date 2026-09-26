@@ -15,5 +15,10 @@ module seclume.pool {
     // its promise of knowing DataSource and nothing else. See PoolEvents.
     requires jdk.jfr;
 
+    // For SessionReset: what a borrower's statements set beyond the
+    // transaction is put back on return. A driver that does not offer it is
+    // simply not asked - the pool still works with anyone's driver.
+    requires seclume.core;
+
     exports space.seclume.pool;
 }

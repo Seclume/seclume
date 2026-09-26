@@ -68,9 +68,17 @@ final class CachedPreparedStatement implements PreparedStatement {
 
     /** Wraps a statement so that closing it returns it to the cache. */
     static PreparedStatement wrap(StatementCache cache, String sql,
-                                  PreparedStatement statement) {
-        return new CachedPreparedStatement(cache, sql, statement);
+                                  PreparedStatement statement, Connection handle) {
+        CachedPreparedStatement wrapped = new CachedPreparedStatement(cache, sql, statement);
+        wrapped.handle = handle;
+        return wrapped;
     }
+
+    /**
+     * The pool handle this was taken through. The statement behind it lives
+     * across borrowers, so it cannot know which one holds it now.
+     */
+    private Connection handle;
 
     /**
      * The statement, if this handle may still be used.
@@ -205,7 +213,8 @@ final class CachedPreparedStatement implements PreparedStatement {
 
     @Override
     public Connection getConnection() throws SQLException {
-        return open().getConnection();
+        Connection underneath = open().getConnection();
+        return handle != null ? handle : underneath;
     }
 
     @Override
