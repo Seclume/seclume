@@ -1,30 +1,37 @@
-# Dependabot: known vulnerabilities and new versions, weekly.
+# Dependabot: known vulnerabilities and new versions.
 #
 # The drivers have no runtime dependency beyond the JDK, so what this watches
 # is the rest: the Spring starter's Spring Boot, the CRaC API, the test and
 # benchmark stack (JUnit, Jazzer, JMH, the vendor drivers compared against),
 # the Maven plugins - and the GitHub Actions, pinned to commit SHAs, which
 # Dependabot keeps current together with their version comments.
+#
+# Grouped so that a week's updates arrive as a few pull requests rather than
+# one per artifact: every pull request runs the full database matrix, and the
+# free plan runs 20 jobs at a time. Security updates are not grouped and not
+# delayed - they still come on their own, at once.
 version: 2
 updates:
   - package-ecosystem: maven
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     groups:
-      test-and-bench:
-        patterns:
-          - "org.junit*"
-          - "com.code-intelligence*"
-          - "org.openjdk.jmh*"
-          - "org.postgresql*"
-          - "com.mysql*"
-          - "org.mariadb*"
-          - "com.microsoft.sqlserver*"
-          - "com.oracle.database*"
-          - "com.zaxxer*"
+      minor-and-patch:
+        update-types: [minor, patch]
+      major:
+        update-types: [major]
+    ignore:
+      # Spring Boot manages these for the starter and the Spring tests; a
+      # version Boot does not know can break its auto-configuration. They
+      # move when Spring Boot moves.
+      - dependency-name: "org.flywaydb:*"
+      - dependency-name: "io.micrometer:*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

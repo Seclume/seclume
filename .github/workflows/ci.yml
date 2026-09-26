@@ -16,8 +16,22 @@ name: CI
 # fork can run the same suite without being given anything.
 
 on:
+  # Pushes to main, and pull requests. A push to a pull request's branch is
+  # already covered by the pull_request run; running both doubled every
+  # Dependabot update into two full matrices. Documentation alone changes no
+  # test result.
   push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'test-reports/**', 'LICENSE', 'NOTICE']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'test-reports/**', 'LICENSE', 'NOTICE']
+
+# The free plan runs 20 jobs at a time across the whole account. A newer push
+# to the same pull request replaces the older run instead of queueing behind
+# it. On main every commit keeps its own run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Everything provable without a database: the cryptography against the
