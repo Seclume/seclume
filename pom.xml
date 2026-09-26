@@ -69,6 +69,10 @@
     <module>seclume-sqlserver</module>
     <module>seclume-oracle</module>
     <module>seclume-pool</module>
+    <module>seclume-crac</module>
+    <module>seclume-kafka</module>
+    <module>seclume-redis</module>
+    <module>seclume-quarkus</module>
     <module>seclume-spring-boot-starter</module>
     <module>seclume-bench</module>
     <module>seclume-verify</module>
@@ -84,12 +88,20 @@
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>25</maven.compiler.release>
     <junit.version>5.11.4</junit.version>
+    <jazzer.version>0.30.0</jazzer.version>
     <!-- Reproducible builds: a fixed timestamp in the archives. -->
     <project.build.outputTimestamp>2026-09-22T19:17:56Z</project.build.outputTimestamp>
   </properties>
 
   <dependencyManagement>
     <dependencies>
+      <!-- Coverage-guided fuzzing: an ordinary build replays the saved
+           inputs, JAZZER_FUZZ=1 searches for new ones. Tests only. -->
+      <dependency>
+        <groupId>com.code-intelligence</groupId>
+        <artifactId>jazzer-junit</artifactId>
+        <version>${jazzer.version}</version>
+      </dependency>
       <dependency>
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
@@ -137,6 +149,16 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-jar-plugin</artifactId>
           <version>3.4.2</version>
+          <configuration>
+            <!-- Implementation-Title / -Version in every jar, so that
+                 Package.getImplementationVersion() - and space.seclume.Version
+                 - can say which build is running. -->
+            <archive>
+              <manifest>
+                <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+              </manifest>
+            </archive>
+          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -158,6 +180,37 @@
   </build>
 
   <profiles>
+    <!--
+      The whole fuzz corpus, instead of the sample an ordinary run takes.
+
+      Four hand-written wire protocols are attacked by tens of thousands of
+      broken frames here, and that is minutes of wall clock - right for a
+      nightly job, wrong for the run somebody is waiting on. A suite people
+      wait on is a suite people learn to skip, and a corpus that makes every
+      build slow is a corpus that gets deleted in six weeks.
+
+      So `mvn test` runs a fixed, deterministic sample of each corpus - the
+      seeds themselves, the shapes that need no seed, and a spread across the
+      rest - which keeps the harness alive and costs seconds. `mvn -Pfuzz
+      test` runs all of it.
+    -->
+    <profile>
+      <id>fuzz</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <systemPropertyVariables>
+                <seclume.fuzz.full>true</seclume.fuzz.full>
+              </systemPropertyVariables>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!--
       Sources and javadoc travel with a release, and only with a release: they
       cost a minute of build time that an ordinary `mvn install` has no reason
@@ -193,6 +246,86 @@
               <execution>
                 <id>attach-javadocs</id>
                 <goals><goal>jar</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+          <!-- A software bill of materials per module: what is in the jar and
+               what it depends on. For seclume that list is short on purpose -
+               the JDK and nothing else at runtime - and the SBOM is how a
+               procurement check verifies it instead of taking it on trust. -->
+          <plugin>
+            <groupId>org.cyclonedx</groupId>
+            <artifactId>cyclonedx-maven-plugin</artifactId>
+            <version>2.9.1</version>
+            <configuration>
+              <outputFormat>json</outputFormat>
+              <includeTestScope>false</includeTestScope>
+            </configuration>
+            <executions>
+              <execution>
+                <phase>package</phase>
+                <goals><goal>makeBom</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!--
+      What changed in the public API since the last release: `mvn -Papicheck
+      verify` compares every module's jar with the released one (from the local
+      repository) and writes target/japicmp/. Before 1.0 it reports and does not
+      fail - the API is still allowed to move, and the CHANGELOG says so - but
+      every break is then a line somebody decided on, not one nobody noticed.
+      At 1.0 breakBuildOnBinaryIncompatibleModifications goes to true.
+    -->
+    <profile>
+      <id>apicheck</id>
+      <properties>
+        <seclume.api.baseline>0.9.0</seclume.api.baseline>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>com.github.siom79.japicmp</groupId>
+            <artifactId>japicmp-maven-plugin</artifactId>
+            <version>0.23.1</version>
+            <configuration>
+              <oldVersion>
+                <dependency>
+                  <groupId>${project.groupId}</groupId>
+                  <artifactId>${project.artifactId}</artifactId>
+                  <version>${seclume.api.baseline}</version>
+                  <type>jar</type>
+                </dependency>
+              </oldVersion>
+              <parameter>
+                <onlyModified>true</onlyModified>
+                <!-- Not the user's API: the internal packages, and the protocol
+                     layers under the JDBC classes, which are exported only
+                     for the session-moving transport built on them. -->
+                <excludes>
+                  <exclude>*.internal.*</exclude>
+                  <exclude>space.seclume.postgresql</exclude>
+                  <exclude>space.seclume.postgresql.wire</exclude>
+                  <exclude>space.seclume.mysql</exclude>
+                  <exclude>space.seclume.mysql.wire</exclude>
+                  <exclude>space.seclume.sqlserver.tds</exclude>
+                  <exclude>space.seclume.oracle</exclude>
+                  <exclude>space.seclume.oracle.net</exclude>
+                </excludes>
+                <ignoreMissingClasses>true</ignoreMissingClasses>
+                <breakBuildOnBinaryIncompatibleModifications>false</breakBuildOnBinaryIncompatibleModifications>
+                <breakBuildOnSourceIncompatibleModifications>false</breakBuildOnSourceIncompatibleModifications>
+                <ignoreMissingOldVersion>true</ignoreMissingOldVersion>
+                <skipPomModules>true</skipPomModules>
+              </parameter>
+            </configuration>
+            <executions>
+              <execution>
+                <phase>verify</phase>
+                <goals><goal>cmp</goal></goals>
               </execution>
             </executions>
           </plugin>

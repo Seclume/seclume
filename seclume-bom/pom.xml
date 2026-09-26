@@ -55,6 +55,31 @@
       </dependency>
       <dependency>
         <groupId>space.seclume</groupId>
+        <artifactId>seclume-crac</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-kafka</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-redis</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-quarkus</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-quarkus-deployment</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
         <artifactId>seclume-spring-boot-starter</artifactId>
         <version>${project.version}</version>
       </dependency>

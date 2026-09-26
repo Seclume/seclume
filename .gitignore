@@ -7,3 +7,10 @@ target/
 .local-*
 .mssql-env.tmp
 .oracle-env.tmp
+
+# Jazzer: the corpus it grows while fuzzing (the findings worth keeping go
+# to src/test/resources/**/*Inputs/ and are committed)
+.cifuzz-corpus/
+
+# Jazzer writes a reproducer here when a fuzz campaign finds something
+crash-*

@@ -1,0 +1,30 @@
+# Dependabot: known vulnerabilities and new versions, weekly.
+#
+# The drivers have no runtime dependency beyond the JDK, so what this watches
+# is the rest: the Spring starter's Spring Boot, the CRaC API, the test and
+# benchmark stack (JUnit, Jazzer, JMH, the vendor drivers compared against),
+# the Maven plugins - and the GitHub Actions, pinned to commit SHAs, which
+# Dependabot keeps current together with their version comments.
+version: 2
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      test-and-bench:
+        patterns:
+          - "org.junit*"
+          - "com.code-intelligence*"
+          - "org.openjdk.jmh*"
+          - "org.postgresql*"
+          - "com.mysql*"
+          - "org.mariadb*"
+          - "com.microsoft.sqlserver*"
+          - "com.oracle.database*"
+          - "com.zaxxer*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

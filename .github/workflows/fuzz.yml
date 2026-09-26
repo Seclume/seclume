@@ -1,0 +1,86 @@
+# The whole fuzz corpus, nightly.
+#
+# The ordinary CI jobs run a fixed sample of each corpus - seconds, so that
+# nobody learns to skip the suite. This runs all of it: tens of thousands of
+# broken frames against four hand-written wire protocols, and the same again
+# through real session objects over a scripted hostile transport.
+#
+# No database service anywhere in here, and that is the point of the design:
+# the decoders are reached through resume(), which takes up a stream somebody
+# else authenticated, so every byte comes from the script and nothing has to
+# be running for it to mean something.
+name: fuzz
+
+on:
+  schedule:
+    # 02:40 UTC. Not on the hour: GitHub's scheduler is busiest then and a
+    # nightly that starts late often does not start at all.
+    - cron: '40 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: The whole corpus
+        run: >
+          ./mvnw -B -Pfuzz
+          -pl seclume-core,seclume-tck,seclume-postgresql,seclume-mysql,seclume-sqlserver,seclume-oracle
+          -am test -Dtest='*Fuzz*,BoundaryContractTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+      - name: What the run found
+        if: failure()
+        run: |
+          echo "A corpus finding is a defect until somebody shows it is not."
+          echo "Every failure prints the stream that produced it, as hex, so it"
+          echo "reproduces from the log alone with no corpus file to fetch."
+
+  # Coverage-guided search, as opposed to replaying a corpus: Jazzer mutates
+  # toward inputs that reach new code. Fifteen minutes per wire decoder a
+  # night. A finding fails the job; the input that caused it is kept as an
+  # artefact and belongs in src/test/resources as a regression case.
+  coverage-guided:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { module: seclume-postgresql, test: PgDecoderFuzzTest }
+          - { module: seclume-mysql, test: MyDecoderFuzzTest }
+          - { module: seclume-sqlserver, test: TdsDecoderFuzzTest }
+          - { module: seclume-oracle, test: OracleDecoderFuzzTest }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - run: ./mvnw -B -DskipTests install -pl ${{ matrix.target.module }} -am
+      - name: Search
+        env:
+          JAZZER_FUZZ: '1'
+        run: >
+          ./mvnw -B test -pl ${{ matrix.target.module }}
+          -Dtest='${{ matrix.target.test }}#coverageGuided'
+          -Djazzer.max_duration=15m -Dsurefire.failIfNoSpecifiedTests=false
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: finding-${{ matrix.target.test }}
+          path: ${{ matrix.target.module }}/src/test/resources/**/crash-*

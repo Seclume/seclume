@@ -26,8 +26,8 @@ jobs:
   core:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -36,7 +36,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -65,8 +65,8 @@ jobs:
       matrix:
         version: ['15', '18']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -75,7 +75,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -83,6 +83,66 @@ jobs:
       - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter -am test
       - if: always()
         run: rm -f .local-pg-password
+
+  # PgBouncer in transaction mode with ONE server connection, so that every
+  # client shares the same server session - what proxyMode=transaction is for,
+  # and the leak it prevents shows up in PgBouncerTest's control.
+  pgbouncer:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: seclume_test
+          POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+          POSTGRES_DB: seclume_test
+          POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Start PgBouncer in transaction mode
+        run: |
+          mkdir bouncer
+          pw="${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}"
+          printf '"seclume_test" "%s"\n' "$pw" > bouncer/userlist.txt
+          cat > bouncer/pgbouncer.ini <<'EOF'
+          [databases]
+          seclume_test = host=127.0.0.1 port=5432 dbname=seclume_test
+          [pgbouncer]
+          listen_addr = 127.0.0.1
+          listen_port = 6432
+          auth_type = scram-sha-256
+          auth_file = /etc/pgbouncer/userlist.txt
+          pool_mode = transaction
+          default_pool_size = 1
+          max_prepared_statements = 200
+          ignore_startup_parameters = extra_float_digits,options
+          EOF
+          chmod 777 bouncer && chmod 666 bouncer/*
+          docker run -d --name bouncer --network host -v "$PWD/bouncer:/etc/pgbouncer" edoburu/pgbouncer:latest
+          for i in $(seq 1 20); do (echo > /dev/tcp/127.0.0.1/6432) 2>/dev/null && break; sleep 1; done
+      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pgtls-password
+      - run: >-
+          ./mvnw -B -pl seclume-diff -am test -Dtest=PgBouncerTest
+          -Dsurefire.failIfNoSpecifiedTests=false
+          -Dseclume.pgbouncer.host=127.0.0.1 -Dseclume.pgbouncer.port=6432
+      - if: always()
+        run: |
+          rm -f .local-pgtls-password bouncer/userlist.txt
+          docker rm -f bouncer || true
 
   mysql:
     runs-on: ubuntu-latest
@@ -110,8 +170,8 @@ jobs:
           - image: 'mariadb:11.4'
             health: 'healthcheck.sh --connect --innodb_initialized'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -120,7 +180,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -139,8 +199,8 @@ jobs:
           MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
         ports: ['1433:1433']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -149,7 +209,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -194,8 +254,8 @@ jobs:
           --health-cmd healthcheck.sh --health-interval 20s
           --health-timeout 10s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -204,7 +264,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -225,8 +285,8 @@ jobs:
   cockroachdb:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -235,7 +295,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -267,8 +327,8 @@ jobs:
   yugabytedb:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           java-version: '25'
           distribution: 'temurin'
@@ -277,7 +337,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
