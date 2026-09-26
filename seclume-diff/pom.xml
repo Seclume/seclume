@@ -28,7 +28,7 @@
     <pgjdbc.version>42.7.13</pgjdbc.version>
     <connectorj.version>26.7.0</connectorj.version>
     <mssqljdbc.version>13.6.0.jre11</mssqljdbc.version>
-    <ojdbc.version>23.6.0.24.10</ojdbc.version>
+    <ojdbc.version>23.26.2.0.0</ojdbc.version>
   </properties>
 
   <dependencies>
