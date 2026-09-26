@@ -33,6 +33,16 @@ updates:
       # each). Only the comparison uses it - seclume never loads ojdbc.
       - dependency-name: "com.oracle.database.jdbc:ojdbc*"
         versions: ["23.26.3.0.0"]
+      # Surefire 3.6.0 and the Maven wrapper 3.3.4 with Maven 3.9.16 failed
+      # core and every database job on Linux in #20 (a JUnit ArgumentsProvider
+      # error, a failed self-attach); the other updates of that group were
+      # green on their own in #22. Held back until the cause is understood.
+      - dependency-name: "org.apache.maven.plugins:maven-surefire-plugin"
+        versions: ["3.6.0"]
+      - dependency-name: "org.apache.maven:apache-maven"
+        versions: ["3.9.16"]
+      - dependency-name: "org.apache.maven.wrapper:maven-wrapper"
+        versions: ["3.3.4"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
