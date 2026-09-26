@@ -39,9 +39,21 @@ public final class TokenStream {
     public static final int DONE_ERROR = 0x0002;
     /** DONE status: the row count is meaningful. */
     public static final int DONE_COUNT = 0x0010;
+    /**
+     * The server acknowledging an ATTENTION: what it was doing, it stopped.
+     *
+     * <p>This is the only way a cancellation is visible. The server does not
+     * send an error for it - it finishes the answer it was in the middle of,
+     * which may already carry rows, and sets this bit in the closing DONE.
+     * A driver that does not look at it reports a short result as a complete
+     * one.
+     */
+    public static final int DONE_ATTENTION = 0x0020;
 
     /** The length of every DONE token: status, current command, row count. */
     private static final int DONE_SIZE = 12;
+
+
 
     /** Receives the rows - a window onto the buffer, valid until the next row. */
     @FunctionalInterface
@@ -66,11 +78,22 @@ public final class TokenStream {
          */
         default void nextResult(List<TdsColumn> columns) throws SQLException {
         }
+
+        /**
+         * Asked after every packet: whether the reading may stop here and go
+         * on later, because the application can already work on what came.
+         * Default no - most answers are read whole.
+         */
+        default boolean pause() {
+            return false;
+        }
     }
 
     private List<TdsColumn> columns = List.of();
     private TdsRow row;
     private long updateCount = -1;
+    /** Whether the server said it stopped because it was asked to. */
+    private boolean attention;
     /**
      * The count the <b>first</b> statement of a batch reported.
      *
@@ -107,8 +130,72 @@ public final class TokenStream {
     public void read(WireBuffer in, int at, int end, RowHandler handler)
             throws IOException, SQLException {
         int p = at;
-        SQLException refused = null;
         while (p < end) {
+            try {
+                p = token(in, p, end, handler);
+            } catch (Incomplete cut) {
+                throw new IOException("the answer ends in the middle of a token at offset " + p);
+            }
+        }
+        finish();
+    }
+
+    /**
+     * Reads the tokens in {@code [at, end)} that are there completely, and
+     * says where the first one starts that is not - the answer is arriving
+     * packet by packet, and a token may be cut by the end of one.
+     *
+     * <p>That is what lets the rows be taken while the rest of the answer is
+     * still on its way, instead of after all of it: the work of reading them
+     * falls into the time the network needs anyway. A token cut short is read
+     * again from its start once more has arrived; nothing it did the first
+     * time sticks, because every token reads all of itself before it changes
+     * anything - see {@link TdsRow} on the one that moves bytes.
+     *
+     * @return where reading has to go on
+     */
+    public int readComplete(WireBuffer in, int at, int end, RowHandler handler)
+            throws IOException, SQLException {
+        int p = at;
+        while (p < end) {
+            try {
+                p = token(in, p, end, handler);
+            } catch (WireBuffer.Truncated | Incomplete cut) {
+                return p;
+            }
+        }
+        return p;
+    }
+
+    /** Raises what a handler refused, once the whole answer has been read. */
+    public void finish() throws SQLException {
+        if (refused != null) {
+            SQLException first = refused;
+            refused = null;
+            throw first;
+        }
+    }
+
+    /** A token that goes on past what has arrived. */
+    private static final class Incomplete extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        Incomplete() {
+            super(null, null, false, false);
+        }
+    }
+
+    private static final Incomplete INCOMPLETE = new Incomplete();
+
+    /** What a handler refused - raised by {@link #finish}. */
+    private SQLException refused;
+
+    /** One token, from its type byte at {@code at}; returns where the next one starts. */
+    private int token(WireBuffer in, int at, int end, RowHandler handler)
+            throws IOException, SQLException {
+        int p = at;
+        {
             int token = in.getByte(p) & 0xff;
             p++;
             switch (token) {
@@ -126,6 +213,12 @@ public final class TokenStream {
                         throw new IOException("a row arrived before its description");
                     }
                     p = row.read(p, token == Tds.TOKEN_NBCROW);
+                    if (p > end) {
+                        // The fixed-width cells are not read, only counted;
+                        // a row that ends past what has arrived would be
+                        // handed on with bytes that are not there yet.
+                        throw INCOMPLETE;
+                    }
                     totalRows++;
                     if (handler != null && refused == null) {
                         // A handler that refuses a row - a result limit, say -
@@ -141,6 +234,9 @@ public final class TokenStream {
                 }
                 case Tds.TOKEN_DONE, Tds.TOKEN_DONE_PROC, Tds.TOKEN_DONE_IN_PROC -> {
                     int status = ushort(in, p);
+                    if ((status & DONE_ATTENTION) != 0) {
+                        attention = true;
+                    }
                     long count = readLong(in, p + 4);
                     if (counts != null) {
                         // Measured against a real server: the count arrives in
@@ -166,8 +262,8 @@ public final class TokenStream {
                     p += DONE_SIZE;
                 }
                 case Tds.TOKEN_RETURN_VALUE -> p = readReturnValue(in, p);
-                case Tds.TOKEN_ERROR -> p = readMessage(in, p, true);
-                case Tds.TOKEN_INFO -> p = readMessage(in, p, false);
+                case Tds.TOKEN_ERROR -> p = readMessage(in, p, end, true);
+                case Tds.TOKEN_INFO -> p = readMessage(in, p, end, false);
                 case Tds.TOKEN_ENVCHANGE -> p = readEnvChange(in, p);
                 // A cursor result names the table its columns came from and
                 // says which of them make up the key. Neither is of any use
@@ -183,18 +279,28 @@ public final class TokenStream {
                         "unexpected token " + Tds.tokenName(token) + " at offset " + (p - 1));
             }
         }
-        if (refused != null) {
-            throw refused;
+        if (p > end) {
+            throw INCOMPLETE;              // a length that points past the answer
         }
+        return p;
     }
 
     /** An error or a message from the server. */
-    private int readMessage(WireBuffer in, int at, boolean isError) {
+    private int readMessage(WireBuffer in, int at, int available, boolean isError)
+            throws Incomplete {
         int end = at + 2 + ushort(in, at);
+        if (end > available) {
+            // Not all of it yet. Recorded now, the error would be recorded
+            // again when the token is read in full after the next packet - and
+            // every long error would reach the caller twice (found in review,
+            // 25.09.2026).
+            throw INCOMPLETE;
+        }
         int p = at + 2;
         int number = in.getIntLe(p);
         p += 4;
-        p++;                                          // state
+        int state = in.getByte(p) & 0xff;
+        p++;
         int severity = in.getByte(p) & 0xff;
         p++;
         int messageChars = ushort(in, p);
@@ -203,7 +309,7 @@ public final class TokenStream {
         if (isError) {
             SQLException next = new SQLException(
                     message + " (error " + number + ", severity " + severity + ")",
-                    sqlState(number), number);
+                    sqlState(number, state), number);
             if (failure == null) {
                 failure = next;
             } else {
@@ -216,16 +322,24 @@ public final class TokenStream {
     }
 
     /**
-     * SQL Server sends no SQLState, only its own error number. These are the
-     * ones a caller actually branches on; everything else stays generic.
+     * SQL Server sends no SQLState, only its own error number and a state
+     * byte that says where in the server the error was raised.
+     *
+     * <p>The numbers a caller branches on have a state of their own - a
+     * constraint violation is 23000, a missing table S0002 as ODBC named it.
+     * Everything else is {@code S} and the server's state byte in four digits,
+     * which is what mssql-jdbc reports: a raiserror with state 1 is S0001, a
+     * missing procedure (state 62) S0062. Measured against it by
+     * {@code ErrorCatalogTest}.
      */
-    private static String sqlState(int number) {
+    private static String sqlState(int number, int state) {
         return switch (number) {
-            case 2601, 2627, 547 -> "23000";          // duplicate key, foreign key
+            case 2601, 2627, 547, 515 -> "23000";     // duplicate key, foreign key, not null
+            case 208 -> "S0002";                      // no such table
             case 1205 -> "40001";                     // deadlock victim
-            case 8152 -> "22001";                     // string would be truncated
             case 18456 -> "28000";                    // login failed
-            default -> "S0001";
+            default -> state < 10 ? "S000" + state
+                    : state < 100 ? "S00" + state : "S0" + state;
         };
     }
 
@@ -284,7 +398,16 @@ public final class TokenStream {
             if (feature == 0xff) {
                 return p;
             }
-            p += 4 + in.getIntLe(p);
+            // A length off the wire: a negative one walked the pointer back
+            // and looped for ever - found by the fuzzer, as a hang.
+            // (Only the sign is checked here: the answer is read in pieces, and
+            // running past the piece is what the buffer's own bounds report.)
+            int length = in.getIntLe(p);
+            if (length < 0) {
+                throw space.seclume.internal.WireBuffer.malformed("a FEATUREEXTACK entry of "
+                        + length + " bytes");
+            }
+            p += 4 + length;
         }
     }
 
@@ -413,5 +536,10 @@ public final class TokenStream {
     /** The first error, with the rest chained behind it; {@code null} if none. */
     public SQLException failure() {
         return failure;
+    }
+
+    /** Whether the server stopped because an ATTENTION told it to. */
+    public boolean wasCancelled() {
+        return attention;
     }
 }

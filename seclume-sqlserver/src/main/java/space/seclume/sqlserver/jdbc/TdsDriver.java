@@ -45,7 +45,14 @@ public final class TdsDriver implements Driver {
             return null;
         }
         TdsSession.Settings settings = TdsUrl.settings(url, properties);
-        return new TdsConnection(TdsSession.open(settings), url);
+        boolean varchar = TdsUrl.varcharParameters(url, properties);
+        TdsConnection connection = new TdsConnection(space.seclume.internal.TrustChoice.using(
+                space.seclume.internal.TrustChoice.of(url, properties),
+                () -> space.seclume.internal.Transports.using(
+                        space.seclume.internal.Transports.option(url, properties),
+                        () -> TdsSession.open(settings))), url);
+        connection.varcharParameters(varchar);
+        return connection;
     }
 
     @Override

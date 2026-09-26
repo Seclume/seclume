@@ -35,11 +35,16 @@ public final class PreLogin {
     private static final int CLIENT_MAJOR = 16;
     private static final int CLIENT_MINOR = 0;
     private static final int CLIENT_BUILD = 1000;
+    private static final int NONCE_LENGTH = 32;
 
     private int encryption = Tds.ENCRYPT_NOT_SUP;
     private int serverMajor;
     private int serverMinor;
     private int serverBuild;
+    /** The server's FEDAUTHREQUIRED answer - echoed in the FEDAUTH feature. */
+    private boolean fedAuthEcho;
+    /** A nonce the server sent for the FEDAUTH feature to return; null if none. */
+    private byte[] nonce;
 
     /** Built empty; {@link #exchange} fills it from the answer. */
     public PreLogin() {
@@ -52,15 +57,28 @@ public final class PreLogin {
      *                          or {@link Tds#ENCRYPT_OFF}
      */
     public void exchange(TdsChannel channel, int requestEncryption) throws IOException {
+        exchange(channel, requestEncryption, false);
+    }
+
+    /**
+     * Sends the PRELOGIN and reads the answer; with {@code fedAuth}, it says
+     * that the login will carry a federated-authentication token
+     * (FEDAUTHREQUIRED), as a token login has to.
+     */
+    public void exchange(TdsChannel channel, int requestEncryption, boolean fedAuth)
+            throws IOException {
         WireBuffer out = channel.begin();
         int tableStart = out.position();
-        // Three options, five bytes each, then the terminator byte.
-        int optionCount = 3;
+        // Three or four options, five bytes each, then the terminator byte.
+        int optionCount = fedAuth ? 4 : 3;
         int valuesAt = tableStart + optionCount * 5 + 1;
 
         writeOption(out, Tds.PRELOGIN_VERSION, valuesAt - tableStart, 6);
         writeOption(out, Tds.PRELOGIN_ENCRYPTION, valuesAt - tableStart + 6, 1);
         writeOption(out, Tds.PRELOGIN_MARS, valuesAt - tableStart + 7, 1);
+        if (fedAuth) {
+            writeOption(out, Tds.PRELOGIN_FEDAUTHREQUIRED, valuesAt - tableStart + 8, 1);
+        }
         out.putByte((byte) Tds.PRELOGIN_TERMINATOR);
 
         // Values: version (6), encryption (1), MARS (1).
@@ -71,6 +89,9 @@ public final class PreLogin {
         out.putShort((short) 0);                   // sub-version
         out.putByte((byte) requestEncryption);
         out.putByte((byte) 0);                     // MARS: no
+        if (fedAuth) {
+            out.putByte((byte) 1);                 // FEDAUTHREQUIRED
+        }
 
         channel.send(Tds.TYPE_PRELOGIN);
         read(channel);
@@ -123,12 +144,35 @@ public final class PreLogin {
                         encryption = in.getByte(offset) & 0xff;
                     }
                 }
+                case Tds.PRELOGIN_FEDAUTHREQUIRED -> {
+                    if (valueLength >= 1) {
+                        fedAuthEcho = in.getByte(offset) != 0;
+                    }
+                }
+                case Tds.PRELOGIN_NONCE -> {
+                    if (valueLength == NONCE_LENGTH) {
+                        nonce = new byte[NONCE_LENGTH]; // seclume-allow: a server nonce, public protocol data
+                        for (int i = 0; i < NONCE_LENGTH; i++) {
+                            nonce[i] = in.getByte(offset + i);
+                        }
+                    }
+                }
                 default -> {
                     // Everything else is of no interest to this driver.
                 }
             }
             at += 5;
         }
+    }
+
+    /** Whether the server's FEDAUTHREQUIRED answer was set - the FEDAUTH echo bit. */
+    public boolean fedAuthEcho() {
+        return fedAuthEcho;
+    }
+
+    /** The server's 32-byte nonce for the FEDAUTH feature, or null. */
+    public byte[] nonce() {
+        return nonce == null ? null : nonce.clone();
     }
 
     /** What the server says about encryption. */

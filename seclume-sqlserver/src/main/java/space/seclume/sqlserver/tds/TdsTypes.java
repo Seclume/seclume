@@ -68,6 +68,10 @@ public final class TdsTypes {
     public static final int NVARCHAR = 0xe7;
     public static final int NCHAR = 0xef;
     public static final int XML = 0xf1;
+    /** A CLR type - geography, geometry, hierarchyid - as its serialized bytes. */
+    public static final int UDT = 0xf0;
+    /** A table-valued parameter (TVP_TYPE_INFO) - sent only, never in a result. */
+    public static final int TVP = 0xf3;
     public static final int TEXT = 0x23;
     public static final int IMAGE = 0x22;
     public static final int NTEXT = 0x63;
@@ -215,7 +219,9 @@ public final class TdsTypes {
     /** The matching {@link Types} value that JDBC callers expect. */
     public static int sqlType(int type, int size, int scale) {
         return switch (type) {
-            case BIT, BITN -> Types.BOOLEAN;
+            // BIT, not BOOLEAN: what mssql-jdbc reports, and what an ORM that
+            // maps SQL Server columns by type code was written against.
+            case BIT, BITN -> Types.BIT;
             case INT1 -> Types.TINYINT;
             case INT2 -> Types.SMALLINT;
             case INT4 -> Types.INTEGER;
@@ -229,7 +235,8 @@ public final class TdsTypes {
             case FLT4 -> Types.REAL;
             case FLT8 -> Types.DOUBLE;
             case FLTN -> size == 4 ? Types.REAL : Types.DOUBLE;
-            case DECIMAL, DECIMALN, NUMERIC, NUMERICN -> Types.DECIMAL;
+            case DECIMAL, DECIMALN -> Types.DECIMAL;
+            case NUMERIC, NUMERICN -> Types.NUMERIC;
             case MONEY, MONEY4, MONEYN -> Types.DECIMAL;
             case DATETIME, DATETIM4, DATETIMN, DATETIME2N -> Types.TIMESTAMP;
             case DATETIMEOFFSETN -> Types.TIMESTAMP_WITH_TIMEZONE;
@@ -246,10 +253,12 @@ public final class TdsTypes {
             case NVARCHAR -> Types.NVARCHAR;
             case TEXT -> Types.LONGVARCHAR;
             case NTEXT -> Types.LONGNVARCHAR;
-            case XML -> Types.SQLXML;
+            // getSQLXML still reads it; the code is the one mssql-jdbc reports.
+            case XML -> Types.LONGNVARCHAR;
             case BINARY, BIGBINARY -> Types.BINARY;
             case VARBINARY, BIGVARBINARY -> Types.VARBINARY;
             case IMAGE -> Types.LONGVARBINARY;
+            case UDT -> Types.VARBINARY;
             default -> Types.OTHER;
         };
     }
@@ -273,8 +282,12 @@ public final class TdsTypes {
             case FLTN -> size == 4 ? "real" : "float";
             case DECIMAL, DECIMALN -> "decimal";
             case NUMERIC, NUMERICN -> "numeric";
-            case MONEY, MONEY4, MONEYN -> "money";
-            case DATETIME, DATETIM4, DATETIMN -> "datetime";
+            case MONEY -> "money";
+            case MONEY4 -> "smallmoney";
+            case MONEYN -> size == 4 ? "smallmoney" : "money";
+            case DATETIME -> "datetime";
+            case DATETIM4 -> "smalldatetime";
+            case DATETIMN -> size == 4 ? "smalldatetime" : "datetime";
             case DATETIME2N -> "datetime2";
             case DATETIMEOFFSETN -> "datetimeoffset";
             case DATEN -> "date";
@@ -299,9 +312,12 @@ public final class TdsTypes {
     public static String javaClass(int type, int size) {
         return switch (type) {
             case BIT, BITN -> "java.lang.Boolean";
-            case INT1, INT2, INT4 -> "java.lang.Integer";
+            // Short for the two small ones, as mssql-jdbc hands them out.
+            case INT1, INT2 -> "java.lang.Short";
+            case INT4 -> "java.lang.Integer";
             case INT8 -> "java.lang.Long";
-            case INTN -> size <= 4 ? "java.lang.Integer" : "java.lang.Long";
+            case INTN -> size <= 2 ? "java.lang.Short"
+                    : size == 4 ? "java.lang.Integer" : "java.lang.Long";
             case FLT4 -> "java.lang.Float";
             case FLT8 -> "java.lang.Double";
             case FLTN -> size == 4 ? "java.lang.Float" : "java.lang.Double";
@@ -311,7 +327,7 @@ public final class TdsTypes {
             case DATETIMEOFFSETN -> "java.time.OffsetDateTime";
             case DATEN -> "java.sql.Date";
             case TIMEN -> "java.sql.Time";
-            case BINARY, BIGBINARY, VARBINARY, BIGVARBINARY, IMAGE -> "[B";
+            case BINARY, BIGBINARY, VARBINARY, BIGVARBINARY, IMAGE, UDT -> "[B";
             default -> "java.lang.String";
         };
     }

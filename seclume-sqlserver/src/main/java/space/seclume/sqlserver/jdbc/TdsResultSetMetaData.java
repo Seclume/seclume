@@ -57,7 +57,7 @@ final class TdsResultSetMetaData implements ResultSetMetaData {
     @Override
     public String getColumnTypeName(int index) throws SQLException {
         TdsColumn c = column(index);
-        return TdsTypes.typeName(c.type(), c.size());
+        return c.typeName() != null ? c.typeName() : TdsTypes.typeName(c.type(), c.size());
     }
 
     @Override

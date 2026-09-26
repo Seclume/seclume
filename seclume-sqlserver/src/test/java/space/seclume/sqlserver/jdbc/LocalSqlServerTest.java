@@ -204,32 +204,112 @@ class LocalSqlServerTest {
     }
 
     /**
-     * With bind values the fetch size is ignored - and nothing breaks.
+     * With bind values the rows come in blocks as well.
      *
-     * <p>{@code sp_cursorprepexec} refuses the parameter list this driver
-     * sends ("the value of the parameter scrollopt is invalid" was solved,
-     * "procedure expects parameter 'params' of type nvarchar" was not). Half a
-     * cursor would be worse than none, so the statement reads the whole result
-     * exactly as it did before - and says so in the documentation rather than
-     * failing at the caller.
+     * <p>This used to fall back to reading everything: an attempt with
+     * {@code sp_cursorprepexec} ended in "procedure expects parameter 'params'
+     * of type nvarchar" - and the procedure number it used was 13, which is
+     * {@code sp_prepexec}, whose second argument <i>is</i> the parameter list.
+     * The call that is used now is {@code sp_cursoropen} itself: with
+     * {@code PARAMETERIZED} (0x1000) in scrollopt it takes the declaration and
+     * the values behind its own arguments, and no prepared handle is left to
+     * give back.
+     *
+     * <p>Run twice on the same statement with other values, and with a text
+     * parameter beside the number, so that a cursor that kept the first values
+     * or a declaration that fit only one type would show.
      */
     @Test
-    void aFetchSizeWithBindValuesFallsBackToReadingEverything() throws Exception {
+    void aFetchSizeWithBindValuesReadsInBlocksToo() throws Exception {
         try (Connection connection = connect()) {
             fillBlockTable(connection);
             try (PreparedStatement query = connection.prepareStatement(
-                    "select n from zl_blocks where n > ? order by n")) {
-                query.setInt(1, 500);
+                    "select n, ? from zl_blocks where n > ? order by n")) {
                 query.setFetchSize(100);
-                int seen = 0;
-                try (ResultSet rows = query.executeQuery()) {
-                    while (rows.next()) {
-                        seen++;
+                for (int from : new int[] {500, 900}) {
+                    query.setString(1, "abä");
+                    query.setInt(2, from);
+                    long before = RoundTrips.of(connection);
+                    int seen = 0;
+                    try (ResultSet rows = query.executeQuery()) {
+                        while (rows.next()) {
+                            seen++;
+                            assertEquals(from + seen, rows.getInt(1), "out of order");
+                            assertEquals("abä", rows.getString(2));
+                        }
                     }
+                    long spent = RoundTrips.of(connection) - before;
+                    assertEquals(1000 - from, seen, "rows lost from " + from);
+                    assertTrue(spent >= (1000 - from) / 100, (1000 - from) + " rows in blocks "
+                            + "of a hundred cannot cost " + spent + " round trips - the "
+                            + "result was read whole");
                 }
-                assertEquals(500, seen);
             } finally {
                 dropBlockTable(connection);
+            }
+        }
+    }
+
+    /**
+     * A fetch size set on everything - as a framework sets it - leaves the
+     * statements that return no rows alone: an insert with and without bind
+     * values, and an update, still write and still count.
+     */
+    @Test
+    void aFetchSizeOnStatementsWithoutRowsChangesNothing() throws Exception {
+        try (Connection connection = connect()) {
+            fillBlockTable(connection);
+            try (PreparedStatement insert = connection.prepareStatement(
+                         "insert into zl_blocks values (?)");
+                 PreparedStatement plain = connection.prepareStatement(
+                         "insert into zl_blocks values (2000)");
+                 PreparedStatement update = connection.prepareStatement(
+                         "update zl_blocks set n = n + 10000 where n > ?")) {
+                insert.setFetchSize(50);
+                plain.setFetchSize(50);
+                update.setFetchSize(50);
+                insert.setInt(1, 1001);
+                assertEquals(1, insert.executeUpdate());
+                assertEquals(1, plain.executeUpdate());
+                update.setInt(1, 1000);
+                assertEquals(2, update.executeUpdate());
+            } finally {
+                dropBlockTable(connection);
+            }
+        }
+    }
+
+    /**
+     * An {@code xml} column, and the column behind it.
+     *
+     * <p>{@code xml} was counted among the four-byte types, so its
+     * description - a schema flag and names, not a length - was read as one:
+     * every column after it and the rows came from the wrong place, and the
+     * connection broke on the first xml column anybody selected. Its values
+     * are PLP; the long one here arrives in several chunks.
+     */
+    @Test
+    void anXmlColumnReadsAsTheDocumentAndKeepsTheRowInStep() throws Exception {
+        String small = "<a x=\"1\">Grüße</a>";
+        StringBuilder large = new StringBuilder("<list>");
+        for (int i = 0; i < 20_000; i++) {
+            large.append("<item n=\"").append(i).append("\"/>");
+        }
+        String big = large.append("</list>").toString();
+        try (Connection connection = connect();
+             PreparedStatement query = connection.prepareStatement(
+                     "select cast(? as xml), 42, cast(? as xml), 'after'")) {
+            query.setString(1, small);
+            query.setString(2, big);
+            try (ResultSet rows = query.executeQuery()) {
+                assertTrue(rows.next());
+                // LONGNVARCHAR, as mssql-jdbc reports xml; getSQLXML reads it still
+                assertEquals(java.sql.Types.LONGNVARCHAR, rows.getMetaData().getColumnType(1));
+                assertEquals(small, rows.getString(1));
+                assertEquals(small, rows.getSQLXML(1).getString());
+                assertEquals(42, rows.getInt(2), "the column behind the xml moved");
+                assertEquals(big, rows.getString(3));
+                assertEquals("after", rows.getString(4));
             }
         }
     }

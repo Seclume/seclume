@@ -53,11 +53,32 @@ public final class LoginResponse {
                 case Tds.TOKEN_ERROR -> at = readError(in, at, true);
                 case Tds.TOKEN_INFO -> at = readError(in, at, false);
                 case Tds.TOKEN_FEATURE_EXT_ACK -> at = skipFeatureExtAck(in, at);
+                case Tds.TOKEN_SSPI -> at = readSspi(in, at, length);
                 case Tds.TOKEN_DONE, Tds.TOKEN_DONE_PROC, Tds.TOKEN_DONE_IN_PROC -> at += 12;
                 default -> throw new IOException(
                         "unexpected token " + Tds.tokenName(token) + " in the login answer");
             }
         }
+    }
+
+    /** The server's token of an integrated login - protocol data, the proof of a key. */
+    private byte[] sspi;
+
+    /** The SSPI token of this answer, or null. */
+    public byte[] sspi() {
+        return sspi;
+    }
+
+    private int readSspi(WireBuffer in, int at, int limit) throws IOException {
+        int tokenLength = readUShort(in, at);
+        if (at + 2 + tokenLength > limit) {
+            throw new IOException("an SSPI token runs past the end of the login answer");
+        }
+        sspi = new byte[tokenLength]; // seclume-allow: a Kerberos token (AP-REP), not a secret
+        for (int i = 0; i < tokenLength; i++) {
+            sspi[i] = in.getByte(at + 2 + i);
+        }
+        return at + 2 + tokenLength;
     }
 
     private int readLoginAck(WireBuffer in, int at) {

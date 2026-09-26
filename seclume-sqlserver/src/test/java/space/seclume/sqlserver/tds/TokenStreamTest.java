@@ -237,6 +237,35 @@ class TokenStreamTest {
     }
 
     /**
+     * An ERROR token cut by a packet boundary after its message text: read
+     * again in full once the rest arrives, and recorded once - not a second
+     * time behind itself (found in review, 25.09.2026).
+     */
+    @Test
+    void anErrorCutInTwoIsRecordedOnce() throws Exception {
+        String message = "Violation of PRIMARY KEY constraint";
+        String server = "db1";
+        int length = 4 + 1 + 1 + 2 + 2 * message.length() + 1 + 2 * server.length() + 1 + 4;
+        Tokens tokens = new Tokens()
+                .u8(Tds.TOKEN_ERROR).u16(length)
+                .i32(2627).u8(1).u8(14)
+                .u16(message.length()).utf16(message)
+                .bString(server).bString("").i32(1)
+                .done(TokenStream.DONE_ERROR, 0);
+        WireBuffer in = tokens.buffer();
+        int whole = in.limit();
+        int cut = 1 + 2 + 4 + 1 + 1 + 2 + 2 * message.length();   // just after the text
+
+        TokenStream stream = new TokenStream();
+        assertEquals(0, stream.readComplete(in, 0, cut, null), "an incomplete token was taken");
+        assertNull(stream.failure(), "recorded before the token had arrived");
+
+        stream.readComplete(in, 0, whole, null);
+        assertEquals(2627, stream.failure().getErrorCode());
+        assertNull(stream.failure().getNextException(), "the same error was recorded twice");
+    }
+
+    /**
      * Several statements in one batch: three descriptions, three DONEs. The
      * last count is the one that counts.
      */

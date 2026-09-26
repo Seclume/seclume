@@ -27,6 +27,8 @@ import space.seclume.sqlserver.tds.TokenStream;
 class TdsStatement implements Statement, TokenStream.RowHandler {
 
     final TdsConnection connection;
+    /** The connection this was made through, as the application sees it - see {@link space.seclume.internal.jdbc.Fronted}. */
+    private final Connection owner;
     private TdsResultBlock block;
     private TdsResultBlock reusable;
     /** Only set while a statement is being read - see {@link #collect}. */
@@ -34,6 +36,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     private int collectedRows;
     /** The statement being read, for the message of a result-limit failure. */
     private String collectingSql;
+
+    /** Where this statement was made, when the connection traces that - see OpenStatements. */
+    final StackTraceElement[] createdAt;
+
+    /** What it last ran, as text - for the fingerprint in OpenStatements. */
+    String lastSql() {
+        return collectingSql;
+    }
     /** What the connection was configured with; ResultLimit.NONE unless set. */
     private ResultLimit resultLimit = ResultLimit.NONE;
     private TdsResultSet resultSet;
@@ -49,28 +59,96 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     private int maxRows;
     private int fetchSize;
     private boolean closed;
+    /** {@code setQueryTimeout}, in seconds; 0 is no limit. */
+    private int queryTimeout;
     private List<String> batch;
 
     TdsStatement(TdsConnection connection) {
         this.connection = connection;
+        this.owner = connection.frontOrSelf();
+        this.createdAt = connection.creationTrace();
     }
 
     // ---- executing -------------------------------------------------------
 
     @Override
-    public boolean execute(String sql) throws SQLException {
+    public boolean execute(String text) throws SQLException {
+        String sql = escaped(text);
+        underDeadline(sql, () -> executeNow(sql));
+        return resultSet != null;
+    }
+
+    private void executeNow(String sql) throws SQLException {
         checkOpen();
         TdsSession session = connection.session();
         collectingSql = sql;
         collect(session, handler -> session.sqlBatch(sql, handler));
-        return resultSet != null;
+    }
+    /**
+     * Runs one statement under this statement's time limit.
+     *
+     * <p>Here rather than in each caller because every execution path needs
+     * it. The wrapper starts a clock, stops it whatever happens, and turns a
+     * cancellation that the clock caused into a
+     * {@link java.sql.SQLTimeoutException} - see
+     * {@link space.seclume.internal.jdbc.Deadline}.
+     */
+    final void underDeadline(String sql, Work body) throws SQLException {
+        try (space.seclume.internal.jdbc.Deadline deadline =
+                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow)) {
+            try {
+                body.run();
+            } catch (SQLException failed) {
+                throw inDoubt(deadline.explain(failed), sql);
+            }
+            // And the statement that came back without failing: on MySQL a
+            // cancelled SLEEP() succeeds, so a check only on the failure path
+            // would let a timed-out statement through as a short answer.
+            deadline.check();
+        }
     }
 
+    /**
+     * A lost answer in auto-commit mode is a lost commit.
+     *
+     * <p>Every statement commits itself there, so a write whose answer never
+     * arrived may have been applied - see
+     * {@link space.seclume.TransactionResolutionUnknownException}. Inside a
+     * transaction the same failure is not this: the server rolls an abandoned
+     * transaction back, and the outcome is known.
+     *
+     * @param sql the statement, or {@code null} for a batch, which is always a
+     *            write
+     */
+    final SQLException inDoubt(SQLException failure, String sql) {
+        return connection.autoCommitNow()
+                ? space.seclume.TransactionResolutionUnknownException.duringAutoCommit(failure, sql)
+                : failure;
+    }
+
+    /** One execution, for {@link #underDeadline}. */
+    @FunctionalInterface
+    interface Work {
+        void run() throws SQLException;
+    }
+
+    /** What the deadline runs when the time is up. */
+    private void stopNow() throws SQLException {
+        connection.session().cancel();
+    }
+
+
     @Override
-    public ResultSet executeQuery(String sql) throws SQLException {
-        execute(sql);
+    public ResultSet executeQuery(String text) throws SQLException {
+        String sql = escaped(text);
+        lazyWanted = true;
+        try {
+            execute(sql);
+        } finally {
+            lazyWanted = false;
+        }
         if (resultSet == null) {
-            throw new SQLException("the statement returned no rows: " + sql
+            throw new SQLException("the statement returned no rows: " + shape(sql)
                     + " - use executeUpdate for statements that do not select");
         }
         return resultSet;
@@ -82,9 +160,34 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     }
 
     @Override
-    public long executeLargeUpdate(String sql) throws SQLException {
-        execute(sql);
+    public long executeLargeUpdate(String text) throws SQLException {
+        String sql = escaped(text);
+        if (execute(sql)) {
+        // JDBC requires a SQLException when the statement produced rows:
+        // executeUpdate promises a count, and a caller that gets 0 back from a
+        // select believes the statement ran and changed nothing. The rows are
+        // closed first, because leaving a cursor open on the way out of an
+        // error is how the next call on this connection finds the stream mid
+        // answer.
+            closeCurrentRows();
+            throw new SQLException("this statement returned rows: " + shape(sql)
+                    + " - use executeQuery or execute for statements that select", "0100E");
+        }
         return Math.max(updateCount, 0);
+    }
+
+    /** The rows of a statement that should not have produced any. */
+    private void closeCurrentRows() {
+        try {
+            java.sql.ResultSet rows = getResultSet();
+            if (rows instanceof space.seclume.internal.jdbc.ReadOnlyResultSet own) {
+                own.discard();
+            } else if (rows != null) {
+                rows.close();
+            }
+        } catch (SQLException alreadyBroken) {
+            // The refusal below is the failure worth reporting.
+        }
     }
 
     /** What the caller issues themselves - a batch or an RPC. */
@@ -104,6 +207,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         // Every statement this driver runs passes here. See space.seclume.jfr.
         space.seclume.jfr.Observed.Statement event =
                 space.seclume.jfr.Observed.beginQuery("sqlserver");
+        connection.sessionState().note(collectingSql);
         boolean failed = true;
         try {
             collectInto(session, execution);
@@ -119,6 +223,17 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     private long rowsCollected;
 
     private void collectInto(TdsSession session, Execution execution) throws SQLException {
+        if (lazy) {
+            // This statement's previous answer is still paused: read it off
+            // the wire - dropped - before the new one is asked for.
+            discarding = true;
+            try {
+                session.drainPending();
+            } finally {
+                lazy = false;
+                discarding = false;
+            }
+        }
         resultLimit = session.resultLimit();
         closeResult();
         // The statement is the handler itself. A lambda here would capture
@@ -138,6 +253,10 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         finishResult();
         rowsCollected = collectedRows;
         block = results.isEmpty() ? null : results.get(0);
+        lazy = block != null && session.isPaused();
+        if (lazy) {
+            collected = block;               // the rows still to come go here
+        }
         if (capturingGeneratedKeys) {
             // The statement was sent as "<insert>;select scope_identity()", so
             // the rows that came back are the key and not a result the caller
@@ -168,6 +287,16 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      */
     @Override
     public void nextResult(java.util.List<space.seclume.sqlserver.tds.TdsColumn> columns) {
+        if (skippingRest) {
+            skippingRest = false;            // the result being dropped has ended
+        } else if (discarding) {
+            return;
+        }
+        if (lazy && collected == block) {
+            // A second result behind the one that was taken while it
+            // arrived: that one is in results already, the new one is not.
+            collected = null;
+        }
         if (refetching) {
             return;
         }
@@ -196,7 +325,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     /** Positions on the first result again, after something walked past it. */
     void positionAtFirstResult() {
         if (resultSet != null) {
-            resultSet.close();
+            resultSet.discard();
         }
         resultIndex = 0;
         block = results.isEmpty() ? null : results.get(0);
@@ -205,7 +334,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     }
 
     private void finishResult() {
-        if (collected != null) {
+        if (collected != null && !results.contains(collected)) {
             results.add(collected);
             collected = null;
         }
@@ -241,6 +370,9 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      */
     @Override
     public void row(space.seclume.sqlserver.tds.TdsRow row) throws SQLException {
+        if (discarding || skippingRest) {
+            return;                          // a paused answer nobody reads any more
+        }
         if (collected == null) {
             collected = blockFor(row.columns());
         }
@@ -291,8 +423,20 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     @Override
     public boolean getMoreResults() throws SQLException {
         checkOpen();
+        if (lazy) {
+            // Whether there is another result is only known at the end of
+            // the answer; the rows of this one that were not read go.
+            skippingRest = true;
+            try {
+                connection.session().drainPending();
+            } finally {
+                lazy = false;
+                skippingRest = false;
+            }
+        }
+        finishResult();
         if (resultSet != null) {
-            resultSet.close();
+            resultSet.discard();
             resultSet = null;
         }
         updateCount = -1;
@@ -309,6 +453,55 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     @Override
     public boolean getMoreResults(int current) throws SQLException {
         return getMoreResults();
+    }
+
+    /**
+     * Set for the length of an executeQuery: its rows may be handed out while
+     * the rest of them is still arriving - see TdsSession.resume.
+     */
+    boolean lazyWanted;
+    /** This statement's answer is paused on the session, with rows to come. */
+    private boolean lazy;
+    /** The paused answer is no longer wanted: what is left is read and dropped. */
+    private boolean discarding;
+    /** Only the rest of the current result is dropped; a later one is kept. */
+    private boolean skippingRest;
+
+    /**
+     * Pause after a packet once the first result has rows - but only for a
+     * plain query: not a cursor, not a statement with generated keys, not a
+     * second result, and not an answer whose rows nobody will read.
+     */
+    @Override
+    public boolean pause() {
+        // The first result only: nothing in results yet on the way out of
+        // executeQuery, and on a resume the one block there is the one the
+        // rows go into.
+        boolean first = results.isEmpty() || (lazy && results.size() == 1
+                && collected == results.get(0));
+        return (lazyWanted || lazy) && resultSetType == ResultSet.TYPE_FORWARD_ONLY
+                && !discarding && !skippingRest && !refetching && !streaming
+                && !capturingGeneratedKeys && collected != null && first
+                && owned.isEmpty() && collectedRows > 0;
+    }
+
+    /** The rows of a paused answer, as far as the next pause. */
+    private boolean resumeLazy() throws SQLException {
+        TdsSession session = connection.session();
+        if (!session.isPaused()) {
+            // Read to its end already - by something else that needed the
+            // connection - and those rows went into the block behind the
+            // ones the result set has read.
+            lazy = false;
+            return false;
+        }
+        block.reset(block.columns());
+        collected = block;
+        collectedRows = 0;
+        if (!session.resume()) {
+            lazy = false;
+        }
+        return block.rowCount() > 0;
     }
 
     /** Whether this result is being read in blocks - see {@code setFetchSize}. */
@@ -350,6 +543,9 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      * than were asked for only when there are no more.
      */
     boolean fetchNextBlock() throws SQLException {
+        if (lazy) {
+            return resumeLazy();
+        }
         if (!streaming || block == null || cursor == 0 || lastBlock < fetchSize) {
             return false;
         }
@@ -414,8 +610,13 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      * execution reuses. The memory goes back when the statement closes.
      */
     void closeResult() {
+        if (lazy) {
+            // The rest of a paused answer is read and dropped, the next time
+            // anything uses the connection.
+            discarding = true;
+        }
         if (resultSet != null) {
-            resultSet.close();
+            resultSet.discard();
             resultSet = null;
         }
         block = null;
@@ -450,7 +651,8 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     // ---- batches ---------------------------------------------------------
 
     @Override
-    public void addBatch(String sql) throws SQLException {
+    public void addBatch(String text) throws SQLException {
+        String sql = escaped(text);
         checkOpen();
         if (batch == null) {
             batch = new ArrayList<>();
@@ -554,14 +756,35 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
 
     @Override
     public void setFetchDirection(int direction) throws SQLException {
-        if (direction != ResultSet.FETCH_FORWARD) {
-            throw new SQLFeatureNotSupportedException("seclume result sets move forward only");
-        }
+        // A hint, as JDBC calls it: the rows come in the order the server
+        // sends them whatever is hinted. Only a value that is no direction
+        // at all is refused.
+        space.seclume.internal.jdbc.ResultSetTypes.requireDirection(direction);
     }
 
     @Override
     public int getResultSetType() {
-        return ResultSet.TYPE_FORWARD_ONLY;
+        return resultSetType;
+    }
+
+    /**
+     * {@code TYPE_FORWARD_ONLY}, or {@code TYPE_SCROLL_INSENSITIVE}: then the
+     * result is read whole and the cursor moves over it in any direction -
+     * see {@link space.seclume.internal.jdbc.ResultSetTypes}.
+     */
+    private int resultSetType = ResultSet.TYPE_FORWARD_ONLY;
+
+    void resultSetType(int type) {
+        this.resultSetType = type;
+    }
+
+    /**
+     * The fetch size that decides whether rows come in blocks: none for a
+     * scrollable result, which has to be here whole before the cursor can
+     * move back. {@link #getFetchSize} still says what was asked for.
+     */
+    int blockSize() {
+        return resultSetType == ResultSet.TYPE_FORWARD_ONLY ? fetchSize : 0;
     }
 
     @Override
@@ -576,48 +799,74 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
 
     @Override
     public int getQueryTimeout() {
-        return 0;
+        return queryTimeout;
     }
 
     @Override
     public void setQueryTimeout(int seconds) throws SQLException {
-        if (seconds != 0) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume does not send an ATTENTION packet yet - a timeout here "
-                    + "would be a lie");
+        checkOpen();
+        if (seconds < 0) {
+            throw new SQLException("a query timeout cannot be negative: " + seconds,
+                    "22023");
         }
+        queryTimeout = seconds;
     }
 
     @Override
-    public int getMaxFieldSize() {
-        return 0;
+    public int getMaxFieldSize() throws SQLException {
+        checkOpen();
+        return maxFieldSize;
     }
 
+    /** See {@link #setMaxFieldSize}; 0 for no limit. */
+    private int maxFieldSize;
+
+    /**
+     * The most characters or bytes a text or binary column of this
+     * statement's results hands out; the rest is dropped, as JDBC says. The
+     * whole value still crosses the wire - it is cut where it is read.
+     */
     @Override
     public void setMaxFieldSize(int max) throws SQLException {
-        if (max != 0) {
-            throw new SQLFeatureNotSupportedException("seclume does not truncate column values");
+        checkOpen();
+        if (max < 0) {
+            throw new SQLException("a maximum field size cannot be negative: " + max, "HY024");
         }
+        maxFieldSize = max;
     }
+
+    /**
+     * Whether JDBC escapes in this statement's text are translated - on by
+     * default, as JDBC requires. See
+     * {@link space.seclume.internal.jdbc.JdbcEscapes}.
+     */
+    private boolean escapeProcessing = true;
 
     @Override
     public void setEscapeProcessing(boolean enable) throws SQLException {
-        if (enable) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume passes SQL to the server unchanged - JDBC escape syntax "
-                    + "like {fn ...} is not rewritten");
-        }
+        this.escapeProcessing = enable;
+    }
+
+    /** The text as the server has to see it. */
+    final String escaped(String sql) {
+        return escapeProcessing ? space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.SQLSERVER) : sql;
     }
 
     @Override
     public void cancel() throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume does not send an ATTENTION packet yet");
+        // checkOpen first: a closed statement is a SQLException, and it is the
+        // ordinary outcome of the race this method is in - it is the one
+        // method on this class that is called from another thread.
+        checkOpen();
+        connection.session().cancel();
     }
 
     @Override
     public void setCursorName(String name) throws SQLException {
-        throw new SQLFeatureNotSupportedException("seclume has no updatable cursors");
+        // JDBC: where positioned update and delete are not supported, this
+        // is a no-op - and seclume has neither.
+        checkOpen();
     }
 
     @Override
@@ -632,13 +881,17 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
 
     @Override
     public void closeOnCompletion() throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume does not close statements automatically");
+        checkOpen();
+        closeOnCompletion = true;
     }
 
+    /** Set by {@link #closeOnCompletion}: the result closing closes this too. */
+    private boolean closeOnCompletion;
+
     @Override
-    public boolean isCloseOnCompletion() {
-        return false;
+    public boolean isCloseOnCompletion() throws SQLException {
+        checkOpen();
+        return closeOnCompletion;
     }
 
     @Override
@@ -671,12 +924,27 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         return executeUpdate(sql);
     }
 
+    @Override
+    public long executeLargeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
+        return executeUpdate(sql, autoGeneratedKeys);
+    }
+
+    @Override
+    public long executeLargeUpdate(String sql, int[] columnIndexes) throws SQLException {
+        return executeUpdate(sql, columnIndexes);
+    }
+
+    @Override
+    public long executeLargeUpdate(String sql, String[] columnNames) throws SQLException {
+        return executeUpdate(sql, columnNames);
+    }
+
     // ---- state -----------------------------------------------------------
 
     @Override
     public Connection getConnection() throws SQLException {
         checkOpen();
-        return connection;
+        return owner;
     }
 
     @Override
@@ -730,4 +998,18 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     public boolean isWrapperFor(Class<?> iface) {
         return iface.isInstance(this);
     }
+
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.SQLSERVER);
+    }
+
 }

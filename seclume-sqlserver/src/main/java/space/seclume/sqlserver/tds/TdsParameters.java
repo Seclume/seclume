@@ -24,9 +24,12 @@ import space.seclume.internal.WireBuffer;
  * <p>Two decisions worth knowing:
  *
  * <ul>
- *   <li>Text goes over as {@code nvarchar}, always. A {@code varchar} would
- *       have to be encoded in the server's code page, which the client cannot
- *       know for sure - and a wrong code page corrupts text silently.</li>
+ *   <li>Text goes over as {@code nvarchar}, except where the server said a
+ *       parameter is compared with a {@code varchar} column and the value is
+ *       plain ASCII - see {@link #preferVarchar}. Anything else as
+ *       {@code varchar} would have to be encoded in the column's code page,
+ *       which the client cannot know for sure, and a wrong code page corrupts
+ *       text silently.</li>
  *   <li>{@code decimal} is built without {@link java.math.BigInteger}: the
  *       digits are multiplied into a 128-bit limb array by hand. That is not
  *       zeal - the library forbids the class outright, because a
@@ -61,6 +64,8 @@ public final class TdsParameters {
 
     private Object[] values = new Object[8]; // seclume-allow: statement parameters, user payload and never a secret
     private int count;
+    /** Which parameters the server compares with a varchar - see preferVarchar; null for none. */
+    private boolean[] varchar;
 
     /** Built empty; the values arrive through {@link #set}. */
     public TdsParameters() {
@@ -91,6 +96,41 @@ public final class TdsParameters {
         count = 0;
     }
 
+    /**
+     * Which parameters to send as {@code varchar} when their text allows it -
+     * those the server itself would declare {@code varchar}, because they are
+     * compared with or written to a {@code varchar} column.
+     *
+     * <p>The reason is the index. {@code nvarchar} ranks above
+     * {@code varchar}, so a {@code varchar} column compared with an
+     * {@code nvarchar} parameter is converted row by row, and under a SQL
+     * collation that turns an index seek into a scan: the best-known
+     * performance trap of Java against SQL Server. Only plain ASCII goes as
+     * {@code varchar}: it is the same byte in every code page SQL Server has,
+     * so no collation can make it mean something else. Any other text stays
+     * {@code nvarchar}, exactly as before.
+     *
+     * @param varchar one flag per parameter, 0-based; null for none
+     */
+    public void preferVarchar(boolean[] varchar) {
+        this.varchar = varchar;
+    }
+
+    /** Whether parameter {@code i} (0-based) goes as varchar this time. */
+    private boolean asVarchar(int i, Object value) {
+        return varchar != null && i < varchar.length && varchar[i]
+                && value instanceof String text && isAscii(text);
+    }
+
+    private static boolean isAscii(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) >= 0x80) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** The declaration {@code sp_executesql} needs as its second argument. */
     public String declaration() throws SQLException {
         StringBuilder text = new StringBuilder(); // seclume-allow: a type declaration, never a secret
@@ -98,9 +138,43 @@ public final class TdsParameters {
             if (i > 0) {
                 text.append(',');
             }
+            text.append("@P").append(i).append(' ');
+            if (asVarchar(i, values[i])) {
+                text.append(((String) values[i]).length() > MAX_VARBINARY_BYTES
+                        ? "varchar(max)" : "varchar(" + MAX_VARBINARY_BYTES + ")");
+            } else {
+                text.append(typeName(values[i]));
+            }
+        }
+        return text.toString();
+    }
+
+    /**
+     * The declaration of every parameter the server need not be asked about:
+     * all but the text and the nulls, whose type is the question.
+     */
+    public String declarationOfNonText() throws SQLException {
+        StringBuilder text = new StringBuilder(); // seclume-allow: a type declaration, never a secret
+        for (int i = 0; i < count; i++) {
+            if (values[i] == null || values[i] instanceof String) {
+                continue;
+            }
+            if (!text.isEmpty()) {
+                text.append(',');
+            }
             text.append("@P").append(i).append(' ').append(typeName(values[i]));
         }
         return text.toString();
+    }
+
+    /** Whether any parameter is text - the only ones the question is about. */
+    public boolean hasText() {
+        for (int i = 0; i < count; i++) {
+            if (values[i] instanceof String) {
+                return true;
+            }
+        }
+        return false;
     }
 
 
@@ -145,7 +219,40 @@ public final class TdsParameters {
     /** Writes every parameter as its own RPC block. */
     public void writeAll(WireBuffer out) throws SQLException {
         for (int i = 0; i < count; i++) {
-            write(out, "@P" + i, values[i]);
+            // Without names, in the order of the declaration: the server binds
+            // them by position. "@P0" and its siblings were seven bytes and a
+            // String each, on every value of every execution - a third of a
+            // batch of short rows, measured against mssql-jdbc, which sends
+            // them the same way.
+            if (asVarchar(i, values[i])) {
+                putBVarchar(out, "");
+                out.putByte((byte) 0);                // input parameter
+                putAsciiVarchar(out, (String) values[i]);
+            } else {
+                write(out, "", values[i]);
+            }
+        }
+    }
+
+    /** ASCII text as {@code varchar}: one byte per character, the same in every code page. */
+    private static void putAsciiVarchar(WireBuffer out, String text) {
+        int length = text.length();
+        out.putByte((byte) TdsTypes.BIGVARCHAR);
+        boolean large = length > MAX_VARBINARY_BYTES;
+        out.putShortLe((short) (large ? 0xffff : MAX_VARBINARY_BYTES));
+        putCollation(out);
+        if (large) {
+            out.putLongLe(length);
+            out.putIntLe(length);
+            for (int i = 0; i < length; i++) {
+                out.putByte((byte) text.charAt(i));
+            }
+            out.putIntLe(0);
+            return;
+        }
+        out.putShortLe((short) length);
+        for (int i = 0; i < length; i++) {
+            out.putByte((byte) text.charAt(i));
         }
     }
 
@@ -169,6 +276,8 @@ public final class TdsParameters {
         return switch (value) {
             case null -> "nvarchar(" + MAX_NVARCHAR_CHARS + ")";
             case TypedNull typed -> typed.declaration();
+            case space.seclume.sqlserver.jdbc.TableValue table ->
+                    space.seclume.sqlserver.jdbc.TableValue.Wire.declaration(table);
             case Boolean ignored -> "bit";
             case Byte ignored -> "int";
             case Short ignored -> "int";
@@ -185,6 +294,12 @@ public final class TdsParameters {
             // and - worse - let a handle compiled for a null (nvarchar(1))
             // truncate the next row's "DORMANT" to "D" without a word. This
             // is also what the vendor's driver sends.
+            // varchar and not nvarchar, matching what putNative writes: the
+            // bytes are the caller's and are not made UTF-16, because that
+            // would need a conversion buffer - see SensitiveParameters.
+            case space.seclume.internal.jdbc.NativeValue value2 ->
+                    value2.length() > MAX_VARBINARY_BYTES
+                            ? "varchar(max)" : "varchar(" + MAX_VARBINARY_BYTES + ")";
             case String text -> text.length() > MAX_NVARCHAR_CHARS
                     ? "nvarchar(max)" : "nvarchar(" + MAX_NVARCHAR_CHARS + ")";
             case byte[] bytes -> bytes.length > MAX_VARBINARY_BYTES
@@ -204,10 +319,15 @@ public final class TdsParameters {
     /** Writes one parameter: name, flags, type description, value. */
     private static void write(WireBuffer out, String name, Object value) throws SQLException {
         putBVarchar(out, name);
-        out.putByte((byte) 0);                        // input parameter
+        // An empty table value goes as the parameter's default: the server
+        // takes no other form of a table without rows.
+        out.putByte((byte) (value instanceof space.seclume.sqlserver.jdbc.TableValue table
+                && table.size() == 0 ? 0x02 : 0));    // input parameter, or its default
         switch (value) {
             case null -> putNull(out, java.sql.Types.NULL);
             case TypedNull typed -> putNull(out, typed.sqlType());
+            case space.seclume.sqlserver.jdbc.TableValue table ->
+                    space.seclume.sqlserver.jdbc.TableValue.Wire.write(out, table);
             case Boolean flag -> {
                 out.putByte((byte) TdsTypes.BITN);
                 out.putByte((byte) 1);
@@ -231,6 +351,8 @@ public final class TdsParameters {
                 out.putLongLe(Double.doubleToLongBits(number));
             }
             case BigDecimal number -> putDecimal(out, number);
+            case space.seclume.internal.jdbc.NativeValue nativeValue ->
+                    putNative(out, nativeValue);
             case String text -> putText(out, text);
             case byte[] bytes -> putBinary(out, bytes);
             case java.sql.Date date -> putDate(out, date.toLocalDate());
@@ -346,6 +468,36 @@ public final class TdsParameters {
         }
         out.putShortLe((short) (text.length() * 2));
         putUtf16(out, text);
+    }
+
+    /**
+     * A text parameter whose bytes are already in native memory.
+     *
+     * <p>{@code BIGVARCHAR} and not {@code NVARCHAR}, and that is the one
+     * decision here: an NVARCHAR parameter is UTF-16 on the wire, and the
+     * caller's bytes are whatever the caller has - a key, ASCII, UTF-8. Making
+     * them UTF-16 would need a conversion and a conversion needs a buffer,
+     * which is the thing this path exists to avoid. The server converts a
+     * varchar parameter into an nvarchar column itself.
+     *
+     * <p>See {@link space.seclume.SensitiveParameters}.
+     */
+    private static void putNative(WireBuffer out,
+            space.seclume.internal.jdbc.NativeValue value) {
+        int length = value.length();
+        out.putByte((byte) TdsTypes.BIGVARCHAR);
+        boolean large = length > MAX_VARBINARY_BYTES;
+        out.putShortLe((short) (large ? 0xffff : Math.max(length, 1)));
+        putCollation(out);
+        if (large) {
+            out.putLongLe(length);
+            out.putIntLe(length);
+            out.putBytes(value.memory(), 0, length);
+            out.putIntLe(0);
+            return;
+        }
+        out.putShortLe((short) length);
+        out.putBytes(value.memory(), 0, length);
     }
 
     private static void putBinary(WireBuffer out, byte[] bytes) {

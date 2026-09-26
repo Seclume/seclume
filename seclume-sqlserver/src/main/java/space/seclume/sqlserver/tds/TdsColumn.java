@@ -16,9 +16,19 @@ package space.seclume.sqlserver.tds;
  * @param scale     the decimal places - also the unit of the time types
  * @param nullable  whether the column may hold NULL
  * @param plp       whether values arrive in the chunked {@code MAX} framing
+ * @param typeName  the type's name where the wire type does not tell it - a
+ *                  CLR type's ({@code geography}), {@code timestamp} - or null
+ * @param charset   the code page of single-byte text, from the collation - see
+ *                  {@link TdsCollation}; null for everything else
  */
 public record TdsColumn(String name, int type, int size, int precision, int scale,
-                        boolean nullable, boolean plp) {
+                        boolean nullable, boolean plp, String typeName,
+                        java.nio.charset.Charset charset) {
+
+    /** The code page of single-byte text, Latin-1 where the column said none. */
+    public java.nio.charset.Charset textCharset() {
+        return charset == null ? java.nio.charset.StandardCharsets.ISO_8859_1 : charset;
+    }
 
     /** The declared size that means {@code varchar(max)} and its relatives. */
     public static final int MAX_SIZE = 0xffff;

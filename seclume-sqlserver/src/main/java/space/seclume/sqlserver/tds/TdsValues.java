@@ -86,9 +86,19 @@ public final class TdsValues {
      *              time types use it
      */
     public static String asText(WireBuffer in, int type, int at, int length, int scale) {
+        return asText(in, type, at, length, scale, java.nio.charset.StandardCharsets.ISO_8859_1);
+    }
+
+    /**
+     * The same, with the code page single-byte text is in - the column's
+     * collation, see {@link TdsCollation}.
+     */
+    public static String asText(WireBuffer in, int type, int at, int length, int scale,
+            java.nio.charset.Charset charset) {
         if (type == TdsTypes.SQLVARIANT) {
             Variant inner = unwrap(in, at, length);
-            return asText(in, inner.type(), inner.at(), inner.length(), inner.scale());
+            return asText(in, inner.type(), inner.at(), inner.length(), inner.scale(),
+                    inner.charset() == null ? charset : inner.charset());
         }
         return switch (type) {
             case TdsTypes.BIT, TdsTypes.BITN -> in.getByte(at) != 0 ? "1" : "0";
@@ -121,21 +131,13 @@ public final class TdsValues {
                 int timeBytes = length - 5;
                 int offsetMinutes = (short) unsigned(in, at + timeBytes + 3, 2);
                 long ticks = timeTicks(in, at, timeBytes);
-                long perSecond = 1;
-                for (int i = 0; i < scale; i++) {
-                    perSecond *= 10;
-                }
+                long perSecond = ticksPerSecond(scale);
                 long ticksPerDay = 86_400L * perSecond;
                 long shifted = ticks + offsetMinutes * 60L * perSecond;
-                int days = days(in, at + timeBytes);
-                while (shifted < 0) {
-                    shifted += ticksPerDay;
-                    days--;
-                }
-                while (shifted >= ticksPerDay) {
-                    shifted -= ticksPerDay;
-                    days++;
-                }
+                // Arithmetic, not a loop that steps a day at a time: a
+                // hostile value would otherwise take billions of steps.
+                int days = (int) (days(in, at + timeBytes) + Math.floorDiv(shifted, ticksPerDay));
+                shifted = Math.floorMod(shifted, ticksPerDay);
                 yield date(days) + " " + time(shifted, scale) + " " + offset(offsetMinutes);
             }
             case TdsTypes.GUID -> guid(in, at);
@@ -146,12 +148,12 @@ public final class TdsValues {
             // representation of anything and loses the value. mssql-jdbc
             // answers with uppercase hex and so does this now.
             case TdsTypes.BINARY, TdsTypes.BIGBINARY, TdsTypes.VARBINARY,
-                 TdsTypes.BIGVARBINARY, TdsTypes.IMAGE -> hex(in, at, length);
+                 TdsTypes.BIGVARBINARY, TdsTypes.IMAGE, TdsTypes.UDT -> hex(in, at, length);
             default -> {
                 if (TdsTypes.isUnicodeText(type)) {
                     yield utf16(in, at, length / 2);
                 }
-                yield ascii(in, at, length);
+                yield ascii(in, at, length, charset);
             }
         };
     }
@@ -184,7 +186,8 @@ public final class TdsValues {
     // ---- the individual formats ------------------------------------------
 
     /** What a {@code sql_variant} turned out to be holding. */
-    private record Variant(int type, int at, int length, int scale) {
+    private record Variant(int type, int at, int length, int scale,
+                           java.nio.charset.Charset charset) {
     }
 
     /**
@@ -209,7 +212,17 @@ public final class TdsValues {
                     in.getByte(at + 2) & 0xff;
             default -> 0;
         };
-        return new Variant(base, at + 2 + properties, length - 2 - properties, scale);
+        // Single-byte text carries its collation in the first five property
+        // bytes, as a column does in its description.
+        java.nio.charset.Charset charset = (base == TdsTypes.BIGVARCHAR
+                || base == TdsTypes.BIGCHAR) && properties >= 5
+                ? ColumnMetadata.collation(in, at + 2) : null;
+        return new Variant(base, at + 2 + properties, length - 2 - properties, scale, charset);
+    }
+
+    /** The type a {@code sql_variant} value turned out to hold - its first byte. */
+    public static int variantBase(WireBuffer in, int at) {
+        return in.getByte(at) & 0xff;
     }
 
     /** An unsigned number of {@code count} bytes, least significant first. */
@@ -232,12 +245,38 @@ public final class TdsValues {
     private static String decimal(WireBuffer in, int at, int length, int scale) {
         boolean positive = in.getByte(at) != 0;
         int magnitudeBytes = length - 1;
+        if (magnitudeBytes <= 8) {
+            // Up to nineteen digits - every decimal(18) and most beyond it -
+            // fit a long: one Long.toString instead of a division per nine
+            // digits and three reversed builders.
+            long magnitude = unsigned(in, at + 1, magnitudeBytes);
+            if (magnitude >= 0) {
+                return withScale(Long.toString(magnitude), scale, positive);
+            }
+        }
         int[] limbs = new int[(magnitudeBytes + 3) / 4]; // seclume-allow: a numeric payload value, not a secret
         for (int i = 0; i < magnitudeBytes; i++) {
             limbs[i / 4] |= (in.getByte(at + 1 + i) & 0xff) << ((i % 4) * 8);
         }
         String digits = digitsOf(limbs);
         return withScale(digits, scale, positive);
+    }
+
+    /**
+     * A {@code decimal} as a BigDecimal straight from its bytes - no text in
+     * between for the ones that fit a long.
+     */
+    public static java.math.BigDecimal asBigDecimal(WireBuffer in, int type, int at, int length,
+            int scale) {
+        if ((type == TdsTypes.DECIMALN || type == TdsTypes.NUMERICN
+                || type == TdsTypes.DECIMAL || type == TdsTypes.NUMERIC) && length - 1 <= 8) {
+            long magnitude = unsigned(in, at + 1, length - 1);
+            if (magnitude >= 0) {
+                return java.math.BigDecimal.valueOf(in.getByte(at) != 0 ? magnitude : -magnitude,
+                        scale);
+            }
+        }
+        return new java.math.BigDecimal(asText(in, type, at, length, scale).trim());
     }
 
     /** Decimal digits of a little-endian limb array; "0" when it is zero. */
@@ -278,15 +317,31 @@ public final class TdsValues {
 
     /** Puts the decimal point in and the sign in front. */
     private static String withScale(String digits, int scale, boolean positive) {
-        String padded = digits;
-        while (padded.length() <= scale) {
-            padded = "0" + padded;
+        // A negative zero prints as zero; the magnitude is zero exactly when
+        // its digits are - no regular expression per value, which is what
+        // this cost before.
+        boolean zero = true;
+        for (int i = 0; i < digits.length() && zero; i++) {
+            zero = digits.charAt(i) == '0';
         }
-        String text = scale == 0
-                ? padded
-                : padded.substring(0, padded.length() - scale) + "."
-                  + padded.substring(padded.length() - scale);
-        return positive || text.matches("0(\\.0*)?") ? text : "-" + text;
+        StringBuilder text = new StringBuilder(digits.length() + scale + 3); // seclume-allow: a numeric payload value, not a secret
+        if (!positive && !zero) {
+            text.append('-');
+        }
+        int whole = digits.length() - scale;
+        if (whole <= 0) {
+            text.append('0');
+        } else {
+            text.append(digits, 0, whole);
+        }
+        if (scale > 0) {
+            text.append('.');
+            for (int i = whole; i < 0; i++) {
+                text.append('0');
+            }
+            text.append(digits, Math.max(whole, 0), digits.length());
+        }
+        return text.toString();
     }
 
     /** {@code money} counts ten-thousandths - the high half comes first. */
@@ -310,7 +365,8 @@ public final class TdsValues {
         if (length == 4) {
             int days = (int) unsigned(in, at, 2);
             int minutes = (int) unsigned(in, at + 2, 2);
-            return date(DAYS_1900 + days) + " " + time(minutes * 60L, 0);
+            // ".0" as Timestamp.toString and so mssql-jdbc write it
+            return date(DAYS_1900 + days) + " " + time(minutes * 60L, 0) + ".0";
         }
         int days = (int) unsigned(in, at, 4);
         long ticks = unsigned(in, at + 4, 4);
@@ -332,7 +388,24 @@ public final class TdsValues {
      * description, not by the value.
      */
     private static long timeTicks(WireBuffer in, int at, int lengthBytes) {
+        if (lengthBytes < 3 || lengthBytes > 5) {
+            throw WireBuffer.malformed("a time of " + lengthBytes + " bytes");
+        }
         return unsigned(in, at, lengthBytes);
+    }
+
+    /** SQL Server's finest time: 100 ns, scale 7. A larger one is not from a server. */
+    static final int MAX_TIME_SCALE = 7;
+
+    private static long ticksPerSecond(int scale) {
+        if (scale < 0 || scale > MAX_TIME_SCALE) {
+            throw WireBuffer.malformed("a time scale of " + scale);
+        }
+        long divisor = 1;
+        for (int i = 0; i < scale; i++) {
+            divisor *= 10;
+        }
+        return divisor;
     }
 
     /** {@code YYYY-MM-DD} from a day count since 0001-01-01. */
@@ -342,10 +415,7 @@ public final class TdsValues {
 
     /** {@code HH:MM:SS[.fff…]} from a tick count, the scale deciding the unit. */
     private static String time(long ticks, int scale) {
-        long divisor = 1;
-        for (int i = 0; i < scale; i++) {
-            divisor *= 10;
-        }
+        long divisor = ticksPerSecond(scale);
         long seconds = ticks / divisor;
         long fraction = ticks - seconds * divisor;
         StringBuilder text = new StringBuilder(); // seclume-allow: a timestamp payload value, not a secret
@@ -420,28 +490,31 @@ public final class TdsValues {
 
     /** UTF-16LE from the buffer; {@code chars} is the number of characters. */
     private static String utf16(WireBuffer in, int at, int chars) {
-        char[] text = new char[chars]; // seclume-allow: payload the caller asked for, not a secret
-        for (int i = 0; i < chars; i++) {
-            text[i] = (char) ((in.getByte(at + i * 2) & 0xff)
-                    | ((in.getByte(at + i * 2 + 1) & 0xff) << 8));
-        }
-        return new String(text); // seclume-allow: payload the caller asked for, not a secret
+        // One bulk copy and the JDK's decoder, which compacts to Latin-1 where
+        // it can - rather than a char at a time into an array that the String
+        // constructor then copies and compresses once more.
+        byte[] bytes = new byte[chars * 2]; // seclume-allow: payload the caller asked for, not a secret
+        // Through slice, which checks the bounds as getByte does: a length off
+        // a hostile wire ends as WireBuffer.Truncated, not as an
+        // IndexOutOfBoundsException from the copy.
+        java.lang.foreign.MemorySegment.copy(in.slice(at, bytes.length),
+                java.lang.foreign.ValueLayout.JAVA_BYTE, 0, bytes, 0, bytes.length);
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_16LE); // seclume-allow: payload the caller asked for, not a secret
     }
 
     /**
      * Single-byte text.
      *
-     * <p>The collation would say which code page applies; this driver reads it
-     * as Latin-1, which is right for the default collations and wrong for none
-     * of the ASCII range. Anything beyond that belongs in an {@code nvarchar}
-     * column - and is noted in {@code PROVENANCE.md} as an open
-     * point rather than silently guessed.
+     * <p>In the code page of the column's collation - see {@link TdsCollation}.
+     * It was Latin-1 for every column, which read the euro sign, Cyrillic and
+     * every CJK text wrong; the claim this comment used to make, that the
+     * default collations are Latin-1, was wrong too - they are code page 1252.
      */
-    private static String ascii(WireBuffer in, int at, int length) {
-        char[] text = new char[length]; // seclume-allow: payload the caller asked for, not a secret
-        for (int i = 0; i < length; i++) {
-            text[i] = (char) (in.getByte(at + i) & 0xff);
-        }
-        return new String(text); // seclume-allow: payload the caller asked for, not a secret
+    private static String ascii(WireBuffer in, int at, int length,
+            java.nio.charset.Charset charset) {
+        byte[] bytes = new byte[length]; // seclume-allow: payload the caller asked for, not a secret
+        java.lang.foreign.MemorySegment.copy(in.slice(at, length),
+                java.lang.foreign.ValueLayout.JAVA_BYTE, 0, bytes, 0, length);
+        return new String(bytes, charset); // seclume-allow: payload the caller asked for, not a secret
     }
 }

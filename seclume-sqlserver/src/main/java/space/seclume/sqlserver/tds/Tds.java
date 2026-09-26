@@ -27,6 +27,8 @@ public final class Tds {
     public static final int HEADER_SIZE = 8;
     /** Default packet size; the server may change it in the login answer. */
     public static final int DEFAULT_PACKET_SIZE = 4096;
+    /** What the login asks for: the most TDS allows. */
+    public static final int REQUESTED_PACKET_SIZE = 32767;
 
     // ---- packet types ----------------------------------------------------
 
@@ -34,12 +36,16 @@ public final class Tds {
     public static final int TYPE_SQL_BATCH = 0x01;
     /** Login. */
     public static final int TYPE_LOGIN7 = 0x10;
+    /** An integrated login's next token, after LOGIN7 (MS-TDS 2.2.1.12). */
+    public static final int TYPE_SSPI = 0x11;
     /** Remote procedure call - this is how prepared statements run. */
     public static final int TYPE_RPC = 0x03;
     /** The server's answer: a stream of tokens. */
     public static final int TYPE_TABULAR_RESULT = 0x04;
     /** Cancels the running statement - what sits behind {@code cancel()}. */
     public static final int TYPE_ATTENTION = 0x06;
+    /** Bulk load data - the rows of an {@code INSERT BULK}. */
+    public static final int TYPE_BULK_LOAD = 0x07;
     /** Transaction control. */
     public static final int TYPE_TRANSACTION_MANAGER = 0x0e;
 
@@ -60,6 +66,7 @@ public final class Tds {
     public static final int PRELOGIN_MARS = 0x04;
     public static final int PRELOGIN_TRACEID = 0x05;
     public static final int PRELOGIN_FEDAUTHREQUIRED = 0x06;
+    public static final int PRELOGIN_NONCE = 0x08;
     public static final int PRELOGIN_TERMINATOR = 0xff;
 
     // ---- encryption negotiation ------------------------------------------
@@ -108,6 +115,8 @@ public final class Tds {
     public static final int TOKEN_RETURN_STATUS = 0x79;
     /** The server acknowledges the requested feature extensions. */
     public static final int TOKEN_FEATURE_EXT_ACK = 0xae;
+    /** The server's token in an integrated login. */
+    public static final int TOKEN_SSPI = 0xed;
 
     /** TDS 7.4 - the level this driver speaks (SQL Server 2012 and newer). */
     public static final int VERSION_7_4 = 0x74000004;
@@ -119,6 +128,7 @@ public final class Tds {
     public static String tokenName(int token) {
         return switch (token) {
             case TOKEN_ENVCHANGE -> "ENVCHANGE";
+            case TOKEN_SSPI -> "SSPI";
             case TOKEN_ERROR -> "ERROR";
             case TOKEN_INFO -> "INFO";
             case TOKEN_LOGIN_ACK -> "LOGINACK";

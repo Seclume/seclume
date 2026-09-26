@@ -24,9 +24,12 @@ import java.sql.Statement;
 final class TdsDatabaseMetaData implements DatabaseMetaData {
 
     private final TdsConnection connection;
+    /** The connection this was made through, as the application sees it - see {@link space.seclume.internal.jdbc.Fronted}. */
+    private final Connection owner;
 
     TdsDatabaseMetaData(TdsConnection connection) {
         this.connection = connection;
+        this.owner = connection.frontOrSelf();
     }
 
     private ResultSet query(String sql) throws SQLException {
@@ -568,7 +571,7 @@ final class TdsDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public Connection getConnection() {
-        return connection;
+        return owner;
     }
 
     @Override

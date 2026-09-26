@@ -50,6 +50,7 @@ public final class TdsRow {
         this.in = in;
         this.columns = columns;
         this.cells = new int[columns.size() * 2]; // seclume-allow: offsets into the buffer, not content
+        this.hasPlp = columns.stream().anyMatch(TdsColumn::plp);
     }
 
     /**
@@ -60,6 +61,31 @@ public final class TdsRow {
      * @return the position just after the row
      */
     public int read(int at, boolean nullBitCompressed) throws IOException {
+        if (hasPlp) {
+            // A MAX value is made contiguous by moving its chunks, in place.
+            // The answer is read while it arrives, and a row cut by the end of
+            // a packet is read again from its start once the rest is in - so
+            // nothing may move until the whole row is known to be there: one
+            // pass that only measures, and checks the last byte.
+            measuring = true;
+            try {
+                int end = pass(at, nullBitCompressed);
+                if (end > at) {
+                    in.getByte(end - 1);                   // there, or Truncated
+                }
+            } finally {
+                measuring = false;
+            }
+        }
+        return pass(at, nullBitCompressed);
+    }
+
+    /** Whether this pass only finds where the row ends; see {@link #read}. */
+    private boolean measuring;
+    /** Whether any column arrives chunked. */
+    private final boolean hasPlp;
+
+    private int pass(int at, boolean nullBitCompressed) throws IOException {
         int p = at;
         int count = columns.size();
         int bitmaskAt = -1;
@@ -174,6 +200,22 @@ public final class TdsRow {
         }
         if (total != PLP_UNKNOWN && total > Integer.MAX_VALUE) {
             throw new IOException("a value of " + total + " bytes does not fit into a row");
+        }
+        if (measuring) {
+            // Only where it ends - see read: nothing moves until the whole
+            // row is known to be there.
+            for (int q = p; ; ) {
+                int chunk = in.getIntLe(q);
+                q += 4;
+                if (chunk == 0) {
+                    return q;
+                }
+                if (chunk < 0) {
+                    throw new IOException("a chunk of " + chunk + " bytes");
+                }
+                in.getByte(q + chunk - 1);             // there, or Truncated
+                q += chunk;
+            }
         }
         int valueAt = p;
         int written = 0;

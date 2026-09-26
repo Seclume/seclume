@@ -88,22 +88,24 @@ public final class TdsSession implements AutoCloseable {
     /** Separates two RPCs in one message - 0xFF since TDS 7.2. */
     private static final int RPC_SEPARATOR = 0xff;
     /**
-     * How many calls go into one message before it is sent.
+     * How many calls go into one message before its answer is read.
      *
-     * <p>The number that actually guards anything is {@link #BATCH_BYTES}: a
-     * client that keeps writing while the server keeps answering can fill both
-     * socket buffers and deadlock, and a bounded message is what prevents it.
-     * The row cap is a second, cruder bound - it used to be 256, which with
-     * handles became the binding one for no reason: five hundred rows of
-     * {@code sp_execute} are some 15 KB, well inside the byte bound, yet they
-     * were split into two messages and two round trips. Raising it to 1024
-     * left the byte bound in charge and closed the rest of the gap to
-     * mssql-jdbc (11.2 ms against 11.1 ms for five hundred rows, measured).
+     * <p>The full packets of a message leave while it is still being written
+     * (TdsChannel.sendFull), so the server runs the first rows while the last
+     * are encoded, and the send buffer holds a packet rather than the batch.
+     * What stays unbounded is the answer: a DONE per call that the server
+     * writes and nobody reads until the message is complete. Should both
+     * socket buffers fill with it, the two ends would wait on each other, so
+     * the calls per message are capped - at a number whose answers, some
+     * 30 bytes a call, sit well inside what the buffers hold; 200 000 rows in
+     * one message were tried against a real server and did not stall either.
+     * Measured against mssql-jdbc, which sends a batch as one message: 5 000
+     * rows 66.6 ms against 66.8, 200 000 rows 2.72 s against 2.93 s. With the
+     * old cap of 1 024 rows and 60 KB it was 74 ms and 3.2 s.
      */
-    private static final int BATCH_ROWS = 1024;
-    /** And how many bytes, whichever comes first - this is the real guard. */
+    private static final int BATCH_ROWS = 16_384;
+    /** A bound on the part of a message still in the buffer - one huge row at most. */
     private static final int BATCH_BYTES = 60 * 1024;
-
     /** Connection settings. Not the password, only its source. */
     public record Settings(String host, int port, String database, String user,
                            SecretProvider secret, String applicationName,
@@ -197,6 +199,8 @@ public final class TdsSession implements AutoCloseable {
     private long transactionDescriptor;
     /** A session setting waiting for a statement to ride along with. */
     private String pending;
+    /** A session context waiting for the next statement - see contextLater. */
+    private String pendingContext;
     /** The columns of the open cursor - only the open reports them. */
     private java.util.List<TdsColumn> cursorColumns = java.util.List.of();
     private long updateCount = -1;
@@ -241,6 +245,7 @@ public final class TdsSession implements AutoCloseable {
      * later by a server complaining about a transaction that does not exist.
      */
     public Detached detach() throws SQLException {
+        drainPending();                      // a paused answer is read in first
         if (!channel.isIdle()) {
             throw new SQLException("this session has work in flight - a stream can only be "
                     + "handed over at a quiescent point (" + channel.inFlight() + ")", "25000");
@@ -255,19 +260,58 @@ public final class TdsSession implements AutoCloseable {
             throw new SQLException("a cursor is open on this session - whoever receives the "
                     + "stream would be reading rows it never asked for", "25000");
         }
-        if (pending != null) {
-            throw new SQLException("a session setting is waiting to ride along with the next "
-                    + "statement - handing the stream over now would lose it", "25000");
-        }
         if (transactionDescriptor != 0) {
             throw new SQLException("this session is inside an explicit transaction, and its "
                     + "descriptor cannot be handed over - commit or roll back first", "25000");
         }
+        // A setting waiting to ride along with the next statement goes now,
+        // as on the other three drivers. This used to refuse the hand-over
+        // instead - safe, but it made setTransactionIsolation() just before a
+        // hand-over an error on this driver alone.
+        flushPending();
         space.seclume.internal.TlsLayer tls = channel.tlsLayer();
         Detached detached = new Detached(channel.transport(), channel.packetSize(),
                 database, serverName, serverVersion, tls);
         channel.release(tls != null);
         return detached;
+    }
+
+    /** The session is reset before the next request - see {@link TdsChannel#resetBeforeNextRequest}. */
+    public void resetBeforeNextRequest() {
+        channel.resetBeforeNextRequest();
+    }
+
+    /**
+     * What {@link #detach()} hands out, <b>without handing anything out</b>:
+     * the session goes on, and the stream and the encryption returned are the
+     * live ones - to be described (the encryption's
+     * {@link space.seclume.internal.TlsLayer#snapshot}), never used. The same
+     * refusals as {@code detach}, and a setting waiting for the next
+     * statement goes now, so the description says what the server has.
+     *
+     * <p>For a copy kept elsewhere against this process dying; taken at a
+     * quiet moment, it is exact until the next statement.
+     */
+    public Detached snapshot() throws SQLException {
+        drainPending();
+        if (!channel.isIdle()) {
+            throw new SQLException("this session has work in flight - it can only be "
+                    + "described at a quiescent point (" + channel.inFlight() + ")", "25000");
+        }
+        if (channel.isEncrypted() && !channel.encryptionCanTravel()) {
+            throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
+                    + "cannot leave the SSLEngine that holds them", "0A000");
+        }
+        if (!cursorColumns.isEmpty()) {
+            throw new SQLException("a cursor is open on this session", "25000");
+        }
+        if (transactionDescriptor != 0) {
+            throw new SQLException("this session is inside an explicit transaction, whose "
+                    + "descriptor another process could not quote", "25000");
+        }
+        flushPending();
+        return new Detached(channel.transport(), channel.packetSize(), database, serverName,
+                serverVersion, channel.tlsLayer());
     }
 
     /**
@@ -411,12 +455,28 @@ public final class TdsSession implements AutoCloseable {
         try {
             channel = TdsChannel.connect(settings.host(), settings.port(),
                     settings.connectTimeoutMillis());
-        } catch (IOException e) {
+            // Before the login, because a login that fails is exactly when
+            // somebody wants to know what the server said. See
+            // space.seclume.Flight.
+            channel.recordFlight(space.seclume.internal.FlightRecorder.from(null));
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "cannot reach " + settings.host() + ":" + settings.port(), "08001", e);
         }
         try {
-            return login(channel, settings);
+            TdsSession session = login(channel, settings);
+            space.seclume.internal.Transports.loggedIn(session.transport());
+            return session;
+        } catch (space.seclume.internal.WireBuffer.Truncated e) {
+            // Before the RuntimeException clause below, and that order is the
+            // whole fix. Truncated is an IllegalStateException, so it used to
+            // leave here as itself - anything that can answer on port 1433
+            // reaches this parser before a credential is exchanged, and a
+            // greeting that runs out mid-field came out as an unchecked
+            // exception rather than as a login that failed.
+            channel.close();
+            throw new SQLNonTransientConnectionException(
+                    "the server's answer is not TDS: " + e.getMessage(), "08001", e);
         } catch (SQLException | RuntimeException e) {
             channel.close();
             throw e;
@@ -429,45 +489,145 @@ public final class TdsSession implements AutoCloseable {
 
     private static TdsSession login(TdsChannel channel, Settings settings)
             throws IOException, SQLException {
+        PreLogin preLogin;
         if (settings.tdsVersion().wrapsTheConnection()) {
             startStrictEncryption(channel, settings);
             // The pre-login still happens - the server wants the version and
             // the instance name - but it happens inside TLS, and its
             // encryption byte is no longer a negotiation: that was settled
             // before the first byte.
-            new PreLogin().exchange(channel, Tds.ENCRYPT_ON);
+            preLogin = new PreLogin();
+            preLogin.exchange(channel, Tds.ENCRYPT_ON, AccessToken.is(settings.secret()));
         } else {
-            negotiateEncryption(channel, settings);
+            preLogin = negotiateEncryption(channel, settings);
         }
 
-        Login7.send(channel, new Login7.Settings(settings.host(), settings.database(),
-                settings.user(), settings.secret(), settings.applicationName(), "seclume"));
+        // From here on it is the login alone: the pre-login is done and TLS is
+        // up either way round. Timed apart from both, because a slow login is
+        // the directory behind the server and a slow handshake is not - see
+        // SeclumeEvents.Authentication.
+        space.seclume.jfr.SeclumeEvents.Authentication event =
+                space.seclume.jfr.Observed.beginLogin();
+        boolean loggedIn = false;
+        try {
+            if (AccessToken.is(settings.secret()) && settings.trustServerCertificate()
+                    && !space.seclume.internal.TrustChoice.pinned()) {
+                // A bearer token works for whoever holds it: it goes only to
+                // a server that proved who it is. trustServerCertificate
+                // encrypts, but to anybody.
+                throw new java.sql.SQLInvalidAuthorizationSpecException("an access token "
+                        + "(authentication=token) may only go to a server whose certificate is "
+                        + "checked, and trustServerCertificate=true checks nothing. Leave it off, "
+                        + "or name the server's key with tlsPin; nothing was sent", "28000");
+            }
+            Login7.Settings login = new Login7.Settings(settings.host(), settings.database(),
+                    settings.user(), settings.secret(), settings.applicationName(), "seclume");
+            LoginResponse response;
+            if (Kerberos.is(settings.secret())) {
+                response = integrated(channel, login, preLogin,
+                        Kerberos.servicePrincipal(settings.secret()));
+            } else {
+                Login7.send(channel, login, preLogin);
+                response = new LoginResponse();
+                response.read(channel);
+            }
+            if (response.failure() != null) {
+                throw response.failure();
+            }
+            if (!response.isLoggedIn()) {
+                throw new SQLNonTransientConnectionException(
+                        "the server sent no LOGINACK", "08004");
+            }
+            if (response.packetSize() > 0) {
+                channel.packetSize(response.packetSize());
+            }
+            TdsSession session = new TdsSession(channel, response);
+            session.method = Kerberos.is(settings.secret()) ? "Kerberos (integrated, mutual)"
+                    : AccessToken.is(settings.secret()) ? "access token (FEDAUTH, inside TLS)"
+                    : "SQL login (LOGIN7, inside TLS)";
+            session.setResultLimit(settings.resultLimit());
+            loggedIn = true;
+            return session;
+        } finally {
+            space.seclume.jfr.Observed.endLogin(event, "sqlserver",
+                    settings.host() + ":" + settings.port(), "login7", loggedIn);
+        }
+    }
 
-        LoginResponse response = new LoginResponse();
-        response.read(channel);
-        if (response.failure() != null) {
-            throw response.failure();
+    /**
+     * An integrated login: Kerberos tokens instead of a password. The first
+     * goes in LOGIN7, every further one the server asks for in an SSPI
+     * packet; the answer that logs in carries the server's own token, and
+     * the login counts only when that completes the context - the server
+     * proved it holds the service's key, so nobody in between can stand in
+     * for it (MS-TDS 3.2.5.1, the same rule as for PostgreSQL's GSSAPI).
+     */
+    private static LoginResponse integrated(TdsChannel channel, Login7.Settings login,
+                                            PreLogin preLogin, String servicePrincipal)
+            throws IOException, SQLException {
+        try (space.seclume.internal.Gssapi.Context gss =
+                     space.seclume.internal.Gssapi.initiatePrincipal(servicePrincipal)) {
+            byte[] token = gss.step(null, 0, 0);
+            Login7.send(channel, login, preLogin, token);
+            for (int round = 0; ; round++) {
+                LoginResponse response = new LoginResponse();
+                response.read(channel);
+                if (response.failure() != null) {
+                    return response;
+                }
+                byte[] answer = response.sspi();
+                if (answer != null && !gss.complete()) {
+                    token = step(gss, answer);
+                } else {
+                    token = new byte[0]; // seclume-allow: an empty token
+                }
+                if (response.isLoggedIn()) {
+                    if (!gss.complete()) {
+                        throw new java.sql.SQLInvalidAuthorizationSpecException("the server "
+                                + "logged the session in without proving it holds the key of "
+                                + servicePrincipal + " - refused, as it could be anybody", "28000");
+                    }
+                    return response;
+                }
+                if (round > 8 || (token.length == 0 && !gss.complete())) {
+                    throw new SQLNonTransientConnectionException("the Kerberos login with "
+                            + servicePrincipal + " ended without an answer from the server",
+                            "08004");
+                }
+                if (token.length == 0) {
+                    // The server's token completed the context; SQL Server sends
+                    // it in a message of its own and the LOGINACK in the next.
+                    continue;
+                }
+                WireBuffer out = channel.begin();
+                out.putBytes(java.lang.foreign.MemorySegment.ofArray(token), 0, token.length);
+                channel.send(Tds.TYPE_SSPI);
+            }
+        } catch (IllegalStateException kerberos) {
+            // No ticket, an unknown SPN, a KDC out of reach: the library says which.
+            throw new java.sql.SQLInvalidAuthorizationSpecException("Kerberos login with "
+                    + servicePrincipal + " failed: " + kerberos.getMessage(), "28000", kerberos);
         }
-        if (!response.isLoggedIn()) {
-            throw new SQLNonTransientConnectionException(
-                    "the server sent no LOGINACK", "08004");
+    }
+
+    /** One step with the server's token, which has to be in native memory for the library. */
+    private static byte[] step(space.seclume.internal.Gssapi.Context gss, byte[] answer) {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment in = arena.allocate(Math.max(1, answer.length));
+            java.lang.foreign.MemorySegment.copy(answer, 0, in,
+                    java.lang.foreign.ValueLayout.JAVA_BYTE, 0, answer.length);
+            return gss.step(in, 0, answer.length);
         }
-        if (response.packetSize() > 0) {
-            channel.packetSize(response.packetSize());
-        }
-        TdsSession session = new TdsSession(channel, response);
-        session.setResultLimit(settings.resultLimit());
-        return session;
     }
 
     /**
      * TDS 7.4: negotiate in the clear, then run the handshake inside the
      * pre-login packets.
      */
-    private static void negotiateEncryption(TdsChannel channel, Settings settings)
+    private static PreLogin negotiateEncryption(TdsChannel channel, Settings settings)
             throws IOException, SQLException {
         PreLogin preLogin = new PreLogin();
-        preLogin.exchange(channel, Tds.ENCRYPT_ON);
+        preLogin.exchange(channel, Tds.ENCRYPT_ON, AccessToken.is(settings.secret()));
         if (!preLogin.supportsEncryption()) {
             // Without TLS the password would go over the wire in the LOGIN7
             // obfuscation, and that is a XOR, not encryption. seclume does
@@ -480,6 +640,7 @@ public final class TdsSession implements AutoCloseable {
                 settings.trustServerCertificate());
         tls.handshake();
         channel.useTls(tls);
+        return preLogin;
     }
 
     /**
@@ -527,7 +688,7 @@ public final class TdsSession implements AutoCloseable {
             putUtf16(out, sql);
             channel.send(Tds.TYPE_SQL_BATCH);
             return readAnswer(handler);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -559,7 +720,7 @@ public final class TdsSession implements AutoCloseable {
             parameters.writeAll(out);
             channel.send(Tds.TYPE_RPC);
             return readAnswer(handler);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -591,24 +752,39 @@ public final class TdsSession implements AutoCloseable {
         pending = pending == null ? sql : pending + "; " + sql;
     }
 
+    /**
+     * A session context to set with the next statement - kept apart from the
+     * settings so that a reset can drop it: sent after a RESETCONNECTION, a
+     * context meant for the previous borrower would reach the next one.
+     */
+    public void contextLater(String sql) {
+        pendingContext = pendingContext == null ? sql : pendingContext + "; " + sql;
+    }
+
+    /** Drops a context not yet sent - see contextLater. */
+    public void dropPendingContext() {
+        pendingContext = null;
+    }
+
     /** Whether a setting is waiting for a statement to ride along with. */
     public boolean hasPending() {
-        return pending != null;
+        return pending != null || pendingContext != null;
     }
 
     /** Sends what is pending right now, for whoever cannot wait. */
     public void flushPending() throws SQLException {
-        if (pending != null) {
-            String sql = pending;
-            pending = null;
+        String sql = takePending();
+        if (sql != null) {
             execute(sql);
         }
     }
 
     /** Takes the pending text and clears it - the caller sends it along. */
     private String takePending() {
-        String sql = pending;
+        String sql = pending == null ? pendingContext
+                : pendingContext == null ? pending : pending + "; " + pendingContext;
         pending = null;
+        pendingContext = null;
         return sql;
     }
 
@@ -626,12 +802,7 @@ public final class TdsSession implements AutoCloseable {
     public int cursorOpen(String sql, String declaration, TdsParameters parameters)
             throws SQLException {
         flushPending();
-        if (declaration != null && !declaration.isEmpty()) {
-            throw new SQLException("a fetch size on a statement with bind values is not "
-                    + "supported on SQL Server yet - sp_cursorprepexec refuses the "
-                    + "parameter list this driver sends, and half of a cursor is worse "
-                    + "than none. Without bind values the block cursor works.");
-        }
+        boolean bound = declaration != null && !declaration.isEmpty();
         try {
             WireBuffer out = beginMessage();
             putAllHeaders(out);
@@ -640,9 +811,17 @@ public final class TdsSession implements AutoCloseable {
             out.putShortLe((short) 0);
             TdsParameters.writeOutputInt(out, "", null);       // the cursor
             TdsParameters.writeStatementText(out, sql);
-            TdsParameters.writeOutputInt(out, "", CURSOR_FORWARD_ONLY);
+            TdsParameters.writeOutputInt(out, "", bound
+                    ? CURSOR_FORWARD_ONLY | CURSOR_PARAMETERIZED : CURSOR_FORWARD_ONLY);
             TdsParameters.writeOutputInt(out, "", CURSOR_READ_ONLY);
             TdsParameters.writeOutputInt(out, "", 0);          // row count
+            if (bound) {
+                // With PARAMETERIZED in scrollopt, the parameter declaration
+                // follows as one more argument and the values behind it -
+                // the same two things sp_executesql takes.
+                TdsParameters.writeStatementText(out, declaration);
+                parameters.writeAll(out);
+            }
             channel.send(Tds.TYPE_RPC);
             TokenStream answer = readAnswer(null);
             Integer handle = answer.returned(0);
@@ -652,7 +831,7 @@ public final class TdsSession implements AutoCloseable {
             }
             cursorColumns = answer.columns();
             return handle;
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -681,7 +860,7 @@ public final class TdsSession implements AutoCloseable {
             TdsParameters.writeInt(out, "", rows);
             channel.send(Tds.TYPE_RPC);
             return readAnswer(handler).rowCount();
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -697,7 +876,7 @@ public final class TdsSession implements AutoCloseable {
             TdsParameters.writeInt(out, "", handle);
             channel.send(Tds.TYPE_RPC);
             readAnswer(null);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -784,7 +963,7 @@ public final class TdsSession implements AutoCloseable {
             // batch case. This is a single call with a single count.
             long count = answer.updateCount();
             return Math.max(count, 0);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -804,7 +983,7 @@ public final class TdsSession implements AutoCloseable {
             TdsParameters.writeInt(out, "", handle);
             channel.send(Tds.TYPE_RPC);
             readAnswer(null);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -873,6 +1052,7 @@ public final class TdsSession implements AutoCloseable {
                     out.putShortLe((short) 0);        // no options
                     TdsParameters.writeInt(out, "", prepared.handle());
                     parameters.writeAll(out);
+                    channel.sendFull(Tds.TYPE_RPC);   // full packets leave now
                     at++;
                     sent++;
                 }
@@ -892,7 +1072,7 @@ public final class TdsSession implements AutoCloseable {
                     counts[start + i] = i < reported.length ? Math.max(reported[i], 0) : 0;
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
         return counts;
@@ -924,7 +1104,7 @@ public final class TdsSession implements AutoCloseable {
             }
             channel.send(Tds.TYPE_TRANSACTION_MANAGER);
             return readAnswer(handler);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1045,7 +1225,7 @@ public final class TdsSession implements AutoCloseable {
                 keep(groupStart + i, i < reported.length ? Math.max(reported[i], 0) : 0);
             }
             pipelineCount = groupStart + group;
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         } catch (SQLException failed) {
             // Which one failed matters more than that one of them did: a block
@@ -1107,6 +1287,7 @@ public final class TdsSession implements AutoCloseable {
      * built differently. A single entry point cannot be missed that way.
      */
     private WireBuffer beginMessage() throws SQLException {
+        drainPending();                      // a paused answer first - see resume
         flushPipeline();
         return channel.begin();
     }
@@ -1114,6 +1295,73 @@ public final class TdsSession implements AutoCloseable {
     /** How often this session has waited for the server. */
     public long roundTrips() {
         return channel.roundTrips();
+    }
+
+    /**
+     * Loads rows with {@code INSERT BULK}: the statement announces the
+     * columns, then one bulk-load message carries their description and every
+     * row, streamed out a packet at a time as it fills.
+     *
+     * @param statement the {@code INSERT BULK ...} text, columns declared as
+     *                  {@code columns} say
+     * @param rows      each row checked by {@link TdsBulk#check} before any of it
+     *                  is written
+     * @return the rows the server says it loaded
+     */
+    public long bulkLoad(String statement, java.util.List<TdsBulk.Column> columns,
+                         java.util.Iterator<Object[]> rows) throws SQLException {
+        // Alone: "Insert bulk cannot be used in a multi-statement batch", and a
+        // setting waiting to ride along would make it one.
+        flushPending();
+        sqlBatch(statement, null);
+        try {
+            WireBuffer out = beginMessage();
+            TdsBulk.writeMetadata(out, columns);
+            long number = 0;
+            while (rows.hasNext()) {
+                Object[] row = rows.next();
+                number++;
+                try {
+                    TdsBulk.check(columns, row, number);
+                } catch (SQLException refused) {
+                    // Rows already streamed cannot be taken back mid-message;
+                    // ending it here, with the rows so far, and telling the
+                    // server to drop them keeps the session in step.
+                    abandonBulk(out);
+                    throw refused;
+                }
+                TdsBulk.writeRow(out, columns, row);
+                channel.sendFull(Tds.TYPE_BULK_LOAD);
+            }
+            TdsBulk.writeDone(out);
+            channel.send(Tds.TYPE_BULK_LOAD);
+            TokenStream answer = readAnswer(null);
+            updateCount = answer.updateCount();
+            return updateCount;
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw brokenConnection(e);
+        }
+    }
+
+    /**
+     * Ends a bulk load whose next row was refused: the message is finished,
+     * and an ATTENTION makes the server drop what it received. The rows
+     * already sent are not loaded - in auto-commit mode the load is one
+     * statement, and it is cancelled.
+     */
+    private void abandonBulk(WireBuffer out) throws SQLException {
+        try {
+            TdsBulk.writeDone(out);
+            channel.send(Tds.TYPE_BULK_LOAD);
+            cancel();
+            try {
+                readAnswer(null);
+            } catch (SQLException expected) {
+                // the cancellation answers as an error - that is the point
+            }
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw brokenConnection(e);
+        }
     }
 
     /** Short form for a statement whose rows are of no interest. */
@@ -1134,15 +1382,101 @@ public final class TdsSession implements AutoCloseable {
      */
     private TokenStream readAnswer(TokenStream.RowHandler handler, int expectedCounts)
             throws IOException, SQLException {
-        int type = channel.receive();
-        if (type != Tds.TYPE_TABULAR_RESULT) {
-            throw new IOException("expected a result, got type 0x" + Integer.toHexString(type));
-        }
         TokenStream tokens = new TokenStream();
         if (expectedCounts > 0) {
             tokens.expectCounts(expectedCounts);
         }
-        tokens.read(channel.message(), 0, channel.messageLength(), handler);
+        channel.startStreaming();
+        return pump(tokens, handler, true);
+    }
+
+    /** The answer whose rows are still arriving, and who takes them; see {@link #resume}. */
+    private TokenStream pendingTokens;
+    private TokenStream.RowHandler pendingHandler;
+
+    /**
+     * Reads the answer while it arrives - see TdsChannel.pump - and, where
+     * the handler asks for it, stops after a packet and leaves the rest on the
+     * wire until {@link #resume} or {@link #drainPending}.
+     *
+     * <p>That pause is what lets an application work on the first rows while
+     * the rest is still on its way, as mssql-jdbc does; without it every
+     * value was decoded only after the last packet had arrived, and a large
+     * result took the network's time plus the application's instead of the
+     * larger of the two.
+     */
+    private TokenStream pump(TokenStream tokens, TokenStream.RowHandler handler,
+            boolean mayPause) throws IOException, SQLException {
+        boolean done = channel.pump((in, end) -> {
+            if (channel.messageType() != Tds.TYPE_TABULAR_RESULT) {
+                throw new IOException("expected a result, got type 0x"
+                        + Integer.toHexString(channel.messageType()));
+            }
+            return tokens.readComplete(in, 0, end, handler);
+        }, mayPause && handler != null ? handler::pause : null);
+        if (!done) {
+            pendingTokens = tokens;
+            pendingHandler = handler;
+            return tokens;
+        }
+        pendingTokens = null;
+        pendingHandler = null;
+        return complete(tokens);
+    }
+
+    /** Whether an answer is paused with rows still to come. */
+    public boolean isPaused() {
+        return pendingTokens != null;
+    }
+
+    /**
+     * Reads on in the paused answer, until the handler asks for a pause
+     * again or the answer ends.
+     *
+     * @return whether it paused again
+     */
+    public boolean resume() throws SQLException {
+        if (pendingTokens == null) {
+            return false;
+        }
+        try {
+            pump(pendingTokens, pendingHandler, true);
+            return pendingTokens != null;
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            pendingTokens = null;
+            pendingHandler = null;
+            throw brokenConnection(e);
+        }
+    }
+
+    /**
+     * Reads the rest of a paused answer, before anything else uses the
+     * connection: TDS is one answer after the other, and a request sent into
+     * the middle of one would read its tail as its own answer.
+     */
+    public void drainPending() throws SQLException {
+        if (pendingTokens == null) {
+            return;
+        }
+        try {
+            pump(pendingTokens, pendingHandler, false);
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            pendingTokens = null;
+            pendingHandler = null;
+            throw brokenConnection(e);
+        } finally {
+            pendingTokens = null;
+            pendingHandler = null;
+        }
+    }
+
+    /** What the end of an answer settles: counts, database, transaction, errors. */
+    private TokenStream complete(TokenStream tokens) throws IOException, SQLException {
+        int type = channel.messageType();
+        if (type != Tds.TYPE_TABULAR_RESULT) {
+            throw new IOException("expected a result, got type 0x" + Integer.toHexString(type));
+        }
+        tokens.finish();
         updateCount = tokens.updateCount();
         if (!tokens.database().isEmpty()) {
             database = tokens.database();
@@ -1157,12 +1491,64 @@ public final class TdsSession implements AutoCloseable {
             // raised, so the connection stays usable.
             throw tokens.failure();
         }
+        // The acknowledgement, if one is owed. Read here and not left for the
+        // next statement - see TdsChannel#drainAttention. The two conditions
+        // are not the same thing: the ATTENTION bit says the server stopped
+        // mid-answer, the drain says an ATTENTION was written at all, and a
+        // cancellation that arrived just as the statement finished shows only
+        // the second. Both mean the caller asked for this to stop.
+        boolean cancelled = tokens.wasCancelled();
+        if (channel.drainAttention()) {
+            cancelled = true;
+        }
+        if (cancelled) {
+            // After the failure check, not before it: a statement that was
+            // both wrong and cancelled should report what was wrong with it.
+            // And after the whole stream was read, for the same reason as
+            // above - the answer may have carried rows before the DONE that
+            // says it was cut short, and leaving them unread would put the
+            // next call one message behind.
+            throw new SQLException("the statement was cancelled", "HY008");
+        }
         return tokens;
+    }
+
+    /**
+     * Tells the server to stop what this connection is doing.
+     *
+     * <p>Eight bytes on the same connection - see
+     * {@link TdsChannel#sendAttention}. Nothing is read here: the answer,
+     * including the acknowledgement, belongs to the thread that is already
+     * waiting for it, and this one only writes.
+     *
+     * <p>Safe from another thread, and that is the only way it is called.
+     *
+     * @throws SQLException if the ATTENTION could not be written
+     */
+    public void cancel() throws SQLException {
+        try {
+            channel.sendAttention();
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw new SQLNonTransientConnectionException(
+                    "the cancellation could not be sent: " + e.getMessage(), "08006", e);
+        }
     }
 
     /**
      * The 22-byte header block. The transaction descriptor is zero outside an
      * explicit transaction, and inside one it is what the server handed out.
+
+     * <p><b>And a second cause, which used to escape as an unchecked
+     * exception.</b> {@code WireBuffer.Truncated} is an
+     * {@code IllegalStateException} thrown when a message announces more bytes
+     * than it brought, and nothing caught it - so a malformed answer came out
+     * of {@code Statement.executeQuery}, a method whose signature promises
+     * {@link SQLException} and nothing else. An application catches
+     * {@code SQLException}; that is what a framework's retry and its
+     * connection-health check are written against. It is the same fact as an
+     * IO failure seen from one layer up: what follows the message is not where
+     * the protocol says it is, so every byte after it would be read at the
+     * wrong offset. Found by the fuzz corpus on 23.09.2026.
      */
     private void putAllHeaders(WireBuffer out) {
         out.putIntLe(ALL_HEADERS_SIZE);
@@ -1179,7 +1565,7 @@ public final class TdsSession implements AutoCloseable {
         }
     }
 
-    private SQLException brokenConnection(IOException cause) {
+    private SQLException brokenConnection(Exception cause) {
         close();
         return new SQLNonTransientConnectionException(
                 "the connection to " + serverName + " broke: " + cause.getMessage(), "08006", cause);
@@ -1209,6 +1595,35 @@ public final class TdsSession implements AutoCloseable {
         return serverVersion;
     }
 
+    /**
+     * How this driver logs in, which on TDS is one way and only one.
+     *
+     * <p>A SQL login in a {@code LOGIN7} packet, with the password under the
+     * obfuscation TDS calls encryption and nobody should: a nibble swap and an
+     * XOR with a constant. That it is not a secret is exactly why this driver
+     * refuses to log in without TLS underneath it - see
+     * {@code negotiateEncryption}.
+     *
+     * <p>An integrated login says Kerberos, a token login says so too.
+     */
+    public String authenticationMethod() {
+        return method;
+    }
+
+    /** How this session logged in - set once, right after the login. */
+    private String method = "SQL login (LOGIN7, inside TLS)";
+
+    /** The certificate the server presented, or null in the clear. */
+    public java.security.cert.X509Certificate serverCertificate() {
+        space.seclume.internal.TlsLayer layer = channel.tlsLayer();
+        try {
+            return layer == null ? null : layer.peerCertificate();
+        } catch (java.io.IOException e) {
+            return null;
+        }
+    }
+
+
     /** What TLS this connection uses, or {@code null} without it. */
     public String tlsDescription() {
         return channel.tlsDescription();
@@ -1217,6 +1632,16 @@ public final class TdsSession implements AutoCloseable {
     /** The database the session is in. */
     public String database() {
         return database;
+    }
+
+    /** What this connection last sent and received - see space.seclume.Flight. */
+    public java.util.List<space.seclume.Flight.Message> recentMessages() {
+        return channel.recentMessages();
+    }
+
+    /** How many messages have crossed this connection. */
+    public long recordedMessages() {
+        return channel.recordedMessages();
     }
 
     public boolean isOpen() {

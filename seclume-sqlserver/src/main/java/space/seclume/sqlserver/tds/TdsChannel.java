@@ -33,6 +33,20 @@ public final class TdsChannel implements AutoCloseable {
      * round, TLS records inside TDS packets, which {@link TdsTls} handles.
      */
     private space.seclume.internal.TlsLayer tls;
+    /**
+     * How many ATTENTIONs were written whose acknowledgement is still unread.
+     *
+     * <p>A count and not a flag, and the difference is a real failure: two
+     * cancellations in a row put two acknowledgements on the wire, and a
+     * client that drains one finds the other at the head of the next
+     * statement's answer. A query-timeout thread that fires twice is not
+     * exotic.
+     *
+     * <p>Atomic because it is raised on the thread that cancels and cleared on
+     * the thread doing the work.
+     */
+    private final java.util.concurrent.atomic.AtomicInteger attentionsPending =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     private TdsChannel(space.seclume.internal.Transport channel) {
         this.channel = channel;
@@ -228,6 +242,56 @@ public final class TdsChannel implements AutoCloseable {
     }
 
     /**
+     * The flight recorder, or {@code null} when nobody asked for one.
+     *
+     * <p>See {@link space.seclume.Flight}.
+     */
+    private space.seclume.internal.FlightRecorder flight;
+
+    /** Switches the recording on - see {@link space.seclume.Flight}. */
+    public void recordFlight(space.seclume.internal.FlightRecorder recorder) {
+        this.flight = recorder;
+    }
+
+    /** What this connection last sent and received, oldest first. */
+    public java.util.List<space.seclume.Flight.Message> recentMessages() {
+        return flight == null ? java.util.List.of() : flight.recent();
+    }
+
+    /** How many messages have crossed this connection. */
+    public long recordedMessages() {
+        return flight == null ? 0 : flight.messages();
+    }
+
+    /** The tail of the recording, or {@code null} when there is none. */
+    public String flightTail() {
+        return flight == null ? null : flight.tail(8);
+    }
+
+    /**
+     * The name of a TDS message type, for a diagnostic.
+     *
+     * <p><b>And the withholding question, answered differently here.</b> A
+     * LOGIN7 packet carries the password, obfuscated by a XOR that is not
+     * encryption - so its length is the password's length plus the fixed
+     * fields, exactly the case PostgreSQL's cleartext path has. That it also
+     * travels inside TLS protects it on the wire and not in a ring buffer in
+     * this process, which is what this recorder is. So the count is withheld.
+     */
+    private static String nameOf(int type) {
+        return switch (type) {
+            case Tds.TYPE_SQL_BATCH -> "SQLBatch";
+            case Tds.TYPE_RPC -> "RPC";
+            case Tds.TYPE_TABULAR_RESULT -> "TabularResult";
+            case Tds.TYPE_ATTENTION -> "Attention";
+            case Tds.TYPE_TRANSACTION_MANAGER -> "TransactionManager";
+            case Tds.TYPE_LOGIN7 -> "LOGIN7";
+            case Tds.TYPE_PRELOGIN -> "PreLogin";
+            default -> "0x" + Integer.toHexString(type);
+        };
+    }
+
+    /**
      * Sends the message.
      *
      * <p>If it does not fit into one packet it is split: every piece gets its
@@ -235,41 +299,101 @@ public final class TdsChannel implements AutoCloseable {
      * reassembles it the same way.
      */
     public void send(int type) throws IOException {
-        roundTrips++;
-        int payloadLength = out.position() - Tds.HEADER_SIZE;
-        int maxPayload = packetSize - Tds.HEADER_SIZE;
-        if (payloadLength <= maxPayload) {
-            writeHeader(0, type, Tds.STATUS_END_OF_MESSAGE, Tds.HEADER_SIZE + payloadLength);
-            flush(Tds.HEADER_SIZE + payloadLength);
-            return;
+        if (!partial) {
+            // Before the request, not after: an ATTENTION sent while nothing
+            // was running has an acknowledgement sitting on the wire, and it
+            // must not be read as the beginning of this statement's answer.
+            drainAttention();
+            roundTrips++;
         }
-        // Split it: the content is already in the buffer, so send it in pieces.
+        int payloadLength = out.position() - Tds.HEADER_SIZE;
+        if (flight != null) {
+            flight.record(true, nameOf(type),
+                    type == Tds.TYPE_LOGIN7 ? space.seclume.Flight.WITHHELD
+                            : (int) Math.min(Integer.MAX_VALUE,
+                                    sentBefore + payloadLength + Tds.HEADER_SIZE));
+        }
+        partial = false;
+        sentBefore = 0;
+        int maxPayload = packetSize - Tds.HEADER_SIZE;
+        // In place: each packet's header goes over the last eight bytes of
+        // the one before, which have left already. The pieces used to be
+        // copied into a buffer of their own, a native allocation and a free
+        // per packet.
         int sent = 0;
-        while (sent < payloadLength) {
+        while (true) {
             int chunk = Math.min(maxPayload, payloadLength - sent);
             boolean last = sent + chunk >= payloadLength;
-            WireBuffer piece = new WireBuffer(Tds.HEADER_SIZE + chunk);
-            try {
-                piece.putZeroes(Tds.HEADER_SIZE);
-                piece.putBytes(out.segment(), Tds.HEADER_SIZE + sent, chunk);
-                piece.putUnsignedLeAt(0, type, 1);
-                piece.putByteAt(1, (byte) (last ? Tds.STATUS_END_OF_MESSAGE : 0));
-                piece.putByteAt(2, (byte) ((Tds.HEADER_SIZE + chunk) >>> 8));
-                piece.putByteAt(3, (byte) (Tds.HEADER_SIZE + chunk));
-                piece.putByteAt(6, (byte) packetId++);
-                ByteBuffer view = piece.view();
-                view.clear().position(0).limit(Tds.HEADER_SIZE + chunk);
-                write(view);
-            } finally {
-                piece.close();
-            }
+            writeHeader(sent, type, last ? Tds.STATUS_END_OF_MESSAGE : 0,
+                    Tds.HEADER_SIZE + chunk);
+            ByteBuffer view = out.view();
+            view.clear().position(sent).limit(sent + Tds.HEADER_SIZE + chunk);
+            write(view);
             sent += chunk;
+            if (last) {
+                break;
+            }
         }
         out.clear();
         packetId = 1;
     }
 
+    /** Whether packets of the message being written have gone out already. */
+    private boolean partial;
+    /** How many payload bytes of it, for the recording. */
+    private long sentBefore;
+
+    /**
+     * Sends the full packets of a message that is still being written, and
+     * keeps the rest to go on from.
+     *
+     * <p>A batch of five thousand rows is a megabyte. Written whole and then
+     * sent, the server sat idle while it was encoded and the client while the
+     * server ran it; sent as the packets fill, the server runs the first rows
+     * while the last are still being written - the way mssql-jdbc sends.
+     */
+    public void sendFull(int type) throws IOException {
+        int maxPayload = packetSize - Tds.HEADER_SIZE;
+        int payload = out.position() - Tds.HEADER_SIZE;
+        if (payload <= maxPayload) {
+            return;                                  // the last packet is never sent here
+        }
+        if (!partial) {
+            drainAttention();
+            roundTrips++;
+            partial = true;
+        }
+        int sent = 0;
+        while (payload - sent > maxPayload) {
+            writeHeader(sent, type, 0, packetSize);
+            ByteBuffer view = out.view();
+            view.clear().position(sent).limit(sent + packetSize);
+            write(view);
+            sent += maxPayload;
+        }
+        int rest = payload - sent;
+        java.lang.foreign.MemorySegment.copy(out.segment(), Tds.HEADER_SIZE + sent,
+                out.segment(), Tds.HEADER_SIZE, rest);
+        out.position(Tds.HEADER_SIZE + rest);
+        sentBefore += sent;
+    }
+
+    /**
+     * Asks the server to reset the session before the next request: the
+     * RESETCONNECTION bit on that request's first packet, which is what
+     * {@code sp_reset_connection} is on the wire - no round trip of its own.
+     */
+    public void resetBeforeNextRequest() {
+        resetNext = true;
+    }
+
+    private boolean resetNext;
+
     private void writeHeader(int at, int type, int status, int length) {
+        if (resetNext) {
+            status |= 0x08;                      // RESETCONNECTION
+            resetNext = false;
+        }
         out.putByteAt(at, (byte) type);
         out.putByteAt(at + 1, (byte) status);
         // The length is big-endian - the only field in all of TDS that is.
@@ -277,7 +401,7 @@ public final class TdsChannel implements AutoCloseable {
         out.putByteAt(at + 3, (byte) length);
         out.putByteAt(at + 4, (byte) 0);
         out.putByteAt(at + 5, (byte) 0);
-        out.putByteAt(at + 6, (byte) 1);
+        out.putByteAt(at + 6, (byte) packetId++);
         out.putByteAt(at + 7, (byte) 0);
     }
 
@@ -297,6 +421,67 @@ public final class TdsChannel implements AutoCloseable {
         while (view.hasRemaining()) {
             channel.write(view);
         }
+    }
+
+    /**
+     * Tells the server to stop what it is doing, on this same connection.
+     *
+     * <p>TDS has no second channel for this and does not need one: an
+     * ATTENTION is a bare header - eight bytes, type 6, end of message - and
+     * it is written while the reader is still blocked waiting for the answer
+     * it is about to interrupt. A socket is full duplex, so a write in one
+     * direction does not wait for a read in the other.
+     *
+     * <p><b>Its own buffer, not {@link #begin()}'s.</b> The send buffer
+     * belongs to whichever thread wrote the request; this method is called
+     * from a different one, by definition, and writing an ATTENTION into a
+     * buffer another thread is holding would corrupt whatever is in it. Eight
+     * bytes on their own cost nothing.
+     *
+     * <p>The server answers by finishing the message it was in the middle of -
+     * possibly with rows already in it - and setting
+     * {@link TokenStream#DONE_ATTENTION} in the closing DONE. There is no
+     * separate acknowledgement, which is why that bit is the only evidence a
+     * cancellation happened at all.
+     */
+    public void sendAttention() throws IOException {
+        WireBuffer attention = new WireBuffer(Tds.HEADER_SIZE);
+        attention.putZeroes(Tds.HEADER_SIZE);
+        attention.putByteAt(0, (byte) Tds.TYPE_ATTENTION);
+        attention.putByteAt(1, (byte) Tds.STATUS_END_OF_MESSAGE);
+        attention.putByteAt(2, (byte) (Tds.HEADER_SIZE >>> 8));
+        attention.putByteAt(3, (byte) Tds.HEADER_SIZE);
+        attention.putByteAt(6, (byte) 1);
+        ByteBuffer view = attention.view();
+        view.clear().position(0).limit(Tds.HEADER_SIZE);
+        write(view);
+        attentionsPending.incrementAndGet();
+    }
+
+    /**
+     * Reads the acknowledgement an ATTENTION always gets, and throws it away.
+     *
+     * <p><b>This is the part that is easy to leave out, and it breaks the
+     * connection rather than the cancellation.</b> The server answers an
+     * ATTENTION with a message of its own - measured against a real SQL
+     * Server: the interrupted batch closes with a DONE carrying the error bit,
+     * and the acknowledgement follows as a <b>separate</b> message. A client
+     * that does not read it finds it at the head of the next statement's
+     * answer, and from then on it is one message behind for good.
+     *
+     * <p>So it is drained in two places: after an answer, where the statement
+     * that was interrupted is waiting to be told; and before the next request,
+     * for the cancellation that arrived when nothing was running - which is
+     * what a query-timeout thread does every time the query finishes first.
+     *
+     * @return whether there was one to drain
+     */
+    public boolean drainAttention() throws IOException {
+        int owed = attentionsPending.getAndSet(0);
+        for (int i = 0; i < owed; i++) {
+            receive();
+        }
+        return owed > 0;
     }
 
     private void flush(int length) throws IOException {
@@ -360,6 +545,123 @@ public final class TdsChannel implements AutoCloseable {
         }
         in.position(0);
         in.limit(messageLength);
+        if (flight != null) {
+            // One entry per reassembled message, not per packet: a large
+            // answer arrives in many packets and a recording that showed them
+            // all would bury the order in a list of identical lines.
+            flight.record(false, nameOf(messageType), messageLength);
+        }
+        return messageType;
+    }
+
+    /** Takes what has arrived of a message; see {@link #receiveStreaming}. */
+    @FunctionalInterface
+    public interface Consumer {
+        /**
+         * @param in  the message so far, from offset 0
+         * @param end how many bytes of it are there
+         * @return how many bytes from the start were used up and may go
+         */
+        int take(WireBuffer in, int end) throws IOException, java.sql.SQLException;
+    }
+
+    /**
+     * Reads one message, handing it on packet by packet.
+     *
+     * <p>{@link #receive} waits for the last packet before anybody looks at
+     * the first, so a large result was read in two phases: the network, then
+     * the rows, one after the other. Here the consumer takes what has come
+     * after every packet, while the kernel is already receiving the next one,
+     * and what it has used up leaves the buffer - which then holds a packet
+     * or two instead of the whole answer.
+     *
+     * @return the message type
+     */
+    public int receiveStreaming(Consumer consumer) throws IOException, java.sql.SQLException {
+        startStreaming();
+        pump(consumer, null);
+        return messageType;
+    }
+
+    /** Whether the last packet of the message being streamed has arrived. */
+    private boolean lastSeen;
+    /** How many bytes of it have been used up so far. */
+    private long streamed;
+
+    /** Begins a message that {@link #pump} then reads. */
+    public void startStreaming() {
+        if (filled > 0) {
+            in.segment().asSlice(0, Math.min(filled, in.capacity())).fill((byte) 0);
+        }
+        in.rewind();
+        filled = 0;
+        messageLength = 0;
+        streamed = 0;
+        lastSeen = false;
+    }
+
+    /**
+     * Reads packets and hands them on, until the message ends - or until
+     * {@code pause} says enough, after a packet: then the rest stays on the
+     * wire, and the next call goes on where this one stopped.
+     *
+     * @param pause asked after every packet; {@code null} reads to the end
+     * @return whether the message is complete
+     */
+    public boolean pump(Consumer consumer, java.util.function.BooleanSupplier pause)
+            throws IOException, java.sql.SQLException {
+        while (!lastSeen) {
+            int headerAt = messageLength;
+            fillTo(headerAt + Tds.HEADER_SIZE);
+            messageType = in.getByte(headerAt) & 0xff;
+            int status = in.getByte(headerAt + 1) & 0xff;
+            int length = ((in.getByte(headerAt + 2) & 0xff) << 8)
+                    | (in.getByte(headerAt + 3) & 0xff);
+            if (length < Tds.HEADER_SIZE) {
+                throw new IOException("the server announced a packet of " + length + " bytes");
+            }
+            fillTo(headerAt + length);
+            lastSeen = (status & Tds.STATUS_END_OF_MESSAGE) != 0;
+            int payload = length - Tds.HEADER_SIZE;
+            int behind = filled - (headerAt + Tds.HEADER_SIZE);
+            java.lang.foreign.MemorySegment.copy(in.segment(), headerAt + Tds.HEADER_SIZE,
+                    in.segment(), headerAt, behind);
+            filled -= Tds.HEADER_SIZE;
+            messageLength = headerAt + payload;
+
+            in.position(0);
+            in.limit(messageLength);
+            int used = consumer.take(in, messageLength);
+            if (lastSeen && used != messageLength) {
+                throw new IOException("the answer ends in the middle of a token, "
+                        + (messageLength - used) + " bytes before its end");
+            }
+            if (used > 0) {
+                // What was used goes: the rest of the message, and whatever of
+                // the next packet the socket already delivered, moves to the
+                // front, and the bytes it leaves behind are cleared - they
+                // were rows.
+                java.lang.foreign.MemorySegment.copy(in.segment(), used, in.segment(), 0,
+                        filled - used);
+                in.segment().asSlice(filled - used, used).fill((byte) 0);
+                filled -= used;
+                messageLength -= used;
+                streamed += used;
+            }
+            if (!lastSeen && pause != null && pause.getAsBoolean()) {
+                return false;
+            }
+        }
+        in.position(0);
+        in.limit(messageLength);
+        if (flight != null) {
+            flight.record(false, nameOf(messageType), (int) Math.min(streamed, Integer.MAX_VALUE));
+        }
+        return true;
+    }
+
+    /** The type of the message being received. */
+    public int messageType() {
         return messageType;
     }
 
@@ -374,6 +676,11 @@ public final class TdsChannel implements AutoCloseable {
     }
 
     private void fillTo(int needed) throws IOException {
+        // Everything received counts, not only the message so far: growing
+        // the buffer copies up to the limit, and the pump sets the limit to
+        // the end of the message - the bytes of the next packet behind it
+        // were lost with the first answer that needed a larger buffer.
+        in.limit(filled);
         while (filled < needed) {
             in.ensureCapacity(Math.max(needed, in.capacity()));
             ByteBuffer view = in.view();
@@ -397,7 +704,11 @@ public final class TdsChannel implements AutoCloseable {
     }
 
     public boolean isOpen() {
-        return channel.isOpen();
+        // Not open once handed over: the socket is still open, but it is
+        // somebody else's now. Without this a connection whose session was
+        // detached believed itself usable and reached into buffers already
+        // given back - IllegalStateException instead of "closed" (08003).
+        return !released && channel.isOpen();
     }
 
     @Override

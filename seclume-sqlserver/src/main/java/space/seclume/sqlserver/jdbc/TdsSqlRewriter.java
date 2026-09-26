@@ -97,7 +97,7 @@ final class TdsSqlRewriter {
             i++;
         }
         throw new SQLException("unterminated "
-                + (open == '\'' ? "string literal" : "identifier") + " in: " + sql);
+                + (open == '\'' ? "string literal" : "identifier") + " in: " + shape(sql));
     }
 
     private static int copyLineComment(String sql, int start, StringBuilder out) {
@@ -132,6 +132,20 @@ final class TdsSqlRewriter {
                 i++;
             }
         }
-        throw new SQLException("unterminated block comment in: " + sql);
+        throw new SQLException("unterminated block comment in: " + shape(sql));
     }
+
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.SQLSERVER);
+    }
+
 }

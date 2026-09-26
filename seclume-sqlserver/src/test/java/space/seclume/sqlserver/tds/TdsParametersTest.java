@@ -34,8 +34,11 @@ class TdsParametersTest {
         }
     }
 
-    /** The name every parameter carries: "@P0" as a one-byte count plus UTF-16. */
-    private static final String NAME_P0 = "03" + "4000" + "5000" + "3000";
+    /**
+     * The name a value carries: none. The values follow their declaration and
+     * are bound by position - a length of zero where "@P0" used to stand.
+     */
+    private static final String NAME_P0 = "00";
 
     @Test
     void writesAnIntegerAsIntn() throws SQLException {

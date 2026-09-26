@@ -35,10 +35,13 @@ import javax.net.ssl.X509TrustManager;
 public final class TdsTls implements space.seclume.internal.TlsLayer {
 
     private final SSLEngine engine;
+    /** Whether a tlsPin is the trust here - compared once the handshake shows the key. */
+    private boolean pinned;
     /** Not final only so that {@link #replaceTransport} can do its job. */
     private space.seclume.internal.Transport channel;
 
-    private final ByteBuffer netOut;
+    /** Grows when a flight or a record does not fit - see {@link #grown}. */
+    private ByteBuffer netOut;
     private final ByteBuffer netIn;
     private final ByteBuffer appIn;
     /** An empty buffer for {@code wrap} during the handshake. */
@@ -74,21 +77,38 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
     public static TdsTls create(space.seclume.internal.Transport channel, String host, int port,
                                 boolean trustAnyCertificate) throws IOException {
         try {
+            // The same trust as every other connection (TlsLayers): a tlsPin is
+            // the trust on its own, compared after the handshake; otherwise the
+            // chain is checked against tlsRootCert or the JVM's store, AND the
+            // certificate has to name the host dialled. This path used to take
+            // the JVM's default context with no host name check, and ignored
+            // tlsRootCert and tlsPin - on SQL Server's default TDS 7.4, and so
+            // under the FEDAUTH token login too. Found in review, 25.09.2026.
+            boolean pinned = space.seclume.internal.TrustChoice.pinned();
             SSLContext context;
-            if (trustAnyCertificate) {
-                context = SSLContext.getInstance("TLS");
+            if (trustAnyCertificate || pinned) {
+                context = SSLContext.getInstance("TLSv1.3");
+                // Opt-in only (trustServerCertificate) - reported as unsafe by
+                // seclume-verify. nosemgrep: java.lang.security.audit.crypto.ssl.insecure-trust-manager.insecure-trust-manager
                 context.init(null, new TrustManager[] {new TrustEverything()}, null);
             } else {
-                context = SSLContext.getDefault();
+                context = space.seclume.internal.TrustChoice.sslContext();
             }
             SSLEngine engine = context.createSSLEngine(host, port);
             engine.setUseClientMode(true);
+            if (!trustAnyCertificate && !pinned) {
+                javax.net.ssl.SSLParameters parameters = engine.getSSLParameters();
+                parameters.setEndpointIdentificationAlgorithm("HTTPS");
+                engine.setSSLParameters(parameters);
+            }
             // TLS 1.2, nothing newer: the handshake *inside* TDS is built
             // for 1.2. TLS 1.3 moves handshake messages past the finish, which
             // breaks this nesting - SQL Server supports 1.3 only with TDS 8.0,
             // where TLS sits outside and wraps the whole connection.
             engine.setEnabledProtocols(new String[] {"TLSv1.2"});
-            return new TdsTls(engine, channel);
+            TdsTls tls = new TdsTls(engine, channel);
+            tls.pinned = pinned;
+            return tls;
         } catch (NoSuchAlgorithmException | KeyManagementException e) {
             throw new IOException("cannot set up TLS", e);
         }
@@ -111,6 +131,13 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
                     netOut.clear();
                     do {
                         SSLEngineResult result = engine.wrap(EMPTY, netOut);
+                        if (result.getStatus() == SSLEngineResult.Status.BUFFER_OVERFLOW) {
+                            // A whole flight in one buffer: it can be larger
+                            // than one record's worth - RDS SQL Server 2019's
+                            // was, 26.09.2026. Keep what is there, grow, retry.
+                            netOut = grown(netOut);
+                            continue;
+                        }
                         status = result.getHandshakeStatus();
                         if (result.getStatus() != SSLEngineResult.Status.OK) {
                             throw new IOException("TLS wrap failed: " + result.getStatus());
@@ -143,6 +170,11 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
                 }
                 default -> throw new IOException("unexpected TLS handshake state: " + status);
             }
+        }
+        if (pinned) {
+            java.security.cert.Certificate[] chain = engine.getSession().getPeerCertificates();
+            space.seclume.internal.TrustChoice.checkPin(chain.length > 0
+                    && chain[0] instanceof java.security.cert.X509Certificate first ? first : null);
         }
         handshakeDone = true;
         netIn.clear();
@@ -195,6 +227,15 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
         }
     }
 
+    /** Twice the room, with what was written so far carried over. */
+    private ByteBuffer grown(ByteBuffer full) {
+        ByteBuffer bigger = ByteBuffer.allocateDirect(
+                Math.max(full.capacity() * 2, engine.getSession().getPacketBufferSize() + 64));
+        full.flip();
+        bigger.put(full);
+        return bigger;
+    }
+
     // ---- after the handshake: TDS inside TLS -----------------------------
 
     /** Encrypts and sends; the plaintext stays in direct memory. */
@@ -204,6 +245,10 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
         while (plain.hasRemaining()) {
             netOut.clear();
             SSLEngineResult result = engine.wrap(plain, netOut);
+            if (result.getStatus() == SSLEngineResult.Status.BUFFER_OVERFLOW) {
+                netOut = grown(netOut);
+                continue;
+            }
             if (result.getStatus() != SSLEngineResult.Status.OK) {
                 throw new IOException("TLS wrap failed: " + result.getStatus());
             }
@@ -345,14 +390,14 @@ public final class TdsTls implements space.seclume.internal.TlsLayer {
      * with SQL Server, because the login packet carries the password
      * effectively in the clear.
      */
-    private static final class TrustEverything implements X509TrustManager {
+    private static final class TrustEverything implements X509TrustManager { // nosemgrep: java.lang.security.audit.crypto.ssl.insecure-trust-manager.insecure-trust-manager
 
-        @Override
+        @Override // nosemgrep: java.lang.security.audit.crypto.ssl.insecure-trust-manager.insecure-trust-manager
         public void checkClientTrusted(X509Certificate[] chain, String authType) {
             // deliberately empty - see the class comment
         }
 
-        @Override
+        @Override // nosemgrep: java.lang.security.audit.crypto.ssl.insecure-trust-manager.insecure-trust-manager
         public void checkServerTrusted(X509Certificate[] chain, String authType) {
             // deliberately empty - see the class comment
         }

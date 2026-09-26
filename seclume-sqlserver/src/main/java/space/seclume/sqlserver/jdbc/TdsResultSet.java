@@ -25,7 +25,7 @@ import space.seclume.sqlserver.tds.TdsValues;
  * {@code getLong} reads the bytes and returns a {@code long}; nothing is
  * allocated on the way.
  */
-public final class TdsResultSet extends ReadOnlyResultSet {
+public final class TdsResultSet extends ReadOnlyResultSet implements space.seclume.Sensitive {
 
     private final TdsResultBlock block;
 
@@ -73,6 +73,14 @@ public final class TdsResultSet extends ReadOnlyResultSet {
     protected String stringAt(int column) {
         TdsColumn description = block.column(column);
         return TdsValues.asText(block.data(), description.type(), block.offset(column),
+                block.length(column), description.scale(), description.textCharset());
+    }
+
+    /** A decimal from its bytes, without the text in between where it fits a long. */
+    @Override
+    protected java.math.BigDecimal decimalAt(int column) {
+        TdsColumn description = block.column(column);
+        return TdsValues.asBigDecimal(block.data(), description.type(), block.offset(column),
                 block.length(column), description.scale());
     }
 
@@ -100,6 +108,20 @@ public final class TdsResultSet extends ReadOnlyResultSet {
     }
 
     /**
+     * An {@code xml} column as {@link java.sql.SQLXML}. Only that type: a
+     * {@code nvarchar} holding XML is still an {@code nvarchar}, as on
+     * PostgreSQL.
+     */
+    @Override
+    protected java.sql.SQLXML sqlXmlAt(int column) throws SQLException {
+        if (block.column(column).type() != space.seclume.sqlserver.tds.TdsTypes.XML) {
+            throw new SQLException("column " + (column + 1) + " is not xml - read it with "
+                    + "getString", "42804");
+        }
+        return new space.seclume.internal.jdbc.XmlValue(stringAt(column));
+    }
+
+    /**
      * The Java object JDBC promises for this column.
      *
      * <p>The dates go the way round through the text: the decoder already
@@ -113,9 +135,11 @@ public final class TdsResultSet extends ReadOnlyResultSet {
         int size = description.size();
         return switch (description.type()) {
             case TdsTypes.BIT, TdsTypes.BITN -> booleanAt(column);
-            case TdsTypes.INT1, TdsTypes.INT2, TdsTypes.INT4 -> (int) longAt(column);
+            case TdsTypes.INT1, TdsTypes.INT2 -> (short) longAt(column);
+            case TdsTypes.INT4 -> (int) longAt(column);
             case TdsTypes.INT8 -> longAt(column);
-            case TdsTypes.INTN -> block.length(column) <= 4
+            case TdsTypes.INTN -> block.length(column) <= 2 ? (Object) (short) longAt(column)
+                    : block.length(column) == 4
                     ? (Object) (int) longAt(column)
                     : (Object) longAt(column);
             case TdsTypes.FLT4 -> (float) doubleAt(column);
@@ -124,8 +148,7 @@ public final class TdsResultSet extends ReadOnlyResultSet {
                     ? (Object) (float) doubleAt(column)
                     : (Object) doubleAt(column);
             case TdsTypes.DECIMAL, TdsTypes.DECIMALN, TdsTypes.NUMERIC, TdsTypes.NUMERICN,
-                 TdsTypes.MONEY, TdsTypes.MONEY4, TdsTypes.MONEYN ->
-                    new java.math.BigDecimal(stringAt(column));
+                 TdsTypes.MONEY, TdsTypes.MONEY4, TdsTypes.MONEYN -> decimalAt(column);
             case TdsTypes.DATEN -> java.sql.Date.valueOf(stringAt(column));
             case TdsTypes.TIMEN -> java.sql.Time.valueOf(withoutFraction(stringAt(column)));
             case TdsTypes.DATETIME, TdsTypes.DATETIM4, TdsTypes.DATETIMN,
@@ -133,7 +156,25 @@ public final class TdsResultSet extends ReadOnlyResultSet {
             case TdsTypes.DATETIMEOFFSETN ->
                     java.time.OffsetDateTime.parse(isoOffset(stringAt(column)));
             case TdsTypes.BINARY, TdsTypes.BIGBINARY, TdsTypes.VARBINARY,
-                 TdsTypes.BIGVARBINARY, TdsTypes.IMAGE -> bytesAt(column);
+                 TdsTypes.BIGVARBINARY, TdsTypes.IMAGE, TdsTypes.UDT -> bytesAt(column);
+            // What the value holds, not the text of it: SERVERPROPERTY('EngineEdition')
+            // is an Integer through mssql-jdbc. The readers below unwrap the
+            // variant themselves, so only the choice of class is made here.
+            case TdsTypes.SQLVARIANT -> switch (TdsValues.variantBase(block.data(),
+                    block.offset(column))) {
+                case TdsTypes.BIT, TdsTypes.BITN -> booleanAt(column);
+                case TdsTypes.INT1, TdsTypes.INT2 -> (short) longAt(column);
+                case TdsTypes.INT4 -> (int) longAt(column);
+                case TdsTypes.INT8 -> longAt(column);
+                case TdsTypes.FLT4 -> (float) doubleAt(column);
+                case TdsTypes.FLT8 -> doubleAt(column);
+                case TdsTypes.DECIMAL, TdsTypes.DECIMALN, TdsTypes.NUMERIC, TdsTypes.NUMERICN,
+                     TdsTypes.MONEY, TdsTypes.MONEY4 -> new java.math.BigDecimal(stringAt(column));
+                case TdsTypes.DATEN -> java.sql.Date.valueOf(stringAt(column));
+                case TdsTypes.DATETIME, TdsTypes.DATETIM4, TdsTypes.DATETIME2N ->
+                        java.sql.Timestamp.valueOf(stringAt(column));
+                default -> stringAt(column);
+            };
             default -> {
                 if (size == 0 && description.type() == TdsTypes.NULLTYPE) {
                     yield null;
@@ -186,4 +227,33 @@ public final class TdsResultSet extends ReadOnlyResultSet {
     @Override
     protected void release() {
     }
+
+    // ---- the native window, for space.seclume.Sensitive ------------------
+
+    @Override
+    protected java.lang.foreign.MemorySegment rawSegmentAt(int column) {
+        return block.data().segment();
+    }
+
+    @Override
+    protected long rawOffsetAt(int column) {
+        return block.offset(column);
+    }
+
+    @Override
+    protected int rawLengthAt(int column) {
+        return block.length(column);
+    }
+
+    @Override
+    public int readInto(int columnIndex, java.lang.foreign.MemorySegment target)
+            throws java.sql.SQLException {
+        return copyRaw(columnIndex, target);
+    }
+
+    @Override
+    public int length(int columnIndex) throws java.sql.SQLException {
+        return rawLength(columnIndex);
+    }
+
 }

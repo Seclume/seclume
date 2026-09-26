@@ -40,6 +40,8 @@ public final class ColumnMetadata {
     private static final int NO_METADATA = 0xffff;
     /** Length of the collation that follows every text type. */
     private static final int COLLATION_SIZE = 5;
+    /** The UserType that marks a {@code binary(8)} as the server's row version. */
+    private static final int ROWVERSION = 0x50;
 
     private ColumnMetadata() {
     }
@@ -57,7 +59,8 @@ public final class ColumnMetadata {
         }
         List<TdsColumn> columns = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            p += 4;                                       // UserType
+            int userType = in.getIntLe(p);
+            p += 4;
             int flags = ushort(in, p);
             p += 2;
             boolean nullable = (flags & 0x0001) != 0;
@@ -69,6 +72,11 @@ public final class ColumnMetadata {
             int precision = 0;
             int scale = 0;
             boolean plp = false;
+            String udtName = null;
+            // The code page of single-byte text - see TdsCollation. Read for
+            // the national types too, where it goes unused: their bytes are
+            // UTF-16 whatever the collation.
+            java.nio.charset.Charset charset = null;
 
             int fixed = TdsTypes.fixedLength(type);
             if (fixed >= 0) {
@@ -81,11 +89,42 @@ public final class ColumnMetadata {
                     || type == TdsTypes.DATETIMEOFFSETN) {
                 scale = in.getByte(p) & 0xff;
                 p++;
+                if (scale > TdsValues.MAX_TIME_SCALE) {
+                    throw space.seclume.internal.WireBuffer.malformed("a time scale of " + scale);
+                }
                 size = timeSize(type, scale);
+            } else if (type == TdsTypes.XML) {
+                // Before the four-byte types, which XML is counted among: its
+                // description is not a length but a schema flag and names, and
+                // its values are PLP. Read the other way it took four bytes of
+                // the flag and the next name for a size, and every column after
+                // it - and the rows - from the wrong place: the connection broke
+                // on the first xml column anybody selected.
+                p = skipXmlInfo(in, p);
+                size = TdsColumn.MAX_SIZE;
+                plp = true;
+            } else if (type == TdsTypes.UDT) {
+                // geography, geometry, hierarchyid: a two-byte size and four
+                // names - database, schema, type and the .NET assembly - the
+                // last with a two-byte length. Unread, the parser took the
+                // first name for a column name and the connection broke on
+                // the first geography anybody selected.
+                size = ushort(in, p);
+                p += 2;
+                p += 1 + (in.getByte(p) & 0xff) * 2;      // database
+                p += 1 + (in.getByte(p) & 0xff) * 2;      // schema
+                int chars = in.getByte(p) & 0xff;
+                udtName = readName(in, p + 1, chars);
+                p += 1 + chars * 2;
+                p += 2 + ushort(in, p) * 2;               // assembly-qualified name
+                // Always chunked, whatever the size says: a hierarchyid of at
+                // most 892 bytes still arrives as PLP.
+                plp = true;
             } else if (TdsTypes.hasFourByteLength(type)) {
                 size = in.getIntLe(p);
                 p += 4;
                 if (type == TdsTypes.TEXT || type == TdsTypes.NTEXT) {
+                    charset = collation(in, p);
                     p += COLLATION_SIZE;
                 }
                 p = skipTableName(in, p);
@@ -95,15 +134,12 @@ public final class ColumnMetadata {
                 // value actually is travels with the value.
                 size = in.getIntLe(p);
                 p += 4;
-            } else if (type == TdsTypes.XML) {
-                p = skipXmlInfo(in, p);
-                size = TdsColumn.MAX_SIZE;
-                plp = true;
             } else if (TdsTypes.hasTwoByteLength(type)) {
                 size = ushort(in, p);
                 p += 2;
                 if (type == TdsTypes.BIGCHAR || type == TdsTypes.BIGVARCHAR
                         || type == TdsTypes.NCHAR || type == TdsTypes.NVARCHAR) {
+                    charset = collation(in, p);
                     p += COLLATION_SIZE;
                 }
                 plp = size == TdsColumn.MAX_SIZE;
@@ -122,7 +158,8 @@ public final class ColumnMetadata {
             String name = readName(in, p + 1, nameChars);
             p += 1 + nameChars * 2;
 
-            columns.add(new TdsColumn(name, type, size, precision, scale, nullable, plp));
+            columns.add(new TdsColumn(name, type, size, precision, scale, nullable, plp,
+                    userType == ROWVERSION ? "timestamp" : udtName, charset));
         }
         return new Parsed(List.copyOf(columns), p);
     }
@@ -140,6 +177,11 @@ public final class ColumnMetadata {
             case TdsTypes.DATETIMEOFFSETN -> timeBytes + 5;
             default -> timeBytes;
         };
+    }
+
+    /** The five bytes of a collation, as the charset its single-byte text is in. */
+    static java.nio.charset.Charset collation(WireBuffer in, int at) {
+        return TdsCollation.charset(in.getIntLe(at), in.getByte(at + 4) & 0xff);
     }
 
     /** The column name in UTF-16LE. */
