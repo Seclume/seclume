@@ -173,3 +173,87 @@ Not a summary of them. An average with an error bar hides a bimodal result, and 
 ### What these numbers do not say
 
 That they hold on another machine, another JDK, or another distance to the server. They say what this run measured, which is the only thing a benchmark can say.
+
+---
+
+## The TLS record layer (26.09.2026, before and after)
+
+`RecordBenchmark` seals and opens one record of `tlsStack=seclume` - no socket and no database,
+only the record layer and the AES-GCM beneath it. `native` is OpenSSL on Linux (CNG on Windows);
+`java` is the constant-time fallback that every other platform gets, macOS among them.
+
+Before is `429a36a` with only `RecordBenchmark` added, after is the commit below; same machine,
+same JDK, one run each, directly after one another.
+
+| | cipher | record | before | after | |
+|---|---|---|---|---|---|
+| seal | native | 64 B | 1 554 ns | 517 ns | 3.0× |
+| seal | native | 16 KiB | 5 893 ns | 4 273 ns | 1.4× |
+| seal | java | 64 B | 65.0 µs | 18.3 µs | 3.5× |
+| seal | java | 16 KiB | 9.63 ms | 2.26 ms | 4.3× |
+| open | native | 64 B | 1 469 ns | 450 ns | 3.3× |
+| open | native | 16 KiB | 5 423 ns | 3 356 ns | 1.6× |
+| open | java | 64 B | 62.9 µs | 19.2 µs | 3.3× |
+| open | java | 16 KiB | 9.28 ms | 2.09 ms | 4.4× |
+
+**What changed.**
+- **Per record**: no confined arena for each record any more, which allocated, zeroed and
+  freed up to 16 KiB every time; a record is opened straight into the caller's buffer.
+- **OpenSSL**: `invokeExact` instead of `invokeWithArguments`, which boxed every argument of
+  the four or five downcalls a record takes. With the first point, that is what a short
+  record cost: the AES-GCM of 64 bytes is a small part of the 450 ns left.
+- **Java AES**: the S-box inversion with four multiplications instead of thirteen, 64-bit bit
+  planes that take four counter blocks per pass, and bytes turned into bit planes by 8x8 bit
+  transposes. Still constant time - AND, XOR and shifts, no lookup.
+
+**What they do not say.** The Java fallback is still some 500 times slower than OpenSSL for
+bulk data, about 7 MB/s here. It logs a warning once when TLS uses it.
+
+### The run
+
+| | |
+|---|---|
+| **measured** | 2026-09-26T18:44:49.692741619Z |
+| **commit** | v0.10.0-9-gbe37749 |
+| **os** | Linux 6.18.44-fc-v37 (amd64) |
+| **cpus** | 4 |
+| **heap** | 3422 MB max |
+| **jdk** | OpenJDK 64-Bit Server VM 25.0.4.1 (Ubuntu) |
+| **jvm arguments** | the build container's proxy and trust-store settings, nothing that touches the measurement |
+| **server** | not recorded - pass -Dbench.url to have it asked |
+
+### Reproducing it
+
+```
+java -jar seclume-bench.jar RecordBenchmark -wi 3 -i 5 -f 1 -w 2s -r 3s -rf json -rff jmh.json
+```
+
+### What was measured
+
+| benchmark | mode | score | error | unit | forks | warmup | iterations |
+|---|---|---|---|---|---|---|---|
+| `RecordBenchmark.open [cipher=native, payload=64]` | avgt | 449.892 | ± 67.202 | ns/op | 1 | 3 | 5 |
+| `RecordBenchmark.open [cipher=native, payload=16384]` | avgt | 3355.738 | ± 373.592 | ns/op | 1 | 3 | 5 |
+| `RecordBenchmark.open [cipher=java, payload=64]` | avgt | 19180.190 | ± 4241.447 | ns/op | 1 | 3 | 5 |
+| `RecordBenchmark.open [cipher=java, payload=16384]` | avgt | 2094589.804 | ± 219140.808 | ns/op | 1 | 3 | 5 |
+| `RecordBenchmark.seal [cipher=native, payload=64]` | avgt | 516.637 | ± 112.068 | ns/op | 1 | 3 | 5 |
+| `RecordBenchmark.seal [cipher=native, payload=16384]` | avgt | 4273.361 | ± 546.567 | ns/op | 1 | 3 | 5 |
+| `RecordBenchmark.seal [cipher=java, payload=64]` | avgt | 18311.489 | ± 1677.210 | ns/op | 1 | 3 | 5 |
+| `RecordBenchmark.seal [cipher=java, payload=16384]` | avgt | 2262475.290 | ± 220491.378 | ns/op | 1 | 3 | 5 |
+
+### The iterations themselves
+
+Not a summary of them. An average with an error bar hides a bimodal result, and a bimodal result is usually the interesting one.
+
+- `RecordBenchmark.open [cipher=native, payload=64]` — 446.478, 475.825, 426.841, 451.303, 449.011 ns/op
+- `RecordBenchmark.open [cipher=native, payload=16384]` — 3246.827, 3488.071, 3323.503, 3420.147, 3300.143 ns/op
+- `RecordBenchmark.open [cipher=java, payload=64]` — 17995.411, 18992.479, 18500.562, 19555.595, 20856.902 ns/op
+- `RecordBenchmark.open [cipher=java, payload=16384]` — 2107494.391, 2047326.834, 2099275.030, 2038389.230, 2180463.537 ns/op
+- `RecordBenchmark.seal [cipher=native, payload=64]` — 567.655, 503.333, 503.908, 495.955, 512.334 ns/op
+- `RecordBenchmark.seal [cipher=native, payload=16384]` — 4152.803, 4331.466, 4494.892, 4172.018, 4215.628 ns/op
+- `RecordBenchmark.seal [cipher=java, payload=64]` — 18584.228, 18339.306, 18124.489, 17688.013, 18821.410 ns/op
+- `RecordBenchmark.seal [cipher=java, payload=16384]` — 2323374.974, 2292772.760, 2206829.572, 2195913.605, 2293485.539 ns/op
+
+### What these numbers do not say
+
+That they hold on another machine, another JDK, or another distance to the server. They say what this run measured, which is the only thing a benchmark can say.

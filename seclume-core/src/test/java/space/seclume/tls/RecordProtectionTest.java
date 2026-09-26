@@ -167,6 +167,45 @@ class RecordProtectionTest {
     }
 
     /**
+     * Opened straight into a buffer with room for the inner type - the way
+     * RecordStream opens every record - and again into one without: the same
+     * payload, and nothing of the inner type left behind it. Several records
+     * in a row, so that the buffers kept by the key are reused.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 17, 1000, 16384})
+    void openedWithOrWithoutRoomForTheInnerType(int length) {
+        byte[] trafficSecret = random(32);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment secret = of(arena, trafficSecret);
+            try (RecordProtection sender =
+                         RecordProtection.fromSecret(HashAlgorithm.SHA_256, secret, 16);
+                 RecordProtection receiver =
+                         RecordProtection.fromSecret(HashAlgorithm.SHA_256, secret, 16)) {
+                MemorySegment wire = arena.allocate(RecordProtection.sealedLength(length));
+                MemorySegment roomy = arena.allocate(length + 64);
+                MemorySegment tight = arena.allocate(Math.max(length, 1));
+                for (int record = 0; record < 4; record++) {
+                    byte[] payload = random(length);
+                    byte type = (byte) (record % 2 == 0 ? 23 : 22);
+                    int written = sender.seal(type, of(arena, payload), 0, length, wire, 0);
+                    boolean direct = record % 2 == 0;
+                    MemorySegment out = direct ? roomy : tight;
+                    out.fill((byte) 0);
+                    RecordProtection.Opened opened = receiver.open(wire, 0, written, out, 0);
+                    assertEquals(type, opened.contentType());
+                    assertEquals(length, opened.length());
+                    assertArrayEquals(payload, bytes(out, length));
+                    if (direct) {
+                        assertEquals(0, roomy.get(ValueLayout.JAVA_BYTE, length),
+                                "the inner type stayed behind the payload");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Records have to be opened in order, and that is the point.
      *
      * <p>The sequence number is never on the wire; both sides count. A receiver
