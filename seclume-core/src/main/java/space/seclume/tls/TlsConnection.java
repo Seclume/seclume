@@ -32,7 +32,13 @@ import space.seclume.internal.Transport;
  *       for one in return, ours are rotated and a KeyUpdate sent back. The
  *       sequence number restarting at zero is part of that, and getting it
  *       wrong would look like a working connection until the first record
- *       after the switch.
+ *       after the switch;
+ *   <li><b>anything else is refused</b>, and so is a KeyUpdate that is not
+ *       exactly one byte of 0 or 1, or that does not end its record: the
+ *       peer is told why ({@code unexpected_message} or
+ *       {@code illegal_parameter}) and the connection is closed. Dropping
+ *       an unknown message quietly would mean reading on in a state nobody
+ *       agreed to.
  * </ul>
  *
  * <p>Both traffic secrets stay off-heap for the life of the connection, in
@@ -193,30 +199,104 @@ public final class TlsConnection implements Transport {
             throw ClientHandshake.refusedAfterCertificate(gone, awaitingVerdict);
         }
         awaitingVerdict = false;
-        switch (record.contentType()) {
-            case RecordProtection.APPLICATION_DATA -> {
-                pending = record.data();
-                pendingOffset = record.offset();
-                pendingLength = record.length();
+        try {
+            switch (record.contentType()) {
+                case RecordProtection.APPLICATION_DATA -> {
+                    pending = record.data();
+                    pendingOffset = record.offset();
+                    pendingLength = record.length();
+                }
+                case 22 -> handlePostHandshake(record);
+                default -> throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                        "a record of type " + record.contentType() + " arrived on an "
+                                + "established connection, where it has no meaning");
             }
-            case 22 -> handlePostHandshake(record);
-            default -> throw new IOException("a record of type " + record.contentType()
-                    + " arrived on an established connection, where it has no meaning");
+        } catch (TlsProtocolException refused) {
+            abort(refused.alert());
+            throw refused;
         }
     }
 
+    /**
+     * RFC 8446 section 4.6: after the handshake a server may send a
+     * NewSessionTicket or a KeyUpdate, and nothing else in the handshake
+     * protocol.
+     */
     private void handlePostHandshake(RecordStream.Incoming record) throws IOException {
+        if (postHandshake.buffered() + record.length() > (1 << 16)) {
+            throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                    "a post-handshake message of more than 64 KiB");
+        }
         postHandshake.append(record.data(), record.offset(), record.length());
         int[] updateRequested = {-1};
+        TlsProtocolException[] refused = {null};
         postHandshake.drain((type, at, length) -> {
-            if (type == KEY_UPDATE && length >= 1) {
-                updateRequested[0] =
-                        postHandshake.segment().get(ValueLayout.JAVA_BYTE, at) & 0xff;
+            if (refused[0] != null) {
+                return;
             }
-            // NewSessionTicket and anything else: nothing here uses it.
+            if (updateRequested[0] >= 0) {
+                // RFC 8446 section 5.1: a KeyUpdate changes the key, and a
+                // key change has to fall on a record boundary.
+                refused[0] = new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                        "a handshake message followed a KeyUpdate in the same record");
+                return;
+            }
+            switch (type) {
+                case NEW_SESSION_TICKET -> {
+                    // Nothing here resumes sessions; the ticket is dropped.
+                }
+                case KEY_UPDATE -> {
+                    int value = length == 1
+                            ? postHandshake.segment().get(ValueLayout.JAVA_BYTE, at) & 0xff : -1;
+                    if (value != 0 && value != 1) {
+                        refused[0] = new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                                length != 1
+                                        ? "a KeyUpdate of " + length + " bytes; it is exactly one"
+                                        : "a KeyUpdate with request_update " + value
+                                                + "; only 0 and 1 exist");
+                        return;
+                    }
+                    updateRequested[0] = value;
+                }
+                default -> refused[0] = new TlsProtocolException(
+                        TlsAlertException.UNEXPECTED_MESSAGE,
+                        "handshake message of type " + type + " on an established connection, "
+                                + "where only NewSessionTicket and KeyUpdate may arrive");
+            }
         });
+        if (refused[0] != null) {
+            throw refused[0];
+        }
         if (updateRequested[0] >= 0) {
+            if (postHandshake.buffered() > 0) {
+                throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                        "a KeyUpdate did not end its record");
+            }
             applyKeyUpdate(updateRequested[0] == 1);
+        }
+    }
+
+    /**
+     * We refused something the peer sent: say why, and close.
+     *
+     * <p>Not a {@link #close()}: that says goodbye with a {@code close_notify},
+     * which is the wrong thing to tell a peer we are refusing. And no alert at
+     * all while a snapshot may still be taken up elsewhere - it would be a
+     * record under a nonce the copy may use again.
+     */
+    private void abort(int alert) {
+        if (!copyOutstanding) {
+            records.abort(alert);
+        }
+        closed = true;
+        pendingLength = 0;
+        postHandshake.close();
+        records.close();
+        arena.close();
+        try {
+            underlying.close();
+        } catch (RuntimeException ignored) {
+            // it is being closed because of the refusal; that one is the news
         }
     }
 

@@ -19,6 +19,10 @@ public class TlsAlertException extends IOException {
     public static final int WARNING = 1;
     public static final int FATAL = 2;
     public static final int CLOSE_NOTIFY = 0;
+    public static final int UNEXPECTED_MESSAGE = 10;
+    public static final int HANDSHAKE_FAILURE = 40;
+    public static final int ILLEGAL_PARAMETER = 47;
+    public static final int DECODE_ERROR = 50;
 
     private final int level;
     private final int description;

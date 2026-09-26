@@ -18,6 +18,12 @@ import space.seclume.internal.Transport;
  * {@link TlsAlertException} is one), nothing else - no index out of bounds, no
  * {@code OutOfMemoryError} from a length taken off the wire, and no hang,
  * because the input simply ends.
+ *
+ * <p>The second sweep goes behind the encryption, with a server that holds
+ * the handshake key and seals whatever the input makes of its flight - see
+ * {@link EncryptedFlight} for the two shapes and what they must not produce:
+ * above all, a connection to a server nobody authenticated. Its deterministic
+ * sample runs in every build as {@code EncryptedFlightSampleTest}.
  */
 class ServerHelloFuzzTest {
 
@@ -30,6 +36,14 @@ class ServerHelloFuzzTest {
         } catch (IOException expected) {
             // what a hostile answer has to end in
         }
+    }
+
+    @FuzzTest(maxDuration = "60s")
+    void aHostileEncryptedFlightNeverConnectsUnauthenticated(byte[] input) throws Exception {
+        if (!TestCertificates.available()) {
+            return;
+        }
+        EncryptedFlight.run(input, EncryptedFlight.material());
     }
 
     /** A server that says {@code bytes} and then hangs up; what the client sends is dropped. */
