@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.10.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-kafka</artifactId>
+  <name>seclume Kafka</name>
+  <description>
+    SASL/SCRAM for the Kafka client with the password off the heap: a JAAS
+    login module that names a secret provider instead of a password, and a
+    SCRAM-SHA-256/512 client that reads the secret for the one step that needs
+    it and wipes it after. Built on the JDK's SASL interfaces only - Kafka is
+    needed at run time, not to compile against.</description>
+
+  <properties>
+    <kafka.version>4.3.1</kafka.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+      <version>${kafka.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
