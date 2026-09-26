@@ -89,12 +89,12 @@ Java 25, Spring Boot 4.x / Spring Framework 7.x. No runtime dependency beyond th
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-spring-boot-starter</artifactId>
-  <version>0.9.0</version>
+  <version>0.10.0</version>
 </dependency>
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-postgresql</artifactId>   <!-- or -mysql, -sqlserver, -oracle -->
-  <version>0.9.0</version>
+  <version>0.10.0</version>
 </dependency>
 ```
 

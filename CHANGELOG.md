@@ -5,10 +5,26 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-Work towards 1.0.0. The three items listed under *Not yet* in 0.9.0 are done:
-the four wire parsers are fuzzed, the compatibility matrix is generated from
-the test run rather than written by hand, and the benchmark figures are
-recorded by a harness that states the machine they came from.
+## [0.10.0] - 2026-09-26
+
+The three items listed under *Not yet* in 0.9.0 are done: the four wire
+parsers are fuzzed, the compatibility matrix is generated from the test run
+rather than written by hand, and the benchmark figures are recorded by a
+harness that states the machine they came from.
+
+Beyond that, in short:
+- **Logins with no secret in the process**: Kerberos for PostgreSQL, MariaDB
+  and SQL Server; PostgreSQL 18 OAuth; Azure SQL access tokens; RDS IAM and
+  Secrets Manager from the EC2 instance role.
+- **Beyond databases**: `seclume-kafka` (SASL/SCRAM) and `seclume-redis`
+  (Jedis) without the password on the heap; `seclume-quarkus`, JVM and native.
+- **Security work**: constant-time AES, Base64 and RSA; AES-GCM from the
+  operating system; post-quantum key exchange; a code review's ten findings
+  fixed; Semgrep, Trivy, CodeQL and Scorecard in CI.
+- **Tested against real AWS**: seven bugs found there and fixed
+  ([test-reports/aws-2026-09-26.md](test-reports/aws-2026-09-26.md)).
+- A pool bug that lost a connection to every Spring `queryForStream`, and a
+  login that could hang for ever on a silent server, fixed.
 
 ### Against real AWS: seven bugs no stand-in showed, and credentials from the instance role
 
@@ -2805,4 +2821,5 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.10.0]: https://github.com/Seclume/seclume/releases/tag/v0.10.0
 [0.9.0]: https://github.com/Seclume/seclume/releases/tag/v0.9.0

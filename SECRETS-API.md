@@ -9,7 +9,7 @@ states.
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-core</artifactId>
-  <version>0.9.0</version>
+  <version>0.10.0</version>
 </dependency>
 ```
 
