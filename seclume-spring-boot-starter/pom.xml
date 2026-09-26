@@ -85,7 +85,7 @@
     <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-core</artifactId>
-      <version>1.16.7</version>
+      <version>1.17.1</version>
       <optional>true</optional>
     </dependency>
     <!-- Tracing, also optional. The API only: a span is created against
