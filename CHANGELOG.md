@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### `tlsPin` refused one server key in 64
+
+A pin whose base64 starts with '/' - one key in 64 - was read as curl's `sha256//<base64>`,
+lost its first character and was refused as "not base64", so such a server could not be pinned
+at all. A leading '/' is now taken for curl's extra slash only when the pin does not decode to a
+SHA-256 without it. `TrustChoicePinTest` reads every first character both ways; the same bug
+made `TrustChoiceTest.thePinnedKeyIsTrusted` fail on one CI run in 64.
+
 ### TLS: post-handshake messages are checked, not dropped
 
 On an established `tlsStack=seclume` connection only NewSessionTicket (dropped) and KeyUpdate
