@@ -182,12 +182,12 @@ public final class Aes {
         int rounds = key.rounds();
         int lanes = blocks * BLOCK;
         for (int b = 0; b < blocks; b++) {
-            addRoundKey(states.asSlice(b * BLOCK, BLOCK), roundKeys, 0);
+            addRoundKey(states.asSlice((long) b * BLOCK, BLOCK), roundKeys, 0);
         }
         for (int round = 1; round < rounds; round++) {
             AesSubBytes.forward(states, lanes);
             for (int b = 0; b < blocks; b++) {
-                MemorySegment state = states.asSlice(b * BLOCK, BLOCK);
+                MemorySegment state = states.asSlice((long) b * BLOCK, BLOCK);
                 shiftRows(state, scratch, false);
                 mixColumns(state);
                 addRoundKey(state, roundKeys, round);
@@ -195,7 +195,7 @@ public final class Aes {
         }
         AesSubBytes.forward(states, lanes);
         for (int b = 0; b < blocks; b++) {
-            MemorySegment state = states.asSlice(b * BLOCK, BLOCK);
+            MemorySegment state = states.asSlice((long) b * BLOCK, BLOCK);
             shiftRows(state, scratch, false);
             addRoundKey(state, roundKeys, rounds);
         }

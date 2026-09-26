@@ -153,7 +153,7 @@ public final class AesGcm {
                         MemorySegment.copy(counter, 0, blocks, b * 16L, 16);
                     }
                     Aes.encryptBlocks(key, blocks, count, scratch);
-                    long take = Math.min(count * 16L, length - at);
+                    int take = (int) Math.min(count * 16L, length - at);   // at most 64
                     for (int i = 0; i < take; i++) {
                         out.set(ValueLayout.JAVA_BYTE, outOffset + at + i,
                                 (byte) (in.get(ValueLayout.JAVA_BYTE, inOffset + at + i)
