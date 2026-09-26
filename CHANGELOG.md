@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### TLS: the record layer of `tlsStack=seclume` is up to 3 times faster, its Java AES-GCM 4 times
+
+`RecordBenchmark` (new, no database needed) measures one record sealed and opened. With OpenSSL a
+64-byte record took 1.5 µs and takes 0.5 µs now, a 16 KiB record 5.4 to 5.9 µs and 3.4 to
+4.3 µs now: no arena per record any more, and the OpenSSL downcalls are exact-typed instead of
+going through `invokeWithArguments`. The constant-time Java AES-GCM, which platforms without
+OpenSSL or CNG get (macOS among them), went from 9.5 to 2.2 ms per 16 KiB record: the S-box
+inversion with four multiplications instead of thirteen, four counter blocks per pass, bit
+planes by 8x8 transposes. It is still some 500 times slower than OpenSSL, and TLS now logs a
+warning once when it falls back to it. Details and both runs in BENCHMARKS.md.
+
 ### `tlsPin` refused one server key in 64
 
 A pin whose base64 starts with '/' - one key in 64 - was read as curl's `sha256//<base64>`,

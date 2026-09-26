@@ -61,8 +61,10 @@ public interface AesGcmCipher extends AutoCloseable {
                 if (Platform.isWindows()) {
                     return new CngAesGcm(key, offset, length);
                 }
+                JavaAesGcm.warnOnce("there is no native AES-GCM for this platform", null);
             } catch (LinkageError | RuntimeException unavailable) {
                 // no usable library - the constant-time Java version below
+                JavaAesGcm.warnOnce("the native AES-GCM could not be loaded", unavailable);
             }
         }
         return new JavaAesGcm(key, offset, length);

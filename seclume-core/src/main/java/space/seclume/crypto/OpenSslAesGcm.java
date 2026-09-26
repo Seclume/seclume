@@ -32,12 +32,16 @@ final class OpenSslAesGcm implements AesGcmCipher {
     private static final int GET_TAG = 0x10;
     private static final int SET_TAG = 0x11;
 
+    /** Where OpenSSL reports how much it wrote - once per context, not per record. */
+    private final Arena arena = Arena.ofShared();
+    private final MemorySegment encryptWritten = arena.allocate(JAVA_INT);
+    private final MemorySegment decryptWritten = arena.allocate(JAVA_INT);
     private MemorySegment encrypting = MemorySegment.NULL;
     private MemorySegment decrypting = MemorySegment.NULL;
 
     OpenSslAesGcm(MemorySegment key, long offset, int length) {
-        MemorySegment cipher = (MemorySegment) call(length == 16 ? AES_128_GCM : AES_256_GCM);
         try {
+            MemorySegment cipher = length == 16 ? newCipher(AES_128_GCM) : newCipher(AES_256_GCM);
             encrypting = context(cipher, key.asSlice(offset, length), 1);
             decrypting = context(cipher, key.asSlice(offset, length), 0);
         } catch (RuntimeException | Error failure) {
@@ -47,16 +51,15 @@ final class OpenSslAesGcm implements AesGcmCipher {
     }
 
     private static MemorySegment context(MemorySegment cipher, MemorySegment key, int encrypt) {
-        MemorySegment context = (MemorySegment) call(CTX_NEW);
+        MemorySegment context = newContext();
         if (context.equals(MemorySegment.NULL)) {
             throw new IllegalStateException("EVP_CIPHER_CTX_new returned no context");
         }
         try {
-            check((int) call(INIT, context, cipher, MemorySegment.NULL, key, MemorySegment.NULL,
-                    encrypt), "EVP_CipherInit_ex");
+            check(init(context, cipher, key, MemorySegment.NULL, encrypt), "EVP_CipherInit_ex");
             return context;
         } catch (RuntimeException | Error failure) {
-            call(CTX_FREE, context);
+            free(context);
             throw failure;
         }
     }
@@ -65,52 +68,43 @@ final class OpenSslAesGcm implements AesGcmCipher {
     public void encrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad, long aadOffset,
                         long aadLength, MemorySegment in, long inOffset, long length,
                         MemorySegment out, long outOffset) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment written = arena.allocate(JAVA_INT);
-            run(encrypting, nonce, nonceOffset, aad, aadOffset, aadLength, in, inOffset, length,
-                    out, outOffset, written);
-            check((int) call(FINAL, encrypting, out.asSlice(outOffset + length), written),
-                    "EVP_CipherFinal_ex");
-            check((int) call(CTRL, encrypting, GET_TAG, AesGcm.TAG,
-                    out.asSlice(outOffset + length, AesGcm.TAG)), "reading the GCM tag");
-        }
+        run(encrypting, nonce, nonceOffset, aad, aadOffset, aadLength, in, inOffset, length,
+                out, outOffset, encryptWritten);
+        check(finish(encrypting, out.asSlice(outOffset + length), encryptWritten),
+                "EVP_CipherFinal_ex");
+        check(ctrl(encrypting, GET_TAG, out.asSlice(outOffset + length, AesGcm.TAG)),
+                "reading the GCM tag");
     }
 
     @Override
     public boolean decrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad,
                            long aadOffset, long aadLength, MemorySegment in, long inOffset,
                            long length, MemorySegment out, long outOffset) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment written = arena.allocate(JAVA_INT);
-            run(decrypting, nonce, nonceOffset, aad, aadOffset, aadLength, in, inOffset, length,
-                    out, outOffset, written);
-            check((int) call(CTRL, decrypting, SET_TAG, AesGcm.TAG,
-                    in.asSlice(inOffset + length, AesGcm.TAG)), "setting the GCM tag");
-            if ((int) call(FINAL, decrypting, out.asSlice(outOffset + length), written) <= 0) {
-                if (length > 0) {
-                    out.asSlice(outOffset, length).fill((byte) 0);
-                }
-                return false;
+        run(decrypting, nonce, nonceOffset, aad, aadOffset, aadLength, in, inOffset, length,
+                out, outOffset, decryptWritten);
+        check(ctrl(decrypting, SET_TAG, in.asSlice(inOffset + length, AesGcm.TAG)),
+                "setting the GCM tag");
+        if (finish(decrypting, out.asSlice(outOffset + length), decryptWritten) <= 0) {
+            if (length > 0) {
+                out.asSlice(outOffset, length).fill((byte) 0);
             }
-            return true;
+            return false;
         }
+        return true;
     }
 
-    /** Nonce, additional data, then the message itself. */
     private static void run(MemorySegment context, MemorySegment nonce, long nonceOffset,
                             MemorySegment aad, long aadOffset, long aadLength,
                             MemorySegment in, long inOffset, long length,
                             MemorySegment out, long outOffset, MemorySegment written) {
-        check((int) call(INIT, context, MemorySegment.NULL, MemorySegment.NULL,
-                MemorySegment.NULL, nonce.asSlice(nonceOffset, AesGcm.NONCE), -1),
-                "EVP_CipherInit_ex with the nonce");
+        check(init(context, MemorySegment.NULL, MemorySegment.NULL,
+                nonce.asSlice(nonceOffset, AesGcm.NONCE), -1), "EVP_CipherInit_ex with the nonce");
         if (aadLength > 0) {
-            check((int) call(UPDATE, context, MemorySegment.NULL, written,
-                    aad.asSlice(aadOffset, aadLength), (int) aadLength),
-                    "EVP_CipherUpdate with the additional data");
+            check(update(context, MemorySegment.NULL, written, aad.asSlice(aadOffset, aadLength),
+                    (int) aadLength), "EVP_CipherUpdate with the additional data");
         }
         if (length > 0) {
-            check((int) call(UPDATE, context, out.asSlice(outOffset, length), written,
+            check(update(context, out.asSlice(outOffset, length), written,
                     in.asSlice(inOffset, length), (int) length), "EVP_CipherUpdate");
         }
     }
@@ -125,12 +119,15 @@ final class OpenSslAesGcm implements AesGcmCipher {
         if (!encrypting.equals(MemorySegment.NULL)) {
             MemorySegment old = encrypting;
             encrypting = MemorySegment.NULL;
-            call(CTX_FREE, old);
+            free(old);
         }
         if (!decrypting.equals(MemorySegment.NULL)) {
             MemorySegment old = decrypting;
             decrypting = MemorySegment.NULL;
-            call(CTX_FREE, old);
+            free(old);
+        }
+        if (arena.scope().isAlive()) {
+            arena.close();
         }
     }
 
@@ -140,19 +137,88 @@ final class OpenSslAesGcm implements AesGcmCipher {
         }
     }
 
-    private static MethodHandle bind(String name, ValueLayout result, ValueLayout... arguments) {
-        FunctionDescriptor descriptor = result == null ? FunctionDescriptor.ofVoid(arguments)
-                : FunctionDescriptor.of(result, arguments);
-        return Linker.nativeLinker().downcallHandle(LIB.find(name).orElseThrow(), descriptor);
+    // ---- the downcalls, each with its exact type ---------------------------
+    //
+    // invokeExact rather than invokeWithArguments: the latter boxes every
+    // argument into an Object[] and goes through a generic adapter, which cost
+    // more than the AES-GCM of a short record itself (RecordBenchmark).
+
+    private static MemorySegment newCipher(MethodHandle which) {
+        try {
+            return (MemorySegment) which.invokeExact();
+        } catch (Throwable e) {
+            throw failed(e);
+        }
     }
 
-    private static Object call(MethodHandle function, Object... arguments) {
+    private static MemorySegment newContext() {
         try {
-            return function.invokeWithArguments(arguments);
-        } catch (RuntimeException | Error e) {
-            throw e;
+            return (MemorySegment) CTX_NEW.invokeExact();
         } catch (Throwable e) {
-            throw new IllegalStateException("OpenSSL AES-GCM downcall failed", e);
+            throw failed(e);
         }
+    }
+
+    private static void free(MemorySegment context) {
+        try {
+            CTX_FREE.invokeExact(context);
+        } catch (Throwable e) {
+            throw failed(e);
+        }
+    }
+
+    /** EVP_CipherInit_ex without an engine; {@code cipher} and {@code key} may be NULL. */
+    private static int init(MemorySegment context, MemorySegment cipher, MemorySegment key,
+                            MemorySegment iv, int encrypt) {
+        try {
+            return (int) INIT.invokeExact(context, cipher, MemorySegment.NULL, key, iv, encrypt);
+        } catch (Throwable e) {
+            throw failed(e);
+        }
+    }
+
+    private static int update(MemorySegment context, MemorySegment out, MemorySegment written,
+                              MemorySegment in, int length) {
+        try {
+            return (int) UPDATE.invokeExact(context, out, written, in, length);
+        } catch (Throwable e) {
+            throw failed(e);
+        }
+    }
+
+    private static int finish(MemorySegment context, MemorySegment out, MemorySegment written) {
+        try {
+            return (int) FINAL.invokeExact(context, out, written);
+        } catch (Throwable e) {
+            throw failed(e);
+        }
+    }
+
+    private static int ctrl(MemorySegment context, int type, MemorySegment tag) {
+        try {
+            return (int) CTRL.invokeExact(context, type, AesGcm.TAG, tag);
+        } catch (Throwable e) {
+            throw failed(e);
+        }
+    }
+
+    private static RuntimeException failed(Throwable e) {
+        if (e instanceof RuntimeException runtime) {
+            return runtime;
+        }
+        if (e instanceof Error error) {
+            throw error;
+        }
+        return new IllegalStateException("OpenSSL AES-GCM downcall failed", e);
+    }
+
+    private static MethodHandle bind(String name, ValueLayout result, ValueLayout... arguments) {
+        return Linker.nativeLinker().downcallHandle(LIB.find(name).orElseThrow(),
+                descriptor(result, arguments));
+    }
+
+    private static FunctionDescriptor descriptor(ValueLayout result, ValueLayout... arguments) {
+        return result == null ? FunctionDescriptor.ofVoid(arguments)
+                : FunctionDescriptor.of(result, arguments);
     }
 }

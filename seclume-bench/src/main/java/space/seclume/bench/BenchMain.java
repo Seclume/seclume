@@ -18,6 +18,7 @@ import org.openjdk.jmh.Main;
  * <pre>
  * java -jar seclume-bench.jar -Dbench.db=postgresql ...        # everything
  * java -jar seclume-bench.jar QueryBenchmark                   # one class
+ * java -jar seclume-bench.jar RecordBenchmark                  # no database at all
  * java -jar seclume-bench.jar -l                               # list them
  * </pre>
  */
@@ -27,10 +28,30 @@ public final class BenchMain {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length == 0 || !args[0].startsWith("-")) {
+        if (args.length == 0 || !args[0].startsWith("-") && !onlyWithoutDatabase(args)) {
             check();
         }
         Main.main(withBenchProperties(args));
+    }
+
+    /** Benchmarks that measure seclume's own code and need no server. */
+    private static final java.util.Set<String> WITHOUT_DATABASE =
+            java.util.Set.of("RecordBenchmark");
+
+    /** Whether every benchmark named before the first option is one of those. */
+    private static boolean onlyWithoutDatabase(String[] args) {
+        boolean any = false;
+        for (String arg : args) {
+            if (arg.startsWith("-")) {
+                break;
+            }
+            int dot = arg.indexOf('.');
+            if (!WITHOUT_DATABASE.contains(dot < 0 ? arg : arg.substring(0, dot))) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
     }
 
     /**

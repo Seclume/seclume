@@ -38,18 +38,14 @@ public final class AesGcm {
             MemorySegment in, long inOffset, long length,
             MemorySegment out, long outOffset) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment hashKey = arena.allocate(16);
-            hashKey.fill((byte) 0);
-            Aes.encryptBlock(key, hashKey);
-
             MemorySegment counter = arena.allocate(16);
             counterBlock(counter, nonce, nonceOffset);
 
             // J0 encrypted is what the tag is masked with, and it must be taken
             // before the counter moves on to the data.
-            MemorySegment tagMask = arena.allocate(16);
-            MemorySegment.copy(counter, 0, tagMask, 0, 16);
-            Aes.encryptBlock(key, tagMask);
+            MemorySegment keys = hashKeyAndTagMask(key, counter, arena);
+            MemorySegment hashKey = keys.asSlice(0, 16);
+            MemorySegment tagMask = keys.asSlice(16, 16);
 
             gctr(key, counter, in, inOffset, length, out, outOffset);
 
@@ -86,15 +82,11 @@ public final class AesGcm {
             MemorySegment in, long inOffset, long length,
             MemorySegment out, long outOffset) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment hashKey = arena.allocate(16);
-            hashKey.fill((byte) 0);
-            Aes.encryptBlock(key, hashKey);
-
             MemorySegment counter = arena.allocate(16);
             counterBlock(counter, nonce, nonceOffset);
-            MemorySegment tagMask = arena.allocate(16);
-            MemorySegment.copy(counter, 0, tagMask, 0, 16);
-            Aes.encryptBlock(key, tagMask);
+            MemorySegment keys = hashKeyAndTagMask(key, counter, arena);
+            MemorySegment hashKey = keys.asSlice(0, 16);
+            MemorySegment tagMask = keys.asSlice(16, 16);
 
             MemorySegment expected = arena.allocate(16);
             try (Ghash ghash = new Ghash(hashKey, 0)) {
@@ -120,6 +112,20 @@ public final class AesGcm {
         }
     }
 
+    /**
+     * H, the encrypted zero block, and the encrypted J0 - in one pass of the
+     * AES, which takes up to four blocks for the price of one.
+     */
+    private static MemorySegment hashKeyAndTagMask(AesKey key, MemorySegment j0, Arena arena) {
+        MemorySegment both = arena.allocate(32);
+        both.asSlice(0, 16).fill((byte) 0);
+        MemorySegment.copy(j0, 0, both, 16, 16);
+        MemorySegment scratch = arena.allocate(16);
+        Aes.encryptBlocks(key, both, 2, scratch);
+        scratch.fill((byte) 0);
+        return both;
+    }
+
     /** The counter block of a twelve-byte nonce: the nonce, then 0x00000001. */
     private static void counterBlock(MemorySegment counter, MemorySegment nonce,
             long nonceOffset) {
@@ -134,21 +140,31 @@ public final class AesGcm {
     private static void gctr(AesKey key, MemorySegment counter, MemorySegment in, long inOffset,
             long length, MemorySegment out, long outOffset) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment block = arena.allocate(16);
-            long at = 0;
-            while (at < length) {
-                increment(counter);
-                MemorySegment.copy(counter, 0, block, 0, 16);
-                Aes.encryptBlock(key, block);
-                long take = Math.min(16, length - at);
-                for (int i = 0; i < take; i++) {
-                    out.set(ValueLayout.JAVA_BYTE, outOffset + at + i,
-                            (byte) (in.get(ValueLayout.JAVA_BYTE, inOffset + at + i)
-                                    ^ block.get(ValueLayout.JAVA_BYTE, i)));
+            // Four counter blocks per pass of the AES: its S-box takes 64 bytes
+            // at the cost of 16 (see AesSubBytes).
+            MemorySegment blocks = arena.allocate(4 * 16);
+            MemorySegment scratch = arena.allocate(16);
+            try {
+                long at = 0;
+                while (at < length) {
+                    int count = (int) Math.min(4, (length - at + 15) / 16);
+                    for (int b = 0; b < count; b++) {
+                        increment(counter);
+                        MemorySegment.copy(counter, 0, blocks, b * 16L, 16);
+                    }
+                    Aes.encryptBlocks(key, blocks, count, scratch);
+                    int take = (int) Math.min(count * 16L, length - at);   // at most 64
+                    for (int i = 0; i < take; i++) {
+                        out.set(ValueLayout.JAVA_BYTE, outOffset + at + i,
+                                (byte) (in.get(ValueLayout.JAVA_BYTE, inOffset + at + i)
+                                        ^ blocks.get(ValueLayout.JAVA_BYTE, i)));
+                    }
+                    at += take;
                 }
-                at += take;
+            } finally {
+                blocks.fill((byte) 0);
+                scratch.fill((byte) 0);
             }
-            block.fill((byte) 0);
         }
     }
 
