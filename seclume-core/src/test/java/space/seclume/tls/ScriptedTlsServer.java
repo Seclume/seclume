@@ -68,6 +68,7 @@ final class ScriptedTlsServer implements Transport {
     private final PrivateKey key;
     private final boolean recordPerMessage;
     private final UnaryOperator<byte[]> tamper;
+    private final List<Outgoing> afterHandshake;
 
     private final Arena arena = Arena.ofShared();
     private final ByteArrayOutputStream fromClient = new ByteArrayOutputStream();
@@ -76,8 +77,33 @@ final class ScriptedTlsServer implements Transport {
     private boolean open = true;
 
     private RecordProtection clientHandshakeReader;
+    private RecordProtection clientApplicationReader;
     private int alertReceived = -1;
     private boolean clientFinishedSeen;
+    private final List<Integer> clientMessages = new ArrayList<>();
+
+    /**
+     * One record the server sends once the handshake is over, under its
+     * application key.
+     *
+     * @param rotateAfter move to the next generation of that key after this
+     *                    record - what a server does right after its own
+     *                    KeyUpdate
+     */
+    record Outgoing(int contentType, byte[] body, boolean rotateAfter) {
+
+        static Outgoing handshake(byte[] message) {
+            return new Outgoing(22, message, false);
+        }
+
+        static Outgoing keyUpdate(int requestUpdate) {
+            return new Outgoing(22, new byte[] {24, 0, 0, 1, (byte) requestUpdate}, true);
+        }
+
+        static Outgoing data(byte[] bytes) {
+            return new Outgoing(23, bytes, false);
+        }
+    }
 
     /**
      * @param script           the flight, in order
@@ -88,11 +114,21 @@ final class ScriptedTlsServer implements Transport {
      */
     ScriptedTlsServer(List<Step> script, byte[] leaf, PrivateKey key, boolean recordPerMessage,
             UnaryOperator<byte[]> tamper) {
+        this(script, leaf, key, recordPerMessage, tamper, List.of());
+    }
+
+    /**
+     * @param afterHandshake records to send after the greeting, under the
+     *                       server's application key
+     */
+    ScriptedTlsServer(List<Step> script, byte[] leaf, PrivateKey key, boolean recordPerMessage,
+            UnaryOperator<byte[]> tamper, List<Outgoing> afterHandshake) {
         this.script = List.copyOf(script);
         this.leaf = leaf.clone();
         this.key = key;
         this.recordPerMessage = recordPerMessage;
         this.tamper = tamper;
+        this.afterHandshake = List.copyOf(afterHandshake);
     }
 
     ScriptedTlsServer(List<Step> script, byte[] leaf, PrivateKey key) {
@@ -107,6 +143,11 @@ final class ScriptedTlsServer implements Transport {
     /** Whether the client got as far as sending its own Finished. */
     boolean clientFinishedSeen() {
         return clientFinishedSeen;
+    }
+
+    /** The handshake message types the client sent after its Finished, in order. */
+    List<Integer> clientMessagesAfterFinished() {
+        return List.copyOf(clientMessages);
     }
 
     // ---- Transport --------------------------------------------------------
@@ -144,6 +185,10 @@ final class ScriptedTlsServer implements Transport {
             clientHandshakeReader.close();
             clientHandshakeReader = null;
         }
+        if (clientApplicationReader != null) {
+            clientApplicationReader.close();
+            clientApplicationReader = null;
+        }
     }
 
     // ---- what the client sent ----------------------------------------------
@@ -175,19 +220,32 @@ final class ScriptedTlsServer implements Transport {
     }
 
     private void opened(byte[] record) {
+        RecordProtection reader = clientFinishedSeen ? clientApplicationReader : clientHandshakeReader;
+        if (reader == null) {
+            return;
+        }
         try (Arena scratch = Arena.ofConfined()) {
             MemorySegment in = scratch.allocate(record.length);
             MemorySegment.copy(record, 0, in, ValueLayout.JAVA_BYTE, 0, record.length);
             MemorySegment out = scratch.allocate(record.length);
-            RecordProtection.Opened result = clientHandshakeReader.open(in, 0, record.length, out, 0);
+            RecordProtection.Opened result = reader.open(in, 0, record.length, out, 0);
             if (result == null) {
                 return;
             }
             if (result.contentType() == 21 && result.length() >= 2) {
                 alertReceived = out.get(ValueLayout.JAVA_BYTE, 1) & 0xff;
-            } else if (result.contentType() == 22
-                    && (out.get(ValueLayout.JAVA_BYTE, 0) & 0xff) == Handshake.FINISHED) {
-                clientFinishedSeen = true;
+            } else if (result.contentType() == 22 && result.length() >= 1) {
+                int type = out.get(ValueLayout.JAVA_BYTE, 0) & 0xff;
+                if (!clientFinishedSeen && type == Handshake.FINISHED) {
+                    clientFinishedSeen = true;
+                } else if (clientFinishedSeen) {
+                    clientMessages.add(type);
+                    if (type == 24 && clientApplicationReader != null) {
+                        RecordProtection next = clientApplicationReader.next();
+                        clientApplicationReader.close();
+                        clientApplicationReader = next;
+                    }
+                }
             }
         }
     }
@@ -255,9 +313,22 @@ final class ScriptedTlsServer implements Transport {
                 transcript.current(digest, 0);
                 schedule.deriveMasterSecret();
                 schedule.deriveApplicationTrafficSecrets(digest);
-                try (RecordProtection application = RecordProtection.fromSecret(HASH,
-                        schedule.serverApplicationTrafficSecret(), KEY_LENGTH)) {
+                clientApplicationReader = RecordProtection.fromSecret(HASH,
+                        schedule.clientApplicationTrafficSecret(), KEY_LENGTH);
+                RecordProtection application = RecordProtection.fromSecret(HASH,
+                        schedule.serverApplicationTrafficSecret(), KEY_LENGTH);
+                try {
                     sealed(wire, application, 23, GREETING);
+                    for (Outgoing record : afterHandshake) {
+                        sealed(wire, application, record.contentType(), record.body());
+                        if (record.rotateAfter()) {
+                            RecordProtection next = application.next();
+                            application.close();
+                            application = next;
+                        }
+                    }
+                } finally {
+                    application.close();
                 }
             }
         } catch (GeneralSecurityException e) {

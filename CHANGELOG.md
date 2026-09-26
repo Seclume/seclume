@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### TLS: post-handshake messages are checked, not dropped
+
+On an established `tlsStack=seclume` connection only NewSessionTicket (dropped) and KeyUpdate
+are accepted now. A KeyUpdate has to be exactly one byte of 0 or 1 and end its record; anything
+else is `illegal_parameter`. Every other handshake message is `unexpected_message`. Before,
+those were dropped without a word, and a KeyUpdate of 2 to 255 counted as "not requested". The
+alert goes to the server and the connection is closed. `PostHandshakeTest` covers each case,
+and three legal ones as the control.
+
 ### Security: `tlsStack=seclume` accepted a server that never authenticated
 
 **Critical, fixed.** The own TLS stack checked the server's certificate and its
