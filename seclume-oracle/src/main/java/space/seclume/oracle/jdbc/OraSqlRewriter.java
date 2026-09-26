@@ -99,7 +99,7 @@ final class OraSqlRewriter {
             }
             i++;
         }
-        throw new SQLException("unterminated string literal in: " + sql);
+        throw new SQLException("unterminated string literal in: " + shape(sql));
     }
 
     /** A quoted identifier - no escape inside, a quote ends it. */
@@ -115,7 +115,7 @@ final class OraSqlRewriter {
                 return i;
             }
         }
-        throw new SQLException("unterminated quoted identifier in: " + sql);
+        throw new SQLException("unterminated quoted identifier in: " + shape(sql));
     }
 
     /**
@@ -126,7 +126,7 @@ final class OraSqlRewriter {
     private static int copyAlternativeQuoted(String sql, int start, StringBuilder out)
             throws SQLException {
         if (start + 2 >= sql.length()) {
-            throw new SQLException("unterminated quoted literal in: " + sql);
+            throw new SQLException("unterminated quoted literal in: " + shape(sql));
         }
         char open = sql.charAt(start + 2);
         char close = switch (open) {
@@ -146,7 +146,7 @@ final class OraSqlRewriter {
             out.append(sql.charAt(i));
             i++;
         }
-        throw new SQLException("unterminated quoted literal in: " + sql);
+        throw new SQLException("unterminated quoted literal in: " + shape(sql));
     }
 
     private static int copyLineComment(String sql, int start, StringBuilder out) {
@@ -171,6 +171,20 @@ final class OraSqlRewriter {
             out.append(sql.charAt(i));
             i++;
         }
-        throw new SQLException("unterminated block comment in: " + sql);
+        throw new SQLException("unterminated block comment in: " + shape(sql));
     }
+
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.ORACLE);
+    }
+
 }

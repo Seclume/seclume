@@ -534,7 +534,10 @@ class LocalOracleJdbcTest {
                         assertEquals(1, count);
                     }
                 }
-                connection.commit();
+                // No commit here: this connection is in auto-commit, so the
+                // batch above was committed as it ran. The call used to be
+                // accepted and did nothing; it is now refused, the way
+                // PostgreSQL has always refused it.
                 try (Statement statement = connection.createStatement();
                      ResultSet found = statement.executeQuery(
                              "select count(*), min(t), max(n) from zl_array")) {
@@ -605,7 +608,10 @@ class LocalOracleJdbcTest {
                     }
                     assertArrayEquals(new int[] {1, 1, 1, 1}, batch.executeBatch());
                 }
-                connection.commit();
+                // No commit here: this connection is in auto-commit, so the
+                // batch above was committed as it ran. The call used to be
+                // accepted and did nothing; it is now refused, the way
+                // PostgreSQL has always refused it.
 
                 try (PreparedStatement select = connection.prepareStatement(
                         "select n, t, d, r from zl_prepared where n <= ? order by n")) {
@@ -635,7 +641,8 @@ class LocalOracleJdbcTest {
                     delete.setInt(1, 2);
                     assertEquals(1, delete.executeUpdate());
                 }
-                connection.commit();
+                // Auto-commit again: the update and the delete are already
+                // committed, and commit() is now refused rather than ignored.
                 try (Statement statement = connection.createStatement();
                      ResultSet count = statement.executeQuery(
                              "select count(*) from zl_prepared")) {

@@ -30,7 +30,12 @@ import space.seclume.oracle.net.TtcResult;
  */
 class OraStatement implements Statement, TtcResult.RowHandler {
 
+    /** ORA-00932, inconsistent data types - what a stale cursor answers. */
+    private static final int STALE_DEFINE = 932;
+
     final OraConnection connection;
+    /** The connection this was made through, as the application sees it - see {@link space.seclume.internal.jdbc.Fronted}. */
+    private final Connection owner;
     private OraResultBlock block;
     private OraResultBlock reusable;
     /** Only set while a statement is being read - see {@link #run}. */
@@ -38,6 +43,14 @@ class OraStatement implements Statement, TtcResult.RowHandler {
     private int collectedRows;
     /** The statement being read, for the message of a result-limit failure. */
     private String collectingSql;
+
+    /** Where this statement was made, when the connection traces that - see OpenStatements. */
+    final StackTraceElement[] createdAt;
+
+    /** What it last ran, as text - for the fingerprint in OpenStatements. */
+    String lastSql() {
+        return collectingSql;
+    }
     /** What the connection was configured with; ResultLimit.NONE unless set. */
     private ResultLimit resultLimit = ResultLimit.NONE;
     private OraResultSet resultSet;
@@ -45,16 +58,21 @@ class OraStatement implements Statement, TtcResult.RowHandler {
     private int maxRows;
     private int fetchSize;
     private boolean closed;
+    /** {@code setQueryTimeout}, in seconds; 0 is no limit. */
+    private int queryTimeout;
     private List<String> batch;
 
     OraStatement(OraConnection connection) {
         this.connection = connection;
+        this.owner = connection.frontOrSelf();
+        this.createdAt = connection.creationTrace();
     }
 
     // ---- executing -------------------------------------------------------
 
     @Override
-    public boolean execute(String sql) throws SQLException {
+    public boolean execute(String text) throws SQLException {
+        String sql = escaped(text);
         return run(sql, null);
     }
 
@@ -66,10 +84,71 @@ class OraStatement implements Statement, TtcResult.RowHandler {
      */
     boolean run(String sql, space.seclume.oracle.net.TtcBinds binds)
             throws SQLException {
+        boolean[] hasRows = new boolean[1];
+        underDeadline(sql, () -> hasRows[0] = runNow(sql, binds));
+        return hasRows[0];
+    }
+
+    /**
+     * Runs one statement under this statement's time limit.
+     *
+     * <p>Here rather than in each caller because every execution path needs
+     * it. The wrapper starts a clock, stops it whatever happens, and turns a
+     * cancellation that the clock caused into a
+     * {@link java.sql.SQLTimeoutException} - see
+     * {@link space.seclume.internal.jdbc.Deadline}.
+     */
+    final void underDeadline(String sql, Work body) throws SQLException {
+        try (space.seclume.internal.jdbc.Deadline deadline =
+                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow)) {
+            try {
+                body.run();
+            } catch (SQLException failed) {
+                throw inDoubt(deadline.explain(failed), sql);
+            }
+            // And the statement that came back without failing: on MySQL a
+            // cancelled SLEEP() succeeds, so a check only on the failure path
+            // would let a timed-out statement through as a short answer.
+            deadline.check();
+        }
+    }
+
+    /**
+     * A lost answer in auto-commit mode is a lost commit.
+     *
+     * <p>Every statement commits itself there, so a write whose answer never
+     * arrived may have been applied - see
+     * {@link space.seclume.TransactionResolutionUnknownException}. Inside a
+     * transaction the same failure is not this: the server rolls an abandoned
+     * transaction back, and the outcome is known.
+     *
+     * @param sql the statement, or {@code null} for a batch, which is always a
+     *            write
+     */
+    final SQLException inDoubt(SQLException failure, String sql) {
+        return connection.autoCommitNow()
+                ? space.seclume.TransactionResolutionUnknownException.duringAutoCommit(failure, sql)
+                : failure;
+    }
+
+    /** One execution, for {@link #underDeadline}. */
+    @FunctionalInterface
+    interface Work {
+        void run() throws SQLException;
+    }
+
+    /** What the deadline runs when the time is up. */
+    private void stopNow() throws SQLException {
+        connection.session().cancel();
+    }
+
+    private boolean runNow(String sql, space.seclume.oracle.net.TtcBinds binds)
+            throws SQLException {
         // Every statement this driver runs passes here, with binds and
         // without. See space.seclume.jfr.
         space.seclume.jfr.Observed.Statement event =
                 space.seclume.jfr.Observed.beginQuery("oracle");
+        connection.sessionState().note(sql);
         boolean failed = true;
         try {
             boolean hasResult = runInto(sql, binds);
@@ -100,10 +179,50 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         // of a few hundred ends in ORA-01000.
         int reuse = session.cursorFor(sql);
         // A fetch size means: bring one block, the rest stays in the cursor.
-        streaming = fetchSize > 0;
+        streaming = blockSize() > 0;
         TtcResult result = session.query(sql, binds, this, reuse, 1, null,
                 session.columnsFor(sql), streaming);
-        session.rememberCursor(sql, result.cursorId(), result.columns());
+        if (result.isFailure() && reuse != 0 && result.errorNumber() == STALE_DEFINE) {
+            // The cursor was kept for this text, and the table under it has
+            // changed since - dropped and re-created with another type in a
+            // column. The server parses again on its own, but the cursor
+            // still carries the types the first run was read in, and it
+            // refuses to hand a LONG RAW over as the VARCHAR2 that stood there
+            // before. A query that failed changed nothing, and Oracle rolls
+            // back only the statement, never the transaction: so the cursor
+            // goes and the text is parsed afresh, once. Found by the type
+            // catalog, which re-creates one table per type.
+            session.forgetCursor(sql, result.cursorId());
+            collected = null;
+            collectedRows = 0;
+            result = session.query(sql, binds, this, 0, 1, null, java.util.List.of(),
+                    streaming);
+        }
+        if (!result.isFailure() && result.cursorId() != 0
+                && OracleSession.needsDefine(result.columns())) {
+            // JSON or VECTOR in the result, and the cursor has no define yet:
+            // what came back are locators that the next fetch spoils
+            // (ORA-24826 from the second block on) and that cost a round trip
+            // each to read. The cursor gets a define that brings the values
+            // in the row, and runs again - two round trips once per cursor,
+            // and from then on none per value. The rows of the first run go:
+            // a query run twice has done nothing twice.
+            java.util.List<space.seclume.oracle.net.OracleColumn> inline =
+                    session.define(result.cursorId(), result.columns());
+            collected = null;
+            collectedRows = 0;
+            result = session.query(sql, binds, this, result.cursorId(), 1, null, inline,
+                    streaming);
+        }
+        if (result.isFailure()) {
+            // Not kept: a statement that failed may have failed at parse,
+            // and a cursor without a parsed statement answers every later
+            // execution with ORA-01003 - forever, for that text on this
+            // connection. See OracleSession.forgetCursor.
+            session.forgetCursor(sql, result.cursorId());
+        } else {
+            session.rememberCursor(sql, result.cursorId(), result.columns());
+        }
         lastReturned = result.returned();
         lastAnswer = result;
         OraResultBlock[] target = {collected};
@@ -123,10 +242,11 @@ class OraStatement implements Statement, TtcResult.RowHandler {
     }
 
     @Override
-    public ResultSet executeQuery(String sql) throws SQLException {
+    public ResultSet executeQuery(String text) throws SQLException {
+        String sql = escaped(text);
         execute(sql);
         if (resultSet == null) {
-            throw new SQLException("the statement returned no rows: " + sql
+            throw new SQLException("the statement returned no rows: " + shape(sql)
                     + " - use executeUpdate for statements that do not select");
         }
         return resultSet;
@@ -138,9 +258,34 @@ class OraStatement implements Statement, TtcResult.RowHandler {
     }
 
     @Override
-    public long executeLargeUpdate(String sql) throws SQLException {
-        execute(sql);
+    public long executeLargeUpdate(String text) throws SQLException {
+        String sql = escaped(text);
+        if (execute(sql)) {
+        // JDBC requires a SQLException when the statement produced rows:
+        // executeUpdate promises a count, and a caller that gets 0 back from a
+        // select believes the statement ran and changed nothing. The rows are
+        // closed first, because leaving a cursor open on the way out of an
+        // error is how the next call on this connection finds the stream mid
+        // answer.
+            closeCurrentRows();
+            throw new SQLException("this statement returned rows: " + shape(sql)
+                    + " - use executeQuery or execute for statements that select", "0100E");
+        }
         return Math.max(updateCount, 0);
+    }
+
+    /** The rows of a statement that should not have produced any. */
+    private void closeCurrentRows() {
+        try {
+            java.sql.ResultSet rows = getResultSet();
+            if (rows instanceof space.seclume.internal.jdbc.ReadOnlyResultSet own) {
+                own.discard();
+            } else if (rows != null) {
+                rows.close();
+            }
+        } catch (SQLException alreadyBroken) {
+            // The refusal below is the failure worth reporting.
+        }
     }
 
     /**
@@ -159,7 +304,15 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         int reuse = session.cursorFor(sql);
         TtcResult result = session.query(sql, binds, this, reuse, iterations, rows,
                 session.columnsFor(sql));
-        session.rememberCursor(sql, result.cursorId(), result.columns());
+        if (result.isFailure()) {
+            // Not kept: a statement that failed may have failed at parse,
+            // and a cursor without a parsed statement answers every later
+            // execution with ORA-01003 - forever, for that text on this
+            // connection. See OracleSession.forgetCursor.
+            session.forgetCursor(sql, result.cursorId());
+        } else {
+            session.rememberCursor(sql, result.cursorId(), result.columns());
+        }
         if (result.isFailure()) {
             throw failure(result);
         }
@@ -389,7 +542,7 @@ class OraStatement implements Statement, TtcResult.RowHandler {
      */
     void closeResult() {
         if (resultSet != null) {
-            resultSet.close();
+            resultSet.discard();
             resultSet = null;
         }
         block = null;
@@ -411,7 +564,8 @@ class OraStatement implements Statement, TtcResult.RowHandler {
     // ---- batches ---------------------------------------------------------
 
     @Override
-    public void addBatch(String sql) throws SQLException {
+    public void addBatch(String text) throws SQLException {
+        String sql = escaped(text);
         checkOpen();
         if (batch == null) {
             batch = new ArrayList<>();
@@ -500,14 +654,35 @@ class OraStatement implements Statement, TtcResult.RowHandler {
 
     @Override
     public void setFetchDirection(int direction) throws SQLException {
-        if (direction != ResultSet.FETCH_FORWARD) {
-            throw new SQLFeatureNotSupportedException("seclume result sets move forward only");
-        }
+        // A hint, as JDBC calls it: the rows come in the order the server
+        // sends them whatever is hinted. Only a value that is no direction
+        // at all is refused.
+        space.seclume.internal.jdbc.ResultSetTypes.requireDirection(direction);
     }
 
     @Override
     public int getResultSetType() {
-        return ResultSet.TYPE_FORWARD_ONLY;
+        return resultSetType;
+    }
+
+    /**
+     * {@code TYPE_FORWARD_ONLY}, or {@code TYPE_SCROLL_INSENSITIVE}: then the
+     * result is read whole and the cursor moves over it in any direction -
+     * see {@link space.seclume.internal.jdbc.ResultSetTypes}.
+     */
+    private int resultSetType = ResultSet.TYPE_FORWARD_ONLY;
+
+    void resultSetType(int type) {
+        this.resultSetType = type;
+    }
+
+    /**
+     * The fetch size that decides whether rows come in blocks: none for a
+     * scrollable result, which has to be here whole before the cursor can
+     * move back. {@link #getFetchSize} still says what was asked for.
+     */
+    int blockSize() {
+        return resultSetType == ResultSet.TYPE_FORWARD_ONLY ? fetchSize : 0;
     }
 
     @Override
@@ -522,48 +697,74 @@ class OraStatement implements Statement, TtcResult.RowHandler {
 
     @Override
     public int getQueryTimeout() {
-        return 0;
+        return queryTimeout;
     }
 
     @Override
     public void setQueryTimeout(int seconds) throws SQLException {
-        if (seconds != 0) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume does not send an Oracle break marker yet - a timeout "
-                    + "here would be a lie");
+        checkOpen();
+        if (seconds < 0) {
+            throw new SQLException("a query timeout cannot be negative: " + seconds,
+                    "22023");
         }
+        queryTimeout = seconds;
     }
 
     @Override
-    public int getMaxFieldSize() {
-        return 0;
+    public int getMaxFieldSize() throws SQLException {
+        checkOpen();
+        return maxFieldSize;
     }
 
+    /** See {@link #setMaxFieldSize}; 0 for no limit. */
+    private int maxFieldSize;
+
+    /**
+     * The most characters or bytes a text or binary column of this
+     * statement's results hands out; the rest is dropped, as JDBC says. The
+     * whole value still crosses the wire - it is cut where it is read.
+     */
     @Override
     public void setMaxFieldSize(int max) throws SQLException {
-        if (max != 0) {
-            throw new SQLFeatureNotSupportedException("seclume does not truncate column values");
+        checkOpen();
+        if (max < 0) {
+            throw new SQLException("a maximum field size cannot be negative: " + max, "HY024");
         }
+        maxFieldSize = max;
     }
+
+    /**
+     * Whether JDBC escapes in this statement's text are translated - on by
+     * default, as JDBC requires. See
+     * {@link space.seclume.internal.jdbc.JdbcEscapes}.
+     */
+    private boolean escapeProcessing = true;
 
     @Override
     public void setEscapeProcessing(boolean enable) throws SQLException {
-        if (enable) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume passes SQL to the server unchanged - JDBC escape syntax "
-                    + "like {fn ...} is not rewritten");
-        }
+        this.escapeProcessing = enable;
+    }
+
+    /** The text as the server has to see it. */
+    final String escaped(String sql) {
+        return escapeProcessing ? space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE) : sql;
     }
 
     @Override
     public void cancel() throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume does not send an Oracle break marker yet");
+        // checkOpen first: a closed statement is a SQLException, and it is the
+        // ordinary outcome of the race this method is in - it is the one
+        // method on this class that is called from another thread.
+        checkOpen();
+        connection.session().cancel();
     }
 
     @Override
     public void setCursorName(String name) throws SQLException {
-        throw new SQLFeatureNotSupportedException("seclume has no updatable cursors");
+        // JDBC: where positioned update and delete are not supported, this
+        // is a no-op - and seclume has neither.
+        checkOpen();
     }
 
     @Override
@@ -578,43 +779,82 @@ class OraStatement implements Statement, TtcResult.RowHandler {
 
     @Override
     public void closeOnCompletion() throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume does not close statements automatically");
+        checkOpen();
+        closeOnCompletion = true;
     }
 
+    /** Set by {@link #closeOnCompletion}: the result closing closes this too. */
+    private boolean closeOnCompletion;
+
     @Override
-    public boolean isCloseOnCompletion() {
-        return false;
+    public boolean isCloseOnCompletion() throws SQLException {
+        checkOpen();
+        return closeOnCompletion;
     }
 
     @Override
     public boolean execute(String sql, int autoGeneratedKeys) throws SQLException {
+        if (autoGeneratedKeys != Statement.NO_GENERATED_KEYS) {
+            throw keysNeedBinds();
+        }
         return execute(sql);
     }
 
     @Override
     public boolean execute(String sql, int[] columnIndexes) throws SQLException {
-        return execute(sql);
+        throw keysNeedBinds();
     }
 
     @Override
     public boolean execute(String sql, String[] columnNames) throws SQLException {
-        return execute(sql);
+        throw keysNeedBinds();
     }
 
     @Override
     public int executeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
+        if (autoGeneratedKeys != Statement.NO_GENERATED_KEYS) {
+            throw keysNeedBinds();
+        }
         return executeUpdate(sql);
     }
 
     @Override
     public int executeUpdate(String sql, int[] columnIndexes) throws SQLException {
-        return executeUpdate(sql);
+        throw keysNeedBinds();
     }
 
     @Override
     public int executeUpdate(String sql, String[] columnNames) throws SQLException {
-        return executeUpdate(sql);
+        throw keysNeedBinds();
+    }
+
+    @Override
+    public long executeLargeUpdate(String sql, int autoGeneratedKeys) throws SQLException {
+        return executeUpdate(sql, autoGeneratedKeys);
+    }
+
+    @Override
+    public long executeLargeUpdate(String sql, int[] columnIndexes) throws SQLException {
+        return executeUpdate(sql, columnIndexes);
+    }
+
+    @Override
+    public long executeLargeUpdate(String sql, String[] columnNames) throws SQLException {
+        return executeUpdate(sql, columnNames);
+    }
+
+    /**
+     * Keys asked of a plain statement.
+     *
+     * <p>Oracle hands them back through "returning into", which needs a bind
+     * variable to return into - so only a prepared statement can. These
+     * methods used to run the statement and quietly return no keys, which a
+     * caller reads as "the insert produced none" rather than as "ask
+     * differently".
+     */
+    private static SQLException keysNeedBinds() {
+        return new java.sql.SQLFeatureNotSupportedException("generated keys on Oracle need "
+                + "a prepared statement - use prepareStatement(sql, new String[] {\"ID\"})");
     }
 
     // ---- state -----------------------------------------------------------
@@ -622,7 +862,7 @@ class OraStatement implements Statement, TtcResult.RowHandler {
     @Override
     public Connection getConnection() throws SQLException {
         checkOpen();
-        return connection;
+        return owner;
     }
 
     @Override
@@ -689,6 +929,83 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         String message = text == null || text.isBlank()
                 ? "the server rejected the statement (" + number + ")"
                 : "the server rejected the statement: " + text;
-        return new SQLException(message, "42000", result.errorNumber());
+        return error(message, result.errorNumber());
     }
+
+    /**
+     * Oracle's error as the exception ojdbc raises for it: the same SQLState
+     * and the same {@code SQLException} subclass.
+     *
+     * <p>Oracle sends no SQLState, so a driver has to invent one, and ojdbc's
+     * are what every Oracle application has been written against - a
+     * framework's translator, a {@code catch (SQLIntegrityConstraintViolationException
+     * e)}, a check for 23000. The table was measured against ojdbc 23 by
+     * raising each number from PL/SQL and reading what came back
+     * ({@code ErrorCatalogTest} compares the everyday ones on every run); it
+     * is a table of observed answers, not of anybody's code.
+     *
+     * <p>Two deliberate additions. A deadlock (ORA-00060) and a serialization
+     * failure (ORA-08177) keep ojdbc's states but arrive as
+     * {@link java.sql.SQLTransactionRollbackException}, and a discarded
+     * package state (ORA-04061, ORA-04068) as a
+     * {@link java.sql.SQLTransientException}: the server has undone the work
+     * and running it again is the remedy, and that is exactly what those
+     * types say - ojdbc throws the plain base class, so a retry written
+     * against the types would never fire. Catching {@code SQLException}
+     * catches them as before.
+     */
+    static SQLException error(String message, int number) {
+        String state = sqlState(number);
+        return switch (number) {
+            case 60, 8177 -> new java.sql.SQLTransactionRollbackException(message, state, number);
+            case 4061, 4068 -> new java.sql.SQLTransientException(message, state, number);
+            case 911 -> new java.sql.SQLSyntaxErrorException(message, state, number);
+            case 1013 -> new java.sql.SQLTimeoutException(message, state, number);
+            case 18, 20, 3113, 12514 -> new java.sql.SQLRecoverableException(message, state,
+                    number);
+            default -> state.startsWith("08") || state.startsWith("28")
+                    ? new SQLException(message, state, number)
+                    : space.seclume.internal.jdbc.SqlErrors.of(message, state, number);
+        };
+    }
+
+    /** The SQLState ojdbc gives an Oracle error number. */
+    static String sqlState(int number) {
+        return switch (number) {
+            case 1, 1400, 2290, 2291, 2292 -> "23000";              // constraint violated
+            case 900, 903, 904, 913, 917, 918, 923, 927, 933, 936, 942, 955, 957, 1031,
+                 1722, 1741, 1756, 2049, 4091 -> "42000";           // syntax, access, invalid number
+            case 911 -> "22019";                                    // invalid character
+            case 1401 -> "22001";                                   // inserted value too large
+            // ORA-12899, "value too large for column", is 72000 through ojdbc -
+            // the generic bucket - and so it is here: code checks the number.
+            case 1438 -> "22003";                                   // precision exceeded
+            case 1476 -> "22012";                                   // division by zero
+            case 1841, 1843, 1847, 1858, 1861 -> "22008";           // date out of range
+            case 2091 -> "40000";                                   // transaction rolled back
+            case 18, 20, 51, 54, 60, 4031 -> "61000";               // resources, deadlock
+            case 100 -> "02000";                                    // no data found
+            case 1002, 1410, 6511 -> "24000";                       // cursor state
+            case 1422, 1427 -> "21000";                             // too many rows
+            case 6502, 6508, 6512, 6530, 6531, 6550 -> "65000";     // PL/SQL
+            case 12154 -> "66000";                                  // net service name
+            case 3113, 12514 -> "08006";                            // connection lost
+            case 28000, 28001, 30006, 38000 -> "99999";
+            default -> "72000";                                     // everything else
+        };
+    }
+
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.ORACLE);
+    }
+
 }

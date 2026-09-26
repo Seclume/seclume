@@ -72,7 +72,40 @@ public final class TtcBinds {
     /** How much goes into one chunk. */
     private static final int CHUNK_SIZE = 32767;
 
-    private final List<Object> values = new ArrayList<>();
+    /**
+     * Beyond this buffer size the server takes a bind for a {@code LONG}.
+     *
+     * <p>The same number as a chunk: 32767 bytes is the most a
+     * {@code VARCHAR2} or {@code RAW} bind can be, and a string or a byte
+     * array described any wider is handled as {@code LONG} or
+     * {@code LONG RAW} - which is how a value of 700 000 characters reaches
+     * a CLOB column at all.
+     */
+    private static final long LONGEST_PLAIN = CHUNK_SIZE;
+
+    /** The values this list owns. */
+    private final List<Object> own = new ArrayList<>();
+    /**
+     * What is bound: {@link #own}, or during a batch a view onto the row
+     * being written - see {@link #setAll}.
+     */
+    private List<Object> values = own;
+
+    /** Back to the owned list before anything changes it. */
+    private List<Object> owned() {
+        if (values != own) {
+            own.clear();
+            own.addAll(values);
+            values = own;
+        }
+        return own;
+    }
+
+    /**
+     * Which variables were described as long ones, by the last
+     * {@link #putDescriptors} - their values go last. See {@link #putValues}.
+     */
+    private boolean[] described;
 
     /**
      * A LOB handed over as a locator rather than as a value.
@@ -103,15 +136,23 @@ public final class TtcBinds {
     public TtcBinds() {
     }
 
+    /** The whole row of a batch at once - what a batch binds for every row, twice. */
+    public void setAll(Object[] row) {
+        // A view, not a copy: every row of a batch is bound twice - measured,
+        // then written - and copying it into the list each time was the
+        // largest cost left in encoding one.
+        values = java.util.Arrays.asList(row);
+    }
+
     /** Sets a value; the index is the JDBC one and starts at one. */
     public void set(int index, Object value) throws SQLException {
         if (index < 1) {
             throw new SQLException("a parameter index starts at 1, not " + index);
         }
         while (values.size() < index) {
-            values.add(null);
+            owned().add(null);
         }
-        values.set(index - 1, value);
+        owned().set(index - 1, value);
     }
 
 
@@ -125,7 +166,7 @@ public final class TtcBinds {
      * everything else - see {@code TtcResult#returned}.
      */
     public void addOutput() {
-        values.add(new Output(OracleColumn.TYPE_NUMBER, false));
+        owned().add(new Output(OracleColumn.TYPE_NUMBER, false));
     }
 
     /**
@@ -181,7 +222,8 @@ public final class TtcBinds {
     }
 
     public void clear() {
-        values.clear();
+        values = own;
+        own.clear();
     }
 
     /**
@@ -207,16 +249,20 @@ public final class TtcBinds {
      * @param sizes the buffer size per variable, or {@code null} for this row
      */
     public void putDescriptors(WireBuffer out, long[] sizes) throws SQLException {
+        messageRules = null;                           // a new message, a fresh look
+        described = new boolean[values.size()];
         for (int index = 0; index < values.size(); index++) {
             Object value = values.get(index);
             int type = value instanceof Output output ? output.type() : typeOf(value);
+            long size = value instanceof Output
+                    ? outputBufferSize(type)
+                    : (sizes == null ? bufferSizeOf(value, type) : sizes[index]);
+            described[index] = !(value instanceof Output) && size > LONGEST_PLAIN;
             out.putByte((byte) type);
             out.putByte((byte) 1);                     // flags, always one here
             out.putByte((byte) 0);                     // precision
             out.putByte((byte) 0);                     // scale
-            TtcParameters.putNumber(out, value instanceof Output
-                    ? outputBufferSize(type)
-                    : (sizes == null ? bufferSizeOf(value, type) : sizes[index]));
+            TtcParameters.putNumber(out, size);
             TtcParameters.putNumber(out, 0);           // largest number of array elements
             TtcParameters.putNumber(out, value instanceof Locator
                     ? LOCATOR_CONTINUATION : 0);       // continuation flags
@@ -236,10 +282,25 @@ public final class TtcBinds {
      *
      * <p>A null is a length of zero and nothing else - the same shape a null
      * column has in a row coming back.
+     *
+     * <p>The values of long variables - described wider than
+     * {@link #LONGEST_PLAIN} - come <b>after all the others</b>, in their own
+     * order; the descriptions stay where they are. The server reads a
+     * {@code LONG} last whatever its place in the statement. Written in place,
+     * the value behind it is read as the long one's, and the answer is
+     * ORA-01461 naming the wrong position. Hibernate's insert of an entity
+     * with a large {@code @Lob String} and a {@code Blob} column after it did
+     * exactly that; python-oracledb writes long values last as well.
      */
     public void putValues(WireBuffer out) throws SQLException {
         out.putByte((byte) TtcMessage.TYPE_ROW_DATA);
-        for (Object value : values) {
+        boolean anyLong = false;
+        for (int index = 0; index < values.size(); index++) {
+            Object value = values.get(index);
+            if (isLong(index)) {
+                anyLong = true;
+                continue;
+            }
             if (value instanceof Output output) {
                 if (output.type() == OracleColumn.TYPE_CURSOR) {
                     // A cursor slot is not an empty value. It carries the
@@ -261,6 +322,17 @@ public final class TtcBinds {
             }
             putValue(out, value);
         }
+        if (anyLong) {
+            for (int index = 0; index < values.size(); index++) {
+                if (isLong(index)) {
+                    putValue(out, values.get(index));
+                }
+            }
+        }
+    }
+
+    private boolean isLong(int index) {
+        return described != null && index < described.length && described[index];
     }
 
     /**
@@ -295,7 +367,7 @@ public final class TtcBinds {
         return NUMBER_SIZE;
     }
 
-    private static void putValue(WireBuffer out, Object value) throws SQLException {
+    private void putValue(WireBuffer out, Object value) throws SQLException {
         switch (value) {
             case null -> out.putByte((byte) 0);
             case Boolean flag -> OracleNumber.encode(out, flag ? 1 : 0);
@@ -307,8 +379,17 @@ public final class TtcBinds {
                     BigDecimal.valueOf(number.doubleValue()).toPlainString());
             case Double number -> OracleNumber.encodeText(out,
                     BigDecimal.valueOf(number).toPlainString());
-            case BigDecimal number -> OracleNumber.encodeText(out, number.toPlainString());
+            case BigDecimal number -> {
+                if (number.unscaledValue().bitLength() < 63) {
+                    OracleNumber.encodeScaled(out, number.unscaledValue().longValue(),
+                            number.scale());
+                } else {
+                    OracleNumber.encodeText(out, number.toPlainString());
+                }
+            }
             case Locator lob -> putLocator(out, lob);
+            case space.seclume.internal.jdbc.NativeValue nativeValue ->
+                    putNative(out, nativeValue);
             case String text -> putText(out, text);
             case byte[] bytes -> putBytes(out, bytes);
             case LocalDate date -> putDate(out, date.atStartOfDay());
@@ -320,7 +401,7 @@ public final class TtcBinds {
                     time.toLocalTime().atDate(java.time.LocalDate.EPOCH));
             case LocalDateTime stamp -> putTimestamp(out, stamp);
             case java.sql.Date date -> putDate(out, date.toLocalDate().atStartOfDay());
-            case java.sql.Timestamp stamp -> putTimestamp(out, stamp.toLocalDateTime());
+            case java.sql.Timestamp stamp -> putTimestamp(out, localFields(stamp, messageRules()));
             case java.time.OffsetDateTime stamp -> putZonedTimestamp(out, stamp);
             case java.time.Instant instant -> putZonedTimestamp(out,
                     instant.atOffset(java.time.ZoneOffset.UTC));
@@ -355,6 +436,7 @@ public final class TtcBinds {
             case BigDecimal ignored -> OracleColumn.TYPE_NUMBER;
             case Locator lob -> lob.character()
                     ? OracleColumn.TYPE_CLOB : OracleColumn.TYPE_BLOB;
+            case space.seclume.internal.jdbc.NativeValue ignored -> OracleColumn.TYPE_VARCHAR;
             case String ignored -> OracleColumn.TYPE_VARCHAR;
             case byte[] ignored -> OracleColumn.TYPE_RAW;
             case LocalDate ignored -> OracleColumn.TYPE_DATE;
@@ -381,6 +463,11 @@ public final class TtcBinds {
     private static long bufferSizeOf(Object value, int type) {
         if (value instanceof Locator) {
             return LOCATOR_BUFFER;
+        }
+        if (value instanceof space.seclume.internal.jdbc.NativeValue nativeValue) {
+            // Before the switch below, which reaches its default and casts to
+            // String. The bytes are already bytes - see SensitiveParameters.
+            return Math.max(nativeValue.length(), 1);
         }
         return switch (type) {
             case OracleColumn.TYPE_NUMBER -> NUMBER_SIZE;
@@ -429,6 +516,34 @@ public final class TtcBinds {
         putBytes(out, bytes);
     }
 
+    /**
+     * The same framing as {@link #putBytes}, reading from native memory.
+     *
+     * <p>Written out a second time rather than sharing, because the point of
+     * the whole path is that there is no {@code byte[]} - and the sharing
+     * would have to go through one. Twelve lines against a heap copy of a
+     * secret is a trade worth making. See
+     * {@link space.seclume.SensitiveParameters}.
+     */
+    private static void putNative(WireBuffer out,
+            space.seclume.internal.jdbc.NativeValue value) {
+        int length = value.length();
+        if (length <= SHORT_LENGTH) {
+            out.putByte((byte) length);
+            out.putBytes(value.memory(), 0, length);
+            return;
+        }
+        out.putByte((byte) CHUNKED);
+        int at = 0;
+        while (at < length) {
+            int chunk = Math.min(CHUNK_SIZE, length - at);
+            TtcParameters.putNumber(out, chunk);
+            out.putBytes(value.memory(), at, chunk);
+            at += chunk;
+        }
+        TtcParameters.putNumber(out, 0);
+    }
+
     private static void putBytes(WireBuffer out, byte[] bytes) {
         if (bytes.length <= SHORT_LENGTH) {
             out.putByte((byte) bytes.length);
@@ -472,7 +587,11 @@ public final class TtcBinds {
      * identical.
      */
     private static void putTimestamp(WireBuffer out, LocalDateTime stamp) {
-        out.putByte((byte) TIMESTAMP_SIZE);
+        int nanos = stamp.getNano();
+        // Without a fraction the four bytes of nanoseconds stay away - seven
+        // bytes, as a DATE is, and as ojdbc sends it: four bytes a row less
+        // in a batch of timestamps.
+        out.putByte((byte) (nanos == 0 ? DATE_SIZE : TIMESTAMP_SIZE));
         int year = stamp.getYear();
         out.putByte((byte) (year / 100 + YEAR_BIAS));
         out.putByte((byte) (year % 100 + YEAR_BIAS));
@@ -481,7 +600,9 @@ public final class TtcBinds {
         out.putByte((byte) (stamp.getHour() + 1));
         out.putByte((byte) (stamp.getMinute() + 1));
         out.putByte((byte) (stamp.getSecond() + 1));
-        int nanos = stamp.getNano();
+        if (nanos == 0) {
+            return;
+        }
         out.putByte((byte) (nanos >>> 24));
         out.putByte((byte) (nanos >>> 16));
         out.putByte((byte) (nanos >>> 8));
@@ -491,14 +612,19 @@ public final class TtcBinds {
     /**
      * The same again with the offset behind it.
      *
-     * <p>Oracle writes the fields of the value as they stand and the offset
-     * beside them, rather than converting to UTC - so an
-     * {@code OffsetDateTime} keeps the zone it was written with, which is
-     * the point of the column type.
+     * <p>The fields in UTC and the offset beside them, which is how Oracle
+     * keeps the type - so an {@code OffsetDateTime} keeps the zone it was
+     * written with, which is the point of the column type.
      */
     private static void putZonedTimestamp(WireBuffer out, java.time.OffsetDateTime stamp) {
         out.putByte((byte) TIMESTAMP_ZONE_SIZE);
-        java.time.LocalDateTime local = stamp.toLocalDateTime();
+        // The fields in UTC, the offset beside them - how Oracle stores the
+        // type. The local fields went out before, so 13:14+02:00 was stored
+        // as 15:14+02:00: two hours late for every other client, and right
+        // only for this driver, whose reader made the same mistake the other
+        // way round. An Instant, at offset zero, was never touched by it.
+        java.time.LocalDateTime local = stamp.withOffsetSameInstant(java.time.ZoneOffset.UTC)
+                .toLocalDateTime();
         int year = local.getYear();
         out.putByte((byte) (year / 100 + YEAR_BIAS));
         out.putByte((byte) (year % 100 + YEAR_BIAS));
@@ -516,6 +642,102 @@ public final class TtcBinds {
         out.putByte((byte) (seconds / 3600 + ZONE_HOUR_BIAS));
         out.putByte((byte) (seconds % 3600 / 60 + ZONE_MINUTE_BIAS));
     }
+
+    /**
+     * The local fields of a Timestamp, as {@code toLocalDateTime} gives them -
+     * without its way through the old calendar classes, which cost more than
+     * the rest of encoding the value. From 1900 on, where the two calendars
+     * agree; before that the JDK's own way, which knows the Julian dates.
+     */
+    static LocalDateTime localFields(java.sql.Timestamp stamp) {
+        return localFields(stamp, rules());
+    }
+
+    /** The same, with the zone rules already looked up. */
+    static LocalDateTime localFields(java.sql.Timestamp stamp,
+                                     java.time.zone.ZoneRules rules) {
+        long millis = stamp.getTime();
+        if (millis < SINCE_1900) {
+            return stamp.toLocalDateTime();
+        }
+        java.time.ZoneOffset offset = offsetAt(millis, rules);
+        return LocalDateTime.ofEpochSecond(Math.floorDiv(millis, 1000L), stamp.getNanos(),
+                offset);
+    }
+
+    /** The zone rules for the message being written, looked up at its first timestamp. */
+    private java.time.zone.ZoneRules messageRules;
+
+    /**
+     * The JVM zone's rules, once per message: {@code ZoneId.systemDefault()}
+     * clones the default TimeZone on every call, which in a batch of
+     * timestamps was a clone per row. A message is written in one go, and the
+     * JVM's zone is the one it was when the message began.
+     */
+    private java.time.zone.ZoneRules messageRules() {
+        if (messageRules == null) {
+            messageRules = rules();
+        }
+        return messageRules;
+    }
+
+    /** The JVM zone and its rules, looked up once while the zone stays the same. */
+    private static volatile Object[] zoneRules = {null, null};
+
+    /**
+     * The rules of the JVM's zone. {@code getRules()} goes to the provider's
+     * map every time, which was a lookup per timestamp in a batch.
+     */
+    private static java.time.zone.ZoneRules rules() {
+        java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+        Object[] cached = zoneRules;
+        if (cached[0] != zone) {
+            cached = new Object[] {zone, zone.getRules()};
+            zoneRules = cached;
+        }
+        return (java.time.zone.ZoneRules) cached[1];
+    }
+
+    /** The offset last looked up, and the span between two transitions it holds for. */
+    private record Window(java.time.zone.ZoneRules rules, long from, long to,
+                          java.time.ZoneOffset offset) {
+    }
+
+    private static volatile Window window;
+
+    /**
+     * The JVM zone's offset at an instant.
+     *
+     * <p>{@code ZoneRules.getOffset} works out the year's transitions again for
+     * every instant past the last one the zone file lists - every current
+     * date - and was the largest cost left in encoding a batch of timestamps.
+     * An offset holds from one transition to the next, and the rows of a batch
+     * mostly fall into the same span; so the span is remembered with it.
+     */
+    private static java.time.ZoneOffset offsetAt(long millis,
+                                                 java.time.zone.ZoneRules rules) {
+        Window known = window;
+        if (known != null && known.rules() == rules && millis >= known.from()
+                && millis < known.to()) {
+            return known.offset();
+        }
+        java.time.Instant instant = java.time.Instant.ofEpochMilli(millis);
+        java.time.ZoneOffset offset = rules.getOffset(instant);
+        long from = Long.MIN_VALUE;
+        long to = Long.MAX_VALUE;
+        if (!rules.isFixedOffset()) {
+            java.time.zone.ZoneOffsetTransition before = rules.previousTransition(
+                    instant.plusMillis(1));
+            java.time.zone.ZoneOffsetTransition after = rules.nextTransition(instant);
+            from = before == null ? Long.MIN_VALUE : before.getInstant().toEpochMilli();
+            to = after == null ? Long.MAX_VALUE : after.getInstant().toEpochMilli();
+        }
+        window = new Window(rules, from, to, offset);
+        return offset;
+    }
+
+    /** 1900-01-01T00:00:00Z, and a day of margin for any zone. */
+    private static final long SINCE_1900 = -2_208_988_800_000L + 86_400_000L;
 
     /** Sixteen bytes, most significant first - what a {@code raw(16)} holds. */
     private static void putUuid(WireBuffer out, java.util.UUID id) {

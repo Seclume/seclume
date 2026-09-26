@@ -362,6 +362,76 @@ public final class TtcQuery {
                 autoCommit, false);
     }
 
+    // ---- defines --------------------------------------------------------
+
+    /** Tells the server how to hand the columns back - nothing is run. */
+    private static final int OPTION_DEFINE = 0x0010;
+    /** In a define's continuation flags: send the LOB's value with it. */
+    private static final long LOB_PREFETCH = 0x2000000L;
+    /** How much of a JSON value may come in the row - its limit, 32 MB. */
+    static final int JSON_INLINE = 32 * 1024 * 1024;
+    /** And of a VECTOR - 1 MB, more than the largest one there is. */
+    static final int VECTOR_INLINE = 1024 * 1024;
+
+    /**
+     * Gives an open cursor a define for every column: JSON and VECTOR asked
+     * for in the row, everything else as it was described, so the rows keep
+     * the shape they had. The server keeps the define with the cursor; every
+     * later execution of it brings the values inline.
+     */
+    public static void sendDefine(NsChannel channel, int sequence, int cursorId,
+                                  java.util.List<OracleColumn> columns) throws IOException {
+        WireBuffer out = channel.beginData();
+        out.putByte((byte) TtcMessage.TYPE_FUNCTION);
+        out.putByte((byte) FUNCTION);
+        out.putByte((byte) sequence);
+        TtcParameters.putNumber(out, 0);                  // token number
+        TtcParameters.putNumber(out, OPTION_DEFINE);
+        TtcParameters.putNumber(out, cursorId);
+        out.putByte((byte) 0);                            // pointer: statement text
+        TtcParameters.putNumber(out, 0);
+        out.putByte((byte) 1);                            // pointer: vector
+        TtcParameters.putNumber(out, AL8I4_LENGTH);
+        out.putByte((byte) 0);                            // pointer: al8o4
+        out.putByte((byte) 0);                            // pointer: al8o4l
+        TtcParameters.putNumber(out, 0);                  // prefetch buffer size
+        TtcParameters.putNumber(out, 0);                  // rows
+        TtcParameters.putNumber(out, MAX_LONG_LENGTH);
+        out.putByte((byte) 0);                            // pointer: binds
+        TtcParameters.putNumber(out, 0);
+        for (int i = 0; i < 5; i++) {
+            out.putByte((byte) 0);                        // al8app, al8txn, al8txl, al8kv, al8kvl
+        }
+        out.putByte((byte) 1);                            // pointer: defines
+        TtcParameters.putNumber(out, columns.size());
+        TtcParameters.putNumber(out, 0);                  // registration id, lower half
+        out.putByte((byte) 0);                            // pointer: al8objlist
+        out.putByte((byte) 1);                            // pointer: al8objlen
+        out.putZeroes(TAIL_ZEROES);
+        putAl8i4(out, true, cursorId, 0, 0);
+        for (OracleColumn column : columns) {
+            boolean inline = column.needsDefine();
+            int size = column.type() == OracleColumn.TYPE_JSON ? JSON_INLINE
+                    : column.type() == OracleColumn.TYPE_VECTOR ? VECTOR_INLINE
+                    : column.bufferSize();
+            out.putByte((byte) column.type());
+            out.putByte((byte) 1);                        // flags: indicators
+            out.putByte((byte) 0);                        // precision
+            out.putByte((byte) 0);                        // scale
+            TtcParameters.putNumber(out, size);
+            TtcParameters.putNumber(out, 0);              // largest number of array elements
+            TtcParameters.putNumber(out, inline ? LOB_PREFETCH : 0);
+            out.putByte((byte) 0);                        // object id
+            TtcParameters.putNumber(out, 0);              // version
+            TtcParameters.putNumber(out, column.charset());
+            out.putByte((byte) (column.charset() == OracleColumn.AL16UTF16 ? 2
+                    : column.charset() != 0 ? 1 : 0));    // character set form
+            TtcParameters.putNumber(out, inline ? size : 0);  // how much may come inline
+            TtcParameters.putNumber(out, 0);              // oaccolid
+        }
+        channel.sendData();
+    }
+
     /** The same, saying whether the statement is an anonymous PL/SQL block. */
     public static void send(NsChannel channel, int sequence, String sql, int prefetchRows,
                             boolean query, TtcBinds binds, int cursorId, int iterations,

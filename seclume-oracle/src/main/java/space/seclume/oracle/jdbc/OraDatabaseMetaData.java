@@ -29,9 +29,12 @@ import java.sql.Statement;
 final class OraDatabaseMetaData implements DatabaseMetaData {
 
     private final OraConnection connection;
+    /** The connection this was made through, as the application sees it - see {@link space.seclume.internal.jdbc.Fronted}. */
+    private final Connection owner;
 
     OraDatabaseMetaData(OraConnection connection) {
         this.connection = connection;
+        this.owner = connection.frontOrSelf();
     }
 
     /**
@@ -499,7 +502,7 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public Connection getConnection() {
-        return connection;
+        return owner;
     }
 
     @Override
@@ -658,7 +661,10 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public RowIdLifetime getRowIdLifetime() {
-        return RowIdLifetime.ROWID_UNSUPPORTED;
+        // A ROWID names a row until the row moves, which a plain heap table
+        // only lets it do when row movement was switched on - ojdbc answers
+        // the same.
+        return RowIdLifetime.ROWID_VALID_FOREVER;
     }
 
     // ---- what the driver can do - and what it cannot ---------------------
@@ -1241,10 +1247,17 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
         return false;
     }
 
-    /** Needs "returning into" and therefore bind variables - see OraStatement. */
+    /**
+     * Through {@code prepareStatement(sql, columnNames)}, which is where
+     * frameworks ask for keys: it needs "returning into" and therefore bind
+     * variables, so a plain {@code Statement} refuses the request rather than
+     * ignoring it - see OraStatement. It used to answer {@code false} here,
+     * which made Spring's {@code SimpleJdbcInsert} refuse a table whose keys
+     * the driver can deliver. Found by the Spring JDBC suite.
+     */
     @Override
     public boolean supportsGetGeneratedKeys() {
-        return false;
+        return true;
     }
 
     @Override

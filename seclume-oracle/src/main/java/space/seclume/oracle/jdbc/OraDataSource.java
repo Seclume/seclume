@@ -129,18 +129,55 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
     }
 
     /**
+     * The transport this data source's connections run on, as the URL option
+     * {@code transport} names it - null for the system property's choice.
+     */
+    private String transport;
+
+    /** The trust the URL chose - {@code tlsRootCert}, {@code tlsPin} - or null for the JVM's. */
+    private space.seclume.internal.TrustChoice.Choice trust;
+
+    public void setTransport(String transport) {
+        this.transport = transport == null || transport.isBlank() ? null : transport.trim();
+    }
+
+    public String getTransport() {
+        return transport;
+    }
+
+    /**
      * Takes over a whole URL, so that the same text means the same thing in
      * the driver and in the {@code DataSource}.
+     *
+     * <p><b>Every</b> setting the URL can carry, not the ones that happened to
+     * exist when this was written: a {@code tls=verify-full} that the driver
+     * honoured and this method dropped would connect without checking the
+     * server, through exactly the door Spring Boot uses.
      */
     public void setUrl(String url) throws SQLException {
-        OracleSession.Settings settings = OraUrl.settings(url, null);
+        setUrl(url, null);
+    }
+
+    /**
+     * The same, with settings beside the URL - the user and the secret
+     * provider, when the configuration keeps them apart from it.
+     */
+    public void setUrl(String url, java.util.Properties properties) throws SQLException {
+        OracleSession.Settings settings = OraUrl.settings(url, properties);
+        this.transport = space.seclume.internal.Transports.option(url, properties);
+        this.trust = space.seclume.internal.TrustChoice.of(url, properties);
         this.host = settings.host();
         this.port = settings.port();
-        this.service = settings.service();
         this.user = settings.user();
         this.secret = settings.secret();
         this.connectTimeoutMillis = settings.connectTimeoutMillis();
         this.hosts = settings.hosts();
+        this.maxResultBytes = settings.resultLimit().maxBytes();
+        this.maxResultRows = settings.resultLimit().maxRows();
+        this.tlsStack = settings.tlsStack();
+        this.identity = settings.identity();
+        this.service = settings.service();
+        this.tls = settings.tls();
     }
 
     /**
@@ -192,7 +229,9 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
                 resolvedIdentity());
-        return new OraConnection(OracleSession.open(settings),
+        return new OraConnection(space.seclume.internal.TrustChoice.using(trust,
+                () -> space.seclume.internal.Transports.using(transport,
+                        () -> OracleSession.open(settings))),
                 OraUrl.PREFIX + "//" + host + ":" + port + "/" + service);
     }
 

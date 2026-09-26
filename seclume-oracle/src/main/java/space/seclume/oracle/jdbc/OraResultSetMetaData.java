@@ -68,17 +68,20 @@ final class OraResultSetMetaData implements ResultSetMetaData {
         // as text. getColumnClassName is a promise about what getObject
         // returns, and an ORM reads it and then casts.
         return switch (c.type()) {
-            case OracleColumn.TYPE_NUMBER -> c.scale() == 0 && c.precision() > 0
-                    && c.precision() <= 9 ? "java.lang.Long" : "java.math.BigDecimal";
+            case OracleColumn.TYPE_NUMBER -> "java.math.BigDecimal";
             case OracleColumn.TYPE_RAW, OracleColumn.TYPE_LONG_RAW -> "[B";
             case OracleColumn.TYPE_DATE, OracleColumn.TYPE_TIMESTAMP -> "java.sql.Timestamp";
-            case OracleColumn.TYPE_TIMESTAMP_ZONE, OracleColumn.TYPE_TIMESTAMP_LOCAL ->
+            case OracleColumn.TYPE_TIMESTAMP_ZONE -> "java.time.OffsetDateTime";
+            case OracleColumn.TYPE_TIMESTAMP_LOCAL ->
                     "java.sql.Timestamp";
             case OracleColumn.TYPE_BINARY_FLOAT -> "java.lang.Float";
             case OracleColumn.TYPE_BINARY_DOUBLE -> "java.lang.Double";
             case OracleColumn.TYPE_BOOLEAN -> "java.lang.Boolean";
             case OracleColumn.TYPE_CLOB -> "java.sql.Clob";
             case OracleColumn.TYPE_BLOB -> "java.sql.Blob";
+            case OracleColumn.TYPE_ROWID, OracleColumn.TYPE_UROWID -> "java.sql.RowId";
+            case OracleColumn.TYPE_OBJECT -> "java.sql.SQLXML";
+            case OracleColumn.TYPE_JSON -> "java.lang.String";
             default -> "java.lang.String";
         };
     }

@@ -263,11 +263,23 @@ public final class TtcLob {
      * end of the data, the same convention as everywhere else in this
      * protocol.
      *
+     * <p>The number behind the locator is there only when the call carried
+     * an amount - a read, a length, a create. A write or a free is answered
+     * with the locator alone, and the status message follows at once. Reading
+     * a number there anyway took the status for one: its first byte as the
+     * count of digits, four bytes of it as the value, and the walk went on in
+     * the middle of it - on the low byte of a counter the server raises with
+     * every call. Mostly that byte is no message type and the walk stopped
+     * quietly; once in 256 calls it is 7, and the write failed with "a row
+     * arrived before its description". That is the intermittent failure the
+     * full builds showed and nothing in isolation reproduced.
+     *
      * @param sink grows to hold the contents; never a heap array
+     * @param amountFollows whether the call asked with an amount
      * @return the parsed tail, for the error it may carry
      */
-    public static Answer read(WireBuffer in, int at, int end, WireBuffer sink)
-            throws SQLException {
+    public static Answer read(WireBuffer in, int at, int end, WireBuffer sink,
+                              boolean amountFollows) throws SQLException {
         int p = at;
         long reported = -1;
         int locatorAt = -1;
@@ -277,7 +289,7 @@ public final class TtcLob {
             if (type == TtcMessage.TYPE_LOB_DATA) {
                 p = readData(in, p + 1, end, sink);
             } else if (type == TtcMessage.TYPE_PARAMETER) {
-                Returned returned = readReturned(in, p + 1);
+                Returned returned = readReturned(in, p + 1, amountFollows);
                 reported = returned.value();
                 locatorAt = returned.locatorAt();
                 locatorLength = returned.locatorLength();
@@ -342,13 +354,16 @@ public final class TtcLob {
      * so both are walked over - but the shape has to be right, or the closing
      * status would be read from the middle of a locator.
      */
-    private static Returned readReturned(WireBuffer in, int at) {
+    private static Returned readReturned(WireBuffer in, int at, boolean amountFollows) {
         int p = at;
         p++;                                              // a zero byte
         int length = in.getByte(p) & 0xff;
         p++;
         int locatorAt = p;
         p += length;                                      // the locator itself
+        if (!amountFollows) {
+            return new Returned(-1, locatorAt, length, p);
+        }
         int digits = in.getByte(p) & 0xff;
         long value = 0;
         for (int i = 0; i < digits; i++) {

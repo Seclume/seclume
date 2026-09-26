@@ -105,7 +105,17 @@ public final class TtcParameters {
         if (chunk != length) {
             // A value longer than 252 bytes arrives in chunks; the login
             // fields are all shorter, so this would be a misread length.
-            throw new IllegalStateException("expected " + length
+            //
+            // Truncated and not a bare IllegalStateException, and the
+            // difference is what the caller sees. Both are unchecked, but the
+            // login path catches Truncated by name and turns it into a
+            // SQLException with 08001 - see OracleSession.connectAndLogIn. A
+            // plain one goes past that clause and leaves getConnection as an
+            // IllegalStateException, which is not a failure a pool or an
+            // application can act on. Found by the login sweep: a spoilt
+            // length in the server's challenge announces a field of
+            // 1,599,292,755 bytes, and this is where that lands.
+            throw WireBuffer.Truncated.because("expected " + length
                     + " bytes, the chunk announces " + chunk);
         }
         char[] text = new char[length]; // seclume-allow: parameter names and hex values, protocol text and never a secret

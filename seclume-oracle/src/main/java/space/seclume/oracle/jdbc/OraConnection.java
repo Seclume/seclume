@@ -2,6 +2,7 @@ package space.seclume.oracle.jdbc;
 
 import space.seclume.Pipelined;
 import space.seclume.RoundTrips;
+import space.seclume.Secured;
 import java.sql.Array;
 import java.sql.Blob;
 import java.sql.CallableStatement;
@@ -40,7 +41,129 @@ import space.seclume.oracle.OracleSession;
  * SQL injection is not something warded off on this path; it does not exist
  * here.
  */
-public final class OraConnection implements Connection, RoundTrips, Pipelined {
+public final class OraConnection implements Connection, space.seclume.internal.jdbc.Fronted, RoundTrips, Pipelined, Secured, space.seclume.Flight,
+        space.seclume.SessionReset, space.seclume.ServerCapacity, space.seclume.ServerIdleLimit,
+        space.seclume.SessionContext,
+        space.seclume.OpenStatements {
+
+    /** The handle in front of this connection, while there is one - see {@link space.seclume.internal.jdbc.Fronted}. */
+    private volatile Connection front;
+
+    @Override
+    public void front(Connection handle) {
+        this.front = handle;
+    }
+
+    /** What a statement or metadata object made now names as its connection. */
+    Connection frontOrSelf() {
+        Connection handle = front;
+        return handle != null ? handle : this;
+    }
+
+    /** Whether statements record where they were made - see OpenStatements. */
+    private volatile boolean traceStatements;
+
+    /** A statement's birthplace, when asked for; nothing otherwise, which is free. */
+    StackTraceElement[] creationTrace() {
+        return traceStatements ? new Throwable().getStackTrace() : null;
+    }
+
+    @Override
+    public void traceStatements(boolean on) {
+        traceStatements = on;
+    }
+
+    @Override
+    public java.util.List<space.seclume.OpenStatements.Opened> openStatements() {
+        java.util.List<space.seclume.OpenStatements.Opened> opened = new java.util.ArrayList<>();
+        for (OraStatement statement : new java.util.ArrayList<>(open)) {
+            String sql = statement.lastSql();
+            opened.add(new space.seclume.OpenStatements.Opened(statement,
+                    sql == null ? null : space.seclume.QueryFingerprint.of(sql),
+                    statement.createdAt));
+        }
+        return opened;
+    }
+
+    /** The server's connection limit and use - see {@link space.seclume.ServerCapacity}. */
+    @Override
+    public space.seclume.ServerCapacity.Capacity capacity() throws SQLException {
+        checkOpen();
+        return space.seclume.internal.jdbc.Capacities.ask(this,
+                "select to_number(value) from v$parameter where name = 'sessions'",
+                "select count(*) from v$session where type = 'USER'");
+    }
+
+
+    /**
+     * The server's idle limit - the profile's {@code IDLE_TIME}, in minutes,
+     * as {@code user_resource_limits} shows it to the user itself.
+     */
+    @Override
+    public java.time.Duration idleLimit() throws SQLException {
+        checkOpen();
+        return space.seclume.internal.jdbc.Capacities.idleLimit(this,
+                "select case when \"LIMIT\" in ('UNLIMITED', 'DEFAULT') then null else to_number(\"LIMIT\") end from user_resource_limits where resource_name = 'IDLE_TIME'",
+                java.time.Duration.ofMinutes(1));
+    }
+
+    /**
+     * See {@link space.seclume.SessionContext}: only {@code client_identifier}.
+     * Any other application context lives in a namespace a DBA creates and
+     * only its own package may set - nothing a driver can do on its behalf.
+     */
+    @Override
+    public void setSessionContext(String name, String value) throws SQLException {
+        checkOpen();
+        space.seclume.internal.jdbc.ContextValues.check(name, value);
+        if (!name.equalsIgnoreCase("client_identifier")) {
+            throw new java.sql.SQLFeatureNotSupportedException("Oracle keeps an application "
+                    + "context in a namespace a DBA creates, set only by its own package - "
+                    + "call that package; the one context a session may set itself is "
+                    + "client_identifier (SYS_CONTEXT('USERENV', 'CLIENT_IDENTIFIER'))");
+        }
+        try (java.sql.PreparedStatement statement = prepareStatement(
+                "begin dbms_session.set_identifier(?); end;")) {
+            statement.setString(1, value);
+            statement.execute();
+        }
+    }
+
+    /** What statements set beyond the transaction - see {@link space.seclume.SessionReset}. */
+    private final space.seclume.internal.jdbc.SessionState sessionState =
+            new space.seclume.internal.jdbc.SessionState();
+
+    /** For the statements: each notes its text here. */
+    space.seclume.internal.jdbc.SessionState sessionState() {
+        return sessionState;
+    }
+
+    @Override
+    public boolean sessionStateChanged() {
+        return sessionState.changed();
+    }
+
+    /**
+     * Package state, the client identifier, module, action and client info,
+     * back to empty - one round trip. An {@code ALTER SESSION} cannot be
+     * undone without knowing what it replaced: that connection is reported as
+     * not reset, and a pool closes it rather than lend it again.
+     */
+    @Override
+    public boolean resetSessionState() throws SQLException {
+        checkOpen();
+        if (!sessionState.changed()) {
+            return true;
+        }
+        if (sessionState.irreversible() || !autoCommit) {
+            return false;
+        }
+        session.query("begin dbms_session.modify_package_state(dbms_session.reinitialize); "
+                + "dbms_session.clear_identifier; dbms_application_info.set_module(null, null); "
+                + "dbms_application_info.set_client_info(null); end;", null);
+        sessionState.clear();
+        return true;
+    }
 
     private final OracleSession session;
     private final String url;
@@ -50,6 +173,38 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     private boolean closed;
     private int isolation = TRANSACTION_READ_COMMITTED;
     private int savepointCounter;
+
+    /**
+     * A JDBC connection on a session this process did not open - what an
+     * application holds, put back on a session that was handed over.
+     *
+     * <p>{@code facts} are what the giving connection knew about itself (see
+     * {@link space.seclume.internal.jdbc.ConnectionFacts}); the server session
+     * carries everything else.
+     */
+    public static java.sql.Connection resume(OracleSession session,
+            space.seclume.internal.jdbc.ConnectionFacts facts) {
+        // The session keeps its own flag - it is a bit in every execute call -
+        // and the two have to agree, or statements are committed by the
+        // server that the connection believes are in a transaction.
+        session.setAutoCommit(facts.autoCommit());
+        session.setReadOnlyTransactions(facts.readOnly());
+        OraConnection connection = new OraConnection(session, "jdbc:seclume:oracle:resumed");
+        connection.autoCommit = facts.autoCommit();
+        connection.readOnly = facts.readOnly();
+        connection.isolation = facts.isolation();
+        connection.savepointCounter = facts.savepoints();
+        return connection;
+    }
+
+    /**
+     * What this connection knows about itself, for whoever takes its session
+     * over - read it <b>before</b> the session is detached.
+     */
+    public space.seclume.internal.jdbc.ConnectionFacts facts() {
+        return new space.seclume.internal.jdbc.ConnectionFacts(autoCommit, readOnly, isolation,
+                0, savepointCounter);
+    }
 
     OraConnection(OracleSession session, String url) {
         this.session = session;
@@ -123,6 +278,8 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
      */
     @Override
     public PreparedStatement prepareStatement(String sql) throws SQLException {
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
         checkOpen();
         OraPreparedStatement statement = new OraPreparedStatement(this, sql);
         open.add(statement);
@@ -132,31 +289,37 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public Statement createStatement(int resultSetType, int resultSetConcurrency)
             throws SQLException {
-        requireForwardReadOnly(resultSetType, resultSetConcurrency);
-        return createStatement();
+        return typed(space.seclume.internal.jdbc.ResultSetTypes.require(resultSetType, resultSetConcurrency), createStatement());
     }
 
     @Override
     public Statement createStatement(int resultSetType, int resultSetConcurrency,
                                      int resultSetHoldability) throws SQLException {
-        requireForwardReadOnly(resultSetType, resultSetConcurrency);
-        return createStatement();
+        return typed(space.seclume.internal.jdbc.ResultSetTypes.require(resultSetType, resultSetConcurrency), createStatement());
     }
 
     @Override
     public PreparedStatement prepareStatement(String sql, int a, int b) throws SQLException {
-        return prepareStatement(sql);
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
+        return typed(space.seclume.internal.jdbc.ResultSetTypes.require(a, b),
+                prepareStatement(sql));
     }
 
     @Override
     public PreparedStatement prepareStatement(String sql, int a, int b, int c)
             throws SQLException {
-        return prepareStatement(sql);
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
+        return typed(space.seclume.internal.jdbc.ResultSetTypes.require(a, b),
+                prepareStatement(sql));
     }
 
     @Override
     public PreparedStatement prepareStatement(String sql, int autoGeneratedKeys)
             throws SQLException {
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
         if (autoGeneratedKeys == Statement.NO_GENERATED_KEYS) {
             return prepareStatement(sql);
         }
@@ -175,6 +338,8 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public PreparedStatement prepareStatement(String sql, String[] columnNames)
             throws SQLException {
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
         checkOpen();
         OraPreparedStatement statement = (OraPreparedStatement) prepareStatement(sql);
         statement.wantGeneratedKeys(columnNames);
@@ -184,12 +349,26 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public PreparedStatement prepareStatement(String sql, int[] columnIndexes)
             throws SQLException {
-        return prepareStatement(sql);
+        // Refused rather than ignored: this used to hand back a plain
+        // statement, and getGeneratedKeys then had nothing - an insert that
+        // asked for its key and silently got none. Oracle's clause names
+        // columns, and a number would first have to be looked up in the
+        // dictionary for a table the statement names, quoted or not.
+        throw new SQLFeatureNotSupportedException(
+                "generated keys by column number are not supported - name the columns "
+                + "instead: prepareStatement(sql, new String[] {\"id\"})");
     }
 
     @Override
     public CallableStatement prepareCall(String sql) throws SQLException {
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
         checkOpen();
+        if (!CallSyntax.isCall(sql)) {
+            // A plain query through prepareCall - Liquibase asks for its
+            // schema this way. See QueryAsCallable.
+            return new space.seclume.internal.jdbc.QueryAsCallable(prepareStatement(sql));
+        }
         OraCallableStatement statement =
                 new OraCallableStatement(this, CallSyntax.parse(sql));
         open.add(statement);
@@ -198,19 +377,29 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public CallableStatement prepareCall(String sql, int a, int b) throws SQLException {
-        return prepareCall(sql);
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
+        return typed(space.seclume.internal.jdbc.ResultSetTypes.require(a, b),
+                prepareCall(sql));
     }
 
     @Override
     public CallableStatement prepareCall(String sql, int a, int b, int c) throws SQLException {
-        return prepareCall(sql);
+        sql = space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
+        return typed(space.seclume.internal.jdbc.ResultSetTypes.require(a, b),
+                prepareCall(sql));
     }
 
-    private void requireForwardReadOnly(int type, int concurrency) throws SQLException {
-        if (type != ResultSet.TYPE_FORWARD_ONLY || concurrency != ResultSet.CONCUR_READ_ONLY) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume result sets are forward-only and read-only");
-        }
+    /**
+     * The statement, set to the result set type asked for - checked before
+     * the statement was made, so a refused type leaves nothing open.
+     */
+    private static <T extends Statement> T typed(int type, T statement) {
+        Statement target = statement instanceof space.seclume.internal.jdbc.QueryAsCallable call
+                ? call.query() : statement;
+        ((OraStatement) target).resultSetType(type);
+        return statement;
     }
 
     // ---- transactions ----------------------------------------------------
@@ -218,6 +407,17 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public boolean getAutoCommit() throws SQLException {
         checkOpen();
+        return autoCommit;
+    }
+
+    /**
+     * The mode, without asking whether the connection is still open.
+     *
+     * <p>For the one caller that needs it after the connection has broken:
+     * deciding whether a lost answer means a lost commit. There
+     * {@code getAutoCommit()} would throw instead of answering.
+     */
+    boolean autoCommitNow() {
         return autoCommit;
     }
 
@@ -239,7 +439,11 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
         // that is the only reading that does not lose work.
         if (value) {
             // Commits only if something actually ran - see OracleSession.
-            session.commit();
+            try {
+                session.commit();
+            } catch (SQLException failure) {
+                throw space.seclume.TransactionResolutionUnknownException.duringCommit(failure);
+            }
         }
         autoCommit = value;
         session.setAutoCommit(value);
@@ -248,13 +452,40 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public void commit() throws SQLException {
         checkOpen();
-        session.commit();
+        requireManualCommit("commit");
+        try {
+            // A failure from here on is after COMMIT began to go out, and a
+            // lost connection then means nobody knows whether it applied -
+            // see TransactionResolutionUnknownException.
+            session.commit();
+        } catch (SQLException failure) {
+            throw space.seclume.TransactionResolutionUnknownException.duringCommit(failure);
+        }
     }
 
     @Override
     public void rollback() throws SQLException {
         checkOpen();
+        requireManualCommit("roll back");
         session.rollback();
+    }
+
+    /**
+     * The three transaction calls JDBC forbids while auto-commit is on.
+     *
+     * <p>PostgreSQL's driver refused these from the start and this one did
+     * not, which is the kind of difference that only shows up when the same
+     * application is pointed at both. And the refusal is not pedantry: code
+     * that calls {@code commit()} on an auto-commit connection believes it is
+     * ending a transaction that was never open, and the writes it thought it
+     * was grouping were each committed on their own as they went.
+     */
+    private void requireManualCommit(String what) throws SQLException {
+        if (autoCommit) {
+            throw new SQLException("cannot " + what
+                    + " while auto-commit is on - call setAutoCommit(false) first",
+                    "25000");
+        }
     }
 
     @Override
@@ -276,7 +507,12 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
             default -> throw new SQLException(
                     "Oracle knows only READ COMMITTED and SERIALIZABLE, not level " + level);
         };
-        session.query("set transaction isolation level " + name, null);
+        // For the session, not the transaction: SET TRANSACTION ISOLATION
+        // LEVEL held for one transaction only, and Spring sets the level
+        // while auto-commit is still on - so it was committed away with
+        // itself and never governed anything. ALTER SESSION stays.
+        session.query("alter session set isolation_level = "
+                + name.replace(' ', '_'), null);
         isolation = level;
     }
 
@@ -290,7 +526,10 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     public void setReadOnly(boolean value) throws SQLException {
         checkOpen();
         if (value != readOnly) {
-            session.query("set transaction " + (value ? "read only" : "read write"), null);
+            // Not sent now: Oracle's read-only lasts one transaction and has
+            // to open it. The session sends it in front of each one - see
+            // OracleSession.setReadOnlyTransactions.
+            session.setReadOnlyTransactions(value);
             readOnly = value;
         }
     }
@@ -303,6 +542,7 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public Savepoint setSavepoint(String name) throws SQLException {
         checkOpen();
+        requireManualCommit("set a savepoint");
         String safe = requirePlainName(name);
         session.query("savepoint " + safe, null);
         return new NamedSavepoint(safe);
@@ -360,7 +600,10 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public void setCatalog(String catalog) throws SQLException {
-        throw new SQLFeatureNotSupportedException("Oracle has no catalogs");
+        // Oracle has no catalogs, and for that case JDBC says what to do:
+        // "if the driver does not support catalogs, it will silently ignore
+        // this request". getCatalog answers null, as it always did.
+        checkOpen();
     }
 
     @Override
@@ -392,7 +635,16 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     }
 
     @Override
-    public boolean isValid(int timeout) {
+    public boolean isValid(int timeout) throws SQLException {
+        // JDBC: a negative timeout is a SQLException, not a value to ignore.
+        // It is the one argument check on this method, and it is worth having
+        // because a caller that passes -1 means something by it - usually a
+        // timeout it computed and got wrong - and silently treating it as "no
+        // limit" hides that.
+        if (timeout < 0) {
+            throw new SQLException("a validation timeout cannot be negative: " + timeout,
+                    "22023");
+        }
         if (closed || !session.isOpen()) {
             return false;
         }
@@ -458,7 +710,8 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     @Override
     public String nativeSQL(String sql) throws SQLException {
         checkOpen();
-        return sql;
+        return space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.ORACLE);
     }
 
     @Override
@@ -483,7 +736,10 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public Map<String, Class<?>> getTypeMap() {
-        return Map.of();
+        // A fresh, mutable one: JDBC's own example puts a mapping into it and
+        // hands it back, and it is setTypeMap that says why that cannot work -
+        // not an UnsupportedOperationException from an immutable map.
+        return new java.util.HashMap<>();
     }
 
     @Override
@@ -500,13 +756,29 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
 
     @Override
     public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume does not change the socket timeout after connecting");
+        checkOpen();
+        if (milliseconds < 0) {
+            throw new SQLException("a network timeout cannot be negative: " + milliseconds,
+                    "22023");
+        }
+        // The executor is not needed: the watch that closes a connection
+        // waiting too long is one thread for all of them - see
+        // space.seclume.internal.NetworkTimeouts.
+        try {
+            session().transport().networkTimeout(milliseconds);
+        } catch (java.io.IOException unsupported) {
+            throw new SQLFeatureNotSupportedException(unsupported.getMessage());
+        }
+        networkTimeout = milliseconds;
     }
 
+    /** What {@link #setNetworkTimeout} set; 0 waits for ever. */
+    private int networkTimeout;
+
     @Override
-    public int getNetworkTimeout() {
-        return 0;
+    public int getNetworkTimeout() throws SQLException {
+        checkOpen();
+        return networkTimeout;
     }
 
     /**
@@ -518,8 +790,12 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
         checkOpen();
         session.query("rollback", null);
         autoCommit = true;
+        session.setAutoCommit(true);
         readOnly = false;
-        isolation = TRANSACTION_READ_COMMITTED;
+        session.setReadOnlyTransactions(false);
+        // The level is a session setting now, so it has to be taken back
+        // explicitly - or the next borrower runs serializable unasked.
+        setTransactionIsolation(TRANSACTION_READ_COMMITTED);
     }
 
     /**
@@ -537,22 +813,23 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
      */
     @Override
     public Clob createClob() {
-        return OraLocalLob.clob();
+        return space.seclume.internal.jdbc.WritableLobs.text();
     }
 
     @Override
     public Blob createBlob() {
-        return OraLocalLob.blob();
+        return space.seclume.internal.jdbc.WritableLobs.binary();
     }
 
     @Override
     public NClob createNClob() {
-        return OraLocalLob.clob();
+        return space.seclume.internal.jdbc.WritableLobs.text();
     }
 
     @Override
     public SQLXML createSQLXML() throws SQLException {
-        throw large("SQLXML");
+        checkOpen();
+        return space.seclume.internal.jdbc.XmlValue.writable();
     }
 
     @Override
@@ -639,4 +916,40 @@ public final class OraConnection implements Connection, RoundTrips, Pipelined {
     public boolean isWrapperFor(Class<?> iface) {
         return iface.isInstance(this) || iface.isInstance(session);
     }
+
+    /**
+     * How this connection proved who it was - see {@link Secured}.
+     *
+     * <p>Delegated rather than computed: the session is the only thing that
+     * watched the login happen.
+     */
+    @Override
+    public String authenticationMethod() {
+        return session.authenticationMethod();
+    }
+
+    @Override
+    public java.security.cert.X509Certificate serverCertificate() {
+        return session.serverCertificate();
+    }
+
+    /** What is carrying this connection, or {@code null} in the clear. */
+    @Override
+    public String tlsDescription() {
+        return session.tlsDescription();
+    }
+
+
+    // ---- the flight recorder, see space.seclume.Flight -------------------
+
+    @Override
+    public java.util.List<space.seclume.Flight.Message> recent() {
+        return session.recentMessages();
+    }
+
+    @Override
+    public long messages() {
+        return session.recordedMessages();
+    }
+
 }

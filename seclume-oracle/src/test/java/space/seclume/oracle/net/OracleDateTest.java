@@ -56,9 +56,10 @@ class OracleDateTest {
      * What the driver writes has to be what the driver reads - the two are
      * separate implementations of the same shifted bytes.
      *
-     * <p>A {@code LocalDateTime} goes as a TIMESTAMP, eleven bytes, and not
-     * as the seven of a DATE: the four at the end are the fraction of a
-     * second, and binding a point in time as a DATE threw it away silently.
+     * <p>A {@code LocalDateTime} goes as a TIMESTAMP - eleven bytes when it
+     * has a fraction of a second, seven when it has none, as ojdbc sends it.
+     * The four at the end are the fraction, and binding a point in time as a
+     * DATE type threw it away silently: the type stays TIMESTAMP either way.
      * The last two values here have one, so that a driver that went back to
      * seven bytes would be caught by the value and not only by the length.
      */
@@ -74,7 +75,8 @@ class OracleDateTest {
             binds.putValues(out);
             // Behind the ROW_DATA byte comes the length, and then the bytes.
             int length = out.getByte(1) & 0xff;
-            assertEquals(OracleDate.DATE_LENGTH + 4, length);
+            assertEquals(stamp.getNano() == 0 ? OracleDate.DATE_LENGTH
+                    : OracleDate.DATE_LENGTH + 4, length);
             String expected = stamp.toString().replace('T', ' ')
                     + (stamp.getSecond() == 0 && stamp.getNano() == 0 ? ":00" : "");
             assertEquals(expected, OracleDate.toText(out.segment(), 2, length));

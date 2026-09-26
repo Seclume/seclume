@@ -24,7 +24,7 @@ import space.seclume.oracle.net.OracleNumber;
  * {@code long} without a {@code String} on the way, which is the whole point:
  * {@code getLong} allocates nothing.
  */
-public final class OraResultSet extends ReadOnlyResultSet {
+public final class OraResultSet extends ReadOnlyResultSet implements space.seclume.Sensitive {
 
     private final OraResultBlock block;
 
@@ -51,7 +51,8 @@ public final class OraResultSet extends ReadOnlyResultSet {
 
     @Override
     protected java.io.InputStream binaryStreamAt(int column) throws SQLException {
-        if (!OracleColumn.isLob(block.column(column).type())) {
+        if (!OracleColumn.isLob(block.column(column).type())
+                || block.column(column).type() == OracleColumn.TYPE_JSON) {
             return new java.io.ByteArrayInputStream(bytesAt(column));
         }
         return blobAt(column).getBinaryStream();
@@ -80,6 +81,25 @@ public final class OraResultSet extends ReadOnlyResultSet {
                         | (value.getByte(i + 1) & 0xff)));
             }
             return text.toString();
+        }
+    }
+
+    /**
+     * A {@code JSON} column as JSON text.
+     *
+     * <p>The locator's LOB holds OSON, and that is decoded here rather than
+     * handed out: a caller without ojdbc's JSON classes - Hibernate, Jackson,
+     * a plain {@code getString} - can do nothing with the binary tree.
+     */
+    private String jsonText(int column) throws SQLException {
+        if (block.column(column).inline()) {
+            // Brought in the row by the define - no round trip.
+            return space.seclume.oracle.net.OracleJson.toText(block.data().segment(),
+                    block.offset(column), block.length(column));
+        }
+        try (WireBuffer value = fetchLob(column)) {
+            return space.seclume.oracle.net.OracleJson.toText(value.segment(), 0,
+                    value.position());
         }
     }
 
@@ -114,11 +134,11 @@ public final class OraResultSet extends ReadOnlyResultSet {
             value.close();
             throw new SQLException("this result has no statement to read the LOB with", "HY000");
         }
-        // The locator of a column is a persistent one, so 112 bytes. A
-        // temporary LOB is 38 - which is why the length is a parameter and not
-        // a constant inside the call.
+        // A column's locator is usually a persistent one, 112 bytes; a JSON
+        // column's is a temporary one of 38. The row said which.
+        int locator = block.length(column);
         owner.connection.session().readLob(block.data(), block.offset(column),
-                TtcLob.LOCATOR_LENGTH, 1, TtcLob.ALL, value);
+                locator > 0 ? locator : TtcLob.LOCATOR_LENGTH, 1, TtcLob.ALL, value);
         return value;
     }
 
@@ -167,8 +187,34 @@ public final class OraResultSet extends ReadOnlyResultSet {
         if (description.type() == OracleColumn.TYPE_CLOB) {
             return clobText(column);
         }
+        if (description.type() == OracleColumn.TYPE_OBJECT) {
+            if (!description.isXml()) {
+                throw new SQLException("column " + (column + 1) + " is an object of type "
+                        + description.objectType() + ", which this driver does not read - "
+                        + "select its attributes instead", "0A000");
+            }
+            return space.seclume.oracle.net.OracleXml.fromImage(block.data().segment(), at,
+                    length);
+        }
+        if (description.type() == OracleColumn.TYPE_ROWID) {
+            return space.seclume.oracle.net.OracleRowid.toText(block.data().segment(), at,
+                    length);
+        }
         if (description.type() == OracleColumn.TYPE_BLOB) {
             throw new SQLException("a BLOB is not text", "22005");
+        }
+        if (description.type() == OracleColumn.TYPE_JSON) {
+            return jsonText(column);
+        }
+        if (description.type() == OracleColumn.TYPE_VECTOR) {
+            if (description.inline()) {
+                return space.seclume.oracle.net.OracleVector.toText(block.data().segment(),
+                        at, length);
+            }
+            try (WireBuffer value = fetchLob(column)) {
+                return space.seclume.oracle.net.OracleVector.toText(value.segment(), 0,
+                        value.position());
+            }
         }
         if (description.type() == OracleColumn.TYPE_NUMBER) {
             return OracleNumber.toText(block.data().segment(), at, length);
@@ -179,7 +225,31 @@ public final class OraResultSet extends ReadOnlyResultSet {
                     ? Float.toString((float) value) : Double.toString(value);
         }
         if (description.type() == OracleColumn.TYPE_BOOLEAN) {
-            return length > 0 && block.data().getByte(at) != 0 ? "1" : "0";
+            // "true", as ojdbc writes it - and as the server does in to_char.
+            return length > 0 && block.data().getByte(at) != 0 ? "true" : "false";
+        }
+        if (description.type() == OracleColumn.TYPE_UROWID) {
+            return space.seclume.oracle.net.OracleRowid.fromUrowid(block.data().segment(), at,
+                    length);
+        }
+        if (description.type() == OracleColumn.TYPE_INTERVAL_YM) {
+            return OracleDate.intervalYearToMonth(block.data().segment(), at);
+        }
+        if (description.type() == OracleColumn.TYPE_INTERVAL_DS) {
+            return OracleDate.intervalDayToSecond(block.data().segment(), at);
+        }
+        if (description.type() == OracleColumn.TYPE_BFILE) {
+            // A locator for a file on the server, which this driver does not
+            // open. ojdbc's getString answers null as well; before, the
+            // locator was not even framed and broke every column after it.
+            return null;
+        }
+        if (description.type() == OracleColumn.TYPE_TIMESTAMP_ZONE) {
+            java.time.ZonedDateTime value = zonedAt(column);
+            return ojdbcText(value.toLocalDateTime()) + " " + zoneText(column, value);
+        }
+        if (description.type() == OracleColumn.TYPE_TIMESTAMP_LOCAL) {
+            return ojdbcText(localAt(column)) + " " + lobSession().zones()[0].getId();
         }
         if (OracleDate.isDate(description.type())) {
             return OracleDate.toText(block.data().segment(), at, length);
@@ -199,6 +269,78 @@ public final class OraResultSet extends ReadOnlyResultSet {
         // value of every NVARCHAR2 column, silently. The column has said
         // which character set it is in all along; nothing asked it.
         return description.charset() == AL16UTF16 ? utf16(at, length) : utf8(at, length);
+    }
+
+    /**
+     * A {@code TIMESTAMP WITH TIME ZONE} as the point in time it names, in
+     * its own zone.
+     *
+     * <p>The fields on the wire are UTC and the zone stands beside them. This
+     * used to print the UTC fields with the offset behind them - a value
+     * written as 13:14+02:00 read back as 11:14+02:00, two hours early, and
+     * getTimestamp followed it. A region arrives as a number and was printed
+     * as an offset of "+113:156", which nothing could read.
+     */
+    private java.time.ZonedDateTime zonedAt(int column) throws SQLException {
+        java.lang.foreign.MemorySegment in = block.data().segment();
+        int at = block.offset(column);
+        int length = block.length(column);
+        java.time.ZoneId zone;
+        if (OracleDate.isRegion(in, at, length)) {
+            String name = lobSession().regionName(OracleDate.regionId(in, at));
+            try {
+                zone = java.time.ZoneId.of(name);
+            } catch (RuntimeException unknown) {
+                throw new SQLException("time zone region " + OracleDate.regionId(in, at)
+                        + " (" + name + ") is not one this JVM knows", "22009", unknown);
+            }
+        } else {
+            zone = java.time.ZoneOffset.ofTotalSeconds(OracleDate.zoneMinutes(in, at) * 60);
+        }
+        return OracleDate.fields(in, at, length).atZone(java.time.ZoneOffset.UTC)
+                .withZoneSameInstant(zone);
+    }
+
+    /** The zone as ojdbc writes it: the region's name, or "+2:00". */
+    private String zoneText(int column, java.time.ZonedDateTime value) {
+        if (!(value.getZone() instanceof java.time.ZoneOffset offset)) {
+            return value.getZone().getId();
+        }
+        int minutes = offset.getTotalSeconds() / 60;
+        return (minutes < 0 ? "-" : "+") + Math.abs(minutes) / 60 + ":"
+                + String.format("%02d", Math.abs(minutes) % 60);
+    }
+
+    /**
+     * A {@code TIMESTAMP WITH LOCAL TIME ZONE} in the session's zone. It
+     * travels in the database's, and was handed out as it travelled.
+     */
+    private java.time.LocalDateTime localAt(int column) throws SQLException {
+        java.time.ZoneId[] zones = lobSession().zones();
+        return OracleDate.fields(block.data().segment(), block.offset(column),
+                        block.length(column))
+                .atZone(zones[1]).withZoneSameInstant(zones[0]).toLocalDateTime();
+    }
+
+    /**
+     * "2024-02-29 13:14:15.123456", and ".0" for no fraction - Timestamp's
+     * form, written out: going through a Timestamp would move a time that
+     * falls into a daylight-saving gap of this JVM's zone.
+     */
+    private static String ojdbcText(java.time.LocalDateTime value) {
+        String fraction = String.format("%09d", value.getNano()).replaceAll("0+$", "");
+        return String.format("%04d-%02d-%02d %02d:%02d:%02d.%s", value.getYear(),
+                value.getMonthValue(), value.getDayOfMonth(), value.getHour(),
+                value.getMinute(), value.getSecond(), fraction.isEmpty() ? "0" : fraction);
+    }
+
+    @Override
+    protected Object temporalAt(int column) throws SQLException {
+        return switch (block.column(column).type()) {
+            case OracleColumn.TYPE_TIMESTAMP_ZONE -> zonedAt(column).toOffsetDateTime();
+            case OracleColumn.TYPE_TIMESTAMP_LOCAL -> localAt(column);
+            default -> null;
+        };
     }
 
     /** Uppercase hex, the way Oracle and ojdbc render a raw. */
@@ -326,6 +468,11 @@ public final class OraResultSet extends ReadOnlyResultSet {
 
     @Override
     protected byte[] bytesAt(int column) throws SQLException {
+        if (block.column(column).type() == OracleColumn.TYPE_JSON) {
+            // The text in UTF-8, as for a JSON column on the other three -
+            // not the OSON tree, which nothing outside ojdbc can read.
+            return jsonText(column).getBytes(java.nio.charset.StandardCharsets.UTF_8); // seclume-allow: user payload requested as bytes, not a secret
+        }
         if (OracleColumn.isLob(block.column(column).type())) {
             return lobBytes(column);
         }
@@ -357,16 +504,48 @@ public final class OraResultSet extends ReadOnlyResultSet {
         return first == 'Y' || first == 'y' || first == 'T' || first == 't' || first == '1';
     }
 
+    /** An {@code XMLType} column as {@link java.sql.SQLXML}. */
+    @Override
+    protected java.sql.SQLXML sqlXmlAt(int column) throws SQLException {
+        if (!block.column(column).isXml()) {
+            throw new SQLException("column " + (column + 1) + " is not XMLType - read it with "
+                    + "getString", "42804");
+        }
+        return new space.seclume.internal.jdbc.XmlValue(stringAt(column));
+    }
+
+    /** A {@code ROWID} column as {@link java.sql.RowId} - its printed form. */
+    @Override
+    protected java.sql.RowId rowIdAt(int column) throws SQLException {
+        int type = block.column(column).type();
+        if (type != OracleColumn.TYPE_ROWID && type != OracleColumn.TYPE_UROWID) {
+            throw new SQLException("column " + (column + 1) + " is not a ROWID - select "
+                    + "rowid to get one", "42804");
+        }
+        return new space.seclume.internal.jdbc.OpaqueRowId(stringAt(column));
+    }
+
     @Override
     protected Object objectAt(int column) throws SQLException {
         OracleColumn description = block.column(column);
+        if (description.type() == OracleColumn.TYPE_ROWID
+                || description.type() == OracleColumn.TYPE_UROWID) {
+            return rowIdAt(column);
+        }
+        if (description.isXml()) {
+            return sqlXmlAt(column);
+        }
         if (description.type() == OracleColumn.TYPE_NUMBER) {
-            String text = stringAt(column);
-            // A scale of -127 means none was declared, so there is nothing to
-            // round to and a BigDecimal is the only honest answer.
-            return text.indexOf('.') < 0 && description.scale() == 0
-                    ? (Object) Long.valueOf(text)
-                    : new java.math.BigDecimal(text);
+            // BigDecimal for every NUMBER, as ojdbc hands it out: code that
+            // casts getObject - Spring's queryForList, a row mapper - was
+            // written against that and does not expect a Long for NUMBER(10).
+            return new java.math.BigDecimal(stringAt(column));
+        }
+        if (description.type() == OracleColumn.TYPE_TIMESTAMP_ZONE) {
+            return zonedAt(column).toOffsetDateTime();
+        }
+        if (description.type() == OracleColumn.TYPE_TIMESTAMP_LOCAL) {
+            return java.sql.Timestamp.valueOf(localAt(column));
         }
         if (OracleDate.isDate(description.type())) {
             return java.sql.Timestamp.valueOf(stringAt(column));
@@ -413,4 +592,33 @@ public final class OraResultSet extends ReadOnlyResultSet {
     @Override
     protected void release() {
     }
+
+    // ---- the native window, for space.seclume.Sensitive ------------------
+
+    @Override
+    protected java.lang.foreign.MemorySegment rawSegmentAt(int column) {
+        return block.data().segment();
+    }
+
+    @Override
+    protected long rawOffsetAt(int column) {
+        return block.offset(column);
+    }
+
+    @Override
+    protected int rawLengthAt(int column) {
+        return block.length(column);
+    }
+
+    @Override
+    public int readInto(int columnIndex, java.lang.foreign.MemorySegment target)
+            throws java.sql.SQLException {
+        return copyRaw(columnIndex, target);
+    }
+
+    @Override
+    public int length(int columnIndex) throws java.sql.SQLException {
+        return rawLength(columnIndex);
+    }
+
 }

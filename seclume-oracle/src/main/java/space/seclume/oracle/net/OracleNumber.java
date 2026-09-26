@@ -84,6 +84,55 @@ public final class OracleNumber {
     }
 
     /**
+     * A decimal given as its unscaled digits and scale - {@code 12.50} as
+     * 1250 and 2 - without going through text.
+     *
+     * <p>A BigDecimal bound as a parameter went through toPlainString and back
+     * into digits, a String and a builder per value; in a batch of five
+     * thousand rows that was the largest single cost on the client. Base 100
+     * wants the point between two groups, so an odd scale takes one more
+     * digit; what does not fit a long then goes the text way.
+     */
+    public static void encodeScaled(WireBuffer out, long unscaled, int scale) {
+        if (unscaled == 0) {
+            out.putByte((byte) 1);
+            out.putByte((byte) ZERO);
+            return;
+        }
+        long value = unscaled;
+        int even = scale;
+        if (even % 2 != 0) {
+            if (Math.abs(value) > Long.MAX_VALUE / 10) {
+                encodeText(out, java.math.BigDecimal.valueOf(unscaled, scale).toPlainString());
+                return;
+            }
+            value *= 10;
+            even++;
+        }
+        if (even < 0 || value == Long.MIN_VALUE) {
+            encodeText(out, java.math.BigDecimal.valueOf(unscaled, scale).toPlainString());
+            return;
+        }
+        boolean positive = value > 0;
+        long rest = positive ? value : -value;
+        int[] groups = new int[MAX_DIGITS]; // seclume-allow: digits of a bind value, never a secret
+        int count = 0;
+        while (rest > 0) {
+            groups[count++] = (int) (rest % BASE);
+            rest /= BASE;
+        }
+        int[] mantissa = new int[count]; // seclume-allow: digits of a bind value, never a secret
+        for (int i = 0; i < count; i++) {
+            mantissa[i] = groups[count - 1 - i];
+        }
+        int length = count;
+        while (length > 1 && mantissa[length - 1] == 0) {
+            length--;
+        }
+        write(out, positive, count - 1 - even / 2, mantissa, length);
+    }
+
+    /**
      * The same for a number that does not fit into a {@code long} - a decimal
      * with a point, or one with too many digits.
      *

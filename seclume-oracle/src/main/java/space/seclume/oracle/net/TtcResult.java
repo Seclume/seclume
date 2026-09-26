@@ -51,6 +51,28 @@ public final class TtcResult {
     }
 
     /**
+     * A description that arrives for a cursor with a define: the server
+     * describes the columns as they are, and the define decides how their
+     * values come - so what was asked inline stays inline.
+     */
+    private static List<OracleColumn> keepInline(List<OracleColumn> known,
+                                                 List<OracleColumn> described) {
+        if (known == null || known.size() != described.size()) {
+            return described;
+        }
+        List<OracleColumn> merged = null;
+        for (int i = 0; i < described.size(); i++) {
+            if (known.get(i).inline() && described.get(i).type() == known.get(i).type()) {
+                if (merged == null) {
+                    merged = new java.util.ArrayList<>(described);
+                }
+                merged.set(i, described.get(i).withInline());
+            }
+        }
+        return merged == null ? described : List.copyOf(merged);
+    }
+
+    /**
      * An answer to a fetch call.
      *
      * <p>A fetch answer carries no column description: the server assumes the
@@ -96,13 +118,23 @@ public final class TtcResult {
         // the walk: the rest of the answer still has to be read, or the next
         // call would start in the middle of this one.
         SQLException refused = null;
+        int last = p - 1;
         while (p < end) {
+            // Every message moves forward. A length off the wire that points
+            // backwards would otherwise send the walk round the same bytes for
+            // ever - found by Jazzer on 25.09.2026 as a session that never
+            // returned, which in a pool is a connection nothing gives back.
+            if (p <= last) {
+                throw space.seclume.internal.WireBuffer.malformed("a message that ends before "
+                        + "it starts, at " + p);
+            }
+            last = p;
             int type = in.getByte(p) & 0xff;
             p++;
             switch (type) {
                 case TtcMessage.TYPE_DESCRIBE_INFO -> {
                     TtcDescribe.Parsed parsed = TtcDescribe.read(in, p);
-                    columns = parsed.columns();
+                    columns = keepInline(columns, parsed.columns());
                     // A description means a new result: whatever the previous
                     // one carried over says nothing about this one.
                     if (row != null) {
@@ -221,6 +253,15 @@ public final class TtcResult {
         }
         p += 1 + length;
         byte[] unchanged = null;
+        // Up to eight bytes of length off the wire: cast to int, a large one
+        // became a negative array size - found by the fuzzer. It cannot be
+        // longer than the buffer the answer is in. (Not its limit: an answer
+        // collected from several packets is read up to a position of its own.)
+        long room = in.segment().byteSize() - p;
+        if (bytes < 0 || bytes > room) {
+            throw space.seclume.internal.WireBuffer.malformed("a bit vector of " + bytes
+                    + " bytes in an answer with room for " + room);
+        }
         if (bytes > 0) {
             p++;                                       // the length once more
             unchanged = new byte[(int) bytes]; // seclume-allow: a bit vector of the protocol, not a secret
@@ -279,8 +320,26 @@ public final class TtcResult {
      * skipped by arithmetic: a rowid sits in the middle, then three lists for
      * batch errors, and only after them the error number. That is why this
      * walks every field.
+     *
+     * <p><b>And the walk can run out.</b> Not every call answers with the full
+     * block: a LOB operation sends a shorter one that ends before the batch
+     * lists, and the walk then asks for a byte the message has not got. Until
+     * {@code WireBuffer} checked its bounds this read past the limit into the
+     * wiped remainder of the buffer, got zeros, and arrived at "error number
+     * 0" - the right answer by accident. It is the right answer on purpose
+     * too: a block that ends before the error number carries no error. So the
+     * walk stops where the message does and keeps what it had.
      */
     private void readError(WireBuffer in, int at) {
+        try {
+            walkError(in, at);
+        } catch (WireBuffer.Truncated shorterThanAStatementsBlock) {
+            // Nothing more to read, and nothing more to report: errorNumber
+            // stays 0, which is what the caller acts on.
+        }
+    }
+
+    private void walkError(WireBuffer in, int at) {
         int p = at;
         p = skipNumber(in, p);                         // call status
         p = skipNumber(in, p);                         // end-to-end sequence
@@ -373,7 +432,11 @@ public final class TtcResult {
         if (count == 0) {
             return p;
         }
-        throw new IllegalStateException("batch errors are not read yet");
+        // Handled like any answer the driver cannot read: the connection is
+        // broken with a sentence, not an IllegalStateException nobody catches -
+        // found by the fuzzer.
+        throw space.seclume.internal.WireBuffer.malformed("the answer carries a list of batch "
+                + "errors, which this driver does not read yet");
     }
 
     private static int skipBlock(WireBuffer in, int at) {

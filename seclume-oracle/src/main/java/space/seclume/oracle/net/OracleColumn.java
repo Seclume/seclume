@@ -19,9 +19,59 @@ package space.seclume.oracle.net;
  *                 national one, which is what an NVARCHAR2 arrives in); 0 for
  *                 types without one
  * @param nullable whether the column may hold NULL
+ * @param inline   whether the value comes in the row itself, because the
+ *                 cursor was given a define asking for it - see
+ *                 {@link #needsDefine}
  */
 public record OracleColumn(String name, int type, int precision, int scale,
-                           int bufferSize, int maxSize, int charset, boolean nullable) {
+                           int bufferSize, int maxSize, int charset, boolean nullable,
+                           String objectType, boolean inline) {
+
+    /** A column of a built-in type - no object type name. */
+    public OracleColumn(String name, int type, int precision, int scale, int bufferSize,
+            int maxSize, int charset, boolean nullable) {
+        this(name, type, precision, scale, bufferSize, maxSize, charset, nullable, "", false);
+    }
+
+    /** As described, the value not yet asked for inline. */
+    public OracleColumn(String name, int type, int precision, int scale, int bufferSize,
+            int maxSize, int charset, boolean nullable, String objectType) {
+        this(name, type, precision, scale, bufferSize, maxSize, charset, nullable, objectType,
+                false);
+    }
+
+    /**
+     * Whether this column's values are LOBs that live only as long as the
+     * fetch that brought them - JSON and VECTOR.
+     *
+     * <p>Their locators are not the handle to a stored LOB that a BLOB's is,
+     * but to a value made for this fetch: read after the next one, they
+     * answer ORA-24826. And each read is a round trip of its own. So a cursor
+     * with such a column is given a define that asks for the value in the
+     * row, and neither happens.
+     */
+    public boolean needsDefine() {
+        return type == TYPE_JSON || type == TYPE_VECTOR;
+    }
+
+    /** The same column, its value asked for in the row. */
+    public OracleColumn withInline() {
+        return new OracleColumn(name, type, precision, scale, bufferSize, maxSize, charset,
+                nullable, objectType, needsDefine());
+    }
+
+    /**
+     * An object - a user-defined type, or one of Oracle's own such as
+     * {@code XMLType}. What it is is in {@link #objectType()}, as
+     * {@code SCHEMA.NAME}; the value is a pickled image, see
+     * {@code TtcRow.readObject}.
+     */
+    public static final int TYPE_OBJECT = 109;
+
+    /** Whether this is Oracle's {@code XMLType}, the one object this driver reads. */
+    public boolean isXml() {
+        return type == TYPE_OBJECT && objectType.endsWith("XMLTYPE");
+    }
 
     /** Oracle's type number for {@code NUMBER}. */
     public static final int TYPE_NUMBER = 2;
@@ -33,6 +83,28 @@ public record OracleColumn(String name, int type, int precision, int scale,
     public static final int TYPE_DATE = 12;
     /** {@code RAW}. */
     public static final int TYPE_RAW = 23;
+
+    /**
+     * {@code ROWID} - the address of a row. Not a length-prefixed value on the
+     * wire but five numbers of the protocol's own variable width; see
+     * {@code TtcRow.readRowid} and {@link OracleRowid}.
+     */
+    public static final int TYPE_ROWID = 11;
+
+    /**
+     * {@code UROWID} - a row address as raw bytes, physical or the key of a
+     * row in an index-organized table; see {@link OracleRowid#fromUrowid}.
+     */
+    public static final int TYPE_UROWID = 208;
+
+    /** {@code BFILE} - a locator naming a file on the server; framed, not read. */
+    public static final int TYPE_BFILE = 114;
+
+    /** {@code INTERVAL YEAR TO MONTH}: four bytes of years, one of months. */
+    public static final int TYPE_INTERVAL_YM = 182;
+
+    /** {@code INTERVAL DAY TO SECOND}: days, hours, minutes, seconds, nanoseconds. */
+    public static final int TYPE_INTERVAL_DS = 183;
 
     /** {@code TIMESTAMP}. */
     public static final int TYPE_TIMESTAMP = 180;
@@ -80,6 +152,19 @@ public record OracleColumn(String name, int type, int precision, int scale,
     public static final int TYPE_BLOB = 113;
 
     /**
+     * {@code JSON}, Oracle's native type since 21c - a LOB locator on the
+     * wire like a BLOB, and what it holds is OSON, not text. See
+     * {@link OracleJson}.
+     */
+    public static final int TYPE_JSON = 119;
+
+    /**
+     * {@code VECTOR} (23ai) - a LOB locator on the wire like JSON, and what it
+     * holds is a vector image; see {@link OracleVector}.
+     */
+    public static final int TYPE_VECTOR = 127;
+
+    /**
      * A cursor - what a PL/SQL {@code SYS_REFCURSOR} parameter is on the wire.
      *
      * <p>Not a value type: what comes back in the bind is the number of a
@@ -95,7 +180,8 @@ public record OracleColumn(String name, int type, int precision, int scale,
      * and getting at the value costs a round trip of its own.
      */
     public static boolean isLob(int type) {
-        return type == TYPE_CLOB || type == TYPE_BLOB;
+        return type == TYPE_CLOB || type == TYPE_BLOB || type == TYPE_JSON
+                || type == TYPE_VECTOR;
     }
 
     /** A scale of -127 means "no scale was declared", not "no decimals". */
@@ -112,17 +198,14 @@ public record OracleColumn(String name, int type, int precision, int scale,
     /**
      * The matching {@link java.sql.Types} value.
      *
-     * <p>A {@code NUMBER} is the awkward one: Oracle has a single numeric type
-     * for everything, and what a caller wants back depends on its scale. A
-     * scale of -127 means none was declared - a computed value - and there
-     * {@code NUMERIC} is the honest answer rather than a guess at
-     * {@code INTEGER}.
+     * <p>A {@code NUMBER} is {@code NUMERIC} whatever its precision and
+     * scale, as ojdbc reports it. A guess at {@code INTEGER} for a
+     * {@code NUMBER(9)} is not what code written against ojdbc sees, and
+     * getObject hands out a BigDecimal either way.
      */
     public int sqlType() {
         return switch (type) {
-            case TYPE_NUMBER -> scale == 0 && precision > 0 && precision <= 9
-                    ? java.sql.Types.INTEGER
-                    : java.sql.Types.NUMERIC;
+            case TYPE_NUMBER -> java.sql.Types.NUMERIC;
             // Oracle sends the same wire type for varchar2 and nvarchar2;
             // only the character set tells them apart. Reporting both as
             // VARCHAR lost the distinction a national column exists for.
@@ -131,16 +214,20 @@ public record OracleColumn(String name, int type, int precision, int scale,
             case TYPE_CHAR -> isNational() ? java.sql.Types.NCHAR : java.sql.Types.CHAR;
             case TYPE_DATE -> java.sql.Types.TIMESTAMP;
             case TYPE_TIMESTAMP -> java.sql.Types.TIMESTAMP;
-            case TYPE_TIMESTAMP_ZONE, TYPE_TIMESTAMP_LOCAL ->
-                    java.sql.Types.TIMESTAMP_WITH_TIMEZONE;
+            case TYPE_TIMESTAMP_ZONE -> java.sql.Types.TIMESTAMP_WITH_TIMEZONE;
+            // Read in the session's zone, it is a timestamp without one.
+            case TYPE_TIMESTAMP_LOCAL ->
+                    java.sql.Types.TIMESTAMP;
             case TYPE_RAW -> java.sql.Types.VARBINARY;
             case TYPE_BOOLEAN -> java.sql.Types.BOOLEAN;
             case TYPE_BINARY_FLOAT -> java.sql.Types.REAL;
             case TYPE_BINARY_DOUBLE -> java.sql.Types.DOUBLE;
             case TYPE_LONG -> java.sql.Types.LONGVARCHAR;
             case TYPE_LONG_RAW -> java.sql.Types.LONGVARBINARY;
-            case TYPE_CLOB -> java.sql.Types.CLOB;
+            case TYPE_CLOB -> isNational() ? java.sql.Types.NCLOB : java.sql.Types.CLOB;
             case TYPE_BLOB -> java.sql.Types.BLOB;
+            case TYPE_ROWID, TYPE_UROWID -> java.sql.Types.ROWID;
+            case TYPE_OBJECT -> isXml() ? java.sql.Types.SQLXML : java.sql.Types.STRUCT;
             default -> java.sql.Types.OTHER;
         };
     }
@@ -161,8 +248,17 @@ public record OracleColumn(String name, int type, int precision, int scale,
             case TYPE_BINARY_DOUBLE -> "BINARY_DOUBLE";
             case TYPE_LONG -> "LONG";
             case TYPE_LONG_RAW -> "LONG RAW";
-            case TYPE_CLOB -> "CLOB";
+            case TYPE_CLOB -> isNational() ? "NCLOB" : "CLOB";
             case TYPE_BLOB -> "BLOB";
+            case TYPE_ROWID -> "ROWID";
+            // ojdbc says ROWID for both, and so does getColumnType
+            case TYPE_UROWID -> "ROWID";
+            case TYPE_BFILE -> "BFILE";
+            case TYPE_INTERVAL_YM -> "INTERVALYM";
+            case TYPE_INTERVAL_DS -> "INTERVALDS";
+            case TYPE_OBJECT -> objectType;
+            case TYPE_JSON -> "JSON";
+            case TYPE_VECTOR -> "VECTOR";
             default -> "UNKNOWN(" + type + ")";
         };
     }

@@ -323,6 +323,12 @@ public final class NsChannel implements AutoCloseable {
         boolean sawReset = false;
         int current = type;
         while (current == NsPacket.TYPE_MARKER) {
+            synchronized (breakLock) {
+                // The server is answering a break - or a failure, which
+                // clears the way the same. Either way nothing is owed.
+                breakInFlight = false;
+                lateBreak = false;
+            }
             sawReset |= markerType() == NsPacket.MARKER_RESET;
             if (sawReset) {
                 sendMarker(NsPacket.MARKER_RESET);
@@ -331,6 +337,24 @@ public final class NsChannel implements AutoCloseable {
             current = nextPacket();
         }
         return current;
+    }
+
+    /**
+     * Reads the server's late answer to a break and throws it away - the
+     * markers, the reset they ask for, and the error behind them.
+     *
+     * <p>Only reached when a call ended without its caller asking
+     * {@link #takeLateBreak()}: the LOB calls, the login. The call has
+     * already reported its outcome, and the error belongs to nothing that is
+     * still running; left on the wire, it would be the next statement's.
+     */
+    private void discardLateBreak() throws IOException {
+        lateBreak = false;
+        int type = answerMarkers(nextPacket());
+        while (type == NsPacket.TYPE_DATA
+                && (dataFlags & NsPacket.DATA_FLAGS_END_OF_RESPONSE) == 0) {
+            type = answerMarkers(nextPacket());
+        }
     }
 
     /** The kind of a marker packet, out of its body. */
@@ -347,13 +371,241 @@ public final class NsChannel implements AutoCloseable {
      */
     private long roundTrips;
 
+    /** Every byte of every packet received - what a fetch size is sized by. */
+    private long bytesReceived;
+
+    public long bytesReceived() {
+        return bytesReceived;
+    }
+
     public long roundTrips() {
         return roundTrips;
     }
 
+    /**
+     * Whether a request has gone out whose answer has not arrived in full.
+     *
+     * <p>Only read by {@link #sendBreak()}, and it is what makes that method
+     * safe. Oracle answers a break with markers of its own, and those markers
+     * are read by whoever is waiting for the answer. Sent when nobody is
+     * waiting, they would sit on the wire until the next statement read them
+     * instead of its own answer.
+     *
+     * <p>Volatile: set and cleared on the working thread, read on the thread
+     * that cancels.
+     */
+    private volatile boolean awaitingAnswer;
+
+    /**
+     * Guards the moment a break is sent against the moment an answer ends.
+     *
+     * <p>Without it, a break could be judged "in flight" just before the
+     * answer's last packet was read, and nobody would expect the markers it
+     * provokes.
+     */
+    private final Object breakLock = new Object();
+
+    /** A break went out during the call now in flight, and no marker has answered it yet. */
+    private boolean breakInFlight;
+
+    /**
+     * The call ended normally although a break was sent during it - so the
+     * server will act on the break <b>after</b> the answer: markers, and an
+     * ORA-01013 behind them.
+     *
+     * <p>Measured against 23ai: a PL/SQL block in {@code dbms_session.sleep}
+     * finishes its sleep, answers as if nothing had happened, and only then
+     * takes the break. The markers and the error were then read by the
+     * <b>next</b> statement, which failed as "cancelled" - a query timeout
+     * that fired late cancelled the wrong statement. python-oracledb reports
+     * the ORA-01013 on the call that was cancelled, and so does this driver
+     * now: see {@link #takeLateBreak()}. {@link #sendData()} clears a late
+     * break nobody took before the next request goes out.
+     */
+    private volatile boolean lateBreak;
+
+    /**
+     * Whether the answer just read is followed by the server's reaction to a
+     * break - and if so, it is now the caller's to read. Asking clears it.
+     */
+    public boolean takeLateBreak() {
+        synchronized (breakLock) {
+            boolean owed = lateBreak;
+            lateBreak = false;
+            return owed;
+        }
+    }
+
+    /**
+     * Tells the server to abandon the call this connection is waiting on.
+     *
+     * <p>Oracle's break is a MARKER packet down the same socket - the
+     * connection running the call is blocked reading, and a socket is full
+     * duplex, so the write does not wait for the read. What comes back is not
+     * an error but <b>more markers</b>: a break and a reset, which the reading
+     * thread answers with a reset of its own (see {@link #answerMarkers}), and
+     * only then does {@code ORA-01013} arrive as an ordinary TTC error. That
+     * whole dance already existed here for failed statements; a break is the
+     * same conversation started from this end.
+     *
+     * <p><b>Its own buffer, not the send buffer.</b> This is called from
+     * another thread by definition, and the send buffer belongs to whoever
+     * wrote the request that is currently in flight.
+     *
+     * <p>Does nothing when no call is in flight, and that is not laziness: the
+     * markers the server would answer with have no reader, and the next
+     * statement would find them where its own answer should be. A
+     * query-timeout thread that fires just after its query finished is the
+     * ordinary case, not the exotic one.
+     *
+     * <p><b>The urgent byte first, and the marker is not enough without it.</b>
+     * Measured against a real 23ai listener: the marker packet alone goes out,
+     * framed exactly as the reset marker that already works in the failure
+     * path, and the server carries on sleeping. It is not reading the socket -
+     * it is running the statement - so the marker waits in its receive buffer
+     * until the thing it was meant to stop has finished. The {@code !} sent as
+     * TCP urgent data is what raises {@code SIGURG} on the far side and makes
+     * the server look up. Oracle accepts the marker on its own only when the
+     * listener is configured with {@code DISABLE_OOB=ON}, which is why the
+     * marker is still sent behind it rather than instead of it.
+     *
+     * <p><b>When the server acts on it</b> is the server's affair: a
+     * long-running query is interrupted within the second, a PL/SQL block in
+     * {@code dbms_session.sleep} sleeps to its end first - python-oracledb
+     * sees the same against the same server. Then the answer arrives as if
+     * nothing had happened and the break's markers follow it; see
+     * {@link #lateBreak} for whose they are.
+     *
+     * <p>The urgent byte goes to the <b>transport</b> and not through the TLS
+     * layer, which is correct and not a shortcut: it is a signal on the
+     * connection rather than data in the stream, and TLS has nowhere to put
+     * it. A transport that cannot send urgent data says so and the marker
+     * goes on its own - which is the right behaviour for a listener that
+     * disabled OOB, and no worse than nothing for one that did not.
+     *
+     * @return whether a break was actually sent
+     */
+    public boolean sendBreak() throws IOException {
+        synchronized (breakLock) {
+            if (TRACE) {
+                System.err.println("[ns] -> break, " + (awaitingAnswer
+                        ? "a call is in flight" : "nothing in flight - not sent"));
+            }
+            if (!awaitingAnswer) {
+                return false;
+            }
+            breakInFlight = true;
+            return writeBreak();
+        }
+    }
+
+    private boolean writeBreak() throws IOException {
+        try {
+            // The byte itself carries no meaning to Oracle beyond "there is
+            // urgent data"; '!' is what every client sends.
+            channel.sendUrgent('!');
+        } catch (IOException cannot) {
+            // A transport without urgent data. The marker below still reaches
+            // a listener with DISABLE_OOB=ON.
+        }
+        WireBuffer marker = new WireBuffer(NsPacket.HEADER_SIZE + 3);
+        marker.putZeroes(NsPacket.HEADER_SIZE);
+        marker.putByte((byte) 1);
+        marker.putByte((byte) 0);
+        marker.putByte((byte) NsPacket.MARKER_TYPE_BREAK);
+        int length = marker.position();
+        if (NsPacket.hasLargeLength(protocolVersion)) {
+            marker.putByteAt(0, (byte) (length >>> 24));
+            marker.putByteAt(1, (byte) (length >>> 16));
+            marker.putByteAt(2, (byte) (length >>> 8));
+            marker.putByteAt(3, (byte) length);
+        } else {
+            marker.putByteAt(0, (byte) (length >>> 8));
+            marker.putByteAt(1, (byte) length);
+        }
+        marker.putByteAt(4, (byte) NsPacket.TYPE_MARKER);
+        java.nio.ByteBuffer view = marker.view();
+        view.clear().position(0).limit(length);
+        writeAll(view);
+        return true;
+    }
+
+    /**
+     * The flight recorder, or {@code null} when nobody asked for one.
+     *
+     * <p>See {@link space.seclume.Flight}.
+     */
+    private space.seclume.internal.FlightRecorder flight;
+    /**
+     * Whether the message being written carries the credential.
+     *
+     * <p><b>Oracle's answer to the withholding question is different again.</b>
+     * The password never travels as itself: O5LOGON sends it AES-encrypted and
+     * hex-encoded, so the length of the second login message is the length of
+     * a ciphertext rounded up to the block size - which is the password's
+     * length to within sixteen bytes. Coarser than PostgreSQL's cleartext case
+     * and finer than nothing, and a ring buffer in this process is the wrong
+     * place to keep either.
+     */
+    private boolean writingCredential;
+
+    /** Switches the recording on - see {@link space.seclume.Flight}. */
+    public void recordFlight(space.seclume.internal.FlightRecorder recorder) {
+        this.flight = recorder;
+    }
+
+    /** What this connection last sent and received, oldest first. */
+    public java.util.List<space.seclume.Flight.Message> recentMessages() {
+        return flight == null ? java.util.List.of() : flight.recent();
+    }
+
+    /** How many packets have crossed this connection. */
+    public long recordedMessages() {
+        return flight == null ? 0 : flight.messages();
+    }
+
+    /** The tail of the recording, or {@code null} when there is none. */
+    public String flightTail() {
+        return flight == null ? null : flight.tail(8);
+    }
+
+    /** The next DATA packet carries the credential - see {@link #writingCredential}. */
+    public void nextPacketCarriesTheCredential() {
+        this.writingCredential = true;
+    }
+
+    /**
+     * The name of what is in a packet, for a diagnostic.
+     *
+     * <p>A DATA packet is named by its TTC message type, because every one of
+     * them is a DATA packet and a recording that said so ten times in a row
+     * would show nothing. The other packet types name themselves.
+     */
+    private String nameOf(int packetType, int ttc) {
+        if (packetType != NsPacket.TYPE_DATA) {
+            return NsPacket.typeName(packetType);
+        }
+        return ttc < 0 ? "DATA" : "DATA/" + TtcMessage.typeName(ttc);
+    }
+
     /** Finishes the DATA packet and sends it. */
     public void sendData() throws IOException {
+        if (lateBreak) {
+            discardLateBreak();
+        }
+        synchronized (breakLock) {
+            awaitingAnswer = true;
+            breakInFlight = false;
+        }
         roundTrips++;
+        if (flight != null) {
+            int ttc = out.position() > NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE
+                    ? out.getByte(NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE) & 0xff
+                    : -1;
+            flight.record(true, nameOf(NsPacket.TYPE_DATA, ttc),
+                    writingCredential ? space.seclume.Flight.WITHHELD : out.position());
+            writingCredential = false;
+        }
         int total = out.position();
         if (total <= negotiatedSdu) {
             writeHeader(total, NsPacket.TYPE_DATA, 0);
@@ -423,6 +675,17 @@ public final class NsChannel implements AutoCloseable {
         out.clear();
     }
 
+    /** Writes a buffer that is not the send buffer - see {@link #sendBreak}. */
+    private void writeAll(ByteBuffer view) throws IOException {
+        if (tls != null) {
+            tls.write(view);
+            return;
+        }
+        while (view.hasRemaining()) {
+            channel.write(view);
+        }
+    }
+
     /** Writes one stretch of the send buffer, whole. */
     private void writeRange(int from, int length) throws IOException {
         if (TRACE) {
@@ -478,17 +741,50 @@ public final class NsChannel implements AutoCloseable {
         if (length < NsPacket.HEADER_SIZE) {
             throw new IOException("the server announced a packet of " + length + " bytes");
         }
+        // And an upper bound, because the lower one alone lets a length off
+        // the wire reach an allocator. A four-byte length of 0x7fffffff grew
+        // the receive buffer towards two gigabytes and failed inside the JDK
+        // with "Segment is too large to wrap as ByteBuffer" - an
+        // IllegalStateException out of executeQuery, on the way to an
+        // OutOfMemoryError on a machine with more room. The negotiated SDU is
+        // what the two ends agreed this connection would use; anything beyond
+        // it is not a packet this conversation can contain.
+        int most = Math.max(negotiatedSdu, SDU) * 2;
+        if (length > most) {
+            throw new IOException("the server announced a packet of " + length
+                    + " bytes, and this connection negotiated " + negotiatedSdu);
+        }
         packetType = in.getByte(4) & 0xff;
         fill(length);
         packetEnd = length;
+        bytesReceived += length;
         in.position(NsPacket.HEADER_SIZE);
         in.limit(length);
 
         if (packetType == NsPacket.TYPE_DATA) {
             dataFlags = readBigEndian(NsPacket.HEADER_SIZE, 2);
             in.position(NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE);
+            if ((dataFlags & NsPacket.DATA_FLAGS_END_OF_RESPONSE) != 0) {
+                // The answer is complete: from here until the next request
+                // nobody is waiting, and a break would have no reader for the
+                // markers it provokes. See sendBreak - and lateBreak for a
+                // break the server has not acted on yet.
+                synchronized (breakLock) {
+                    awaitingAnswer = false;
+                    if (breakInFlight) {
+                        breakInFlight = false;
+                        lateBreak = true;
+                    }
+                }
+            }
         } else {
             dataFlags = 0;
+        }
+        if (flight != null) {
+            int at = in.position();
+            flight.record(false, nameOf(packetType,
+                    packetType == NsPacket.TYPE_DATA && at < in.limit()
+                            ? in.getByte(at) & 0xff : -1), length);
         }
         if (TRACE) {
             int at = in.position();
@@ -725,7 +1021,11 @@ public final class NsChannel implements AutoCloseable {
     }
 
     public boolean isOpen() {
-        return channel.isOpen();
+        // Not open once handed over: the socket is still open, but it is
+        // somebody else's now. Without this a connection whose session was
+        // detached believed itself usable and reached into buffers already
+        // given back - IllegalStateException instead of "closed" (08003).
+        return !released && channel.isOpen();
     }
 
     @Override

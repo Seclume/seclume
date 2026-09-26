@@ -38,6 +38,8 @@ final class OraUrl {
 
     static OracleSession.Settings settings(String url, Properties properties)
             throws SQLException {
+        // jdbc:seclume:oracle:tns:ALIAS becomes the //host:port/service form.
+        url = TnsNames.resolve(url, properties);
         JdbcUrl.Parsed parsed;
         try {
             parsed = JdbcUrl.parse(url, properties, PREFIX, DEFAULT_PORT);

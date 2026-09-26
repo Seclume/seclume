@@ -53,15 +53,38 @@ public final class TtcLogin {
     private static final int PAIR_COUNT = 8;
     /** How many bytes of the speedy key travel. */
     private static final int SPEEDY_KEY_BYTES = 80;
+    /**
+     * The most PBKDF2 rounds this client will run for a server that asks.
+     *
+     * <p>Oracle asks for 4096 in the generation and 3 in the derivation.
+     * The number comes off the wire, and both ends of it are a weapon: a
+     * <b>0</b> reaches the JDK as "iterations must be at least 1" - an
+     * {@code IllegalArgumentException} out of {@code getConnection}, which is
+     * not a failure a pool can act on - and a <b>2,000,000,000</b> is a
+     * server telling a client to spend an hour on a login it will then
+     * refuse. Both were found by the login sweep, in the same run.
+     */
+    private static final int MOST_ITERATIONS = 1_000_000;
     /** Oracle's identifier for AL32UTF8. */
     private static final String CHARSET = "873";
     /** How the session shows up in the server's own view of its clients. */
     private static final String DRIVER_NAME = "seclume thin : 0.1";
     /** The version as a packed number, the way Oracle counts. */
     private static final String DRIVER_VERSION = "67117056";
-    /** Sessions start in UTC; anything else is a surprise waiting to happen. */
-    private static final String ALTER_TIME_ZONE =
-            "ALTER SESSION SET TIME_ZONE='+00:00'\0";
+    /**
+     * Sessions start in the JVM's zone, as with ojdbc: a region name such as
+     * {@code Europe/Vienna} when the JVM has one, so daylight saving follows,
+     * otherwise the current offset.
+     */
+    static String alterTimeZone() {
+        java.time.ZoneId zone = java.time.ZoneId.systemDefault();
+        String id = zone.getId();
+        String name = id.indexOf('/') > 0 && !id.startsWith("Etc/")
+                ? id
+                : zone.getRules().getOffset(java.time.Instant.now()).getId()
+                        .replace("Z", "+00:00");
+        return "ALTER SESSION SET TIME_ZONE='" + name + "'\0";
+    }
 
     private TtcLogin() {
     }
@@ -86,6 +109,8 @@ public final class TtcLogin {
             throw new IOException("the server sent a session key of " + keyLength
                     + " bytes; seclume has only established the 32-byte derivation");
         }
+        checkIterations("AUTH_PBKDF2_VGEN_COUNT", challenge.generationCount());
+        checkIterations("AUTH_PBKDF2_SDER_COUNT", challenge.derivationCount());
 
         try (Arena arena = Arena.ofConfined();
              SecretScope password = SecretScope.fromProvider(secret)) {
@@ -135,7 +160,7 @@ public final class TtcLogin {
                 // The time zone has to be set here, not later: a session that
                 // starts in the server's zone and is moved afterwards has
                 // already written timestamps in the wrong one.
-                TtcParameters.putPair(out, "AUTH_ALTER_SESSION", ALTER_TIME_ZONE, 1);
+                TtcParameters.putPair(out, "AUTH_ALTER_SESSION", alterTimeZone(), 1);
                 TtcParameters.putPair(out, "AUTH_CONNECT_STRING", connectString, 0);
                 channel.sendData();
             } finally {
@@ -150,6 +175,22 @@ public final class TtcLogin {
             }
         }
         readAnswer(channel);
+    }
+
+    /**
+     * A round count the server asked for, before it reaches a key derivation.
+     *
+     * <p>Checked here rather than inside the derivation because this is the
+     * layer that knows the number came off the wire. An unreadable value
+     * arrives as a zero - {@link TtcAuth} parses these leniently, and it
+     * should - so zero and "the server said something that is not a number"
+     * are the same case, and both are a server this client will not follow.
+     */
+    private static void checkIterations(String name, int count) throws IOException {
+        if (count < 1 || count > MOST_ITERATIONS) {
+            throw new IOException("the server asked for " + count + " rounds in "
+                    + name + "; seclume runs between 1 and " + MOST_ITERATIONS);
+        }
     }
 
     /** The header of the second stage - the pairs follow the user name. */

@@ -53,8 +53,6 @@ public final class TtcRow {
     /** The server did not say how long the LOB is. */
     public static final long UNKNOWN_LENGTH = -1;
 
-    /** The byte that announces the locator: 112 bytes plus the two before it. */
-    private static final int LOCATOR_DESCRIPTOR = 114;
     /** A length of this means the value arrives in pieces. */
     private static final int CHUNKED = 0xfe;
 
@@ -169,8 +167,34 @@ public final class TtcRow {
                 continue;                              // keeps the previous value
             }
             carried[i] = false;                        // this one is in the message
-            if (OracleColumn.isLob(column.type())) {
+            if (column.inline()) {
+                p = readInline(p, i);
+                continue;
+            }
+            if (OracleColumn.isLob(column.type())
+                    || column.type() == OracleColumn.TYPE_BFILE) {
                 p = readLocator(p, i);
+                continue;
+            }
+            if (column.type() == OracleColumn.TYPE_UROWID) {
+                // A length of the protocol's variable width in front of the
+                // usual length-prefixed bytes; zero is NULL. Read as the bytes
+                // alone, the length was taken for the value and every column
+                // after it was read from the wrong place.
+                long total = rawNumber(p);
+                p = skipRawNumber(p);
+                if (total == 0) {
+                    cells[i * 2] = p;
+                    cells[i * 2 + 1] = -1;
+                    continue;
+                }
+            }
+            if (column.type() == OracleColumn.TYPE_ROWID) {
+                p = readRowid(p, i);
+                continue;
+            }
+            if (column.type() == OracleColumn.TYPE_OBJECT) {
+                p = readObject(p, i);
                 continue;
             }
             int length = in.getByte(p) & 0xff;
@@ -220,9 +244,11 @@ public final class TtcRow {
      * which is as far from the cause as a message can get.
      *
      * <p>So the two fields are taken when they are there and skipped when they
-     * are not, decided on the byte that follows: a length prefix of 114 never
-     * starts a number - they are at most eight bytes long - but 114 is exactly
-     * what announces the locator.
+     * are not, decided on the byte that follows: the leading number says how
+     * long the descriptor is, and the same value as a single byte announces
+     * it - 114 for a persistent locator of 112 bytes, 40 for the temporary one
+     * of 38 that a {@code JSON} column carries. A length prefix is at most
+     * eight, so it is never mistaken for either.
      *
      * <p>A NULL LOB has none of it: the leading number is zero and the column
      * is over.
@@ -238,7 +264,7 @@ public final class TtcRow {
             return p;
         }
         lobLengths[column] = UNKNOWN_LENGTH;
-        for (int guard = 0; guard < 4 && (in.getByte(p) & 0xff) != LOCATOR_DESCRIPTOR; guard++) {
+        for (int guard = 0; guard < 4 && (in.getByte(p) & 0xff) != descriptor; guard++) {
             if (lobLengths[column] == UNKNOWN_LENGTH) {
                 lobLengths[column] = rawNumber(p);      // the length, when it comes at all
             }
@@ -251,6 +277,96 @@ public final class TtcRow {
         cells[column * 2] = p;
         cells[column * 2 + 1] = locatorLength;
         return p + locatorLength;
+    }
+
+    /**
+     * A {@code ROWID}: a leading byte that is zero for NULL, then five numbers
+     * of the protocol's variable width - object, file, a byte nothing uses,
+     * block, slot. The cell is the five, still encoded; {@link OracleRowid}
+     * turns them into the text Oracle prints.
+     *
+     * <p>Read as a length-prefixed value before, the leading byte was taken
+     * for a length - fourteen, where the five take eleven - and three bytes of
+     * the next column went with it: every column after a rowid was read from
+     * the wrong place.
+     */
+    private int readRowid(int at, int column) {
+        int p = at;
+        int present = in.getByte(p) & 0xff;
+        p++;
+        if (present == 0) {
+            cells[column * 2] = p;
+            cells[column * 2 + 1] = -1;
+            return p;
+        }
+        int start = p;
+        for (int field = 0; field < 5; field++) {
+            p = skipRawNumber(p);
+        }
+        cells[column * 2] = start;
+        cells[column * 2 + 1] = p - start;
+        return p;
+    }
+
+    /**
+     * An object column - {@code XMLType} among them: the type's id, the
+     * object's id and a snapshot, each a number giving a length and then that
+     * many bytes when it is not zero; a version; the image's length; flags;
+     * and the image itself, length-prefixed like any value and chunked when
+     * long. The cell is the image.
+     *
+     * <p>Read as a plain value before, the first length was taken for the
+     * value's length and the rest of the row from the wrong place - the result
+     * looked empty.
+     */
+    private int readObject(int at, int column) {
+        int p = at;
+        for (int part = 0; part < 3; part++) {             // type id, object id, snapshot
+            long length = rawNumber(p);
+            p = skipRawNumber(p);
+            if (length > 0) {
+                p = skipValue(p);
+            }
+        }
+        p = skipRawNumber(p);                               // version
+        long imageLength = rawNumber(p);
+        p = skipRawNumber(p);
+        p = skipRawNumber(p);                               // flags
+        if (imageLength == 0) {
+            cells[column * 2] = p;
+            cells[column * 2 + 1] = -1;
+            return p;
+        }
+        int length = in.getByte(p) & 0xff;
+        p++;
+        if (length == CHUNKED) {
+            return readChunked(p, column);
+        }
+        cells[column * 2] = p;
+        cells[column * 2 + 1] = length == 0 ? -1 : length;
+        return p + length;
+    }
+
+    /** Walks over a length-prefixed value, chunked or not. */
+    private int skipValue(int at) {
+        int length = in.getByte(at) & 0xff;
+        int p = at + 1;
+        if (length != CHUNKED) {
+            return p + length;
+        }
+        while (true) {
+            int lengthOfLength = in.getByte(p) & 0xff;
+            p++;
+            int chunk = 0;
+            for (int i = 0; i < lengthOfLength; i++) {
+                chunk = (chunk << 8) | (in.getByte(p + i) & 0xff);
+            }
+            p += lengthOfLength;
+            if (chunk == 0) {
+                return p;
+            }
+            p += chunk;
+        }
     }
 
     /** Oracle's length-prefixed number: one byte of count, then the value. */
@@ -279,6 +395,58 @@ public final class TtcRow {
     }
 
     /**
+     * A JSON or VECTOR value the define asked for in the row: its length, the
+     * LOB's size and chunk size, the value itself - one piece or chunks - and
+     * the locator, which nobody needs any more. A length of zero is NULL.
+     */
+    private int readInline(int at, int column) {
+        int p = at;
+        long length = rawNumber(p);
+        p = skipRawNumber(p);
+        if (length == 0) {
+            cells[column * 2] = p;
+            cells[column * 2 + 1] = -1;
+            return p;
+        }
+        p = skipRawNumber(p);                          // size of the LOB
+        p = skipRawNumber(p);                          // chunk size
+        int first = in.getByte(p) & 0xff;
+        p++;
+        if (first == CHUNKED) {
+            p = readChunked(p, column);
+        } else {
+            cells[column * 2] = p;
+            cells[column * 2 + 1] = first;
+            p += first;
+        }
+        int locator = in.getByte(p) & 0xff;            // the locator, walked over
+        p++;
+        if (locator == CHUNKED) {
+            int keep = cells[column * 2];
+            int keepLength = cells[column * 2 + 1];
+            p = skipChunks(p);
+            cells[column * 2] = keep;
+            cells[column * 2 + 1] = keepLength;
+            return p;
+        }
+        return p + locator;
+    }
+
+    /** Walks over chunks without moving them. */
+    private int skipChunks(int at) {
+        int read = at;
+        while (true) {
+            int lengthOfLength = in.getByte(read) & 0xff;
+            read++;
+            int chunk = chunkLength(read, lengthOfLength);
+            read += lengthOfLength + chunk;
+            if (chunk == 0) {
+                return read;
+            }
+        }
+    }
+
+    /**
      * A value that arrives in pieces.
      *
      * <p>Every piece has its own length in front of it, so the bytes are not
@@ -294,10 +462,7 @@ public final class TtcRow {
         while (true) {
             int lengthOfLength = in.getByte(read) & 0xff;
             read++;
-            int chunk = 0;
-            for (int i = 0; i < lengthOfLength; i++) {
-                chunk = (chunk << 8) | (in.getByte(read + i) & 0xff);
-            }
+            int chunk = chunkLength(read, lengthOfLength);
             read += lengthOfLength;
             if (chunk == 0) {
                 break;
@@ -310,6 +475,29 @@ public final class TtcRow {
         cells[column * 2] = write;
         cells[column * 2 + 1] = total == 0 ? -1 : total;
         return read;
+    }
+
+    /**
+     * One chunk's length, as the wire gives it - at most four bytes of it, and
+     * no more than what is left of the received data. A length the server
+     * cannot have meant (a negative one after four bytes, found by Jazzer on
+     * 25.09.2026, reached a copy as "size is negative") is refused as a
+     * malformed answer instead.
+     */
+    private int chunkLength(int at, int lengthOfLength) {
+        if (lengthOfLength > 4) {
+            throw space.seclume.internal.WireBuffer.malformed("a chunk length of "
+                    + lengthOfLength + " bytes");
+        }
+        long chunk = 0;
+        for (int i = 0; i < lengthOfLength; i++) {
+            chunk = (chunk << 8) | (in.getByte(at + i) & 0xff);
+        }
+        if (chunk > in.segment().byteSize() - at - lengthOfLength) {
+            throw space.seclume.internal.WireBuffer.malformed("a chunk of " + chunk
+                    + " bytes in an answer that has fewer left");
+        }
+        return (int) chunk;
     }
 
     /**

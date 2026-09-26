@@ -69,7 +69,15 @@ public final class TtcDescribe {
             reader.block();                            // a block that is skipped
         }
         reader.number();                               // largest row size
-        int count = (int) reader.number();
+        long announced = reader.number();
+        // Oracle's own limit is 4096 columns (with MAX_COLUMNS=EXTENDED); a
+        // count off the wire beyond it - or below zero, as the fuzzer sent -
+        // reached the ArrayList constructor as "Illegal Capacity".
+        if (announced < 0 || announced > 4096) {
+            throw space.seclume.internal.WireBuffer.malformed("the server described "
+                    + announced + " columns, which no Oracle result has");
+        }
+        int count = (int) announced;
         if (count == 0) {
             return new Parsed(List.of(), reader.at());
         }
@@ -118,7 +126,13 @@ public final class TtcDescribe {
         int bufferSize = (int) in.number();
         in.number();                                   // largest number of array elements
         in.number();                                   // continuation flags
-        in.block();                                    // object id
+        // The object id, the schema and the type name each come as a length
+        // and then, when it is not zero, the bytes. For a built-in type the
+        // length is zero and one byte long, which is why reading them as bare
+        // blocks worked - until an object column (XMLType) described itself.
+        if (in.number() > 0) {                         // object id
+            in.block();
+        }
         in.number();                                   // version
         int charset = (int) in.number();
         in.byteValue();                                // character set form
@@ -131,18 +145,25 @@ public final class TtcDescribe {
         in.byteValue();                                // name length, once
         in.number();                                   // name length, again
         String name = in.text();
-        in.block();                                    // schema
-        in.block();                                    // type name
+        String schema = in.number() > 0 ? in.text() : "";   // schema, of an object type
+        String typeName = in.number() > 0 ? in.text() : ""; // and its name
         in.number();                                   // column position
         in.number();                                   // UDS flags
         in.block();                                    // domain schema (23.1)
         in.block();                                    // domain name (23.1)
         in.number();                                   // number of annotations (23.1)
-        in.number();                                   // three more, zero here
-        in.number();
-        in.number();
+        // 23.4: a vector's dimensions as a number, then its format and flags
+        // as one byte each - not as numbers. For every other column all
+        // three are zero and a zero reads the same either way, which is why
+        // three numbers worked until a VECTOR described itself: its format
+        // byte, 2 for FLOAT32, was taken for a length and the rest of the
+        // description shifted.
+        in.number();                                   // dimensions
+        in.byteValue();                                // format
+        in.byteValue();                                // flags
         return new OracleColumn(name, type, precision, scale, bufferSize, maxSize,
-                charset, nullable);
+                charset, nullable, type == OracleColumn.TYPE_OBJECT
+                        ? (schema.isEmpty() ? typeName : schema + "." + typeName) : "");
     }
 
     /** Reads Oracle's three shapes: a byte, a length-prefixed number, a block. */

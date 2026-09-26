@@ -126,7 +126,13 @@ public final class TtcAuth {
         WireBuffer in = channel.packet();
         int start = in.position();
         int end = in.limit();
-        for (int at = start; at < end; at++) {
+        for (int at = start; at + 1 < end; at++) {
+            // at + 1 < end, not at < end: the next byte is looked at below,
+            // and a type byte in the very last position of the packet has no
+            // message behind it anyway. Without the bound this asks WireBuffer
+            // for a byte past the limit, and since the bounds check went in
+            // that is a Truncated - a search giving up with an error instead
+            // of a result.
             if (in.getByte(at) != TtcMessage.TYPE_PARAMETER) {
                 continue;
             }

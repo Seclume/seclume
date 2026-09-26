@@ -23,7 +23,8 @@ import space.seclume.oracle.net.TtcBinds;
  * <p>JDBC's question mark becomes {@code :1}, {@code :2} and so on; see
  * {@link OraSqlRewriter} for why that is a read and not a replace.
  */
-final class OraPreparedStatement extends OraStatement implements ParameterSetters {
+final class OraPreparedStatement extends OraStatement implements ParameterSetters,
+        space.seclume.SensitiveParameters {
 
     private final String originalSql;
     private final String sql;
@@ -51,7 +52,7 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
         run();
         ResultSet result = currentResultSet();
         if (result == null) {
-            throw new SQLException("the statement returned no rows: " + originalSql
+            throw new SQLException("the statement returned no rows: " + shape(originalSql)
                     + " - use executeUpdate for statements that do not select");
         }
         return result;
@@ -75,7 +76,7 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
                 throw new SQLException("the statement has " + parameterCount
                         + " parameters but only " + parameters.count() + " were set");
             }
-            return connection.session().pipelineExecute(sql, parameters);
+            return connection.session().pipelineExecute(currentSql(), parameters);
         }
         run();
         return Math.max(getLargeUpdateCount(), 0);
@@ -97,12 +98,32 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
                 parameters.addOutput();
             }
             connection.session().expectReturning(keyColumns.length);
-            boolean hasResult = run(OraStatement.withReturningInto(sql, keyColumns,
+            boolean hasResult = run(OraStatement.withReturningInto(currentSql(), keyColumns,
                     parameterCount + 1), parameters);
             keepAsGeneratedKeys(java.util.List.of(keyColumns), lastReturned());
             return hasResult;
         }
-        return run(sql, parameters);
+        return run(currentSql(), parameters);
+    }
+
+    /** Lists bound to {@code in (?)}, by parameter index - see InLists; null for none. */
+    private space.seclume.internal.jdbc.InLists.Bound[] lists;
+    /** The statement text the lists were last applied to, and what it became. */
+    private String listSource;
+    private String listSql;
+
+    /** The text to send: the statement's own, or its form for the bound lists. */
+    private String currentSql() throws SQLException {
+        if (!space.seclume.internal.jdbc.InLists.any(lists)) {
+            return sql;
+        }
+        String applied = space.seclume.internal.jdbc.InLists.apply(originalSql, lists,
+                space.seclume.internal.jdbc.InLists.Dialect.ORACLE);
+        if (!applied.equals(listSource)) {
+            listSource = applied;
+            listSql = OraSqlRewriter.rewrite(applied).sql();
+        }
+        return listSql;
     }
 
     /** The columns whose keys the caller wants, or {@code null}. */
@@ -121,13 +142,17 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
             throw new SQLException("the statement has " + parameterCount
                     + " parameters, so " + index + " does not exist");
         }
-        parameters.set(index, value);
+        space.seclume.internal.jdbc.InLists.Bound list = space.seclume.internal.jdbc.InLists.of(
+                value, space.seclume.internal.jdbc.InLists.Dialect.ORACLE);
+        lists = space.seclume.internal.jdbc.InLists.note(lists, index, list);
+        parameters.set(index, list == null ? value : list.payload());
     }
 
     @Override
     public void clearParameters() throws SQLException {
         checkOpen();
         parameters.clear();
+        lists = null;
     }
 
     // ---- batches ---------------------------------------------------------
@@ -135,6 +160,7 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
     @Override
     public void addBatch() throws SQLException {
         checkOpen();
+        space.seclume.internal.jdbc.InLists.refuseInBatch(lists);
         if (batch == null) {
             batch = new ArrayList<>();
         }
@@ -179,7 +205,14 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
         List<Object[]> values = batch;
         batch = null;
         long[] counts = new long[values.size()]; // seclume-allow: update counts, not a secret
-        long touched = runBatch(values);
+        // A batch in auto-commit mode commits as it goes, so a lost answer
+        // here is a lost commit - see inDoubt.
+        long touched;
+        try {
+            touched = runBatch(values);
+        } catch (SQLException failure) {
+            throw inDoubt(failure, null);
+        }
         for (int i = 0; i < counts.length; i++) {
             counts[i] = touched == counts.length ? 1 : Statement.SUCCESS_NO_INFO;
         }
@@ -188,13 +221,7 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
 
     private long runBatch(List<Object[]> values) throws SQLException {
         checkOpen();
-        return runArray(sql, parameters, values.size(), row -> {
-            Object[] set = values.get(row);
-            parameters.clear();
-            for (int p = 0; p < set.length; p++) {
-                parameters.set(p + 1, set[p]);
-            }
-        });
+        return runArray(sql, parameters, values.size(), row -> parameters.setAll(values.get(row)));
     }
 
     @Override
@@ -244,174 +271,40 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
 
     @Override
     public ParameterMetaData getParameterMetaData() throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume does not ask the server to describe the parameters - it encodes "
-                + "every parameter from its Java type instead");
+        checkOpen();
+        return space.seclume.internal.jdbc.PlaceholderMetaData.of(parameterCount);
     }
 
-    // ---- LOBs als Parameter ----------------------------------------------
+    // Streams, Blob and Clob as parameters: ParameterSetters reads them and
+    // sends the value - the rule this driver had first, now shared by all four.
 
     /**
-     * A large value handed over as a stream.
-     *
-     * <p>These are read to the end and then sent as an ordinary parameter.
-     * Said plainly rather than hidden: the value does pass through memory, so
-     * a stream buys convenience here, not thrift. It is still the right thing
-     * to offer - Hibernate and Spring Data reach for these methods on their
-     * own, and refusing them turns a working mapping into a stack trace.
-     *
-     * <p>What makes it safe at all is that a long parameter now leaves the
-     * driver in pieces: without {@code NsChannel.sendSplit} the server would
-     * simply close the connection.
+     * A {@code ROWID} as a parameter - its printed form, which Oracle turns
+     * back into an address itself, as it does for {@code where rowid = '...'}.
      */
     @Override
-    public void setCharacterStream(int index, java.io.Reader reader) throws SQLException {
-        setString(index, readFully(reader));
+    public void setRowId(int index, java.sql.RowId value) throws SQLException {
+        setString(index, value == null ? null : value.toString());
     }
 
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.ORACLE);
+    }
+
+
     @Override
-    public void setCharacterStream(int index, java.io.Reader reader, int length)
+    public void setSensitive(int parameterIndex, java.lang.foreign.MemorySegment value)
             throws SQLException {
-        setCharacterStream(index, reader, (long) length);
+        setParameter(parameterIndex, new space.seclume.internal.jdbc.NativeValue(value));
     }
 
-    @Override
-    public void setCharacterStream(int index, java.io.Reader reader, long length)
-            throws SQLException {
-        setString(index, readFully(reader, length));
-    }
-
-    @Override
-    public void setNCharacterStream(int index, java.io.Reader reader) throws SQLException {
-        setCharacterStream(index, reader);
-    }
-
-    @Override
-    public void setNCharacterStream(int index, java.io.Reader reader, long length)
-            throws SQLException {
-        setCharacterStream(index, reader, length);
-    }
-
-    @Override
-    public void setClob(int index, java.sql.Clob value) throws SQLException {
-        if (value == null) {
-            setNull(index, java.sql.Types.CLOB);
-            return;
-        }
-        setCharacterStream(index, value.getCharacterStream());
-    }
-
-    @Override
-    public void setClob(int index, java.io.Reader reader) throws SQLException {
-        setCharacterStream(index, reader);
-    }
-
-    @Override
-    public void setClob(int index, java.io.Reader reader, long length) throws SQLException {
-        setCharacterStream(index, reader, length);
-    }
-
-    @Override
-    public void setNClob(int index, java.sql.NClob value) throws SQLException {
-        setClob(index, (java.sql.Clob) value);
-    }
-
-    @Override
-    public void setNClob(int index, java.io.Reader reader) throws SQLException {
-        setCharacterStream(index, reader);
-    }
-
-    @Override
-    public void setNClob(int index, java.io.Reader reader, long length) throws SQLException {
-        setCharacterStream(index, reader, length);
-    }
-
-    @Override
-    public void setBinaryStream(int index, java.io.InputStream stream) throws SQLException {
-        setBytes(index, readFully(stream));
-    }
-
-    @Override
-    public void setBinaryStream(int index, java.io.InputStream stream, int length)
-            throws SQLException {
-        setBinaryStream(index, stream, (long) length);
-    }
-
-    @Override
-    public void setBinaryStream(int index, java.io.InputStream stream, long length)
-            throws SQLException {
-        setBytes(index, readFully(stream, length));
-    }
-
-    @Override
-    public void setBlob(int index, java.sql.Blob value) throws SQLException {
-        if (value == null) {
-            setNull(index, java.sql.Types.BLOB);
-            return;
-        }
-        setBinaryStream(index, value.getBinaryStream());
-    }
-
-    @Override
-    public void setBlob(int index, java.io.InputStream stream) throws SQLException {
-        setBinaryStream(index, stream);
-    }
-
-    @Override
-    public void setBlob(int index, java.io.InputStream stream, long length)
-            throws SQLException {
-        setBinaryStream(index, stream, length);
-    }
-
-    private static String readFully(java.io.Reader reader) throws SQLException {
-        return readFully(reader, Long.MAX_VALUE);
-    }
-
-    private static String readFully(java.io.Reader reader, long limit) throws SQLException {
-        if (reader == null) {
-            return null;
-        }
-        StringBuilder text = new StringBuilder(); // seclume-allow: user payload, not a secret
-        char[] buffer = new char[8192]; // seclume-allow: user payload, not a secret
-        try (java.io.Reader open = reader) {
-            while (text.length() < limit) {
-                int wanted = (int) Math.min(buffer.length, limit - text.length());
-                int read = open.read(buffer, 0, wanted);
-                if (read < 0) {
-                    break;
-                }
-                text.append(buffer, 0, read);
-            }
-        } catch (java.io.IOException e) {
-            throw new SQLException("the reader for parameter failed: " + e.getMessage(), "22000", e);
-        }
-        return text.toString();
-    }
-
-    private static byte[] readFully(java.io.InputStream stream) throws SQLException {
-        return readFully(stream, Long.MAX_VALUE);
-    }
-
-    private static byte[] readFully(java.io.InputStream stream, long limit) throws SQLException {
-        if (stream == null) {
-            return null;
-        }
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        byte[] buffer = new byte[8192]; // seclume-allow: user payload, not a secret
-        try (java.io.InputStream open = stream) {
-            long total = 0;
-            while (total < limit) {
-                int wanted = (int) Math.min(buffer.length, limit - total);
-                int read = open.read(buffer, 0, wanted);
-                if (read < 0) {
-                    break;
-                }
-                out.write(buffer, 0, read);
-                total += read;
-            }
-        } catch (java.io.IOException e) {
-            throw new SQLException("the stream for parameter failed: " + e.getMessage(), "22000", e);
-        }
-        return out.toByteArray();
-    }
 }

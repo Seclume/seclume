@@ -45,7 +45,11 @@ public final class OraDriver implements Driver {
             return null;
         }
         OracleSession.Settings settings = OraUrl.settings(url, properties);
-        return new OraConnection(OracleSession.open(settings), url);
+        return new OraConnection(space.seclume.internal.TrustChoice.using(
+                space.seclume.internal.TrustChoice.of(url, properties),
+                () -> space.seclume.internal.Transports.using(
+                        space.seclume.internal.Transports.option(url, properties),
+                        () -> OracleSession.open(settings))), url);
     }
 
     @Override

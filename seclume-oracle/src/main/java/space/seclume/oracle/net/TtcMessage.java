@@ -122,4 +122,13 @@ public final class TtcMessage {
 
     /** Ends the transaction and throws the work away. */
     public static final int FUNCTION_ROLLBACK = 15;
+
+    /**
+     * A round trip that does nothing - python-oracledb's {@code ping}.
+     *
+     * <p>Useful as a carrier: a piggyback needs a call to ride on, and this is
+     * the one call that changes no state on the server, the transaction
+     * included.
+     */
+    public static final int FUNCTION_PING = 147;
 }
