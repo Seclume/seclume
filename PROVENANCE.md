@@ -34,6 +34,11 @@ of its Open Specifications and places under the Microsoft Open Specification Pro
 document specifies the packet framing, the login exchange, the token stream and the type
 encodings.
 
+The code page of each collation (`TdsCollation`) is the **server's own answer**:
+`COLLATIONPROPERTY(name, 'SortId' | 'LCID' | 'CodePage')` over every collation
+`sys.fn_helpcollations()` lists, taken from our own SQL Server 2022 and 2025 instances, and
+checked against the server by `SqlServerCollationTest` on every run.
+
 ## Oracle
 
 Oracle is the exception: **there is no published specification** of TNS/NS or TTC. Four
@@ -42,10 +47,10 @@ the project's internal notes.
 
 | Source | What it is | What it supplied |
 |---|---|---|
-| **`python-oracledb`** | Oracle's own thin driver, published by Oracle under **UPL-1.0 or Apache-2.0** — licences that permit an independent reimplementation | The verifier types, the 12c password hash, session key length, combo key derivation, the layout of `AUTH_PASSWORD` |
+| **`python-oracledb`** | Oracle's own thin driver, published by Oracle under **UPL-1.0 or Apache-2.0** — licences that permit an independent reimplementation | The verifier types, the 12c password hash, session key length, combo key derivation, the layout of `AUTH_PASSWORD`; the layout of OSON, Oracle's binary JSON (header flags, field-name dictionary, node types); that the values of `LONG` binds go after all others; the three 23.4 fields at the end of a column description (a vector's dimensions, format and flags) and the layout of a `VECTOR` image (magic byte, version, flags, format, element count, optional norm) |
 | **Oracle's own documentation** on 12c password versions | vendor documentation | Confirms the PBKDF2 and final SHA-512 structure |
 | **A published 2012 analysis** of CVE-2012-3137 | a public mailing-list post describing the method in prose | Confirms the 11g key derivation and AES-192-CBC with a zero IV |
-| **Observation of a running server** | our own instance of Oracle Database Free, which we license | The fixed fields of the CONNECT packet, and several places where the derived values were wrong |
+| **Observation of a running server** | our own instance of Oracle Database Free, which we license | The fixed fields of the CONNECT packet, and several places where the derived values were wrong; the wire form of `TIMESTAMP WITH TIME ZONE` (UTC fields, offset or region number), of `INTERVAL`, `UROWID` and `BFILE`, read from dumps of our own rows |
 | **Observation of `python-oracledb` on the wire** | its own debug output (`PYO_DEBUG_PACKETS=1`) against that instance — bytes, not code | The shape of the close-cursors piggyback: the message type, the function number, and that the piggyback carries the lower call number of the pair |
 
 **The method, and its limits, stated plainly.** Descriptions of behaviour were read; **no

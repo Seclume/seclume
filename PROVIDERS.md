@@ -1,6 +1,6 @@
 # Where the secret comes from
 
-Twelve providers, and the README's table names them without saying what separates them. The
+Fourteen providers, and the README only names them without saying what separates them. The
 differences that decide which one you want are not "which store" but three others:
 
 - **does the credential expire**, because that is what the pool has to know about;
@@ -20,7 +20,7 @@ prevent. Settings say *where* a secret lives, never what it is. That is also why
 secret a provider needs — a Vault token, a bearer token, an AWS session token — is itself a
 nested provider rather than a value.
 
-## The twelve
+## The fourteen
 
 | Provider | Reads from | Expires | Needs a provider underneath | Per connect |
 |---|---|---|---|---|
@@ -36,8 +36,10 @@ nested provider rather than a value.
 | `aws-secrets-manager` | AWS Secrets Manager | no | `key-`, optional `session-token-` | one HTTPS request |
 | `azure-key-vault` | Azure Key Vault | **yes**, when the secret has `exp` | `token-` | one HTTPS request |
 | `gcp-secret-manager` | Google Secret Manager | no | `token-` | one HTTPS request |
+| `azure-managed-identity` | nothing stored — the VM's Entra token, from IMDS | not reported (see below) | — | one local HTTP request |
+| `gcp-metadata` | nothing stored — the workload's Google token, from the metadata server | not reported (see below) | — | one local HTTP request |
 
-`callback` is a thirteenth and is not configuration: it is the interface your own code
+`callback` is a fifteenth and is not configuration: it is the interface your own code
 implements, handed native memory to write into.
 
 ### What "expires" buys
@@ -51,6 +53,13 @@ new ones start on the new one. One minute of margin by default
 
 Without it the usual arrangement is to set `maxLifetime` shorter than the TTL by hand, in a
 second place, and to remember it when the TTL changes.
+
+Two details decide whether "does not empty the pool" holds in practice. **The replacement is
+opened before the old connection is retired**, not after. Otherwise there is a moment with
+nothing in the pool, and every caller arriving in it pays a full handshake plus the round trip
+to fetch the password. And **the deadlines are spread out** (`credential-spread`, the margin
+by default). Connections opened in one burst share an expiry to the second, so without it a
+whole cohort would reach its deadline in the same housekeeping round.
 
 ### What "needs a provider underneath" costs
 
@@ -169,13 +178,121 @@ memory rather than concatenated. This was documented as an unsupported gap for a
 than closed badly; the note is kept in `internal/docs` because the reasoning is worth more
 than the outcome.
 
+### Workload identity: no stored credential at all
+
+```properties
+provider=azure-managed-identity                       # Azure Database for PostgreSQL / MySQL
+resource=https://ossrdbms-aad.database.windows.net
+client-id=...                                         # a user-assigned identity; optional
+
+provider=gcp-metadata                                 # Cloud SQL IAM authentication
+account=default                                       # or another attached service account
+```
+
+The database accepts the machine's own identity. Azure's Instance Metadata Service and
+Google's metadata server hand an access token to whatever runs on the host, and that token is
+the password - there is nothing to store, rotate, leak or forget to revoke. The SDKs return
+it as a `String` (`AccessToken.getToken()`, `getTokenValue()`); here it goes from the socket
+into native memory, and only `access_token` is copied out of the answer.
+
+Both endpoints are **plain HTTP on the link-local address** `169.254.169.254`, which is how
+they are meant to be reached: the packet never leaves the host. `SecretFetch` allows plain
+HTTP to a link-local or loopback address and **refuses it for anything else** - checked on the
+resolved address, before a byte is sent - so a configuration that points one of these at a
+real host fails instead of handing a token across a network.
+
+**Expiry is not reported, on purpose.** The database checks the token at login and never
+again, so an open connection outlives it; reporting the hour would have the pool retire
+healthy connections for nothing. Each new connection asks for a token, and both services cache
+it locally. `rds-iam` does the same, for the same reason.
+
+Both also work as the `token-` of a vault: `token-provider=azure-managed-identity` with
+`token-resource=https://vault.azure.net` reads Key Vault with the machine's identity, and
+`token-provider=gcp-metadata` does the same for Secret Manager.
+
+**PostgreSQL 18's OAuth login** takes any of these tokens: with `oauth` in `pg_hba.conf` the
+server asks for `OAUTHBEARER`, and the driver sends the provider's secret as the bearer token -
+from `azure-managed-identity`, `gcp-metadata`, a `file` that a sidecar keeps fresh, or any other
+provider. Only to a server that proved who it is (`tls=verify-full` or `tlsPin`): with
+`tls=require` or no TLS the driver refuses before reading the token. Azure SQL's token login
+likewise refuses `trustServerCertificate=true` unless a `tlsPin` names the key. Which tokens the server accepts is its validator's business
+(`oauth_validator_libraries`); PostgreSQL ships none.
+
+**Azure SQL** takes the token in LOGIN7's `FEDAUTH` feature: `authentication=token` with
+`provider=azure-managed-identity` and `resource=https://database.windows.net/`. No user name and
+no password go out. The wire format is checked against a SQL Server 2022, which reads it and
+answers with an ordinary "Login failed"; a live Azure SQL login has not been run yet.
+
+**Not covered yet:** App Service and Functions (a different endpoint and header), Azure Arc.
+
+### No password: the certificate is the login
+
+```properties
+provider=none
+clientCert=/var/run/secrets/svid.pem          # or clientCertThumbprint=... on Windows
+clientKey-provider=file
+clientKey-path=/var/run/secrets/svid_key.pem
+```
+
+For PostgreSQL's `cert` method (`hostssl all app 0.0.0.0/0 cert` in `pg_hba.conf`; the
+certificate's CN is the user) and for a MySQL account created with an empty password and
+`REQUIRE SUBJECT '/CN=app' AND ISSUER '/CN=your-ca'`. Needs `tls=require` or stricter and
+`tlsStack=seclume`, like every client certificate here.
+
+`none` is a word rather than an absent setting so that a forgotten password still fails.
+PostgreSQL refuses before sending anything if the server asks for a password after all; MySQL
+sends the empty password, because that is how its certificate-only accounts are written.
+
+## One line instead of four
+
+With the starter, `secret-uri` expands to the `secret.*` keys. It is the same spelling the JDBC
+URL takes, so a deployment needs one environment variable per data source rather than four
+that have to agree:
+
+```properties
+seclume.datasources.main.secret-uri=file:/run/secrets/db
+seclume.datasources.main.secret-uri=env-file:/run/secrets/app.env?key=DB_PASSWORD
+seclume.datasources.main.secret-uri=credential-manager?target=AppDb
+seclume.datasources.main.secret-uri=encrypted:/run/secrets/db.enc?key-provider=dpapi&key-path=/run/secrets/kek&aad=main
+```
+
+If a data source gives both `secret-uri` and `secret.*`, it is refused rather than resolved by
+precedence.
+
+## The guard: plaintext passwords elsewhere in the application
+
+At startup the starter reads the whole `Environment` and names every property that holds a
+password in plain text: `spring.mail.password`, and whatever the application invented for
+itself. It reports and does not forbid, because much of what it finds has no off-heap
+alternative yet, and a guard that blocks what cannot be fixed gets switched off. **Names are
+logged, never values.**
+
+```properties
+seclume.secret-guard=warn                     # warn (default), fail, off
+seclume.secret-guard-allow=spring.mail.password
+```
+
+The allow-list is the point. It turns "we have three plaintext passwords and nobody knows"
+into three that are written down and decided on, and it is meant to get shorter.
+
 ## Which one to pick
+
+The option that makes all of this unnecessary is **Kerberos**: there is no secret in the
+process at all, only a ticket in the operating system's credential cache. It works for
+PostgreSQL and MariaDB on Linux through the system's GSSAPI library. Use `provider=none`, let
+`kinit` or a keytab provide the ticket, and put `gss` in `pg_hba.conf` or create the MariaDB
+user `IDENTIFIED VIA gssapi`. Windows' SSPI, SQL Server Integrated
+Security and Oracle Kerberos/NTS are not supported yet. Everywhere else:
 
 - **A container platform with secret mounts** — `file`. It is the shortest path and the one
   with nothing to go wrong.
 - **A Vault estate** — `vault` with a dynamic credential. The lease handling is the part
   nobody else has and the reason it is worth the extra configuration.
 - **RDS** — `rds-iam`. No password exists to be stolen.
+- **Azure Database, Cloud SQL** — `azure-managed-identity`, `gcp-metadata`. The same, with
+  the cloud's own workload identity.
+- **A SPIFFE agent or cert-manager already issuing certificates** — `none`, with the client
+  certificate as the login.
 - **Windows, no orchestration** — `dpapi` or `credential-manager`.
 - **A password that may not stand in the configuration, and no store** — `encrypted`, having
   read the paragraph about what it does not buy.

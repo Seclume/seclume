@@ -23,5 +23,11 @@ None. seclume implements the PostgreSQL, MySQL, TDS and Oracle TTC wire
 protocols itself and depends on nothing outside the JDK at runtime. The Spring
 Boot starter depends on Spring, which the application brings anyway.
 
+Data, not code: seclume-core carries Amazon RDS's public CA certificate bundle
+(space/seclume/internal/aws-rds-global-bundle.pem), as published by Amazon Web
+Services at https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem,
+so that tlsRootCert=aws-rds can verify RDS servers. The certificates are public
+trust anchors and are redistributed unchanged.
+
 Test and build tooling (JUnit, Spring Boot, Flyway, Maven plugins) is declared
 in the POMs and carries its own licences; none of it is redistributed here.
