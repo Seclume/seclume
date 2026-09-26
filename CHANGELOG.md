@@ -5,6 +5,30 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Security: `tlsStack=seclume` accepted a server that never authenticated
+
+**Critical, fixed.** The own TLS stack checked the server's certificate and its
+CertificateVerify only when those messages arrived. A server - or anybody in the middle - that
+sent EncryptedExtensions and then its own Finished, with no Certificate and no
+CertificateVerify, was accepted even under `tls=verify-full`, and `peerCertificate()` was null.
+That is a working man-in-the-middle; a review reproduced it on 26.09.2026. The default stack
+(`jsse`) was not affected.
+- The server's flight is now read as the state machine of RFC 8446 section 4.4:
+  EncryptedExtensions, optionally CertificateRequest, Certificate, CertificateVerify, Finished,
+  each exactly once and in that order. Anything else ends the handshake with
+  `unexpected_message`, which is also sent to the server.
+- Certificate and CertificateVerify are required in every handshake, also through
+  `connectWithoutAuthenticating`: that skips the trust and hostname check, not the proof that the
+  server holds the key it presented.
+- A second check before the application secrets are derived refuses a server with no
+  certificate or no verified CertificateVerify, so that a later change to the order cannot bring
+  the hole back unnoticed.
+- `ServerFlightOrderTest` drives a scripted server that makes every signature and Finished valid
+  where it stands, and refuses each broken order with and without trust. It also tries all 3905
+  flights of up to five messages: exactly the two legal ones connect. The fuzzing now reaches the
+  encrypted flight as well (`ServerHelloFuzzTest`, sampled in every build by
+  `EncryptedFlightSampleTest`), and the sample finds the old hole at its seventh case.
+
 ## [0.10.0] - 2026-09-26
 
 The three items listed under *Not yet* in 0.9.0 are done: the four wire

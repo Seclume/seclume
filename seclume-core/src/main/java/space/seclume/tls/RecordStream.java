@@ -181,6 +181,23 @@ final class RecordStream implements AutoCloseable {
         }
     }
 
+    /**
+     * Tells the peer why we are stopping - a fatal alert under whatever
+     * protection is in force - and swallows any failure to do so. The caller
+     * is already on its way out with the real exception; a peer that cannot
+     * be told must not replace that with "broken pipe".
+     */
+    void abort(int description) {
+        try (Arena scratch = Arena.ofConfined()) {
+            MemorySegment alert = scratch.allocate(2);
+            alert.set(ValueLayout.JAVA_BYTE, 0, (byte) TlsAlertException.FATAL);
+            alert.set(ValueLayout.JAVA_BYTE, 1, (byte) description);
+            write((byte) 21, alert, 0, 2);
+        } catch (IOException | RuntimeException ignored) {
+            // best effort: the connection is being closed either way
+        }
+    }
+
     private TlsAlertException alert(MemorySegment data, long offset, int length) {
         if (length < 2) {
             return new TlsAlertException(TlsAlertException.FATAL, -1);

@@ -221,10 +221,22 @@ public final class ClientHandshake {
                 schedule.deriveHandshakeTrafficSecrets(digest.segment().asSlice(0, hash.digestLength()));
                 records.readWith(RecordProtection.fromSecret(
                         hash, schedule.serverHandshakeTrafficSecret(), keyLength));
+                // Our handshake key is in force from here on, although the
+                // first record under it is our Finished: an alert sent while
+                // the server's flight is being refused has to go out under
+                // it, because that is the key the server now reads with.
+                records.writeWith(RecordProtection.fromSecret(
+                        hash, schedule.clientHandshakeTrafficSecret(), keyLength));
 
                 // ---- the server's encrypted flight ------------------------
-                byte[] certificateRequest = readServerFlight(records, transcript, schedule,
+                ServerFlight flight = readServerFlight(records, transcript, schedule,
                         digest, hash, host, trust, serverChain, alpn);
+                byte[] certificateRequest = flight.certificateRequest();
+                // The order above already makes this impossible to reach.
+                // It is here so that a later change to that order - a PSK
+                // branch, a resumption - cannot quietly bring back the
+                // connection nobody authenticated.
+                requireAuthenticatedServer(serverChain, flight.signatureVerified());
 
                 // Everything through the server's Finished: the context for both
                 // the application secrets and our own Finished.
@@ -236,8 +248,6 @@ public final class ClientHandshake {
 
                 // ---- our Finished, still under the handshake key -----------
                 records.writeChangeCipherSpec();
-                records.writeWith(RecordProtection.fromSecret(
-                        hash, schedule.clientHandshakeTrafficSecret(), keyLength));
 
                 MemorySegment beforeFinished = throughServerFinished;
                 if (certificateRequest != null) {
@@ -289,6 +299,10 @@ public final class ClientHandshake {
             }
             done = true;
             return connection;
+        } catch (TlsProtocolException refused) {
+            // Say why before hanging up; the server otherwise sees a reset.
+            records.abort(refused.alert());
+            throw refused;
         } finally {
             if (!done) {
                 records.close();
@@ -394,29 +408,72 @@ public final class ClientHandshake {
                 (int) share[2]);
     }
 
+    /** What the server's flight left behind for the rest of the handshake. */
+    private record ServerFlight(byte[] certificateRequest, boolean signatureVerified) {
+    }
+
     /**
-     * EncryptedExtensions, Certificate, CertificateVerify, an optional
-     * CertificateRequest and Finished - however many records they arrive in,
-     * and in whatever combination.
+     * Where the server's flight stands: which message may come next.
+     *
+     * <p>RFC 8446 section 4.4, for a handshake without a PSK - the only kind
+     * this client makes: EncryptedExtensions, then optionally
+     * CertificateRequest, then Certificate, CertificateVerify and Finished,
+     * each exactly once. Certificate and CertificateVerify are not optional
+     * (section 4.4.2), whether or not the certificate is then checked
+     * against a trust store: without them the server has proved nothing at
+     * all, and the encryption is with whoever answered.
+     */
+    private enum Expect {
+        ENCRYPTED_EXTENSIONS("EncryptedExtensions"),
+        CERTIFICATE_OR_REQUEST("Certificate or CertificateRequest"),
+        CERTIFICATE("Certificate"),
+        CERTIFICATE_VERIFY("CertificateVerify"),
+        FINISHED("Finished"),
+        NOTHING("nothing more");
+
+        private final String wanted;
+
+        Expect(String wanted) {
+            this.wanted = wanted;
+        }
+    }
+
+    /**
+     * EncryptedExtensions, an optional CertificateRequest, Certificate,
+     * CertificateVerify and Finished - however many records they arrive in,
+     * and in exactly that order.
+     *
+     * <p><b>The order is the security property.</b> Each message is checked
+     * where it stands, and a client that merely reacts to whatever arrives
+     * checks nothing that is not sent: a server - or anybody in the middle -
+     * that goes from EncryptedExtensions straight to a Finished of its own
+     * making was accepted by the version before this one, with a trust store
+     * set and {@code peerCertificate()} null. Review, 26.09.2026. So every
+     * message is refused unless it is the one that is due, with
+     * {@code unexpected_message} as RFC 8446 prescribes.
      *
      * @return the request context if a {@code CertificateRequest} arrived -
      *         normally empty, which is not the same as absent - or
-     *         {@code null} if the server did not ask for a client certificate
+     *         {@code null} if the server did not ask for a client
+     *         certificate; and whether a CertificateVerify was verified
      */
-    private static byte[] readServerFlight(RecordStream records, TranscriptHash transcript,
+    private static ServerFlight readServerFlight(RecordStream records, TranscriptHash transcript,
             KeySchedule schedule, SecretScope digest, HashAlgorithm hash, String host,
             CertificateTrust trust, List<X509Certificate> chain, String alpn)
             throws IOException {
         try (HandshakeReassembler flight = new HandshakeReassembler(1 << 20)) {
-            boolean[] finished = {false};
+            Expect[] expect = {Expect.ENCRYPTED_EXTENSIONS};
+            boolean[] verified = {false};
             byte[][] certificateRequest = {null};
             IOException[] failure = {null};
 
-            while (!finished[0] && failure[0] == null) {
+            while (expect[0] != Expect.NOTHING && failure[0] == null) {
                 RecordStream.Incoming record = records.next();
                 if (record.contentType() != 22) {
-                    throw new IOException("a record of type " + record.contentType()
-                            + " arrived during the server's handshake flight");
+                    throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                            "a record of type " + record.contentType() + " arrived during the "
+                                    + "server's handshake flight, where " + expect[0].wanted
+                                    + " was due");
                 }
                 flight.append(record.data(), record.offset(), record.length());
                 flight.drain((type, at, length) -> {
@@ -427,25 +484,47 @@ public final class ClientHandshake {
                         MemorySegment message = flight.segment();
                         int total = Handshake.HEADER + length;
                         long start = at - Handshake.HEADER;
+                        Expect now = expect[0];
                         switch (type) {
                             case Handshake.ENCRYPTED_EXTENSIONS -> {
+                                due(now == Expect.ENCRYPTED_EXTENSIONS, type, now);
                                 checkSelectedProtocol(message, at, length, alpn);
                                 transcript.update(message, start, total);
+                                expect[0] = Expect.CERTIFICATE_OR_REQUEST;
+                            }
+                            case Handshake.CERTIFICATE_REQUEST -> {
+                                due(now == Expect.CERTIFICATE_OR_REQUEST, type, now);
+                                // Only noted here. The answer belongs in the
+                                // client's own flight, which is written once
+                                // this one has been read to its end.
+                                certificateRequest[0] =
+                                        CertificateMessage.requestContext(message, at);
+                                transcript.update(message, start, total);
+                                expect[0] = Expect.CERTIFICATE;
                             }
                             case Handshake.CERTIFICATE -> {
+                                due(now == Expect.CERTIFICATE_OR_REQUEST
+                                        || now == Expect.CERTIFICATE, type, now);
                                 readCertificates(message, at, length, chain);
                                 authenticate(chain, host, trust);
                                 transcript.update(message, start, total);
+                                expect[0] = Expect.CERTIFICATE_VERIFY;
                             }
                             case Handshake.CERTIFICATE_VERIFY -> {
+                                due(now == Expect.CERTIFICATE_VERIFY, type, now);
                                 // Signed over everything up to and including Certificate,
                                 // so the hash is taken before this message is added.
+                                // Checked with or without a trust store: the signature
+                                // is what proves the server holds the key it presented.
                                 transcript.current(digest.segment(), 0);
                                 verifySignature(chain, message, at,
                                         digest.segment().asSlice(0, hash.digestLength()));
+                                verified[0] = true;
                                 transcript.update(message, start, total);
+                                expect[0] = Expect.FINISHED;
                             }
                             case Handshake.FINISHED -> {
+                                due(now == Expect.FINISHED, type, now);
                                 // Likewise: over everything up to and including
                                 // CertificateVerify.
                                 transcript.current(digest.segment(), 0);
@@ -458,18 +537,13 @@ public final class ClientHandshake {
                                             + "in flight");
                                 }
                                 transcript.update(message, start, total);
-                                finished[0] = true;
+                                expect[0] = Expect.NOTHING;
                             }
-                            case Handshake.CERTIFICATE_REQUEST -> {
-                                // Only noted here. The answer belongs in the
-                                // client's own flight, which is written once
-                                // this one has been read to its end.
-                                certificateRequest[0] =
-                                        CertificateMessage.requestContext(message, at);
-                                transcript.update(message, start, total);
-                            }
-                            default -> throw new IOException("handshake message of type " + type
-                                    + " is not expected in a server's first flight");
+                            default -> throw new TlsProtocolException(
+                                    TlsAlertException.UNEXPECTED_MESSAGE,
+                                    "handshake message of type " + type + " is not part of a "
+                                            + "server's first flight; " + now.wanted
+                                            + " was due");
                         }
                     } catch (IOException e) {
                         failure[0] = e;
@@ -479,7 +553,55 @@ public final class ClientHandshake {
             if (failure[0] != null) {
                 throw failure[0];
             }
-            return certificateRequest[0];
+            if (flight.buffered() > 0) {
+                // RFC 8446 section 5.1: handshake messages must not span a key
+                // change, and the server's Finished is one.
+                throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                        "handshake bytes followed the server's Finished under the same key");
+            }
+            return new ServerFlight(certificateRequest[0], verified[0]);
+        }
+    }
+
+    /** Refuses a message that is not the one due at this point of the flight. */
+    private static void due(boolean inOrder, int type, Expect expected)
+            throws TlsProtocolException {
+        if (!inOrder) {
+            throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                    "the server sent " + messageName(type) + " where RFC 8446 section 4.4 "
+                            + "requires " + expected.wanted);
+        }
+    }
+
+    private static String messageName(int type) {
+        return switch (type) {
+            case Handshake.ENCRYPTED_EXTENSIONS -> "EncryptedExtensions";
+            case Handshake.CERTIFICATE_REQUEST -> "CertificateRequest";
+            case Handshake.CERTIFICATE -> "Certificate";
+            case Handshake.CERTIFICATE_VERIFY -> "CertificateVerify";
+            case Handshake.FINISHED -> "Finished";
+            default -> "handshake message " + type;
+        };
+    }
+
+    /**
+     * The second lock on the same door: no application secret is derived
+     * for a server that has not shown a certificate and proved, with a
+     * verified CertificateVerify, that it holds the key in it.
+     *
+     * <p>Unconditional rather than only with a trust store. This client never
+     * offers a PSK, so there is no handshake in which a server legitimately
+     * skips both - and {@code connectWithoutAuthenticating} gives up the check
+     * of <em>who</em> the key belongs to, not the proof that the server holds
+     * one.
+     */
+    static void requireAuthenticatedServer(List<X509Certificate> chain,
+            boolean signatureVerified) throws TlsProtocolException {
+        if (chain.isEmpty() || !signatureVerified) {
+            throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
+                    "the server finished its handshake without "
+                            + (chain.isEmpty() ? "a certificate" : "a verified CertificateVerify")
+                            + " - refusing to derive keys for a peer nobody authenticated");
         }
     }
 
