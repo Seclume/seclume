@@ -106,19 +106,28 @@ public final class TrustChoice {
                     + "one is '" + value + "'", "08001");
         }
         value = value.substring(7);
-        if (value.startsWith("/")) {
-            value = value.substring(1);
-        }
         // Base64 has '+', which a URL decoder turns into a blank: the pin is
         // taken as written, and a blank in it can only have been a '+'.
         value = value.replace(' ', '+').replace("%2B", "+").replace("%2b", "+")
                 .replace("%2F", "/").replace("%2f", "/").replace("%3D", "=")
                 .replace("%3d", "=");
-        byte[] pin;
+        byte[] pin = null;
+        IllegalArgumentException malformed = null;
         try {
             pin = Base64.getDecoder().decode(value); // seclume-allow: a pin, public by design
         } catch (IllegalArgumentException e) {
-            throw new SQLException("tlsPin is not base64: " + e.getMessage(), "08001");
+            malformed = e;
+        }
+        // One key in 64 has a base64 that starts with '/', so a leading '/'
+        // is only curl's extra slash when the pin does not stand without it.
+        if ((pin == null || pin.length != 32) && value.startsWith("/")) {
+            try {
+                pin = Base64.getDecoder().decode(value.substring(1)); // seclume-allow: a pin, public by design
+            } catch (IllegalArgumentException e) {
+                throw new SQLException("tlsPin is not base64: " + e.getMessage(), "08001");
+            }
+        } else if (pin == null) {
+            throw new SQLException("tlsPin is not base64: " + malformed.getMessage(), "08001");
         }
         if (pin.length != 32) {
             throw new SQLException("tlsPin has " + pin.length + " bytes, a SHA-256 has 32",
