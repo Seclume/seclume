@@ -36,7 +36,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -75,7 +75,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -109,7 +109,7 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: maven
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -180,7 +180,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -209,7 +209,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -264,7 +264,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -295,7 +295,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -337,7 +337,7 @@ jobs:
       # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
       # every job, which on 22.09.2026 got one of nine a 429 from the
       # distribution host and a red build with nothing wrong in it.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
