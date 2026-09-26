@@ -45,6 +45,8 @@ public final class RecordProtection implements AutoCloseable {
     /** The header is type, two version bytes and two length bytes. */
     public static final int HEADER = 5;
     private static final int MAX_PLAINTEXT = 16384;
+    /** RFC 8446 section 5.2: at most 2^14 + 256 bytes of ciphertext, the tag included. */
+    private static final int MAX_INNER = MAX_PLAINTEXT + 256 - AesGcm.TAG;
 
     private final Arena arena = Arena.ofShared();
     private final AesGcmCipher key;
@@ -52,6 +54,14 @@ public final class RecordProtection implements AutoCloseable {
     private final HashAlgorithm hash;
     private final MemorySegment secret;
     private final int keyLength;
+    /** The nonce of the record in hand; rebuilt from IV and sequence number each time. */
+    private final MemorySegment nonce;
+    /**
+     * The plaintext with its inner type, for sealing - and for opening into a
+     * caller's buffer too small for the padding. Allocated on first use, since
+     * a key is only ever used in one direction, and wiped after every record.
+     */
+    private MemorySegment content;
     private long sequence;
 
     private RecordProtection(HashAlgorithm hash, MemorySegment trafficSecret, int keyLength) {
@@ -67,6 +77,7 @@ public final class RecordProtection implements AutoCloseable {
 
         this.iv = arena.allocate(AesGcm.NONCE);
         Hkdf.expandLabel(hash, secret, "iv", null, iv, 0, AesGcm.NONCE);
+        this.nonce = arena.allocate(AesGcm.NONCE);
     }
 
     /**
@@ -103,18 +114,20 @@ public final class RecordProtection implements AutoCloseable {
         int body = inner + AesGcm.TAG;
         writeHeader(out, outOffset, body);
 
-        try (Arena scratch = Arena.ofConfined()) {
-            MemorySegment nonce = scratch.allocate(AesGcm.NONCE);
-            nonce(nonce);
-            MemorySegment content = scratch.allocate(inner);
-            if (length > 0) {
-                MemorySegment.copy(plain, offset, content, 0, length);
-            }
-            content.set(ValueLayout.JAVA_BYTE, length, contentType);
-
+        // One nonce and one content buffer for the life of the key, not an
+        // arena per record: allocating, zeroing and freeing 16 KiB each time
+        // cost more than the AES-GCM of a short record (RecordBenchmark).
+        nonce();
+        MemorySegment content = content();
+        if (length > 0) {
+            MemorySegment.copy(plain, offset, content, 0, length);
+        }
+        content.set(ValueLayout.JAVA_BYTE, length, contentType);
+        try {
             key.encrypt(nonce, 0, out, outOffset, HEADER, content, 0, inner,
                     out, outOffset + HEADER);
-            content.fill((byte) 0);
+        } finally {
+            content.asSlice(0, inner).fill((byte) 0);
         }
         sequence++;
         return HEADER + body;
@@ -132,34 +145,46 @@ public final class RecordProtection implements AutoCloseable {
             return null;                    // not even room for the inner type
         }
         int inner = body - AesGcm.TAG;
-        try (Arena scratch = Arena.ofConfined()) {
-            MemorySegment nonce = scratch.allocate(AesGcm.NONCE);
-            nonce(nonce);
-            MemorySegment content = scratch.allocate(inner);
-            boolean ok = key.decrypt(nonce, 0, record, offset, HEADER,
-                    record, offset + HEADER, inner, content, 0);
-            if (!ok) {
-                return null;
-            }
-            sequence++;
-            // Backwards past the padding: the last byte that is not zero is
-            // the real content type. A record that is all zeroes has none and
-            // is a protocol error rather than an empty message.
-            int at = inner - 1;
-            while (at >= 0 && content.get(ValueLayout.JAVA_BYTE, at) == 0) {
-                at--;
-            }
-            if (at < 0) {
-                content.fill((byte) 0);
-                return null;
-            }
-            byte contentType = content.get(ValueLayout.JAVA_BYTE, at);
-            if (at > 0) {
-                MemorySegment.copy(content, 0, out, outOffset, at);
-            }
-            content.fill((byte) 0);
-            return new Opened(contentType, at);
+        if (inner > MAX_INNER) {
+            throw new IllegalArgumentException("a record holds at most " + MAX_INNER
+                    + " bytes of content and padding, not " + inner);
         }
+        // Straight into the caller's buffer when the inner type and padding fit
+        // there too - RecordStream's always does - and through the content
+        // buffer otherwise, so that exactly the payload lands in out.
+        boolean direct = out.byteSize() - outOffset >= inner;
+        MemorySegment target = direct ? out : content();
+        long base = direct ? outOffset : 0;
+        nonce();
+        boolean ok = key.decrypt(nonce, 0, record, offset, HEADER,
+                record, offset + HEADER, inner, target, base);
+        if (!ok) {
+            return null;
+        }
+        sequence++;
+        // Backwards past the padding: the last byte that is not zero is the
+        // real content type. A record that is all zeroes has none and is a
+        // protocol error rather than an empty message.
+        int at = inner - 1;
+        while (at >= 0 && target.get(ValueLayout.JAVA_BYTE, base + at) == 0) {
+            at--;
+        }
+        if (at < 0) {
+            target.asSlice(base, inner).fill((byte) 0);
+            return null;
+        }
+        byte contentType = target.get(ValueLayout.JAVA_BYTE, base + at);
+        if (direct) {
+            // Only the type is left to clear behind the payload; the padding
+            // after it is zeroes already.
+            target.set(ValueLayout.JAVA_BYTE, base + at, (byte) 0);
+        } else {
+            if (at > 0) {
+                MemorySegment.copy(target, 0, out, outOffset, at);
+            }
+            target.asSlice(0, inner).fill((byte) 0);
+        }
+        return new Opened(contentType, at);
     }
 
     /**
@@ -224,14 +249,21 @@ public final class RecordProtection implements AutoCloseable {
     }
 
     /** IV xor sequence number, the number right-aligned in the twelve bytes. */
-    private void nonce(MemorySegment out) {
-        MemorySegment.copy(iv, 0, out, 0, AesGcm.NONCE);
+    private void nonce() {
+        MemorySegment.copy(iv, 0, nonce, 0, AesGcm.NONCE);
         for (int i = 0; i < 8; i++) {
             int at = AesGcm.NONCE - 1 - i;
             byte counter = (byte) (sequence >>> (8 * i));
-            out.set(ValueLayout.JAVA_BYTE, at,
-                    (byte) (out.get(ValueLayout.JAVA_BYTE, at) ^ counter));
+            nonce.set(ValueLayout.JAVA_BYTE, at,
+                    (byte) (nonce.get(ValueLayout.JAVA_BYTE, at) ^ counter));
         }
+    }
+
+    private MemorySegment content() {
+        if (content == null) {
+            content = arena.allocate(MAX_INNER);
+        }
+        return content;
     }
 
     @Override

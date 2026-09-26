@@ -164,18 +164,41 @@ public final class Aes {
     }
 
     private static void encryptBlock(AesKey key, MemorySegment state, MemorySegment scratch) {
+        encryptBlocks(key, state, 1, scratch);
+    }
+
+    /**
+     * Encrypts {@code blocks} consecutive blocks - up to four - in place, each
+     * on its own: what counter mode needs. The S-box works on bit planes with
+     * room for 64 bytes, so it takes all of them in one pass, and that pass is
+     * nearly all the cost of a block.
+     */
+    static void encryptBlocks(AesKey key, MemorySegment states, int blocks,
+                              MemorySegment scratch) {
+        if (blocks < 1 || blocks * BLOCK > AesSubBytes.MAX_LANES) {
+            throw new IllegalArgumentException("one to four blocks at a time, not " + blocks);
+        }
         MemorySegment roundKeys = key.roundKeys();
         int rounds = key.rounds();
-        addRoundKey(state, roundKeys, 0);
-        for (int round = 1; round < rounds; round++) {
-            AesSubBytes.forward(state);
-            shiftRows(state, scratch, false);
-            mixColumns(state);
-            addRoundKey(state, roundKeys, round);
+        int lanes = blocks * BLOCK;
+        for (int b = 0; b < blocks; b++) {
+            addRoundKey(states.asSlice(b * BLOCK, BLOCK), roundKeys, 0);
         }
-        AesSubBytes.forward(state);
-        shiftRows(state, scratch, false);
-        addRoundKey(state, roundKeys, rounds);
+        for (int round = 1; round < rounds; round++) {
+            AesSubBytes.forward(states, lanes);
+            for (int b = 0; b < blocks; b++) {
+                MemorySegment state = states.asSlice(b * BLOCK, BLOCK);
+                shiftRows(state, scratch, false);
+                mixColumns(state);
+                addRoundKey(state, roundKeys, round);
+            }
+        }
+        AesSubBytes.forward(states, lanes);
+        for (int b = 0; b < blocks; b++) {
+            MemorySegment state = states.asSlice(b * BLOCK, BLOCK);
+            shiftRows(state, scratch, false);
+            addRoundKey(state, roundKeys, rounds);
+        }
     }
 
     private static void decryptBlock(AesKey key, MemorySegment state, MemorySegment scratch) {
