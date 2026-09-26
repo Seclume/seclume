@@ -58,6 +58,41 @@ class DataSourceForEveryUrlTest {
         assertEquals(expected, source.getClass().getName());
     }
 
+    /**
+     * What the URL says about TLS arrives - on all four.
+     *
+     * <p>It did not: the starter copied host, port, database and a few flags
+     * into the {@code DataSource} one by one, and {@code tls} was not among
+     * them. {@code tls=verify-full} in {@code application.properties} meant
+     * {@code prefer} on PostgreSQL and MySQL - encrypted, server unchecked -
+     * and no TLS at all on Oracle, without a word.
+     */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "jdbc:seclume:postgresql://host:5432/db?tls=verify-full&tlsStack=seclume, verify-full",
+        "jdbc:seclume:mysql://host:3306/db?tls=verify-full&tlsStack=seclume,      verify-full",
+        "jdbc:seclume:oracle://host:2484/FREEPDB1?tls=verify-full&tlsStack=seclume, verify-full",
+        "jdbc:seclume:sqlserver://host:1433/db?tds=8.0&tlsStack=seclume,          8.0",
+    })
+    void theTlsTheUrlAsksForIsTheTlsTheDataSourceUses(String url, String expected)
+            throws Exception {
+        DataSource source = SeclumeDataSources.create("main", properties(url), null);
+        String tls = (String) source.getClass()
+                .getMethod(source.getClass().getSimpleName().equals("TdsDataSource")
+                        ? "getTds" : "getTls").invoke(source);
+        assertEquals(expected, tls, "the URL asked for it: " + url);
+        assertEquals("seclume", source.getClass().getMethod("getTlsStack").invoke(source));
+    }
+
+    /** And the rest of the URL with it - one PostgreSQL-only setting as the witness. */
+    @Test
+    void theRestOfTheUrlArrivesToo() {
+        var source = (space.seclume.postgresql.jdbc.SeclumeDataSource) SeclumeDataSources.create(
+                "main", properties("jdbc:seclume:postgresql://host/db?statementCacheSize=7"),
+                null);
+        assertEquals(7, source.getStatementCacheSize());
+    }
+
     @Test
     void anUnknownPrefixNamesAllOfThem() {
         IllegalStateException failure = assertThrows(IllegalStateException.class,

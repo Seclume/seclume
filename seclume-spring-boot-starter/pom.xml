@@ -36,6 +36,16 @@
       <version>${spring.boot.version}</version>
     </dependency>
 
+    <!-- JdbcConnectionDetails - what Testcontainers' @ServiceConnection and
+         Docker Compose support hand over. Optional: only looked at when it
+         is there. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-jdbc</artifactId>
+      <version>${spring.boot.version}</version>
+      <optional>true</optional>
+    </dependency>
+
     <!-- The drivers are optional: somebody who uses only PostgreSQL
          should not have to carry the other three. -->
     <dependency>
@@ -75,7 +85,7 @@
     <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-core</artifactId>
-      <version>1.15.4</version>
+      <version>1.16.7</version>
       <optional>true</optional>
     </dependency>
     <!-- Tracing, also optional. The API only: a span is created against
@@ -98,6 +108,13 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-health</artifactId>
+      <version>${spring.boot.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <!-- /actuator/seclume - only where the application has the actuator. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-actuator</artifactId>
       <version>${spring.boot.version}</version>
       <optional>true</optional>
     </dependency>

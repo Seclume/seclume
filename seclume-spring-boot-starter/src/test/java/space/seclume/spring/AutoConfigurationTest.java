@@ -118,6 +118,8 @@ class AutoConfigurationTest {
         properties.put("seclume.datasources.main.pool.minimum-idle", "1");
         properties.put("seclume.datasources.main.pool.connection-timeout", "2s");
         properties.put("seclume.datasources.main.pool.warmup", "true");
+        properties.put("seclume.datasources.main.pool.credential-spread", "30s");
+        properties.put("seclume.datasources.main.pool.shutdown-timeout", "3s");
 
         try (AnnotationConfigApplicationContext context = context(properties)) {
             SeclumePool pool = context.getBean(SeclumePool.class);
@@ -125,6 +127,8 @@ class AutoConfigurationTest {
             assertEquals(1, pool.settings().getMinimumIdle());
             assertEquals(Duration.ofSeconds(2), pool.settings().getConnectionTimeout());
             assertEquals("seclume-main", pool.settings().getName());
+            assertEquals(Duration.ofSeconds(30), pool.settings().getCredentialSpread());
+            assertEquals(Duration.ofSeconds(3), pool.settings().getShutdownTimeout());
             // warmup=true means the connection is already standing.
             assertEquals(1, pool.idleCount());
         }
@@ -143,6 +147,31 @@ class AutoConfigurationTest {
             assertNotSame(main, reporting);
             // 'main' is the primary one - getBean(DataSource.class) finds it.
             assertEquals(main, context.getBean(DataSource.class));
+        }
+    }
+
+    /** seclume.read-write-split: the application's DataSource sends read-only work to the replica. */
+    @Test
+    void aReadWriteSplitBecomesTheApplicationsDataSource() throws Exception {
+        Map<String, Object> properties = postgres("seclume.datasources.main");
+        properties.putAll(postgres("seclume.datasources.replica"));
+        properties.put("seclume.read-write-split.primary", "main");
+        properties.put("seclume.read-write-split.replica", "replica");
+        try (AnnotationConfigApplicationContext context = context(properties)) {
+            DataSource dataSource = context.getBean(DataSource.class);
+            assertTrue(dataSource instanceof space.seclume.pool.ReadWriteSplit,
+                    dataSource.getClass().getName());
+            try (Connection connection = dataSource.getConnection()) {
+                connection.setReadOnly(true);
+                try (Statement statement = connection.createStatement();
+                     ResultSet result = statement.executeQuery("select 1")) {
+                    assertTrue(result.next());
+                }
+            }
+            SeclumePool replica = context.getBean("replicaDataSource", SeclumePool.class);
+            assertEquals(1, replica.statistics().borrowed(), "the read did not go to the replica");
+            assertEquals(0, context.getBean("mainDataSource", SeclumePool.class)
+                    .statistics().borrowed());
         }
     }
 
@@ -170,6 +199,30 @@ class AutoConfigurationTest {
         @Bean
         SecretProvider myVault() {
             return new FileSecretProvider(passwordFile, 256);
+        }
+    }
+
+    /** A session context bean reaches the pool, and the database sees it. */
+    @Test
+    void aSessionContextBeanReachesEveryBorrow() throws Exception {
+        try (AnnotationConfigApplicationContext context =
+                     context(postgres("seclume.datasources.main"), OwnSessionContext.class)) {
+            try (Connection connection = context.getBean(DataSource.class).getConnection();
+                 Statement statement = connection.createStatement();
+                 ResultSet result = statement.executeQuery(
+                         "select current_setting('app.tenant_id', true)")) {
+                assertTrue(result.next());
+                assertEquals("42", result.getString(1));
+            }
+        }
+    }
+
+    @Configuration
+    static class OwnSessionContext {
+
+        @Bean
+        SeclumeSessionContext tenant() {
+            return () -> Map.of("app.tenant_id", "42");
         }
     }
 

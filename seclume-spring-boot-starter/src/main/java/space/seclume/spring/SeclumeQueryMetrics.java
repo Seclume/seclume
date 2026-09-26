@@ -135,18 +135,25 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
     /**
      * A move to another server of the host list.
      *
+     * <p>A timer rather than a counter, and the count comes with it: what an
+     * operator wants after a switchover is not how often a server was passed
+     * over but how long each one took to not answer. A refused connection is
+     * a millisecond; a silently dropped packet is the whole connect timeout,
+     * spent inside {@code getConnection}. In a count those two are the same
+     * number.
+     *
      * <p>Without a tag for the reason. It is a server's message, it is
      * unbounded, and it is the field most likely to carry something nobody
      * meant to publish - the recording keeps it, a metric name must not.
      */
     private void failover(MeterRegistry registry, RecordedEvent event) {
-        Counter.builder("seclume.failover")
+        Timer.builder("seclume.failover")
                 .description("a server of the host list could not be reached and the next "
                         + "was tried")
                 .tag("from", string(event, "from"))
                 .tag("to", string(event, "to"))
                 .register(registry)
-                .increment();
+                .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
     }
 
     /**

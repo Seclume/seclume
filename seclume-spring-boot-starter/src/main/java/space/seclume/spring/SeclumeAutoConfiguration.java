@@ -134,8 +134,11 @@ public class SeclumeAutoConfiguration {
                 io.opentelemetry.api.OpenTelemetry.class)
         @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
                 name = "seclume.tracing", havingValue = "true")
-        SeclumeTracing seclumeTracing(io.opentelemetry.api.OpenTelemetry openTelemetry) {
-            SeclumeTracing tracing = new SeclumeTracing(openTelemetry);
+        SeclumeTracing seclumeTracing(io.opentelemetry.api.OpenTelemetry openTelemetry,
+                org.springframework.core.env.Environment environment) {
+            SeclumeTracing tracing = new SeclumeTracing(openTelemetry,
+                    SeclumeTracing.optedIntoDuplicates(
+                            environment.getProperty("OTEL_SEMCONV_STABILITY_OPT_IN")));
             tracing.install();
             return tracing;
         }
@@ -155,6 +158,19 @@ public class SeclumeAutoConfiguration {
         SeclumePoolHealth seclumePoolHealth(
                 org.springframework.beans.factory.ObjectProvider<SeclumePool> pools) {
             return new SeclumePoolHealth(pools.stream().toList());
+        }
+    }
+
+    /** {@code /actuator/seclume} - only when the actuator is on the class path. */
+    @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "org.springframework.boot.actuate.endpoint.annotation.Endpoint")
+    static class EndpointConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean(SeclumeEndpoint.class)
+        SeclumeEndpoint seclumeEndpoint(
+                org.springframework.beans.factory.ObjectProvider<SeclumePool> pools) {
+            return new SeclumeEndpoint(pools.stream().toList());
         }
     }
 
@@ -189,16 +205,40 @@ public class SeclumeAutoConfiguration {
             }
             String primary = properties.getPrimary();
             boolean single = properties.getDatasources().size() == 1;
+            SeclumeProperties.ReadWriteSplitProperties split = properties.getReadWriteSplit();
+            boolean splitting = split.getPrimary() != null && split.getReplica() != null;
+            if (splitting) {
+                for (String part : new String[] {split.getPrimary(), split.getReplica()}) {
+                    if (!properties.getDatasources().containsKey(part)) {
+                        throw new IllegalStateException("seclume.read-write-split names '" + part
+                                + "', which is not under seclume.datasources");
+                    }
+                }
+                single = false;          // the split is the application's DataSource
+            }
 
             for (Map.Entry<String, SeclumeProperties.DataSourceProperties> entry
                     : properties.getDatasources().entrySet()) {
                 String name = entry.getKey();
                 String beanName = single ? "dataSource" : name + "DataSource";
                 RootBeanDefinition definition = new RootBeanDefinition(SeclumePool.class);
-                definition.setPrimary(single || name.equals(primary));
+                definition.setPrimary(!splitting && (single || name.equals(primary)));
                 definition.setDestroyMethodName("close");
                 definition.setInstanceSupplier(() -> build(name, entry.getValue(), factory));
                 registry.registerBeanDefinition(beanName, definition);
+            }
+            if (splitting) {
+                String primaryBean = split.getPrimary() + "DataSource";
+                String replicaBean = split.getReplica() + "DataSource";
+                java.time.Duration wait = split.getReadYourWrites();
+                RootBeanDefinition both = new RootBeanDefinition(
+                        space.seclume.pool.ReadWriteSplit.class);
+                both.setPrimary(true);
+                both.setInstanceSupplier(() -> new space.seclume.pool.ReadWriteSplit(
+                        factory.getBean(primaryBean, javax.sql.DataSource.class),
+                        factory.getBean(replicaBean, javax.sql.DataSource.class))
+                        .readYourWrites(wait));
+                registry.registerBeanDefinition("dataSource", both);
             }
         }
 
@@ -262,6 +302,9 @@ public class SeclumeAutoConfiguration {
             if (source instanceof ExpiringCredentials expiring) {
                 settings.setCredentialExpiry(expiring::credentialsValidUntil);
             }
+            // The tenant of the request, on every borrow - see SeclumeSessionContext.
+            beans.getBeanProvider(SeclumeSessionContext.class)
+                    .ifAvailable(context -> settings.setSessionContext(context::current));
             SeclumePool pool = new SeclumePool(source, settings);
             if (settings.isWarmup()) {
                 try {
@@ -296,6 +339,12 @@ public class SeclumeAutoConfiguration {
             }
             if (pool.getCredentialMargin() != null) {
                 settings.setCredentialMargin(pool.getCredentialMargin());
+            }
+            if (pool.getCredentialSpread() != null) {
+                settings.setCredentialSpread(pool.getCredentialSpread());
+            }
+            if (pool.getShutdownTimeout() != null) {
+                settings.setShutdownTimeout(pool.getShutdownTimeout());
             }
             if (pool.getKeepaliveTime() != null) {
                 settings.setKeepaliveTime(pool.getKeepaliveTime());

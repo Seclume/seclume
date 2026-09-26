@@ -63,7 +63,7 @@ class TracingTest {
         }
 
         List<SpanData> spans = exported.getFinishedSpanItems();
-        SpanData statement = spans.stream().filter(s -> s.getName().equals("SELECT")).findFirst()
+        SpanData statement = spans.stream().filter(s -> s.getName().equals("SELECT orders")).findFirst()
                 .orElseThrow(() -> new AssertionError("no statement span: "
                         + spans.stream().map(SpanData::getName).toList()));
 
@@ -72,14 +72,21 @@ class TracingTest {
         assertEquals(request.getSpanContext().getTraceId(), statement.getTraceId());
 
         assertEquals("postgresql", statement.getAttributes()
-                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.system")));
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.system.name")));
+        assertEquals("SELECT", statement.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.operation.name")));
+        assertEquals("SELECT orders", statement.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.query.summary")));
+        assertEquals(null, statement.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.system")),
+                "the old names came without being asked for");
         assertEquals(7L, statement.getAttributes()
                 .get(io.opentelemetry.api.common.AttributeKey.longKey(
                         "db.response.returned_rows")));
 
         // The fingerprint, and nothing that was in the statement.
         String recorded = statement.getAttributes()
-                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.statement"));
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.query.text"));
         assertEquals("select * from orders where customer = ?", recorded);
         assertFalse(recorded.contains("4711"), "a value reached a trace: " + recorded);
     }
@@ -95,7 +102,11 @@ class TracingTest {
                 QueryFingerprint.Dialect.ORACLE, 0, true);
 
         SpanData statement = exported.getFinishedSpanItems().get(0);
-        assertEquals("INSERT", statement.getName());
+        assertEquals("INSERT ledger", statement.getName());
+        assertEquals("oracle.db", statement.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.system.name")));
+        assertEquals("_OTHER", statement.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("error.type")));
         assertEquals(StatusCode.ERROR, statement.getStatus().getStatusCode());
         assertTrue(statement.getStatus().getDescription().isEmpty(),
                 "the status carries a description, and a server's error text is the field "
@@ -127,7 +138,46 @@ class TracingTest {
                 "a statement after the close produced a span");
     }
 
-    /** The span name stays the operation, whatever the statement was. */
+    /**
+     * {@code OTEL_SEMCONV_STABILITY_OPT_IN=database/dup}: the old names come
+     * beside the stable ones, for a backend still reading them.
+     */
+    @Test
+    void theOldNamesComeWhenAskedFor() {
+        SeclumeTracing tracing = new SeclumeTracing(sdk, true);
+        tracing.install();
+        Observed.endQuery(Observed.beginQuery("sqlserver"), "sqlserver",
+                "update accounts set balance = 1 where id = 2",
+                QueryFingerprint.Dialect.SQLSERVER, 1, false);
+        SpanData statement = exported.getFinishedSpanItems().get(0);
+        assertEquals("sqlserver", statement.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.system")));
+        assertEquals("microsoft.sql_server", statement.getAttributes()
+                .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.system.name")));
+        assertEquals(statement.getAttributes()
+                        .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.query.text")),
+                statement.getAttributes()
+                        .get(io.opentelemetry.api.common.AttributeKey.stringKey("db.statement")));
+        assertTrue(SeclumeTracing.optedIntoDuplicates("http, database/dup"));
+        assertFalse(SeclumeTracing.optedIntoDuplicates("database"));
+        assertFalse(SeclumeTracing.optedIntoDuplicates(null));
+    }
+
+    /** The summary: the operation and the first table, nothing of the values. */
+    @Test
+    void theSummaryIsTheOperationAndItsTable() {
+        assertEquals("SELECT orders", SeclumeTracing.summaryOf(
+                "select * from orders where id = ?"));
+        assertEquals("INSERT ledger", SeclumeTracing.summaryOf("insert into ledger values (?)"));
+        assertEquals("UPDATE app.accounts", SeclumeTracing.summaryOf(
+                "update app.accounts set b = ? where id = ?"));
+        assertEquals("DELETE t", SeclumeTracing.summaryOf("delete from \"t\" where x = ?"));
+        assertEquals("SELECT", SeclumeTracing.summaryOf("select ?"));
+        assertEquals("SELECT", SeclumeTracing.summaryOf("select * from (select ?) x"));
+        assertEquals("WITH", SeclumeTracing.summaryOf("with r as (select ?) select * from r"));
+    }
+
+    /** The operation, whatever the statement was. */
     @Test
     void theNameIsTheOperationAndNotTheShape() {
         assertEquals("SELECT", SeclumeTracing.operationOf("select * from t where id = ?"));

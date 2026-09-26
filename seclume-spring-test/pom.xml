@@ -95,6 +95,53 @@
       <version>${spring.boot.version}</version>
       <scope>test</scope>
     </dependency>
+    <!-- The frameworks beyond JPA, each through its own API - see
+         FrameworksTest - and a JTA coordinator for JtaAcrossFourTest. Test
+         scope: none of them is part of what the starter ships. -->
+    <dependency>
+      <groupId>org.liquibase</groupId>
+      <artifactId>liquibase-core</artifactId>
+      <version>5.0.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.jooq</groupId>
+      <artifactId>jooq</artifactId>
+      <version>3.21.8</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mybatis</groupId>
+      <artifactId>mybatis</artifactId>
+      <version>3.5.19</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-jdbc</artifactId>
+      <version>4.1.1</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.atomikos</groupId>
+      <artifactId>transactions-jdbc</artifactId>
+      <version>6.0.1</version>
+      <classifier>jakarta</classifier>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.atomikos</groupId>
+      <artifactId>transactions-jta</artifactId>
+      <version>6.0.1</version>
+      <classifier>jakarta</classifier>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.transaction</groupId>
+      <artifactId>jakarta.transaction-api</artifactId>
+      <version>2.0.1</version>
+      <scope>test</scope>
+    </dependency>
     <!-- Only for TestHosts: where the test databases are stands in one
          place and not in every test class. -->
     <dependency>

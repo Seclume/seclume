@@ -47,6 +47,56 @@ public class SeclumeProperties {
         this.primary = primary;
     }
 
+    private ReadWriteSplitProperties readWriteSplit = new ReadWriteSplitProperties();
+
+    /** {@code seclume.read-write-split.*} - see {@link space.seclume.pool.ReadWriteSplit}. */
+    public ReadWriteSplitProperties getReadWriteSplit() {
+        return readWriteSplit;
+    }
+
+    public void setReadWriteSplit(ReadWriteSplitProperties readWriteSplit) {
+        this.readWriteSplit = readWriteSplit;
+    }
+
+    /**
+     * Two of the data sources as one: read-only work to the replica, the rest
+     * to the primary. When both are named, the application's DataSource -
+     * the bean called {@code dataSource} - is the split.
+     */
+    public static class ReadWriteSplitProperties {
+
+        /** The data source that takes writes, by its name under seclume.datasources. */
+        private String primary;
+        /** The one that takes read-only work. */
+        private String replica;
+        /** How long a read waits for the replica to catch up with a write; off when unset. */
+        private java.time.Duration readYourWrites;
+
+        public String getPrimary() {
+            return primary;
+        }
+
+        public void setPrimary(String primary) {
+            this.primary = primary;
+        }
+
+        public String getReplica() {
+            return replica;
+        }
+
+        public void setReplica(String replica) {
+            this.replica = replica;
+        }
+
+        public java.time.Duration getReadYourWrites() {
+            return readYourWrites;
+        }
+
+        public void setReadYourWrites(java.time.Duration readYourWrites) {
+            this.readYourWrites = readYourWrites;
+        }
+    }
+
     public Map<String, DataSourceProperties> getDatasources() {
         return datasources;
     }
@@ -205,6 +255,8 @@ public class SeclumeProperties {
          * expiry at all - Vault's database engine does, a file does not.
          */
         private Duration credentialMargin;
+        private Duration credentialSpread;
+        private Duration shutdownTimeout;
         private Duration keepaliveTime;
         private Duration validationTimeout;
         private Duration validationBypassWindow;
@@ -269,6 +321,24 @@ public class SeclumeProperties {
         /** @see #credentialMargin */
         public void setCredentialMargin(Duration credentialMargin) {
             this.credentialMargin = credentialMargin;
+        }
+
+        /** How far apart the deadlines of connections opened together are spread. */
+        public Duration getCredentialSpread() {
+            return credentialSpread;
+        }
+
+        public void setCredentialSpread(Duration credentialSpread) {
+            this.credentialSpread = credentialSpread;
+        }
+
+        /** How long closing the pool waits for borrowed connections; 10 s by default. */
+        public Duration getShutdownTimeout() {
+            return shutdownTimeout;
+        }
+
+        public void setShutdownTimeout(Duration shutdownTimeout) {
+            this.shutdownTimeout = shutdownTimeout;
         }
 
         public Duration getKeepaliveTime() {
