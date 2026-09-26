@@ -29,8 +29,10 @@ import java.util.Map;
  * The scaffolding of a forward-only, read-only {@code ResultSet}.
  *
  * <p>{@code ResultSet} has over 190 methods, of which a driver of this shape
- * really answers about twenty. The rest are backwards cursors and updating in
- * place - things seclume cannot do and does not pretend to.
+ * really answers about twenty. The rest are updating in place - which seclume
+ * does not do and does not pretend to - and the cursor in any direction, which
+ * a result of {@code TYPE_SCROLL_INSENSITIVE} has and a forward-only one
+ * refuses.
  *
  * <p>{@code Array}, {@code SQLXML} and {@code RowId} sit between the two: they
  * are refused here and served by whichever driver actually has the type, which
@@ -40,7 +42,8 @@ import java.util.Map;
  * <p>This class answers the unanswerable part once and for all, with
  * {@link SQLFeatureNotSupportedException}. A {@code ResultSet} that acts as if
  * it could go backwards and quietly returns the wrong thing is worse than one
- * that refuses honestly.
+ * that refuses honestly - so a forward-only result, whose earlier rows may
+ * already be gone, refuses {@code previous()} rather than guess.
  *
  * <p>What a driver contributes are the values: the {@code ...At} methods. They
  * receive the <b>zero-based</b> column index of the current row; converting
@@ -54,8 +57,53 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     private boolean lastWasNull;
     private boolean closed;
 
+    /**
+     * Whether the statement asked for {@code TYPE_SCROLL_INSENSITIVE}. The
+     * driver then read the result whole - no fetch size, no pause - and the
+     * cursor may move over it in any direction.
+     */
+    private final boolean scrollable;
+
     protected ReadOnlyResultSet(Statement statement) {
         this.statement = statement;
+        boolean scroll = false;
+        int limit = 0;
+        try {
+            scroll = statement != null
+                    && statement.getResultSetType() == TYPE_SCROLL_INSENSITIVE;
+            limit = statement == null ? 0 : statement.getMaxFieldSize();
+        } catch (SQLException closed) {
+            // A statement that cannot say is one that was not asked to scroll.
+        }
+        this.scrollable = scroll;
+        this.maxFieldSize = limit;
+    }
+
+    /**
+     * {@code Statement.setMaxFieldSize}: the most characters or bytes a text
+     * or binary column hands out, the rest silently dropped - JDBC's words,
+     * and what the vendors do. 0 for no limit, which is nearly always.
+     */
+    private final int maxFieldSize;
+    /** Which columns the limit applies to, worked out on first need. */
+    private boolean[] truncatable;
+
+    private boolean truncatable(int column) throws SQLException {
+        if (truncatable == null) {
+            ResultSetMetaData description = metaData();
+            boolean[] which = new boolean[columnCount()];
+            for (int i = 0; i < which.length; i++) {
+                which[i] = switch (description.getColumnType(i + 1)) {
+                    case java.sql.Types.CHAR, java.sql.Types.VARCHAR, java.sql.Types.LONGVARCHAR,
+                         java.sql.Types.NCHAR, java.sql.Types.NVARCHAR,
+                         java.sql.Types.LONGNVARCHAR, java.sql.Types.BINARY,
+                         java.sql.Types.VARBINARY, java.sql.Types.LONGVARBINARY -> true;
+                    default -> false;
+                };
+            }
+            truncatable = which;
+        }
+        return truncatable[column];
     }
 
     // ---- what a driver contributes ---------------------------------------
@@ -141,6 +189,20 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         throw noSuchType("ROWID");
     }
 
+    /**
+     * A point in time the driver has decoded itself: an
+     * {@link java.time.OffsetDateTime} for a value that carries its zone, a
+     * {@link java.time.LocalDateTime} for one that does not - or {@code null},
+     * and the value is read from its text as before.
+     *
+     * <p>For the drivers whose text form is not ISO: Oracle writes a
+     * {@code TIMESTAMP WITH TIME ZONE} as ojdbc does, "... +2:00" or
+     * "... Europe/Vienna", and neither reads back as an offset.
+     */
+    protected Object temporalAt(int column) throws SQLException {
+        return null;
+    }
+
     /** The zero-based index for a column name, or -1. */
     protected abstract int columnIndexOf(String label);
 
@@ -184,8 +246,27 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return false;
     }
 
+    /**
+     * Closes the result the way an application does: and if the statement
+     * was told {@code closeOnCompletion()}, the statement with it.
+     */
     @Override
-    public final void close() {
+    public final void close() throws SQLException {
+        if (!closed) {
+            discard();
+            if (statement != null && !statement.isClosed() && statement.isCloseOnCompletion()) {
+                statement.close();
+            }
+        }
+    }
+
+    /**
+     * Closes the result the way the driver does - because the statement runs
+     * again, moves to its next result or closes itself. That is not the
+     * completion {@code closeOnCompletion()} waits for: a statement that
+     * closed itself on its own next execution would be unusable.
+     */
+    public final void discard() {
         if (!closed) {
             closed = true;
             release();
@@ -258,10 +339,81 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return column;
     }
 
+    // ---- reading a column without it becoming a String -------------------
+
+    /**
+     * Where the column's bytes are, for a driver that keeps rows in native
+     * memory.
+     *
+     * <p>Not abstract, because not every result set here is a window onto a
+     * receive buffer: a catalogue answer built from a list has no such thing,
+     * and pretending otherwise would put a copy behind an API whose entire
+     * purpose is that there is no copy.
+     */
+    protected java.lang.foreign.MemorySegment rawSegmentAt(int column) throws SQLException {
+        throw notBackedByMemory();
+    }
+
+    /** Where in that segment - see {@link #rawSegmentAt}. */
+    protected long rawOffsetAt(int column) throws SQLException {
+        throw notBackedByMemory();
+    }
+
+    /** How many bytes - see {@link #rawSegmentAt}. */
+    protected int rawLengthAt(int column) throws SQLException {
+        throw notBackedByMemory();
+    }
+
+    private SQLException notBackedByMemory() {
+        return new SQLException("this result set is built from values rather than from the "
+                + "server's answer, so there is no native window to read: "
+                + getClass().getName(), "0A000");
+    }
+
+    /**
+     * {@link space.seclume.Sensitive#length}, with the shared bounds check.
+     *
+     * <p>Here and not in each driver because {@link #check} is what decides
+     * that there is a row, that the column exists, and whether it is null -
+     * and four copies of that are four chances to get the null wrong.
+     */
+    protected final int rawLength(int columnIndex) throws SQLException {
+        int column = check(columnIndex);
+        return lastWasNull ? -1 : rawLengthAt(column);
+    }
+
+    /** {@link space.seclume.Sensitive#readInto}, with the shared bounds check. */
+    protected final int copyRaw(int columnIndex, java.lang.foreign.MemorySegment target)
+            throws SQLException {
+        int column = check(columnIndex);
+        if (lastWasNull) {
+            return -1;
+        }
+        int length = rawLengthAt(column);
+        if (target == null) {
+            throw new SQLException("no segment to read column " + columnIndex + " into");
+        }
+        if (target.byteSize() < length) {
+            // Refused rather than truncated. A key cut in half does not fail
+            // here - it fails in whatever verifies a signature, hours later
+            // and nowhere near this line.
+            throw new SQLException("column " + columnIndex + " holds " + length
+                    + " bytes and the segment given holds " + target.byteSize(), "22001");
+        }
+        java.lang.foreign.MemorySegment.copy(rawSegmentAt(column), rawOffsetAt(column),
+                target, 0, length);
+        return length;
+    }
+
     @Override
     public final String getString(int columnIndex) throws SQLException {
         int column = check(columnIndex);
-        return lastWasNull ? null : stringAt(column);
+        if (lastWasNull) {
+            return null;
+        }
+        String value = stringAt(column);
+        return maxFieldSize > 0 && value.length() > maxFieldSize && truncatable(column)
+                ? value.substring(0, maxFieldSize) : value;
     }
 
     @Override
@@ -331,19 +483,45 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     @Override
     public final byte[] getBytes(int columnIndex) throws SQLException {
         int column = check(columnIndex);
-        return lastWasNull ? null : bytesAt(column);
+        if (lastWasNull) {
+            return null;
+        }
+        byte[] value = bytesAt(column); // seclume-allow: the value getBytes returns anyway
+        return maxFieldSize > 0 && value.length > maxFieldSize && truncatable(column)
+                ? java.util.Arrays.copyOf(value, maxFieldSize) : value;
     }
 
     @Override
     public final Object getObject(int columnIndex) throws SQLException {
         int column = check(columnIndex);
-        return lastWasNull ? null : objectAt(column);
+        if (lastWasNull) {
+            return null;
+        }
+        if (maxFieldSize > 0 && truncatable(column)) {
+            Object value = objectAt(column);
+            return value instanceof String ? getString(columnIndex)
+                    : value instanceof byte[] ? getBytes(columnIndex) : value;
+        }
+        return objectAt(column);
     }
 
     @Override
     public final Date getDate(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
-        return text == null ? null : Date.valueOf(text.length() > 10 ? text.substring(0, 10) : text);
+        if (text == null) {
+            return null;
+        }
+        java.time.LocalDateTime decoded = inThisZone(temporalAt(columnIndex - 1));
+        return decoded != null ? Date.valueOf(decoded.toLocalDate())
+                : Date.valueOf(text.length() > 10 ? text.substring(0, 10) : text);
+    }
+
+    /** What {@link #temporalAt} decoded, as the JVM's zone sees it; null if nothing. */
+    private static java.time.LocalDateTime inThisZone(Object decoded) {
+        if (decoded instanceof java.time.OffsetDateTime zoned) {
+            return zoned.atZoneSameInstant(java.time.ZoneId.systemDefault()).toLocalDateTime();
+        }
+        return decoded instanceof java.time.LocalDateTime local ? local : null;
     }
 
     /**
@@ -360,10 +538,29 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         if (text == null) {
             return null;
         }
+        java.time.LocalDateTime decoded = inThisZone(temporalAt(columnIndex - 1));
+        if (decoded != null) {
+            return Time.valueOf(decoded.toLocalTime());
+        }
         String value = text.trim().replace('T', ' ');
         int space = value.indexOf(' ');
         if (space > 0 && value.indexOf(':') > space) {
             value = value.substring(space + 1);
+        }
+        // A time with a zone - PostgreSQL's timetz, "13:14:15+02" - is the
+        // instant it names, on the epoch day, in this JVM's zone: what pgjdbc
+        // answers. Read as a plain time, the offset was part of the seconds
+        // and getTime threw; found by the type catalog run.
+        int zone = Math.max(value.lastIndexOf('+'), value.lastIndexOf('-'));
+        if (zone > 0) {
+            String time = value.substring(0, zone);
+            String offset = value.substring(zone);
+            if (offset.length() == 3) {
+                offset += ":00";
+            }
+            java.time.OffsetTime at = java.time.OffsetTime.of(
+                    java.time.LocalTime.parse(time), java.time.ZoneOffset.of(offset));
+            return new Time(at.atDate(java.time.LocalDate.EPOCH).toInstant().toEpochMilli());
         }
         int dot = value.indexOf('.');
         return Time.valueOf(dot < 0 ? value : value.substring(0, dot));
@@ -388,9 +585,116 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         if (text == null) {
             return null;
         }
+        Object decoded = temporalAt(columnIndex - 1);
+        if (decoded instanceof java.time.OffsetDateTime zoned) {
+            return Timestamp.from(zoned.toInstant());
+        }
+        if (decoded instanceof java.time.LocalDateTime local) {
+            return Timestamp.valueOf(local);
+        }
+        Timestamp fast = zonedTimestamp(text);
+        if (fast != null) {
+            return fast;
+        }
         java.time.OffsetDateTime zoned = withOffset(text);
         return zoned == null ? Timestamp.valueOf(text.replace('T', ' ').trim())
                 : Timestamp.from(zoned.toInstant());
+    }
+
+    /**
+     * The common shape of a point in time with its offset -
+     * {@code 2026-09-24 13:14:15.123456+02}, {@code +02:00}, {@code +0530} -
+     * straight to epoch milliseconds and nanoseconds, or {@code null} for
+     * anything else, which then goes the general way.
+     *
+     * <p>The general way parses a LocalDateTime and a ZoneOffset and builds an
+     * Instant: three objects and two parsers per value, which made getObject
+     * on a PostgreSQL {@code timestamptz} take twice as long as through
+     * pgjdbc. This is arithmetic on the characters.
+     */
+    static Timestamp zonedTimestamp(String text) {
+        int length = text.length();
+        if (length < 22 || text.charAt(4) != '-' || text.charAt(7) != '-'
+                || (text.charAt(10) != ' ' && text.charAt(10) != 'T')
+                || text.charAt(13) != ':' || text.charAt(16) != ':') {
+            return null;
+        }
+        int year = digits(text, 0, 4);
+        int month = digits(text, 5, 2);
+        int day = digits(text, 8, 2);
+        int hour = digits(text, 11, 2);
+        int minute = digits(text, 14, 2);
+        int second = digits(text, 17, 2);
+        if ((year | month | day | hour | minute | second) < 0) {
+            return null;
+        }
+        int p = 19;
+        int nanos = 0;
+        if (p < length && text.charAt(p) == '.') {
+            p++;
+            int scale = 100_000_000;
+            int start = p;
+            while (p < length && text.charAt(p) >= '0' && text.charAt(p) <= '9') {
+                nanos += (text.charAt(p) - '0') * scale;
+                scale /= 10;
+                p++;
+            }
+            if (p - start > 9) {
+                return null;                               // more than a nanosecond
+            }
+        }
+        if (p < length && text.charAt(p) == ' ') {
+            p++;
+        }
+        if (p >= length || (text.charAt(p) != '+' && text.charAt(p) != '-')) {
+            return null;
+        }
+        int sign = text.charAt(p) == '-' ? -1 : 1;
+        int offsetHours = digits(text, p + 1, 2);
+        int offsetMinutes = 0;
+        int end = p + 3;
+        if (end < length && text.charAt(end) == ':') {
+            offsetMinutes = digits(text, end + 1, 2);
+            end += 3;
+        } else if (end + 2 <= length) {
+            offsetMinutes = digits(text, end, 2);
+            end += 2;
+        }
+        if (offsetHours < 0 || offsetMinutes < 0 || end != length || month < 1 || month > 12
+                || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+            return null;
+        }
+        long seconds = epochDay(year, month, day) * 86_400L + hour * 3600L + minute * 60L
+                + second - sign * (offsetHours * 3600L + offsetMinutes * 60L);
+        Timestamp stamp = new Timestamp(seconds * 1000);
+        stamp.setNanos(nanos);
+        return stamp;
+    }
+
+    /** Two or four decimal digits at {@code at}, or -1. */
+    private static int digits(String text, int at, int count) {
+        if (at + count > text.length()) {
+            return -1;
+        }
+        int value = 0;
+        for (int i = at; i < at + count; i++) {
+            char c = text.charAt(i);
+            if (c < '0' || c > '9') {
+                return -1;
+            }
+            value = value * 10 + c - '0';
+        }
+        return value;
+    }
+
+    /** Days since 1970-01-01 of a proleptic Gregorian date - Howard Hinnant's algorithm. */
+    private static long epochDay(int year, int month, int day) {
+        long y = month <= 2 ? year - 1 : year;
+        long era = Math.floorDiv(y, 400);
+        long yearOfEra = y - era * 400;
+        long dayOfYear = (153L * (month > 2 ? month - 3 : month + 9) + 2) / 5 + day - 1;
+        long dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+        return era * 146_097 + dayOfEra - 719_468;
     }
 
     /**
@@ -456,7 +760,13 @@ public abstract class ReadOnlyResultSet implements ResultSet {
             }
             case "java.time.LocalDateTime" -> {
                 String text = getString(columnIndex);
-                java.time.OffsetDateTime zoned = text == null ? null : withOffset(text);
+                Object decoded = text == null ? null : temporalAt(columnIndex - 1);
+                if (decoded instanceof java.time.LocalDateTime local) {
+                    yield local;
+                }
+                java.time.OffsetDateTime zoned = text == null ? null
+                        : decoded instanceof java.time.OffsetDateTime known ? known
+                        : withOffset(text);
                 if (zoned != null) {
                     // A column with a zone read as a value without one: the
                     // fields as they stand, not shifted into the JVM's zone.
@@ -470,7 +780,12 @@ public abstract class ReadOnlyResultSet implements ResultSet {
                 if (text == null) {
                     yield null;
                 }
-                java.time.OffsetDateTime zoned = withOffset(text);
+                Object decoded = temporalAt(columnIndex - 1);
+                if (decoded instanceof java.time.LocalDateTime local) {
+                    yield local.atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime();
+                }
+                java.time.OffsetDateTime zoned = decoded instanceof java.time.OffsetDateTime known
+                        ? known : withOffset(text);
                 yield zoned != null ? zoned
                         : Timestamp.valueOf(text.replace('T', ' ').trim()).toLocalDateTime()
                                 .atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime();
@@ -714,7 +1029,7 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final int getType() {
-        return TYPE_FORWARD_ONLY;
+        return scrollable ? TYPE_SCROLL_INSENSITIVE : TYPE_FORWARD_ONLY;
     }
 
     @Override
@@ -734,10 +1049,8 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final void setFetchDirection(int direction) throws SQLException {
-        if (direction != FETCH_FORWARD) {
-            throw new SQLFeatureNotSupportedException(
-                    "seclume result sets move forward only");
-        }
+        // A hint: the rows are where they are, whatever is hinted.
+        ResultSetTypes.requireDirection(direction);
     }
 
     @Override
@@ -784,46 +1097,85 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return iface.isInstance(this);
     }
 
-    // ---- the backwards cursor - there is none ----------------------------
+    // ---- the cursor in any direction, for a scrollable result -----------
 
-    private static SQLFeatureNotSupportedException forwardOnly() {
-        return new SQLFeatureNotSupportedException(
-                "seclume result sets are forward-only - iterate with next()");
+    /**
+     * Refuses a move for a forward-only result; a scrollable one is whole, so
+     * every row number is a position in {@link #rowCount()}.
+     */
+    private void requireScrollable() throws SQLException {
+        checkOpen();
+        if (!scrollable) {
+            throw new SQLFeatureNotSupportedException("this result set is forward-only - "
+                    + "iterate with next(), or ask for TYPE_SCROLL_INSENSITIVE");
+        }
+    }
+
+    /** Puts the cursor on {@code target} (zero-based), or before or after the rows. */
+    private boolean moveCursor(int target) {
+        int rows = rowCount();
+        if (target < 0) {
+            row = -1;
+            return false;
+        }
+        if (target >= rows) {
+            row = rows;
+            return false;
+        }
+        row = target;
+        moveTo(row);
+        return true;
     }
 
     @Override
     public final boolean previous() throws SQLException {
-        throw forwardOnly();
+        requireScrollable();
+        return moveCursor(Math.min(row, rowCount()) - 1);
     }
 
     @Override
     public final void beforeFirst() throws SQLException {
-        throw forwardOnly();
+        requireScrollable();
+        row = -1;
     }
 
     @Override
     public final void afterLast() throws SQLException {
-        throw forwardOnly();
+        requireScrollable();
+        row = rowCount();
     }
 
     @Override
     public final boolean first() throws SQLException {
-        throw forwardOnly();
+        requireScrollable();
+        return moveCursor(0);
     }
 
     @Override
     public final boolean last() throws SQLException {
-        throw forwardOnly();
+        requireScrollable();
+        return moveCursor(rowCount() - 1);
     }
 
+    /**
+     * Row {@code rowNumber}, counted from one; a negative number counts from
+     * the end, {@code -1} being the last row. Zero is before the first.
+     */
     @Override
     public final boolean absolute(int rowNumber) throws SQLException {
-        throw forwardOnly();
+        requireScrollable();
+        if (rowNumber == 0) {
+            row = -1;
+            return false;
+        }
+        return moveCursor(rowNumber > 0 ? rowNumber - 1 : rowCount() + rowNumber);
     }
 
     @Override
     public final boolean relative(int rows) throws SQLException {
-        throw forwardOnly();
+        requireScrollable();
+        long target = (long) row + rows;
+        return moveCursor((int) Math.max(-1, Math.min(target, rowCount())));
     }
 
     // ---- updating - there is none ----------------------------------------
@@ -1416,15 +1768,27 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return getString(columnLabel);
     }
 
+    /**
+     * With no mapping in it - which is what every caller passes that got its
+     * map from {@code Connection.getTypeMap()} - this is {@code getObject}:
+     * JDBC says so for an empty map. A mapping is refused, because none of
+     * the four has a user-defined type this could map.
+     */
     @Override
     public final Object getObject(int columnIndex, Map<String, Class<?>> map)
             throws SQLException {
+        if (map == null || map.isEmpty()) {
+            return getObject(columnIndex);
+        }
         throw noSuchType("custom-mapped");
     }
 
     @Override
     public final Object getObject(String columnLabel, Map<String, Class<?>> map)
             throws SQLException {
+        if (map == null || map.isEmpty()) {
+            return getObject(columnLabel);
+        }
         throw noSuchType("custom-mapped");
     }
 
@@ -1528,8 +1892,13 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         try {
             return java.net.URI.create(value).toURL();
         } catch (java.net.MalformedURLException | IllegalArgumentException notAUrl) {
-            throw new SQLException("the column does not hold a URL: " + notAUrl.getMessage(),
-                    notAUrl);
+            // Without the JDK's message, which quotes the value back. That
+            // value is a row: it can be anything the application stored, and
+            // this message goes into a log. The column and the cause are
+            // enough to find it; the content is not this exception's to
+            // publish.
+            throw new SQLException("column " + columnIndex + " does not hold a URL",
+                    "22P02", notAUrl);
         }
     }
 

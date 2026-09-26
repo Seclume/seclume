@@ -269,11 +269,9 @@ public final class DpapiSecretProvider implements SecretProvider {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
 
+    /** A checked hex digit's value, without a branch: '0'-'9' are 0x3_, letters 0x4_/0x6_. */
     private static int hexValue(byte c) {
-        if (c <= '9') {
-            return c - '0';
-        }
-        return (c | 0x20) - 'a' + 10;
+        return (c & 0xf) + 9 * ((c >> 6) & 1);
     }
 
     @Override

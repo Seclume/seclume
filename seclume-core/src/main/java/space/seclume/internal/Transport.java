@@ -50,6 +50,44 @@ public interface Transport extends AutoCloseable {
      */
     int write(ByteBuffer from) throws IOException;
 
+    /**
+     * Gives up on a read or write that waits longer than this, and closes the
+     * transport - {@code Connection.setNetworkTimeout}. Zero waits for ever,
+     * which is what every transport does until told otherwise.
+     *
+     * <p>Default: not supported, for a transport that has no socket of its own
+     * to give up on.
+     *
+     * @param millis the longest a single read or write may wait, or 0
+     * @throws IOException if this transport cannot do it
+     */
+    default void networkTimeout(int millis) throws IOException {
+        throw new IOException("this transport has no network timeout");
+    }
+
+    /**
+     * Sends one byte ahead of everything still queued - TCP urgent data.
+     *
+     * <p>The fifth method, and it took a protocol to justify it. Oracle's
+     * break is not a packet the server reads in turn: the server is busy
+     * running the statement and is not reading the socket at all, so an
+     * in-band marker sits in its receive buffer until the statement it was
+     * meant to stop has finished. Urgent data is delivered out of order and
+     * raises {@code SIGURG} on the far side, which is what makes a server look
+     * up from what it is doing. Oracle accepts the in-band marker only when
+     * the listener is configured with {@code DISABLE_OOB=ON}.
+     *
+     * <p>Default: not supported. Most transports cannot do this - a pipe, a
+     * TLS layer, anything that is not a socket - and a caller that needs it
+     * has to be able to find out without guessing.
+     *
+     * @param value the byte, of which TCP carries exactly one
+     * @throws IOException if this transport has no way to send it
+     */
+    default void sendUrgent(int value) throws IOException {
+        throw new IOException("this transport cannot send urgent data");
+    }
+
     /** Whether this transport can still carry bytes. */
     boolean isOpen();
 

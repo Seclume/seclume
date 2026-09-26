@@ -229,7 +229,25 @@ public final class P256ClientIdentity implements ClientIdentity {
      * hide a mistake in the deployment.
      */
     private static List<byte[]> readChain(Path file) {
-        try (InputStream in = Files.newInputStream(file)) {
+        try {
+            return parseChain(Files.readAllBytes(file), file); // seclume-allow: the certificate chain, which is public
+        } catch (IOException e) {
+            throw new IllegalArgumentException("the client certificate chain in " + file
+                    + " cannot be read", e);
+        }
+    }
+
+    /**
+     * The same from bytes already read.
+     *
+     * <p>For {@link ReloadingClientIdentity}, which has to parse exactly the
+     * bytes it compared: reading the file a second time to build the identity
+     * would leave a window in which a rotation lands between the comparison
+     * and the load, and the identity would then carry a chain that does not
+     * match what was recorded as loaded.
+     */
+    static List<byte[]> parseChain(byte[] content, Path file) {
+        try (InputStream in = new java.io.ByteArrayInputStream(content)) {
             List<byte[]> chain = new ArrayList<>();
             for (java.security.cert.Certificate certificate
                     : CertificateFactory.getInstance("X.509").generateCertificates(in)) {

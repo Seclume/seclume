@@ -1,6 +1,8 @@
 package space.seclume.tls;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -134,6 +136,53 @@ class TlsFreezeThawTest {
                     + "whoever continues it");
             try (TlsConnection after = TlsConnection.thaw(socket, frozen.segment(), 0, length)) {
                 echo(after, "after");
+            }
+        }
+    }
+
+    /**
+     * A snapshot writes what freeze writes and gives nothing up: the
+     * connection goes on, a snapshot taken at the same quiet moment is
+     * byte for byte the frozen state, and a connection taken up from one
+     * carries on as a thawed one does.
+     */
+    @Test
+    void aSnapshotIsTheFrozenStateWithoutGivingTheConnectionUp() throws Exception {
+        try (EchoServer server = EchoServer.start(serverContext);
+                Transport socket = connectTo(server);
+                SecretScope early = SecretScope.allocate(512);
+                SecretScope late = SecretScope.allocate(512);
+                SecretScope frozen = SecretScope.allocate(512)) {
+
+            TlsConnection before = ClientHandshake.connect(socket, HOSTNAME,
+                    CertificateTrust.of(trustStore));
+            echo(before, "one");
+            int earlyLength = before.snapshot(early.segment(), 0);
+            // While the early copy could still be thawed, a record from here
+            // would share its nonce with the copy's first one: refused.
+            assertThrows(IOException.class,
+                    () -> before.write(ByteBuffer.wrap(new byte[] {1})));
+            before.snapshotReleased();                      // the early copy is discarded
+            echo(before, "still working after a snapshot");
+            int lateLength = before.snapshot(late.segment(), 0);
+            int frozenLength = before.freeze(frozen.segment(), 0);
+            before.close();
+
+            assertEquals(frozenLength, lateLength);
+            assertArrayEquals(frozen.segment().asSlice(0, frozenLength).toArray(
+                            java.lang.foreign.ValueLayout.JAVA_BYTE),
+                    late.segment().asSlice(0, lateLength).toArray(
+                            java.lang.foreign.ValueLayout.JAVA_BYTE),
+                    "a snapshot at the same moment is not the frozen state");
+            assertFalse(java.util.Arrays.equals(
+                            early.segment().asSlice(0, earlyLength).toArray(
+                                    java.lang.foreign.ValueLayout.JAVA_BYTE),
+                            late.segment().asSlice(0, lateLength).toArray(
+                                    java.lang.foreign.ValueLayout.JAVA_BYTE)),
+                    "the record counters did not move - an old snapshot would pass for new");
+
+            try (TlsConnection after = TlsConnection.thaw(socket, late.segment(), 0, lateLength)) {
+                echo(after, "from the snapshot");
             }
         }
     }

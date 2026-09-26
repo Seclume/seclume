@@ -75,10 +75,27 @@ public final class TlsLayers {
         space.seclume.jfr.SeclumeEvents.TlsHandshake event =
                 space.seclume.jfr.Observed.beginHandshake();
         TlsLayer layer = null;
+        // A pinned key is the trust: no chain and no host name to check, the
+        // key compared once the handshake has shown it.
+        boolean pinned = TrustChoice.pinned();
+        boolean checkChain = verify && !pinned;
         try {
             layer = stack == TlsStack.SECLUME
-                    ? SeclumeTls.start(transport, host, verify, identity, alpn)
-                    : jsse(transport, host, port, verify, alpn);
+                    ? SeclumeTls.start(transport, host, checkChain, identity, alpn)
+                    : jsse(transport, host, port, checkChain, alpn);
+            if (pinned) {
+                try {
+                    TrustChoice.checkPin(layer);
+                } catch (IOException wrongKey) {
+                    try {
+                        layer.close();
+                    } catch (Exception ignored) {
+                        // refused either way
+                    }
+                    layer = null;
+                    throw wrongKey;
+                }
+            }
             return layer;
         } finally {
             space.seclume.jfr.Observed.endHandshake(event, host + ":" + port,

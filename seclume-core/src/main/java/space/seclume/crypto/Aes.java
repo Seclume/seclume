@@ -168,12 +168,12 @@ public final class Aes {
         int rounds = key.rounds();
         addRoundKey(state, roundKeys, 0);
         for (int round = 1; round < rounds; round++) {
-            subBytes(state, AesTables.SBOX);
+            AesSubBytes.forward(state);
             shiftRows(state, scratch, false);
             mixColumns(state);
             addRoundKey(state, roundKeys, round);
         }
-        subBytes(state, AesTables.SBOX);
+        AesSubBytes.forward(state);
         shiftRows(state, scratch, false);
         addRoundKey(state, roundKeys, rounds);
     }
@@ -184,12 +184,12 @@ public final class Aes {
         addRoundKey(state, roundKeys, rounds);
         for (int round = rounds - 1; round >= 1; round--) {
             shiftRows(state, scratch, true);
-            subBytes(state, AesTables.INV_SBOX);
+            AesSubBytes.inverse(state);
             addRoundKey(state, roundKeys, round);
             invMixColumns(state);
         }
         shiftRows(state, scratch, true);
-        subBytes(state, AesTables.INV_SBOX);
+        AesSubBytes.inverse(state);
         addRoundKey(state, roundKeys, 0);
     }
 
@@ -201,12 +201,6 @@ public final class Aes {
                 int keyByte = (word >>> (24 - 8 * row)) & 0xff;
                 set(state, index, (byte) (get(state, index) ^ keyByte));
             }
-        }
-    }
-
-    private static void subBytes(MemorySegment state, byte[] box) {
-        for (int i = 0; i < BLOCK; i++) {
-            set(state, i, box[get(state, i) & 0xff]);
         }
     }
 

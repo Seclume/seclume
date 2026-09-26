@@ -13,7 +13,15 @@ import java.lang.foreign.MemorySegment;
  */
 public final class AesKey implements AutoCloseable {
 
-    private final Arena arena = Arena.ofConfined();
+    /**
+     * Shared, not confined: a record layer's key lives as long as its
+     * connection, and a connection is opened in one thread and used in
+     * others - every pool does that. A confined arena made every connection
+     * on seclume's own TLS stack fail with {@code WrongThreadException} the
+     * first time a second thread touched it. Closing a shared arena costs a
+     * little more; it happens a few times per connection, not per record.
+     */
+    private final Arena arena = Arena.ofShared();
     private final MemorySegment roundKeys;
     private final int rounds;
     private boolean closed;
@@ -79,10 +87,8 @@ public final class AesKey implements AutoCloseable {
         return "AesKey[bits=" + ((rounds - 6) * 32) + "]";
     }
 
+    /** SubWord - computed in constant time, see AesSubBytes: the input is key material. */
     private static int substituteWord(int word) {
-        return (AesTables.SBOX[(word >>> 24) & 0xff] & 0xff) << 24
-                | (AesTables.SBOX[(word >>> 16) & 0xff] & 0xff) << 16
-                | (AesTables.SBOX[(word >>> 8) & 0xff] & 0xff) << 8
-                | (AesTables.SBOX[word & 0xff] & 0xff);
+        return AesSubBytes.word(word);
     }
 }

@@ -17,19 +17,9 @@ import java.lang.foreign.ValueLayout;
  */
 public final class Base64Off {
 
-    private static final byte[] ALPHABET =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-                    .getBytes(java.nio.charset.StandardCharsets.US_ASCII); // seclume-allow: a public constant alphabet, no secret
-
-    /** Reverse table; -1 means "not a Base64 character". */
-    private static final int[] VALUES = new int[256];
-
-    static {
-        java.util.Arrays.fill(VALUES, -1);
-        for (int i = 0; i < ALPHABET.length; i++) {
-            VALUES[ALPHABET[i] & 0xff] = i;
-        }
-    }
+    // No lookup tables: what is encoded and decoded here is secret (a SCRAM
+    // client proof, a private key in PEM), and a table indexed by a secret
+    // is a cache-timing channel. Both directions are arithmetic with masks.
 
     private Base64Off() {
     }
@@ -57,25 +47,25 @@ public final class Base64Off {
             int block = ((byteAt(source, offset + i) & 0xff) << 16)
                     | ((byteAt(source, offset + i + 1) & 0xff) << 8)
                     | (byteAt(source, offset + i + 2) & 0xff);
-            setByte(target, out++, ALPHABET[(block >>> 18) & 0x3f]);
-            setByte(target, out++, ALPHABET[(block >>> 12) & 0x3f]);
-            setByte(target, out++, ALPHABET[(block >>> 6) & 0x3f]);
-            setByte(target, out++, ALPHABET[block & 0x3f]);
+            setByte(target, out++, character((block >>> 18) & 0x3f));
+            setByte(target, out++, character((block >>> 12) & 0x3f));
+            setByte(target, out++, character((block >>> 6) & 0x3f));
+            setByte(target, out++, character(block & 0x3f));
             i += 3;
         }
         int rest = length - i;
         if (rest == 1) {
             int block = (byteAt(source, offset + i) & 0xff) << 16;
-            setByte(target, out++, ALPHABET[(block >>> 18) & 0x3f]);
-            setByte(target, out++, ALPHABET[(block >>> 12) & 0x3f]);
+            setByte(target, out++, character((block >>> 18) & 0x3f));
+            setByte(target, out++, character((block >>> 12) & 0x3f));
             setByte(target, out++, (byte) '=');
             setByte(target, out++, (byte) '=');
         } else if (rest == 2) {
             int block = ((byteAt(source, offset + i) & 0xff) << 16)
                     | ((byteAt(source, offset + i + 1) & 0xff) << 8);
-            setByte(target, out++, ALPHABET[(block >>> 18) & 0x3f]);
-            setByte(target, out++, ALPHABET[(block >>> 12) & 0x3f]);
-            setByte(target, out++, ALPHABET[(block >>> 6) & 0x3f]);
+            setByte(target, out++, character((block >>> 18) & 0x3f));
+            setByte(target, out++, character((block >>> 12) & 0x3f));
+            setByte(target, out++, character((block >>> 6) & 0x3f));
             setByte(target, out++, (byte) '=');
         }
         return (int) (out - targetOffset);
@@ -97,13 +87,14 @@ public final class Base64Off {
             if (c == '=') {
                 break;
             }
-            int value = VALUES[c];
+            int value = value(c);
             if (value < 0) {
                 if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
                     continue;
                 }
+                // The position only: the character may be part of a secret.
                 throw new IllegalArgumentException(
-                        "not a base64 character at position " + i + ": 0x" + Integer.toHexString(c));
+                        "not a base64 character at position " + i);
             }
             accumulator = (accumulator << 6) | value;
             bits += 6;
@@ -113,6 +104,42 @@ public final class Base64Off {
             }
         }
         return (int) (out - targetOffset);
+    }
+
+    /**
+     * The character for a six-bit value, without a table: 'A'+x, shifted by
+     * masks for the ranges 26.., 52.., 62 and 63.
+     */
+    static byte character(int x) {
+        int c = x + 'A';
+        c += ((25 - x) >> 31) & 6;                   // 26..51 -> 'a'..'z'
+        c -= ((51 - x) >> 31) & 75;                  // 52..61 -> '0'..'9'
+        c -= ((61 - x) >> 31) & 15;                  // 62     -> '+'
+        c += ((62 - x) >> 31) & 3;                   // 63     -> '/'
+        return (byte) c;
+    }
+
+    /** The six-bit value of a character, or -1 - without a table or a branch on it. */
+    static int value(int c) {
+        int upper = inRange(c, 'A', 'Z');
+        int lower = inRange(c, 'a', 'z');
+        int digit = inRange(c, '0', '9');
+        int plus = equal(c, '+');
+        int slash = equal(c, '/');
+        int value = (upper & (c - 'A')) | (lower & (c - 'a' + 26)) | (digit & (c - '0' + 52))
+                | (plus & 62) | (slash & 63);
+        int valid = upper | lower | digit | plus | slash;
+        return value | ~valid;                        // -1 where no range matched
+    }
+
+    /** All ones if {@code low <= c <= high}, else zero. */
+    private static int inRange(int c, int low, int high) {
+        return ~(((c - low) | (high - c)) >> 31);
+    }
+
+    /** All ones if {@code c == k}, else zero (for {@code c} and {@code k} in 0..255). */
+    private static int equal(int c, int k) {
+        return ((c ^ k) - 1) >> 31;
     }
 
     private static byte byteAt(MemorySegment segment, long offset) {

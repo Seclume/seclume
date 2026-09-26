@@ -18,6 +18,10 @@ module seclume.core {
     // require jdk.jfr to name a type it only passes back.
     requires transitive jdk.jfr;
 
+    // TCP keepalive's timing where the platform lets it be set - see
+    // SocketTransport.connect.
+    requires jdk.net;
+
     /** The small public surface every driver shares. */
     exports space.seclume;
     exports space.seclume.crypto;

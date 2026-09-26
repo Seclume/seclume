@@ -74,24 +74,54 @@ public final class ClientHello {
     public static int write(MemorySegment out, long offset, MemorySegment random,
             MemorySegment sessionId, int group, MemorySegment publicShare, String serverName,
             String alpn) {
-        int shareLength = switch (group) {
-            case X25519 -> 32;
-            case SECP256R1 -> 65;
-            default -> throw new IllegalArgumentException("unsupported key share group: " + group);
-        };
-        if (random.byteSize() != 32 || publicShare.byteSize() != shareLength
-                || sessionId.byteSize() > 32) {
-            throw new IllegalArgumentException("wrong random, session id or public share length");
+        return write(out, offset, random, sessionId, new int[] {group},
+                new MemorySegment[] {publicShare}, serverName, alpn);
+    }
+
+    /** The hybrid post-quantum group, X25519MLKEM768 - see HybridMlKem. */
+    public static final int X25519MLKEM768 = 0x11EC;
+
+    /**
+     * As above, offering a share for each of several groups, in order of
+     * preference - the post-quantum hybrid first and P-256 beside it, so that
+     * a server without the hybrid picks P-256 at once rather than asking for a
+     * retry this client does not do.
+     */
+    public static int write(MemorySegment out, long offset, MemorySegment random,
+            MemorySegment sessionId, int[] groups, MemorySegment[] publicShares,
+            String serverName, String alpn) {
+        if (groups.length == 0 || groups.length != publicShares.length) {
+            throw new IllegalArgumentException("one public share per group");
         }
-        if (group == SECP256R1 && publicShare.get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0) != 4) {
-            throw new IllegalArgumentException("P-256 needs an uncompressed point");
+        int sharesLength = 0;
+        for (int i = 0; i < groups.length; i++) {
+            int expected = switch (groups[i]) {
+                case X25519 -> 32;
+                case SECP256R1 -> 65;
+                case X25519MLKEM768 -> space.seclume.crypto.HybridMlKem.CLIENT_SHARE;
+                default -> throw new IllegalArgumentException("unsupported key share group: "
+                        + groups[i]);
+            };
+            if (publicShares[i].byteSize() != expected) {
+                throw new IllegalArgumentException("wrong public share length for group "
+                        + groups[i]);
+            }
+            if (groups[i] == SECP256R1
+                    && publicShares[i].get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0) != 4) {
+                throw new IllegalArgumentException("P-256 needs an uncompressed point");
+            }
+            sharesLength += 4 + expected;
+        }
+        if (random.byteSize() != 32 || sessionId.byteSize() > 32) {
+            throw new IllegalArgumentException("wrong random or session id length");
         }
         String name = dnsName(serverName); // public routing metadata, never a secret
         int sessionLength = (int) sessionId.byteSize();
-        // supported_versions (7), groups (8), signatures (18), certificate
-        // signatures (24), key_share (10 + share), optional server_name (9 + name).
+        // supported_versions (7), groups (6 + 2 per group), signatures (18),
+        // certificate signatures (24), key_share (6 + the shares), optional
+        // server_name (9 + name).
         int alpnLength = alpn == null ? 0 : 4 + 2 + 1 + alpn.length();
-        int extensions = 7 + 8 + 18 + 24 + 10 + shareLength
+        int extensions = 7 + 6 + 2 * groups.length + 18 + 24 + 6 + sharesLength
                 + (name == null ? 0 : 9 + name.length()) + alpnLength;
         int body = 2 + 32 + 1 + sessionLength + 2 + 4 + 1 + 1 + 2 + extensions;
         int length = Handshake.HEADER + body;
@@ -117,8 +147,11 @@ public final class ClientHello {
         }
         extension(buffer, Handshake.EXTENSION_SUPPORTED_VERSIONS, 3);
         buffer.put((byte) 2).putShort((short) TLS13);
-        extension(buffer, Handshake.EXTENSION_SUPPORTED_GROUPS, 4);
-        buffer.putShort((short) 2).putShort((short) group);
+        extension(buffer, Handshake.EXTENSION_SUPPORTED_GROUPS, 2 + 2 * groups.length);
+        buffer.putShort((short) (2 * groups.length));
+        for (int group : groups) {
+            buffer.putShort((short) group);
+        }
 
         // CertificateVerify: RSA-PSS with rsaEncryption keys, or ECDSA.
         extension(buffer, Handshake.EXTENSION_SIGNATURE_ALGORITHMS, 14);
@@ -131,9 +164,12 @@ public final class ClientHello {
         signatures(buffer);
         buffer.putShort((short) 0x0401).putShort((short) 0x0501).putShort((short) 0x0601);
 
-        extension(buffer, Handshake.EXTENSION_KEY_SHARE, 6 + shareLength);
-        buffer.putShort((short) (4 + shareLength)).putShort((short) group).putShort((short) shareLength);
-        buffer.put(publicShare.asByteBuffer());
+        extension(buffer, Handshake.EXTENSION_KEY_SHARE, 2 + sharesLength);
+        buffer.putShort((short) sharesLength);
+        for (int i = 0; i < groups.length; i++) {
+            buffer.putShort((short) groups[i]).putShort((short) publicShares[i].byteSize());
+            buffer.put(publicShares[i].asByteBuffer());
+        }
 
         if (alpn != null) {
             extension(buffer, EXTENSION_ALPN, 2 + 1 + alpn.length());

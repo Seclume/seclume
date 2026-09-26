@@ -89,8 +89,59 @@ public final class SecretFetch {
                 // is still a copy of a secret and it is finished with.
                 wipe(request);
             }
-            return readResponse(tls, body);
+            return readResponse(tls::read, body);
         }
+    }
+
+    /**
+     * The same over plain HTTP - for the one kind of server that has no TLS
+     * and is right not to.
+     *
+     * <p>A cloud's instance metadata service answers on a link-local address,
+     * {@code 169.254.169.254}, and on nothing else: the packet never leaves
+     * the host it is running on, and there is no certificate to check because
+     * there is no network to be attacked across. Azure's IMDS and Google's
+     * metadata server both speak plain HTTP there, and both hand out the
+     * workload's access token.
+     *
+     * <p><b>Refused for any other address.</b> The address the name resolves
+     * to is checked, not the name, and it has to be link-local - or loopback,
+     * which is the same machine and is what a test uses. A token fetched over
+     * plain HTTP from anywhere else is a token given away, and a
+     * configuration that points this at a real host by mistake must fail
+     * rather than work.
+     */
+    public static Response sendLinkLocal(String host, int port, int timeoutMillis,
+            String method, String path, Map<String, String> headers, MemorySegment body)
+            throws IOException {
+        return sendLinkLocal(host, port, timeoutMillis, method, path, headers, List.of(), body);
+    }
+
+    /** The same, with headers whose values must not become a {@code String}. */
+    public static Response sendLinkLocal(String host, int port, int timeoutMillis,
+            String method, String path, Map<String, String> headers,
+            List<SecretHeader> secretHeaders, MemorySegment body) throws IOException {
+        java.net.InetAddress address = java.net.InetAddress.getByName(host);
+        if (!address.isLinkLocalAddress() && !address.isLoopbackAddress()) {
+            throw new IOException("refusing plain HTTP to " + host + " (" + address.getHostAddress()
+                    + "): only a link-local metadata service may be asked without TLS");
+        }
+        try (Transport socket = SocketTransport.connect(address.getHostAddress(), port,
+                timeoutMillis)) {
+            ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024);
+            writeRequest(request, host, method, path, headers, secretHeaders, null);
+            request.flip();
+            while (request.hasRemaining()) {
+                socket.write(request);
+            }
+            return readResponse(socket::read, body);
+        }
+    }
+
+    /** Where a response is read from - a TLS channel or, for metadata, the bare socket. */
+    @FunctionalInterface
+    private interface Source {
+        int read(ByteBuffer into) throws IOException;
     }
 
     /** A header whose value must not become a {@code String}. */
@@ -115,7 +166,15 @@ public final class SecretFetch {
         }
         if (body != null) {
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8); // seclume-allow: request bodies here carry no secret - tokens travel as secret headers
-            ascii(request, "Content-Type: application/json\r\n");
+            // The caller's own Content-Type wins, and only one is sent: AWS
+            // joins repeated headers into one value, so an added
+            // "application/json" beside the signed "application/x-amz-json-1.1"
+            // broke every Secrets Manager signature (found live, 26.09.2026).
+            boolean typed = headers.keySet().stream()
+                    .anyMatch(name -> name.equalsIgnoreCase("Content-Type"));
+            if (!typed) {
+                ascii(request, "Content-Type: application/json\r\n");
+            }
             ascii(request, "Content-Length: " + bytes.length + "\r\n\r\n");
             request.put(bytes);
         } else {
@@ -132,7 +191,7 @@ public final class SecretFetch {
      * the whole response first would have defeated the point before reaching
      * this comment.
      */
-    private static Response readResponse(TlsChannel tls, MemorySegment body) throws IOException {
+    private static Response readResponse(Source tls, MemorySegment body) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocateDirect(MAX_RESPONSE);
         try {
             while (buffer.hasRemaining() && !complete(buffer)) {

@@ -583,6 +583,19 @@ public interface OutParameters extends CallableStatement {
     }
 
     @Override
+    default void setObject(String name, Object value, java.sql.SQLType targetSqlType)
+            throws SQLException {
+        setObject(indexOf(name), value, ParameterSetters.typeNumber(targetSqlType));
+    }
+
+    @Override
+    default void setObject(String name, Object value, java.sql.SQLType targetSqlType,
+                           int scaleOrLength) throws SQLException {
+        setObject(indexOf(name), value, ParameterSetters.typeNumber(targetSqlType),
+                scaleOrLength);
+    }
+
+    @Override
     default void setURL(String name, URL value) throws SQLException {
         setURL(indexOf(name), value);
     }
@@ -720,32 +733,50 @@ public interface OutParameters extends CallableStatement {
 
     @Override
     default Blob getBlob(int index) throws SQLException {
-        throw unsupported("BLOB");
+        Object value = outValue(index);
+        if (value == null || value instanceof Blob) {
+            return (Blob) value;
+        }
+        return Lobs.binary(getBytes(index));
     }
 
     @Override
     default Blob getBlob(String name) throws SQLException {
-        throw unsupported("BLOB");
+        return getBlob(indexOf(name));
     }
 
     @Override
     default Clob getClob(int index) throws SQLException {
-        throw unsupported("CLOB");
+        return getNClob(index);
     }
 
     @Override
     default Clob getClob(String name) throws SQLException {
-        throw unsupported("CLOB");
+        return getClob(indexOf(name));
     }
 
+    /**
+     * The OUT value as a LOB. The value is already here - an OUT parameter
+     * comes back whole with the call's answer - so this is the text or the
+     * bytes in a LOB's clothing, which is what the vendors hand back for a
+     * {@code VARCHAR} or {@code TEXT} read this way; a driver whose value is
+     * a real LOB returns that.
+     */
     @Override
     default NClob getNClob(int index) throws SQLException {
-        throw unsupported("NCLOB");
+        Object value = outValue(index);
+        if (value == null || value instanceof NClob) {
+            return (NClob) value;
+        }
+        if (value instanceof Clob clob) {
+            return Lobs.text(clob.getSubString(1, (int) clob.length()));
+        }
+        return Lobs.text(getString(index));
     }
 
     @Override
     default NClob getNClob(String name) throws SQLException {
-        throw unsupported("NCLOB");
+        return getNClob(indexOf(name));
     }
 
     @Override
@@ -760,47 +791,67 @@ public interface OutParameters extends CallableStatement {
 
     @Override
     default URL getURL(int index) throws SQLException {
-        throw unsupported("URL");
+        String text = getString(index);
+        if (text == null) {
+            return null;
+        }
+        try {
+            return java.net.URI.create(text).toURL();
+        } catch (IllegalArgumentException | java.net.MalformedURLException notAUrl) {
+            throw new SQLException("OUT parameter " + index + " is not a URL", "22018",
+                    notAUrl);
+        }
     }
 
+    /** A row address from an OUT parameter, in the form the server gave it. */
     @Override
     default RowId getRowId(int index) throws SQLException {
-        throw unsupported("ROWID");
+        Object value = outValue(index);
+        if (value == null || value instanceof RowId) {
+            return (RowId) value;
+        }
+        return new OpaqueRowId(getString(index));
     }
 
     @Override
     default RowId getRowId(String name) throws SQLException {
-        throw unsupported("ROWID");
+        return getRowId(indexOf(name));
     }
 
     @Override
     default SQLXML getSQLXML(int index) throws SQLException {
-        throw unsupported("SQLXML");
+        String text = getString(index);
+        return text == null ? null : new XmlValue(text);
     }
 
     @Override
     default SQLXML getSQLXML(String name) throws SQLException {
-        throw unsupported("SQLXML");
+        return getSQLXML(indexOf(name));
     }
 
     @Override
     default Reader getCharacterStream(int index) throws SQLException {
-        throw unsupported("a character stream");
+        Object value = outValue(index);
+        if (value instanceof Clob clob) {
+            return clob.getCharacterStream();
+        }
+        String text = getString(index);
+        return text == null ? null : new java.io.StringReader(text);
     }
 
     @Override
     default Reader getCharacterStream(String name) throws SQLException {
-        throw unsupported("a character stream");
+        return getCharacterStream(indexOf(name));
     }
 
     @Override
     default Reader getNCharacterStream(int index) throws SQLException {
-        throw unsupported("a character stream");
+        return getCharacterStream(index);
     }
 
     @Override
     default Reader getNCharacterStream(String name) throws SQLException {
-        throw unsupported("a character stream");
+        return getNCharacterStream(indexOf(name));
     }
 
     private static SQLFeatureNotSupportedException unsupported(String what) {

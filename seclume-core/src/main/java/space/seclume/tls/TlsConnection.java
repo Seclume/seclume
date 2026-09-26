@@ -57,7 +57,22 @@ public final class TlsConnection implements Transport {
     private int pendingLength;
     private boolean closed;
     private boolean frozen;
+    /**
+     * A snapshot has been taken and may still be taken up elsewhere. Until
+     * the caller says it cannot, this connection writes nothing: a record
+     * here and then one from the copy would carry the same sequence number,
+     * and so the same AES-GCM nonce under the same key - two ciphertexts that
+     * give away the XOR of their plaintexts and the authentication key, and
+     * with it the power to forge records. Found in review, 25.09.2026.
+     */
+    private boolean copyOutstanding;
     private boolean endOfStream;
+
+    /**
+     * A client certificate went out and the server has not answered since -
+     * the window in which a dead connection means a refused certificate.
+     */
+    private boolean awaitingVerdict;
 
     /** The server's leaf certificate, for channel binding; null after a thaw. */
     private java.security.cert.X509Certificate peerCertificate;
@@ -72,6 +87,11 @@ public final class TlsConnection implements Transport {
         // A post-handshake message is small; a peer announcing a huge one is
         // not doing anything this connection needs to buffer.
         this.postHandshake = new HandshakeReassembler(1 << 16);
+    }
+
+    /** Set by the handshake when it sent a client certificate. */
+    void certificatePresented() {
+        awaitingVerdict = true;
     }
 
     /** What the handshake settled on - filled in by {@link ClientHandshake}. */
@@ -136,10 +156,20 @@ public final class TlsConnection implements Transport {
     @Override
     public int write(ByteBuffer from) throws IOException {
         checkUsable();
+        checkNoCopyOutstanding();
         int total = from.remaining();
         while (from.hasRemaining()) {
             int chunk = Math.min(from.remaining(), RecordStream.MAX_PLAINTEXT);
-            records.write(RecordProtection.APPLICATION_DATA, MemorySegment.ofBuffer(from), 0, chunk);
+            try {
+                records.write(RecordProtection.APPLICATION_DATA, MemorySegment.ofBuffer(from), 0,
+                        chunk);
+            } catch (TlsAlertException alert) {
+                throw alert;
+            } catch (IOException gone) {
+                // The same refusal, met by the first write instead of the
+                // first read - which of the two it hits is a matter of timing.
+                throw ClientHandshake.refusedAfterCertificate(gone, awaitingVerdict);
+            }
             from.position(from.position() + chunk);
         }
         return total;
@@ -156,7 +186,13 @@ public final class TlsConnection implements Transport {
                 return;
             }
             throw alert;
+        } catch (IOException gone) {
+            // The server checks a TLS 1.3 client certificate after our
+            // Finished, and its alert is usually lost to the reset that
+            // follows - see ClientHandshake.refusedAfterCertificate.
+            throw ClientHandshake.refusedAfterCertificate(gone, awaitingVerdict);
         }
+        awaitingVerdict = false;
         switch (record.contentType()) {
             case RecordProtection.APPLICATION_DATA -> {
                 pending = record.data();
@@ -200,6 +236,7 @@ public final class TlsConnection implements Transport {
         message.set(ValueLayout.JAVA_BYTE, 2, (byte) 0);
         message.set(ValueLayout.JAVA_BYTE, 3, (byte) 1);
         message.set(ValueLayout.JAVA_BYTE, 4, (byte) 0);   // update_not_requested, or we would loop
+        checkNoCopyOutstanding();
         records.write((byte) 22, message, 0, Handshake.HEADER + 1);
         records.writeWith(records.writeProtection().next());
     }
@@ -253,6 +290,61 @@ public final class TlsConnection implements Transport {
                 records.readProtection(), records.writeProtection());
         frozen = true;
         return length;
+    }
+
+    /**
+     * Writes the same state {@link #freeze} writes and <b>keeps the
+     * connection</b>: it goes on reading and writing, and the bytes describe
+     * it exactly until the next record either way.
+     *
+     * <p>For a copy kept elsewhere against this process dying: taken at a
+     * quiet moment, it lets another process carry on the connection from that
+     * moment. Any record after it makes the copy stale - which the copy's
+     * first record then shows, by failing its tag rather than being accepted.
+     * The same refusals as {@code freeze}: nothing read and not yet taken,
+     * no half post-handshake message.
+     *
+     * @return the number of bytes written
+     */
+    public int snapshot(MemorySegment out, long offset) {
+        if (closed || frozen) {
+            throw new IllegalStateException("this connection is "
+                    + (frozen ? "frozen" : "closed"));
+        }
+        if (pendingLength > 0) {
+            throw new IllegalStateException("there are still " + pendingLength + " bytes read "
+                    + "from the peer that nobody has taken - a copy now would be wrong");
+        }
+        if (postHandshake.buffered() > 0) {
+            throw new IllegalStateException("half of a post-handshake message is buffered");
+        }
+        int length = TlsMigration.encode(out, offset, records.readProtection(),
+                records.writeProtection());
+        copyOutstanding = true;
+        return length;
+    }
+
+    /**
+     * Every copy {@link #snapshot} made is gone or superseded - deleted
+     * where it was kept, or replaced by a newer one taken before this
+     * connection writes again. Until this is called the connection refuses to
+     * write (see the field comment on why that is not caution but AES-GCM).
+     */
+    public void snapshotReleased() {
+        copyOutstanding = false;
+    }
+
+    /**
+     * An IOException and not a state error: to a driver this is a connection
+     * it cannot write to, which it closes quietly - the one reaction that
+     * sends nothing.
+     */
+    private void checkNoCopyOutstanding() throws IOException {
+        if (copyOutstanding) {
+            throw new IOException("a snapshot of this connection may still be taken "
+                    + "up elsewhere, and a record written now would reuse the nonce the copy "
+                    + "would write with - call snapshotReleased() once no copy can be thawed");
+        }
     }
 
     /**
@@ -325,6 +417,15 @@ public final class TlsConnection implements Transport {
             postHandshake.close();
             records.close();
             arena.close();
+            return;
+        }
+        if (copyOutstanding) {
+            // Not even a goodbye: a close_notify is a record under a nonce the
+            // copy may still use.
+            postHandshake.close();
+            records.close();
+            arena.close();
+            underlying.close();
             return;
         }
         try {

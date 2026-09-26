@@ -155,8 +155,29 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
         return maxLength;
     }
 
+    /**
+     * The same with the credentials of the EC2 instance's role - see
+     * {@link AwsInstanceRole}.
+     */
+    public AwsSecretsManagerSecretProvider(AwsInstanceRole role, String region, String secretId,
+            String field, int maxLength) {
+        this(null, null, null, region, secretId, field, maxLength);
+        this.role = role;
+    }
+
+    /** The instance role the credentials come from, or null for a key pair. */
+    private AwsInstanceRole role;
+
     @Override
     public int writeSecret(MemorySegment target) {
+        if (role != null) {
+            return role.use((id, key, session) -> fetch(target, id, key, session));
+        }
+        return fetch(target, accessKeyId, awsSecretKey, sessionToken);
+    }
+
+    private int fetch(MemorySegment target, String keyId, SecretProvider key,
+                      SecretProvider session) {
         String body = "{\"SecretId\":\"" + escape(secretId) + "\"}";
         Instant now = clock.instant();
         String stamp = STAMP.format(now);
@@ -167,18 +188,22 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
              // Temporary credentials only. Read afresh per request, because a
              // session token expires and the provider behind it is where a
              // newer one appears.
-             SecretScope token = sessionToken == null ? null
-                     : SecretScope.fromProvider(sessionToken)) {
+             SecretScope token = session == null ? null
+                     : SecretScope.fromProvider(session)) {
 
             SecretFetch.Response response = SecretFetch.send(host, port, verify, timeoutMillis,
-                    "POST", "/", headers(stamp, authorization(arena, body, stamp, day, token)),
+                    "POST", "/", headers(stamp,
+                            authorization(arena, body, stamp, day, token, keyId, key)),
                     token == null ? List.of() : List.of(new SecretFetch.SecretHeader(
                             "X-Amz-Security-Token", token.secret(), token.length())),
                     body, answer.segment());
             if (!response.ok()) {
+                // An error answer carries no secret, only AWS's reason - and
+                // "400" alone hid which one: a signature, a missing secret and
+                // a missing right all come back as 400 from this API.
                 throw new SecretUnavailableException("AWS Secrets Manager answered "
-                        + response.status() + " for " + secretId + ". 400 usually means the "
-                        + "secret does not exist, 403 that the key may not read it");
+                        + response.status() + " for " + secretId + ": "
+                        + reason(answer.segment(), response.bodyLength()));
             }
             answer.length(response.bodyLength());
 
@@ -203,6 +228,25 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
                     "AWS Secrets Manager answered, but not in a shape this understands: "
                     + e.getMessage(), e);
         }
+    }
+
+    /** {@code __type} and {@code message} of an error answer - public text, never a secret. */
+    private static String reason(MemorySegment body, int length) {
+        StringBuilder said = new StringBuilder(); // seclume-allow: an error answer, which holds no secret
+        for (String key : new String[] {"__type", "message", "Message"}) {
+            try (Arena scratch = Arena.ofConfined()) {
+                MemorySegment out = scratch.allocate(300);
+                int n = JsonOff.string(body, length, out, key);
+                for (int i = 0; i < n; i++) {
+                    char c = (char) (out.get(java.lang.foreign.ValueLayout.JAVA_BYTE, i) & 0xff);
+                    said.append(c >= 0x20 && c < 0x7f ? c : '?');
+                }
+                said.append(' ');
+            } catch (RuntimeException absent) {
+                // not in this answer
+            }
+        }
+        return said.length() == 0 ? "no reason given" : said.toString().trim();
     }
 
     private static int copy(SecretScope from, MemorySegment target) {
@@ -231,7 +275,7 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
      * key, and it stays inside {@link AwsSigV4#sign}.
      */
     private String authorization(Arena arena, String body, String stamp, String day,
-            SecretScope token) {
+            SecretScope token, String keyId, SecretProvider key) {
         String scope = AwsSigV4.scope(day, region, SERVICE);
         String signedHeaders = token == null ? SIGNED_HEADERS : SIGNED_HEADERS_WITH_TOKEN;
 
@@ -265,13 +309,12 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
 
         MemorySegment signature;
         try {
-            signature = AwsSigV4.sign(arena, awsSecretKey::writeSecret, toSign, day, region,
-                    SERVICE);
+            signature = AwsSigV4.sign(arena, key::writeSecret, toSign, day, region, SERVICE);
         } catch (IllegalStateException empty) {
             throw new SecretUnavailableException("the AWS secret key source gave nothing - "
                     + "the request to Secrets Manager cannot be signed without it", empty);
         }
-        return AwsSigV4.ALGORITHM + " Credential=" + accessKeyId + "/" + scope
+        return AwsSigV4.ALGORITHM + " Credential=" + keyId + "/" + scope
                 + ", SignedHeaders=" + signedHeaders
                 + ", Signature=" + AwsSigV4.hex(signature);
     }
@@ -296,7 +339,9 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
     @Override
     public void close() {
         try {
-            awsSecretKey.close();
+            if (awsSecretKey != null) {
+                awsSecretKey.close();       // null with an instance role
+            }
         } finally {
             if (sessionToken != null) {
                 sessionToken.close();

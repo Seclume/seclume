@@ -189,79 +189,168 @@ public interface ParameterSetters extends PreparedStatement {
         setParameter(index, value);
     }
 
+    /**
+     * JDBC 4.2's form with a {@link java.sql.SQLType}: the same as the one
+     * with the type's number. It was left to the interface's default, which
+     * refuses - so {@code setObject(1, x, JDBCType.INTEGER)} failed where
+     * {@code setObject(1, x, Types.INTEGER)} worked.
+     */
+    @Override
+    default void setObject(int index, Object value, java.sql.SQLType targetSqlType)
+            throws SQLException {
+        setObject(index, value, typeNumber(targetSqlType));
+    }
+
+    @Override
+    default void setObject(int index, Object value, java.sql.SQLType targetSqlType,
+                           int scaleOrLength) throws SQLException {
+        setObject(index, value, typeNumber(targetSqlType), scaleOrLength);
+    }
+
+    /** A {@code JDBCType}'s number; another vendor's type has nothing to say here. */
+    static int typeNumber(java.sql.SQLType type) throws SQLException {
+        Integer number = type == null ? null : type.getVendorTypeNumber();
+        if (number == null || !"java.sql".equals(type.getVendor())) {
+            throw new java.sql.SQLFeatureNotSupportedException("not a java.sql.JDBCType: " + type);
+        }
+        return number;
+    }
+
     /** MySQL and PostgreSQL are Unicode throughout; N-text is the same text. */
     @Override
     default void setNString(int index, String value) throws SQLException {
         setParameter(index, value);
     }
 
-    // ---- streams: deliberately not ---------------------------------------
+    // ---- streams: read to the end, then sent as a value ------------------
 
-    private static SQLFeatureNotSupportedException streams() {
-        return new SQLFeatureNotSupportedException(
-                "seclume does not take streams as parameters - read the value yourself "
-                + "and pass a String or byte[], so the size stays visible at the call site");
-    }
+    /*
+     * A stream is read here and the value sent like any other. Said plainly:
+     * the value does pass through memory, so a stream buys convenience, not
+     * thrift. It is still the right thing to offer - Hibernate binds a Blob
+     * or Clob from its LobHelper with setBinaryStream(index, stream, length),
+     * Spring's LobHandler does the same, and refusing them turned working
+     * mappings into stack traces. The Oracle driver has done this from the
+     * start; the other three now do it the same way.
+     *
+     * A length that is given is held to: a stream that ends early is an
+     * error, not a shorter value. See StreamValues.
+     */
 
     @Override
     default void setAsciiStream(int index, InputStream stream, int length) throws SQLException {
-        throw streams();
+        setAsciiStream(index, stream, (long) length);
     }
 
     @SuppressWarnings("deprecation")
     @Override
     default void setUnicodeStream(int index, InputStream stream, int length) throws SQLException {
-        throw streams();
+        throw new SQLFeatureNotSupportedException("setUnicodeStream is deprecated since "
+                + "JDBC 2.0 - use setCharacterStream");
     }
 
     @Override
     default void setBinaryStream(int index, InputStream stream, int length) throws SQLException {
-        throw streams();
+        setBinaryStream(index, stream, (long) length);
     }
 
     @Override
     default void setAsciiStream(int index, InputStream stream, long length) throws SQLException {
-        throw streams();
+        setParameter(index, StreamValues.ascii(stream, length));
     }
 
     @Override
     default void setBinaryStream(int index, InputStream stream, long length) throws SQLException {
-        throw streams();
+        setParameter(index, StreamValues.bytes(stream, length));
     }
 
     @Override
     default void setAsciiStream(int index, InputStream stream) throws SQLException {
-        throw streams();
+        setAsciiStream(index, stream, StreamValues.UNKNOWN);
     }
 
     @Override
     default void setBinaryStream(int index, InputStream stream) throws SQLException {
-        throw streams();
+        setBinaryStream(index, stream, StreamValues.UNKNOWN);
     }
 
     @Override
     default void setCharacterStream(int index, Reader reader, int length) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader, (long) length);
     }
 
     @Override
     default void setCharacterStream(int index, Reader reader, long length) throws SQLException {
-        throw streams();
+        setParameter(index, StreamValues.text(reader, length));
     }
 
     @Override
     default void setCharacterStream(int index, Reader reader) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader, StreamValues.UNKNOWN);
     }
 
     @Override
     default void setNCharacterStream(int index, Reader reader, long length) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader, length);
     }
 
     @Override
     default void setNCharacterStream(int index, Reader reader) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader);
+    }
+
+    /*
+     * A Blob or Clob is a value that happens to have an interface: read it
+     * and send what it holds. This is not a server-side LOB and does not
+     * create one - PostgreSQL, where a LOB column is an oid and would need
+     * one, keeps its own refusal.
+     */
+
+    @Override
+    default void setBlob(int index, Blob value) throws SQLException {
+        setParameter(index, value == null ? null
+                : StreamValues.bytes(value.getBinaryStream(), value.length()));
+    }
+
+    @Override
+    default void setBlob(int index, InputStream stream, long length) throws SQLException {
+        setBinaryStream(index, stream, length);
+    }
+
+    @Override
+    default void setBlob(int index, InputStream stream) throws SQLException {
+        setBinaryStream(index, stream);
+    }
+
+    @Override
+    default void setClob(int index, Clob value) throws SQLException {
+        setParameter(index, value == null ? null
+                : StreamValues.text(value.getCharacterStream(), value.length()));
+    }
+
+    @Override
+    default void setClob(int index, Reader reader, long length) throws SQLException {
+        setCharacterStream(index, reader, length);
+    }
+
+    @Override
+    default void setClob(int index, Reader reader) throws SQLException {
+        setCharacterStream(index, reader);
+    }
+
+    @Override
+    default void setNClob(int index, NClob value) throws SQLException {
+        setClob(index, value);
+    }
+
+    @Override
+    default void setNClob(int index, Reader reader, long length) throws SQLException {
+        setCharacterStream(index, reader, length);
+    }
+
+    @Override
+    default void setNClob(int index, Reader reader) throws SQLException {
+        setCharacterStream(index, reader);
     }
 
     // ---- types seclume does not send ------------------------------------
@@ -273,71 +362,50 @@ public interface ParameterSetters extends PreparedStatement {
 
     @Override
     default void setRef(int index, Ref value) throws SQLException {
+        if (value == null) {
+            setNull(index, java.sql.Types.REF);
+            return;
+        }
         throw unsupported("REF");
     }
 
     @Override
-    default void setBlob(int index, Blob value) throws SQLException {
-        throw unsupported("BLOB");
-    }
-
-    @Override
-    default void setBlob(int index, InputStream stream, long length) throws SQLException {
-        throw unsupported("BLOB");
-    }
-
-    @Override
-    default void setBlob(int index, InputStream stream) throws SQLException {
-        throw unsupported("BLOB");
-    }
-
-    @Override
-    default void setClob(int index, Clob value) throws SQLException {
-        throw unsupported("CLOB");
-    }
-
-    @Override
-    default void setClob(int index, Reader reader, long length) throws SQLException {
-        throw unsupported("CLOB");
-    }
-
-    @Override
-    default void setClob(int index, Reader reader) throws SQLException {
-        throw unsupported("CLOB");
-    }
-
-    @Override
-    default void setNClob(int index, NClob value) throws SQLException {
-        throw unsupported("NCLOB");
-    }
-
-    @Override
-    default void setNClob(int index, Reader reader, long length) throws SQLException {
-        throw unsupported("NCLOB");
-    }
-
-    @Override
-    default void setNClob(int index, Reader reader) throws SQLException {
-        throw unsupported("NCLOB");
-    }
-
-    @Override
     default void setArray(int index, Array value) throws SQLException {
+        // A null is a null whatever type it would have had - JDBC says so for
+        // every setter, and the vendors bind it; only a value needs the type.
+        if (value == null) {
+            setNull(index, java.sql.Types.ARRAY);
+            return;
+        }
         throw unsupported("ARRAY");
     }
 
     @Override
     default void setRowId(int index, RowId value) throws SQLException {
+        if (value == null) {
+            setNull(index, java.sql.Types.ROWID);
+            return;
+        }
         throw unsupported("ROWID");
     }
 
+    /** XML travels as its text, which is what every one of the servers parses it from. */
     @Override
     default void setSQLXML(int index, SQLXML value) throws SQLException {
-        throw unsupported("SQLXML");
+        if (value == null) {
+            setNull(index, java.sql.Types.SQLXML);
+            return;
+        }
+        setString(index, value.getString());
     }
 
+    /** A URL is stored as its text; none of the four has a type of its own for it. */
     @Override
     default void setURL(int index, URL value) throws SQLException {
-        throw unsupported("URL");
+        if (value == null) {
+            setNull(index, java.sql.Types.DATALINK);
+            return;
+        }
+        setString(index, value.toString());
     }
 }

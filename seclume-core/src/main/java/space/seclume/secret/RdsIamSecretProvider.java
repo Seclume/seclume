@@ -38,7 +38,14 @@ public final class RdsIamSecretProvider implements SecretProvider {
     /** What the signature covers besides the query - always just the host. */
     private static final String SIGNED_HEADERS = "host";
     private static final String ALGORITHM = "AWS4-HMAC-SHA256";
-    private static final String SERVICE = "rds";
+    /**
+     * {@code rds-db}, the service that connects to a database - not {@code rds},
+     * the API that manages instances. With {@code rds} every token was refused
+     * ("PAM authentication failed"); found against a live Aurora cluster on
+     * 26.09.2026, where a token from the AWS CLI made in the same second
+     * differed in exactly this word.
+     */
+    private static final String SERVICE = "rds-db";
     private static final String TERMINATOR = "aws4_request";
     /** The longest AWS allows, and the only value that makes sense here. */
     private static final int EXPIRES_SECONDS = 900;
@@ -85,44 +92,91 @@ public final class RdsIamSecretProvider implements SecretProvider {
         this.clock = clock;
     }
 
+    /**
+     * The same with the credentials of the EC2 instance's role - temporary
+     * ones, so the token carries their session token, signed and sent, and
+     * built in native memory like the rest.
+     */
+    public RdsIamSecretProvider(AwsInstanceRole role, String region, String host, int port,
+                                String user) {
+        this(null, null, region, host, port, user, Clock.systemUTC());
+        this.role = role;
+    }
+
+    /** The instance role the credentials come from, or null for a key pair. */
+    private AwsInstanceRole role;
+
     @Override
     public int writeSecret(MemorySegment target) {
+        if (role != null) {
+            return role.use((id, key, session) -> token(target, id, key, session));
+        }
+        return token(target, accessKeyId, awsSecretKey, null);
+    }
+
+    /**
+     * The signed URL, written straight into {@code target}: the canonical
+     * request in native memory (the session token is in it), then the token
+     * the same way. Until 26.09.2026 the token was assembled as a
+     * {@code String} before it was written - a credential valid for fifteen
+     * minutes on the heap, in the one class that says it keeps them off.
+     */
+    private int token(MemorySegment target, String keyId, SecretProvider key,
+                      SecretProvider sessionToken) {
         Instant now = clock.instant();
         String stamp = STAMP.format(now);
         String day = DAY.format(now);
         String scope = day + "/" + region + "/" + SERVICE + "/" + TERMINATOR;
         String endpoint = host + ":" + port;
-
-        // None of this is secret: it is the request that will be signed, and it
-        // travels to the server in the clear anyway.
-        String query = "Action=connect"
+        // Sorted by name, as the canonical query has to be; the session token
+        // falls between X-Amz-Expires and X-Amz-SignedHeaders.
+        String head = "Action=connect"
                 + "&DBUser=" + urlEncode(user)
                 + "&X-Amz-Algorithm=" + ALGORITHM
-                + "&X-Amz-Credential=" + urlEncode(accessKeyId + "/" + scope)
+                + "&X-Amz-Credential=" + urlEncode(keyId + "/" + scope)
                 + "&X-Amz-Date=" + stamp
-                + "&X-Amz-Expires=" + EXPIRES_SECONDS
-                + "&X-Amz-SignedHeaders=" + SIGNED_HEADERS;
-        String canonicalRequest = "GET\n/\n" + query + "\n"
-                + "host:" + endpoint + "\n\n"
-                + SIGNED_HEADERS + "\n"
-                + EMPTY_PAYLOAD;
-        String toSign = ALGORITHM + "\n" + stamp + "\n" + scope + "\n"
-                + AwsSigV4.sha256Hex(canonicalRequest);
+                + "&X-Amz-Expires=" + EXPIRES_SECONDS;
+        String tail = "&X-Amz-SignedHeaders=" + SIGNED_HEADERS;
 
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment signature = sign(arena, toSign, day);
-            String token = endpoint + "/?" + query + "&X-Amz-Signature=" + hex(signature);
-            return write(target, token);
+        try (Arena arena = Arena.ofConfined();
+             SecretScope session = sessionToken == null ? null
+                     : SecretScope.fromProvider(sessionToken)) {
+            int tokenRoom = session == null ? 0 : 3 * session.length() + 32;
+            String canonicalHash;
+            try (space.seclume.internal.CanonicalRequest canonical =
+                         new space.seclume.internal.CanonicalRequest(arena, 1024 + tokenRoom)) {
+                canonical.text("GET\n/\n" + head);
+                if (session != null) {
+                    canonical.text("&X-Amz-Security-Token=");
+                    canonical.secretUrlEncoded(session.secret(), session.length());
+                }
+                canonical.text(tail + "\nhost:" + endpoint + "\n\n" + SIGNED_HEADERS + "\n"
+                        + EMPTY_PAYLOAD);
+                canonicalHash = canonical.sha256Hex();
+            }
+            String toSign = ALGORITHM + "\n" + stamp + "\n" + scope + "\n" + canonicalHash;
+            MemorySegment signature = sign(arena, key, toSign, day);
+
+            int at = put(target, 0, endpoint + "/?" + head);
+            if (session != null) {
+                at = put(target, at, "&X-Amz-Security-Token=");
+                if (at + 3L * session.length() > target.byteSize()) {
+                    throw new SecretUnavailableException("the IAM token does not fit in the "
+                            + target.byteSize() + " bytes provided - raise the secret buffer size");
+                }
+                at += AwsSigV4.urlEncode(session.secret(), session.length(), target, at);
+            }
+            return put(target, at, tail + "&X-Amz-Signature=" + hex(signature));
         }
     }
 
     /**
-     * A signed URL of this shape runs to some six hundred characters; a
-     * kilobyte leaves room for long user names and long endpoints.
+     * A signed URL of this shape runs to some four hundred characters, and to
+     * a few kilobytes with a session token in it.
      */
     @Override
     public int maxSecretLength() {
-        return 1024;
+        return role != null ? 8192 : 1024;
     }
 
     /**
@@ -131,9 +185,9 @@ public final class RdsIamSecretProvider implements SecretProvider {
      * <p>Shared with the Secrets Manager provider, which needs the same four
      * HMACs for a differently shaped request - see {@link AwsSigV4}.
      */
-    private MemorySegment sign(Arena arena, String toSign, String day) {
+    private MemorySegment sign(Arena arena, SecretProvider key, String toSign, String day) {
         try {
-            return AwsSigV4.sign(arena, awsSecretKey::writeSecret, toSign, day, region, SERVICE);
+            return AwsSigV4.sign(arena, key::writeSecret, toSign, day, region, SERVICE);
         } catch (IllegalStateException empty) {
             throw new SecretUnavailableException(
                     "the AWS secret key source gave nothing - an IAM token cannot be signed "
@@ -141,17 +195,17 @@ public final class RdsIamSecretProvider implements SecretProvider {
         }
     }
 
-    private static int write(MemorySegment target, String token) {
-        // The length in a variable of its own, and not "token.length()" in the
-        // message: the rule is that nothing named like a secret is ever
-        // concatenated into a message, and a rule with exceptions is not one.
-        int needed = token.length();
+    /** Public text into the token, at {@code at}; returns where it ends. */
+    private static int put(MemorySegment target, int at, String text) {
+        // The length in a variable of its own, not in the message: nothing
+        // named like a secret is ever concatenated into a message.
+        int needed = at + text.length();
         if (needed > target.byteSize()) {
             throw new SecretUnavailableException("the IAM token needs " + needed
                     + " bytes and the buffer takes " + target.byteSize()
                     + " - raise the secret buffer size");
         }
-        return AwsSigV4.writeAscii(target, token);
+        return at + AwsSigV4.writeAscii(target.asSlice(at), text);
     }
 
     private static String hex(MemorySegment bytes) {

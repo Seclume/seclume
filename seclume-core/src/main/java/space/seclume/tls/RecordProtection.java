@@ -5,7 +5,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 import space.seclume.crypto.AesGcm;
-import space.seclume.crypto.AesKey;
+import space.seclume.crypto.AesGcmCipher;
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Hkdf;
 
@@ -47,7 +47,7 @@ public final class RecordProtection implements AutoCloseable {
     private static final int MAX_PLAINTEXT = 16384;
 
     private final Arena arena = Arena.ofShared();
-    private final AesKey key;
+    private final AesGcmCipher key;
     private final MemorySegment iv;
     private final HashAlgorithm hash;
     private final MemorySegment secret;
@@ -62,7 +62,7 @@ public final class RecordProtection implements AutoCloseable {
 
         MemorySegment material = arena.allocate(keyLength);
         Hkdf.expandLabel(hash, secret, "key", null, material, 0, keyLength);
-        this.key = new AesKey(material, 0, keyLength);
+        this.key = AesGcmCipher.of(material, 0, keyLength);
         material.fill((byte) 0);
 
         this.iv = arena.allocate(AesGcm.NONCE);
@@ -112,7 +112,7 @@ public final class RecordProtection implements AutoCloseable {
             }
             content.set(ValueLayout.JAVA_BYTE, length, contentType);
 
-            AesGcm.encrypt(key, nonce, 0, out, outOffset, HEADER, content, 0, inner,
+            key.encrypt(nonce, 0, out, outOffset, HEADER, content, 0, inner,
                     out, outOffset + HEADER);
             content.fill((byte) 0);
         }
@@ -136,7 +136,7 @@ public final class RecordProtection implements AutoCloseable {
             MemorySegment nonce = scratch.allocate(AesGcm.NONCE);
             nonce(nonce);
             MemorySegment content = scratch.allocate(inner);
-            boolean ok = AesGcm.decrypt(key, nonce, 0, record, offset, HEADER,
+            boolean ok = key.decrypt(nonce, 0, record, offset, HEADER,
                     record, offset + HEADER, inner, content, 0);
             if (!ok) {
                 return null;
@@ -203,6 +203,11 @@ public final class RecordProtection implements AutoCloseable {
     /** Copies the current traffic secret out - {@code hash().digestLength()} bytes. */
     void copySecretInto(MemorySegment out, long offset) {
         MemorySegment.copy(secret, 0, out, offset, hash.digestLength());
+    }
+
+    /** Which AES-GCM this protection runs on: {@code openssl}, {@code cng} or {@code java}. */
+    public String cipherImplementation() {
+        return key.implementation();
     }
 
     /** Sets it - for a connection rebuilt from a written-down state. */

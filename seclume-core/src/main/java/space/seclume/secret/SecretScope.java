@@ -68,6 +68,17 @@ public final class SecretScope implements AutoCloseable {
     }
 
     /**
+     * Like {@link #allocate}, in an arena of its own that more than one thread
+     * may use - for a secret written by one thread and read by another, as a
+     * copy kept for another process is: received on one thread, taken up on
+     * whichever serves the request that needs it. Locked and wiped the same;
+     * closing releases it.
+     */
+    public static SecretScope allocateShared(int capacity) {
+        return new SecretScope(Arena.ofShared(), true, capacity);
+    }
+
+    /**
      * Like {@link #allocate}, but in an arena someone else owns. Closing then
      * only zeroes - the memory is released when that arena closes.
      *

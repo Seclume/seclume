@@ -90,13 +90,18 @@ public final class TlsChannel implements TlsLayer {
         try {
             SSLContext context;
             if (verify) {
-                context = SSLContext.getDefault();
+                context = TrustChoice.sslContext();
             } else {
-                context = SSLContext.getInstance("TLS");
+                context = SSLContext.getInstance("TLSv1.3");
+                // Opt-in only (tls=require, trustServerCertificate) - seclume-verify
+                // --migrate reports it as unsafe. nosemgrep: java.lang.security.audit.crypto.ssl.insecure-trust-manager.insecure-trust-manager
                 context.init(null, new TrustManager[] {new TrustEverything()}, null);
             }
             SSLEngine engine = context.createSSLEngine(host, port);
             engine.setUseClientMode(true);
+            // Explicitly, not by the JDK's current default: a deployment that
+            // loosens jdk.tls.disabledAlgorithms must not bring TLS 1.0 back here.
+            engine.setEnabledProtocols(new String[] {"TLSv1.3", "TLSv1.2"});
             if (verify || alpn != null) {
                 SSLParameters parameters = engine.getSSLParameters();
                 if (alpn != null) {

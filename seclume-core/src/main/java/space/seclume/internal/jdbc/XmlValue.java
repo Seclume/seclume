@@ -38,9 +38,29 @@ public final class XmlValue implements SQLXML {
 
     private String document;
     private boolean freed;
+    /** Made by {@code Connection.createSQLXML}: to be written once, then bound. */
+    private final boolean writable;
+    /** What a writer or stream handed out by the write half has collected. */
+    private java.io.StringWriter text;
+    private java.io.ByteArrayOutputStream bytes;
 
     public XmlValue(String document) {
         this.document = document;
+        this.writable = false;
+    }
+
+    private XmlValue() {
+        this.writable = true;
+    }
+
+    /**
+     * An empty one for {@code Connection.createSQLXML}: the application
+     * writes the document into it - as text, through a writer, as UTF-8
+     * bytes or through a {@code StreamResult} - and binds it with
+     * {@code setSQLXML}, which sends the text.
+     */
+    public static XmlValue writable() {
+        return new XmlValue();
     }
 
     @Override
@@ -91,6 +111,11 @@ public final class XmlValue implements SQLXML {
         if (freed) {
             throw new SQLException("this SQLXML has been freed");
         }
+        if (text != null) {
+            document = text.toString();
+        } else if (bytes != null) {
+            document = bytes.toString(StandardCharsets.UTF_8);
+        }
         return document;
     }
 
@@ -98,23 +123,49 @@ public final class XmlValue implements SQLXML {
 
     @Override
     public OutputStream setBinaryStream() throws SQLException {
-        throw readOnly();
+        requireWritable();
+        bytes = new java.io.ByteArrayOutputStream();
+        return bytes;
     }
 
     @Override
     public Writer setCharacterStream() throws SQLException {
-        throw readOnly();
+        requireWritable();
+        text = new java.io.StringWriter();
+        return text;
     }
 
     @Override
     public void setString(String value) throws SQLException {
-        throw readOnly();
+        requireWritable();
+        document = value;
     }
 
+    @SuppressWarnings("unchecked")
     @Override
     public <T extends javax.xml.transform.Result> T setResult(Class<T> resultClass)
             throws SQLException {
-        throw readOnly();
+        requireWritable();
+        if (resultClass == null || resultClass == javax.xml.transform.stream.StreamResult.class
+                || resultClass == javax.xml.transform.Result.class) {
+            return (T) new javax.xml.transform.stream.StreamResult(setCharacterStream());
+        }
+        throw new SQLFeatureNotSupportedException("seclume takes an SQLXML only as a "
+                + "StreamResult, not as " + resultClass.getName()
+                + " - transform into a StreamResult or write the text");
+    }
+
+    /** Written once, as JDBC says, and only one that was made to be written. */
+    private void requireWritable() throws SQLException {
+        if (!writable) {
+            throw readOnly();
+        }
+        if (freed) {
+            throw new SQLException("this SQLXML has been freed");
+        }
+        if (document != null || text != null || bytes != null) {
+            throw new SQLException("this SQLXML has already been written");
+        }
     }
 
     private static SQLFeatureNotSupportedException readOnly() {

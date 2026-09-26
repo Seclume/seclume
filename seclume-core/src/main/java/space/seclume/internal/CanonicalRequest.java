@@ -74,6 +74,17 @@ public final class CanonicalRequest implements AutoCloseable {
         return this;
     }
 
+    /** Appends secret bytes URL-encoded - a session token inside a query. */
+    public CanonicalRequest secretUrlEncoded(MemorySegment value, int valueLength) {
+        checkOpen();
+        if (valueLength < 0 || length + 3L * valueLength > buffer.byteSize()) {
+            throw new IllegalStateException("the canonical request does not fit in the "
+                    + buffer.byteSize() + " bytes reserved for it");
+        }
+        length += AwsSigV4.urlEncode(value, valueLength, buffer, length);
+        return this;
+    }
+
     /**
      * The SHA-256 of what has been written, hex-encoded.
      *

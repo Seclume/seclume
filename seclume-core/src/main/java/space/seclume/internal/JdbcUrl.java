@@ -98,7 +98,7 @@ public final class JdbcUrl {
     public static Parsed parse(String url, Properties properties, String prefix, int defaultPort) {
         if (url == null || !url.startsWith(prefix)) {
             throw new IllegalArgumentException(
-                    "not a seclume URL for this driver: " + url + " - expected "
+                    "not a seclume URL for this driver: " + redact(url) + " - expected "
                     + prefix + "//host:port/database");
         }
         String rest = url.substring(prefix.length());
@@ -136,7 +136,23 @@ public final class JdbcUrl {
                 // it says which of these servers to take, and with one server
                 // it changes nothing and costs nothing.
                 .looking(space.seclume.internal.jdbc.TargetServer.of(
-                        options.get("targetServerType")));
+                        options.get("targetServerType")))
+                // hostSelection=ordered|quality: the list as written, or the
+                // best measured server first - see HostQuality.
+                .selecting(space.seclume.internal.jdbc.HostSelection.of(
+                        options.get("hostSelection")))
+                // patroni=http://db1:8008,...: the cluster says where its leader
+                // is now - see PatroniTopology.
+                .discovering(space.seclume.internal.jdbc.PatroniTopology.of(
+                        options.get("patroni")));
+        // aurora=true: the instances an Aurora cluster reported, remembered
+        // for the next connect - see AuroraTopology.
+        space.seclume.internal.jdbc.AuroraTopology aurora =
+                space.seclume.internal.jdbc.AuroraTopology.of(options.get("aurora"),
+                        options.get("auroraInstanceHost"), hosts.hosts());
+        if (aurora != null) {
+            hosts = hosts.discovering(aurora);
+        }
         if (database.isEmpty()) {
             database = options.getOrDefault("database", "");
         }
@@ -162,5 +178,49 @@ public final class JdbcUrl {
     /** Lower case without locale surprises - for comparing keys. */
     public static String normalize(String key) {
         return key.replace("-", "").toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * A URL fit to put in a message, with the values of its options removed.
+     *
+     * <p><b>The case this is for is a URL that is not ours.</b> A seclume URL
+     * carries a provider and a path and no credential - that is the whole
+     * design. But the message that names a wrong URL is precisely the message
+     * that gets a <i>vendor's</i> URL, and those routinely read
+     * {@code ...?user=app&amp;password=hunter2}. Echoing it back puts the
+     * password in the application's log, at the moment somebody is already
+     * confused and reading logs.
+     *
+     * <p>So the shape is kept - scheme, host, port, database, and which
+     * options were given - and every value after an {@code =} becomes
+     * {@code ?}. That is enough to see what is wrong with a URL, which is the
+     * only reason to print one.
+     *
+     * <p>Not a parser: this runs on strings that are malformed by definition,
+     * so it does the one textual thing it can do correctly.
+     */
+    public static String redact(String url) {
+        if (url == null) {
+            return "null";
+        }
+        int question = url.indexOf('?');
+        if (question < 0) {
+            return url;
+        }
+        StringBuilder out = new StringBuilder(url.length());
+        out.append(url, 0, question + 1);
+        String[] pairs = url.substring(question + 1).split("&", -1);
+        for (int i = 0; i < pairs.length; i++) {
+            if (i > 0) {
+                out.append('&');
+            }
+            int equals = pairs[i].indexOf('=');
+            if (equals < 0) {
+                out.append(pairs[i]);
+            } else {
+                out.append(pairs[i], 0, equals + 1).append('?');
+            }
+        }
+        return out.toString();
     }
 }

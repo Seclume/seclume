@@ -186,6 +186,60 @@ public final class Observed {
         event.commit();
     }
 
+    /** A handle around the login alone, or {@code null} when nobody records. */
+    public static SeclumeEvents.Authentication beginLogin() {
+        SeclumeEvents.Authentication event = new SeclumeEvents.Authentication();
+        if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    /**
+     * @param method what the server asked for, by its own name - and never
+     *               anything derived from what was sent back
+     */
+    public static void endLogin(SeclumeEvents.Authentication event, String kind, String server,
+            String method, boolean succeeded) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.kind = kind;
+        event.server = server;
+        event.method = method == null ? "" : method;
+        event.succeeded = succeeded;
+        event.commit();
+    }
+
+    public static SeclumeEvents.CertificateReload beginCertificateReload() {
+        SeclumeEvents.CertificateReload event = new SeclumeEvents.CertificateReload();
+        if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    public static void endCertificateReload(SeclumeEvents.CertificateReload event,
+            String certificate, boolean succeeded, String reason) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.certificate = certificate;
+        event.succeeded = succeeded;
+        event.reason = reason == null ? "" : reason;
+        event.commit();
+    }
+
     public static SeclumeEvents.TlsHandshake beginHandshake() {
         SeclumeEvents.TlsHandshake event = new SeclumeEvents.TlsHandshake();
         if (!event.isEnabled()) {
@@ -210,15 +264,45 @@ public final class Observed {
         event.commit();
     }
 
-    /** A host of the list was unreachable and the next one was tried. */
-    public static void failover(String from, String to, String reason) {
+    /**
+     * Begun before a server of the list is tried, ended only if it fails.
+     *
+     * <p>A handle is taken on every attempt and committed on none of the ones
+     * that work - an attempt that succeeds is not a failover and has an event
+     * of its own already. Begun rather than measured afterwards because the
+     * fact worth having is how long the server took to not answer.
+     */
+    public static SeclumeEvents.Failover beginAttempt() {
         SeclumeEvents.Failover event = new SeclumeEvents.Failover();
         if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    /**
+     * The 0.9.0 form, without the time it took: kept so that code built
+     * against 0.9.0 still links. Records an event of no duration.
+     */
+    public static void failover(String from, String to, String reason) {
+        failover(beginAttempt(), from, to, reason, 0);
+    }
+
+    /** A host of the list was unreachable and the next one was tried. */
+    public static void failover(SeclumeEvents.Failover event, String from, String to,
+            String reason, int attempt) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
             return;
         }
         event.from = from;
         event.to = to;
         event.reason = reason;
+        event.attempt = attempt;
         event.commit();
     }
 

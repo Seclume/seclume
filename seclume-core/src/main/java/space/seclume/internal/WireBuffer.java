@@ -102,7 +102,26 @@ public final class WireBuffer implements AutoCloseable {
         return limit;
     }
 
+    /**
+     * Says how much of the buffer is valid - and refuses a claim the memory
+     * cannot back.
+     *
+     * <p><b>The bounds checks below are only as honest as this number.</b>
+     * {@code require} compares against {@code limit}, so a limit set from a
+     * length that came off the wire and was never compared to the capacity
+     * makes every check downstream pass while the reads walk off the end.
+     * That is how it showed up: a MySQL packet header spoilt to announce
+     * 131 072 bytes in a 32 KB buffer, {@code require(131072)} passing
+     * cheerfully, and the {@code IndexOutOfBoundsException} arriving from the
+     * MemorySegment two frames later. Found by the decoder fuzz sweep on
+     * 23.09.2026, after two shallower fixes in the same area had each moved
+     * the failure one layer down.
+     */
     public void limit(int newLimit) {
+        if (newLimit < 0 || newLimit > capacity()) {
+            throw new Truncated("a message of " + newLimit + " bytes was announced, and this "
+                    + "buffer holds " + capacity() + " - the server sent something unexpected");
+        }
         this.limit = newLimit;
     }
 
@@ -128,9 +147,15 @@ public final class WireBuffer implements AutoCloseable {
     }
 
     public void ensureCapacity(int needed) {
-        if (needed <= capacity()) {
-            return;
+        // The check alone, small enough to be inlined into every put: the
+        // growing below made this too large for that, and a call per byte
+        // written was the largest single cost of encoding a batch.
+        if (needed > segment.byteSize()) {
+            grow(needed);
         }
+    }
+
+    private void grow(int needed) {
         int size = Math.max(capacity() * 2, needed);
         MemorySegment bigger = arena.allocate(size);
         MemorySegment.copy(segment, 0, bigger, 0, Math.max(position, limit));
@@ -293,6 +318,10 @@ public final class WireBuffer implements AutoCloseable {
     }
 
     public int getIntLe(int at) {
+        // Checked like getByte and getInt: this one was not, and read past
+        // the valid bytes into whatever the buffer held before - which a
+        // reader that goes on packet by packet relies on hearing about.
+        requireAt(at, 4);
         return segment.get(LE_INT, at);
     }
 
@@ -310,6 +339,8 @@ public final class WireBuffer implements AutoCloseable {
      * <p>See {@code Row#getLong}, which is what this exists for.
      */
     public long getLongLe(int at) {
+        // Not checked against the limit, unlike getIntLe: TextNumber reads
+        // eight bytes at a time up to the capacity and uses only its own.
         return segment.get(LE_LONG, at);
     }
 
@@ -363,16 +394,56 @@ public final class WireBuffer implements AutoCloseable {
     }
 
     public int getInt(int at) {
+        requireAt(at, 4);
         return segment.get(BE_INT, at);
     }
 
     public byte getByte(int at) {
+        requireAt(at, 1);
         return segment.get(ValueLayout.JAVA_BYTE, at);
     }
 
     /** A slice without copying - this is how row data is passed on. */
     public MemorySegment slice(int offset, int length) {
+        requireAt(offset, length);
         return segment.asSlice(offset, length);
+    }
+
+    /**
+     * The same check as {@link #require}, for the accessors that take an
+     * offset instead of using the cursor.
+     *
+     * <p><b>These three had no check at all.</b> The sequential readers all
+     * call {@code require}; the absolute ones did not, and the difference was
+     * invisible because the absolute ones are used for random access within a
+     * message whose offsets the decoder had just computed itself - which is
+     * fine until one of those offsets is computed from a length that came off
+     * the wire.
+     *
+     * <p>What that looked like: SQL Server's {@code ColumnMetadata} reading a
+     * column count that disagreed with the columns, walking its offset past
+     * the end of a 32 KB buffer, and getting an {@code IndexOutOfBoundsException}
+     * <b>from the MemorySegment</b> - a JVM-level message about a native
+     * address, out of {@code Statement.executeQuery}, where an application
+     * expects a {@code SQLException}. Found by the decoder fuzz sweep on
+     * 23.09.2026.
+     *
+     * <p>The bound is the message's {@code limit} and not the segment's
+     * capacity, deliberately: reading another message's bytes is not a crash
+     * but it is still wrong, and it is the more insidious of the two.
+     */
+    private void requireAt(int at, int bytes) {
+        // Against the furthest byte known to be good, which is `limit` while
+        // reading and `position` while writing - this class does not track
+        // which it is doing, and the first version of this check compared
+        // against `limit` alone. That broke every caller that reads back out
+        // of a buffer it has just written, where `limit` is still zero: 70
+        // tests in the core said so within a minute of it going in.
+        int valid = Math.max(limit, position);
+        if (at < 0 || bytes < 0 || at > valid - bytes) {
+            throw new Truncated("the buffer holds " + valid + " valid bytes, and " + bytes
+                    + " were wanted at " + at + " - the server sent something unexpected");
+        }
     }
 
     /**
@@ -417,6 +488,16 @@ public final class WireBuffer implements AutoCloseable {
     }
 
     /**
+     * An answer that cannot be what the protocol says - a count below zero, a
+     * length past any limit. Thrown where it is found, and handled like a
+     * truncated one: the connection is broken, because its stream is at a
+     * position nobody can make sense of.
+     */
+    public static Truncated malformed(String what) {
+        return new Truncated(what);
+    }
+
+    /**
      * A message that stopped before it had said everything it promised.
      *
      * <p>Its own type, and not a bare {@code IllegalStateException}, so the
@@ -437,13 +518,50 @@ public final class WireBuffer implements AutoCloseable {
         Truncated(String message) {
             super(message);
         }
+
+        /**
+         * For a decoder outside this package that has found the same fact.
+         *
+         * <p>A row that ends after two of its three columns is a message
+         * announcing more than it brought, said in the vocabulary of the layer
+         * above. Throwing this rather than a bare
+         * {@code IllegalStateException} is what makes the refusal reach an
+         * application as a {@code SQLException}: the four sessions map this
+         * type to a connection failure, and they map nothing else.
+         */
+        public static Truncated because(String message) {
+            return new Truncated(message);
+        }
     }
 
+    /**
+     * The one bounds check every decoder in all four drivers stands on.
+     *
+     * <p><b>Written as a subtraction, and that is the whole of it.</b> The
+     * obvious form, {@code position + bytes > limit}, is wrong for exactly the
+     * input an attacker sends: a length of {@code 0x7fffffff} read off the
+     * wire makes the addition overflow, the sum comes out negative, the
+     * comparison says the bytes are there, and the position walks off the end
+     * of the buffer. Everything downstream then reads at an offset that means
+     * nothing - and in PostgreSQL's row reader it meant
+     * {@code new byte[0x7fffffff]} and an {@code OutOfMemoryError}, which in a
+     * server is not this connection's death but every connection's.
+     *
+     * <p>{@code bytes < 0} is refused for the same reason rather than trusted
+     * to be impossible: a negative length reaching a caller that adds it to a
+     * position is the same bug wearing the other sign.
+     *
+     * <p>Found by the decoder fuzz sweep on 23.09.2026, from a DataRow whose
+     * column length was a single spoilt field. The check had been correct for
+     * every length a server actually sends, which is why nothing else found
+     * it.
+     */
     private void require(int bytes) {
-        if (position + bytes > limit) {
+        if (bytes < 0 || bytes > limit - position) {
             throw new Truncated(
-                    "the message ends after " + limit + " bytes, but " + (position + bytes)
-                    + " were needed - the server sent something unexpected");
+                    "the message ends after " + limit + " bytes, but " + bytes
+                    + " more were needed at " + position
+                    + " - the server sent something unexpected");
         }
     }
 

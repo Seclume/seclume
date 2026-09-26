@@ -23,6 +23,12 @@ import org.junit.jupiter.api.Test;
  * expectation worth pinning. A test that compares the code against itself
  * proves that it is deterministic and nothing else.
  *
+ * <p>An independent computation shares the misreadings of whoever wrote
+ * it: until 26.09.2026 both this expectation and the code signed for the
+ * service {@code rds}, and every token was refused by a real Aurora cluster.
+ * The service is {@code rds-db}; the token from the AWS CLI, made in the same
+ * second, now matches this code's byte for byte ({@code proof/TokenCheck.java}).
+ *
  * <p>The key in it is the example key pair from Amazon's own signing
  * documentation, which exists precisely so that signatures can be shown in
  * public.
@@ -39,11 +45,11 @@ class RdsIamSecretProviderTest {
     private static final String EXPECTED =
             "db.example.com:5432/?Action=connect&DBUser=app"
             + "&X-Amz-Algorithm=AWS4-HMAC-SHA256"
-            + "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260910%2Feu-central-1%2Frds"
+            + "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260910%2Feu-central-1%2Frds-db"
             + "%2Faws4_request"
             + "&X-Amz-Date=20260910T120000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host"
             + "&X-Amz-Signature="
-            + "e4943e0b870c23b37ece1bf6e52ad3e0ede0f941fd45b59dab24ad3a9535f63c";
+            + "d4a70a4eceee2cebc57b35bfce526f7a12cb4c7ae6a6d7bea641e816cf3c3a37";
 
     @Test
     void theTokenMatchesAnIndependentlySignedOne() {

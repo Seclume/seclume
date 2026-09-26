@@ -21,6 +21,15 @@ import java.util.List;
  * <p>The last server that worked is tried first next time. Without that, a
  * list whose first entry is down pays for the timeout on every single connect,
  * which turns a failover into a permanent slowdown.
+ *
+ * <p><b>Or the best one, with {@code hostSelection=quality}.</b> Every attempt
+ * is measured either way - connect time, failures, the role a server reported
+ * - in {@link HostQuality}, which the whole process shares. With
+ * {@code quality} the order is taken from there: servers in a back-off after
+ * a failure last, the rest fastest and most reliable first, and a server whose
+ * measurement has gone stale tried once to renew it. That is the part of a
+ * load balancer a driver can do honestly, because it is only about which
+ * server the next connection goes to.
  */
 public final class HostList {
 
@@ -50,17 +59,99 @@ public final class HostList {
      * preference behaves exactly as it always did.
      */
     private final TargetServer target;
+    /** How the next server is chosen - see {@link HostSelection}. */
+    private final HostSelection selection;
     /** The one that worked last - tried first, so a dead head costs nothing. */
     private volatile int preferred;
 
     private HostList(List<Host> hosts, TargetServer target) {
+        this(hosts, target, HostSelection.ORDERED);
+    }
+
+    private HostList(List<Host> hosts, TargetServer target, HostSelection selection) {
+        this(hosts, target, selection, null);
+    }
+
+    private HostList(List<Host> hosts, TargetServer target, HostSelection selection,
+                     ClusterTopology topology) {
         this.hosts = List.copyOf(hosts);
         this.target = target;
+        this.selection = selection;
+        this.topology = topology;
+    }
+
+    /** Asked for the cluster's members before each open - see ClusterTopology; null for none. */
+    private final ClusterTopology topology;
+
+    /** The same servers, and a cluster to ask where its leader is now. */
+    public HostList discovering(ClusterTopology cluster) {
+        return cluster == null ? this : new HostList(hosts, target, selection, cluster);
+    }
+
+    /** The cluster this list asks, or null. */
+    public ClusterTopology topology() {
+        return topology;
+    }
+
+    /**
+     * The list for this attempt: the cluster's members as it reports them now,
+     * or these hosts when there is no cluster to ask or it does not answer.
+     */
+    private HostList current() {
+        if (topology == null) {
+            return this;
+        }
+        List<Host> members = topology.hosts(target);
+        return members.isEmpty() ? new HostList(hosts, target, selection)
+                : new HostList(members, target, HostSelection.ORDERED);
     }
 
     /** The same servers, looking for a particular kind of one. */
     public HostList looking(TargetServer wanted) {
-        return wanted == target ? this : new HostList(hosts, wanted);
+        return wanted == target ? this : new HostList(hosts, wanted, selection, topology);
+    }
+
+    /** The same servers, chosen between the way this says. */
+    public HostList selecting(HostSelection how) {
+        return how == selection ? this : new HostList(hosts, target, how, topology);
+    }
+
+    /** How this list picks - {@link HostSelection#ORDERED} unless told. */
+    public HostSelection selection() {
+        return selection;
+    }
+
+    /**
+     * The order of this attempt, as indices.
+     *
+     * <p>{@code ORDERED}: the list as written, starting at the one that
+     * worked last. {@code QUALITY}: whatever {@link HostQuality} ranks best.
+     */
+    private int[] attemptOrder() {
+        if (selection == HostSelection.QUALITY) {
+            return HostQuality.order(hosts, target);
+        }
+        int[] order = new int[hosts.size()];
+        int start = preferred;
+        for (int i = 0; i < order.length; i++) {
+            order[i] = (start + i) % hosts.size();
+        }
+        return order;
+    }
+
+    /** Opens one, and writes down how it went. */
+    private static <T> T measured(Opener<T> opener, Host host) throws SQLException {
+        long began = System.nanoTime();
+        try {
+            T opened = opener.open(host);
+            HostQuality.succeeded(host, System.nanoTime() - began);
+            return opened;
+        } catch (SQLException e) {
+            if (isUnreachable(e)) {
+                HostQuality.failed(host);
+            }
+            throw e;
+        }
     }
 
     /** What this list is looking for - {@link TargetServer#ANY} unless told. */
@@ -182,20 +273,30 @@ public final class HostList {
      * whoever reads it to look at the network.
      */
     public <T> T open(Opener<T> opener, Roles<T> roles) throws SQLException {
+        if (topology != null) {
+            return current().open(opener, roles);
+        }
         TargetServer wanted = target;
         if (!wanted.needsToAsk()) {
             return open(opener);
         }
-        int start = preferred;
+        int[] order = attemptOrder();
         SQLException failure = null;
         List<String> refused = new ArrayList<>();
-        for (int i = 0; i < hosts.size(); i++) {
-            int index = (start + i) % hosts.size();
+        for (int i = 0; i < order.length; i++) {
+            int index = order[i];
             Host host = hosts.get(index);
+            Host next = hosts.get(order[(i + 1) % order.length]);
             T opened = null;
+            // Begun here and committed only where this server is passed over:
+            // what the event measures is how long it took to not answer, and
+            // that clock starts before the attempt, not after it fails.
+            space.seclume.jfr.SeclumeEvents.Failover attempt =
+                    space.seclume.jfr.Observed.beginAttempt();
             try {
-                opened = opener.open(host);
+                opened = measured(opener, host);
                 ServerRole role = roles.of(opened);
+                HostQuality.role(host, role);
                 if (wanted.accepts(role)) {
                     preferred = index;
                     return opened;
@@ -206,9 +307,8 @@ public final class HostList {
                 // Recorded like a failover, because that is what it is: this
                 // connection is going somewhere else, and which node was
                 // passed over is the fact somebody will want afterwards.
-                Host next = hosts.get((index + 1) % hosts.size());
-                space.seclume.jfr.Observed.failover(host.toString(), next.toString(),
-                        "not the " + wanted + " this connection asked for");
+                space.seclume.jfr.Observed.failover(attempt, host.toString(), next.toString(),
+                        "not the " + wanted + " this connection asked for", i + 1);
             } catch (SQLException e) {
                 if (opened != null) {
                     roles.giveBack(opened);
@@ -220,9 +320,8 @@ public final class HostList {
                     e.addSuppressed(failure);
                 }
                 failure = e;
-                Host next = hosts.get((index + 1) % hosts.size());
-                space.seclume.jfr.Observed.failover(host.toString(), next.toString(),
-                        e.getMessage());
+                space.seclume.jfr.Observed.failover(attempt, host.toString(), next.toString(),
+                        e.getMessage(), i + 1);
             }
         }
         if (refused.isEmpty()) {
@@ -246,16 +345,22 @@ public final class HostList {
      * helps nobody.
      */
     public <T> T open(Opener<T> opener) throws SQLException {
-        if (hosts.size() == 1) {
-            return opener.open(hosts.get(0));       // nothing to fail over to
+        if (topology != null) {
+            return current().open(opener);
         }
-        int start = preferred;
+        if (hosts.size() == 1) {
+            return opener.open(hosts.get(0));       // nothing to fail over to, nothing to rank
+        }
+        int[] order = attemptOrder();
         SQLException failure = null;
-        for (int i = 0; i < hosts.size(); i++) {
-            int index = (start + i) % hosts.size();
+        for (int i = 0; i < order.length; i++) {
+            int index = order[i];
             Host host = hosts.get(index);
+            Host next = hosts.get(order[(i + 1) % order.length]);
+            space.seclume.jfr.SeclumeEvents.Failover attempt =
+                    space.seclume.jfr.Observed.beginAttempt();
             try {
-                T opened = opener.open(host);
+                T opened = measured(opener, host);
                 preferred = index;                  // this one answers, ask it first
                 return opened;
             } catch (SQLException e) {
@@ -270,9 +375,8 @@ public final class HostList {
                 // succeeds, because the interesting fact is which server did
                 // not answer - and on a run where none of them does, that is
                 // the only place it is known.
-                Host next = hosts.get((index + 1) % hosts.size());
-                space.seclume.jfr.Observed.failover(host.toString(), next.toString(),
-                        e.getMessage());
+                space.seclume.jfr.Observed.failover(attempt, host.toString(), next.toString(),
+                        e.getMessage(), i + 1);
             }
         }
         throw new SQLException("none of the " + hosts.size() + " servers could be reached ("

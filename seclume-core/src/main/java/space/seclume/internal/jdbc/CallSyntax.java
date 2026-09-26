@@ -30,6 +30,31 @@ import java.sql.SQLException;
 public record CallSyntax(String name, String arguments, int parameters, boolean returnsValue) {
 
     /**
+     * Whether this text is a procedure call at all - what {@code prepareCall}
+     * asks before deciding whether the text needs {@link #parse} or is a plain
+     * query for a {@link QueryAsCallable}.
+     */
+    public static boolean isCall(String sql) {
+        if (sql == null) {
+            return false;
+        }
+        String text = sql.strip();
+        if (text.startsWith("{")) {
+            text = text.substring(1).strip();
+        }
+        if (text.startsWith("?")) {
+            int equals = text.indexOf('=');
+            if (equals < 0) {
+                return false;
+            }
+            text = text.substring(equals + 1).strip();
+        }
+        return text.length() >= 4 && text.regionMatches(true, 0, "call", 0, 4)
+                && (text.length() == 4 || Character.isWhitespace(text.charAt(4))
+                    || text.charAt(4) == '(');
+    }
+
+    /**
      * Takes a call apart.
      *
      * @throws SQLException if this is not a procedure call at all - said
@@ -43,7 +68,7 @@ public record CallSyntax(String name, String arguments, int parameters, boolean 
         String text = sql.trim();
         if (text.startsWith("{")) {
             if (!text.endsWith("}")) {
-                throw new SQLException("the call starts with '{' and does not end with '}': " + sql);
+                throw new SQLException("the call starts with '{' and does not end with '}': " + shape(sql));
             }
             text = text.substring(1, text.length() - 1).trim();
         }
@@ -53,7 +78,7 @@ public record CallSyntax(String name, String arguments, int parameters, boolean 
             int equals = text.indexOf('=');
             if (equals < 0 || !text.substring(1, equals).isBlank()) {
                 throw new SQLException("a call that starts with '?' has to continue '= call': "
-                        + sql);
+                        + shape(sql));
             }
             returnsValue = true;
             text = text.substring(equals + 1).trim();
@@ -63,7 +88,7 @@ public record CallSyntax(String name, String arguments, int parameters, boolean 
                 || (text.length() > 4 && !Character.isWhitespace(text.charAt(4))
                     && text.charAt(4) != '(')) {
             throw new SQLException("this is not a procedure call - a callable statement reads "
-                    + "'{call p(?)}' or '{? = call f(?)}', and this is: " + sql);
+                    + "'{call p(?)}' or '{? = call f(?)}', and this is: " + shape(sql));
         }
         text = text.substring(4).trim();
 
@@ -76,16 +101,16 @@ public record CallSyntax(String name, String arguments, int parameters, boolean 
             // taking the last would swallow it into the argument list.
             int close = matchingParen(text, open);
             if (close < 0) {
-                throw new SQLException("the argument list of the call is not closed: " + sql);
+                throw new SQLException("the argument list of the call is not closed: " + shape(sql));
             }
             if (!isBlankOrComment(text.substring(close + 1))) {
-                throw new SQLException("there is more after the call than its arguments: " + sql);
+                throw new SQLException("there is more after the call than its arguments: " + shape(sql));
             }
             name = text.substring(0, open).trim();
             arguments = text.substring(open + 1, close).trim();
         }
         if (name.isEmpty()) {
-            throw new SQLException("the call names no procedure: " + sql);
+            throw new SQLException("the call names no procedure: " + shape(sql));
         }
         return new CallSyntax(name, arguments, countPlaceholders(arguments), returnsValue);
     }
@@ -126,6 +151,55 @@ public record CallSyntax(String name, String arguments, int parameters, boolean 
     /** How many parameters the statement has altogether, the return value included. */
     public int totalParameters() {
         return parameters + (returnsValue ? 1 : 0);
+    }
+
+    /**
+     * Question marks that are really parameters - not the ones inside a
+     * string, an identifier or a comment - in any statement text.
+     */
+    public static int placeholders(String sql) {
+        return countPlaceholders(sql);
+    }
+
+    /**
+     * For every character of {@code sql}, whether it is code - not inside a
+     * string, a quoted identifier or a comment.
+     */
+    public static boolean[] codeMask(String sql) {
+        boolean[] code = new boolean[sql.length()];
+        int at = 0;
+        while (at < sql.length()) {
+            int skipped = skipNonCode(sql, at);
+            if (skipped != at) {
+                at = Math.min(skipped, sql.length());
+                continue;
+            }
+            code[at] = true;
+            at++;
+        }
+        return code;
+    }
+
+    /** Where each real placeholder stands in {@code sql}, in order. */
+    public static int[] placeholderOffsets(String sql) {
+        int[] offsets = new int[8];
+        int count = 0;
+        int at = 0;
+        while (at < sql.length()) {
+            int skipped = skipNonCode(sql, at);
+            if (skipped != at) {
+                at = skipped;
+                continue;
+            }
+            if (sql.charAt(at) == '?') {
+                if (count == offsets.length) {
+                    offsets = java.util.Arrays.copyOf(offsets, count * 2);
+                }
+                offsets[count++] = at;
+            }
+            at++;
+        }
+        return java.util.Arrays.copyOf(offsets, count);
     }
 
     /**
@@ -235,4 +309,18 @@ public record CallSyntax(String name, String arguments, int parameters, boolean 
         }
         return at;                            // unterminated; the server will say so
     }
+
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.GENERIC);
+    }
+
 }

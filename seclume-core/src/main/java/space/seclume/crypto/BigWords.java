@@ -72,6 +72,23 @@ final class BigWords {
         return 0;
     }
 
+    /** {@code a -= b} if {@code a >= b}, else nothing - in constant time. */
+    static void subtractIfNotBelow(MemorySegment a, MemorySegment b, int words) {
+        long borrow = 0;
+        for (int i = 0; i < words; i++) {
+            long difference = (get(a, i) & 0xffffffffL) - (get(b, i) & 0xffffffffL) - borrow;
+            borrow = (difference >> 32) & 1;
+        }
+        int keep = (int) borrow - 1;               // all ones when a >= b, else zero
+        borrow = 0;
+        for (int i = 0; i < words; i++) {
+            int x = get(a, i);
+            long difference = (x & 0xffffffffL) - (get(b, i) & 0xffffffffL) - borrow;
+            borrow = (difference >> 32) & 1;
+            set(a, i, ((int) difference & keep) | (x & ~keep));
+        }
+    }
+
     /** {@code a -= b}, both {@code words} long; expects {@code a >= b}. */
     static void subtract(MemorySegment a, MemorySegment b, int words) {
         long borrow = 0;
@@ -92,29 +109,28 @@ final class BigWords {
         }
     }
 
-    /** Schoolbook multiplication: {@code out} needs {@code aWords + bWords} words. */
+    /**
+     * Schoolbook multiplication: {@code out} needs {@code aWords + bWords} words.
+     *
+     * <p>The same work for every value - no skipped zero words, no carry loop
+     * that runs as long as the carry does - because the numbers multiplied
+     * here carry the password (see the class comment). Row {@code i} ends in
+     * word {@code i + bWords}, which no earlier row has written, so its carry
+     * is stored there directly.
+     */
     static void multiply(MemorySegment a, int aWords, MemorySegment b, int bWords,
                          MemorySegment out) {
         out.asSlice(0, (aWords + bWords) * 4L).fill((byte) 0);
         for (int i = 0; i < aWords; i++) {
             long carry = 0;
             long factor = get(a, i) & 0xffffffffL;
-            if (factor == 0) {
-                continue;
-            }
             for (int j = 0; j < bWords; j++) {
                 long product = factor * (get(b, j) & 0xffffffffL)
                         + (get(out, i + j) & 0xffffffffL) + carry;
                 set(out, i + j, (int) product);
                 carry = product >>> 32;
             }
-            int index = i + bWords;
-            while (carry != 0) {
-                long sum = (get(out, index) & 0xffffffffL) + carry;
-                set(out, index, (int) sum);
-                carry = sum >>> 32;
-                index++;
-            }
+            set(out, i + bWords, (int) carry);
         }
     }
 
@@ -145,14 +161,14 @@ final class BigWords {
             set(modulusExtended, words, 0);
             remainder.fill((byte) 0);
 
+            // Constant time: the next bit is ORed in rather than tested, and
+            // the modulus is always subtracted, the result kept by a mask
+            // when there was no borrow - no branch on the value being reduced.
             for (int bit = xWords * 32 - 1; bit >= 0; bit--) {
                 shiftLeftOne(remainder, extended);
-                if (bit(x, bit)) {
-                    set(remainder, 0, get(remainder, 0) | 1);
-                }
-                if (compare(remainder, modulusExtended, extended) >= 0) {
-                    subtract(remainder, modulusExtended, extended);
-                }
+                set(remainder, 0, get(remainder, 0)
+                        | ((get(x, bit >>> 5) >>> (bit & 31)) & 1));
+                subtractIfNotBelow(remainder, modulusExtended, extended);
             }
             MemorySegment.copy(remainder, 0, result, 0, words * 4L);
         } finally {

@@ -206,7 +206,7 @@ class QueryFingerprintTest {
     @Test
     void neverRefuses() {
         for (String sql : List.of("", "   ", "'", "\"", "/*", "$$", "q'[", "select", "((((",
-                "-- only a comment", " ")) {
+                "-- only a comment", "\0")) {
             assertTrue(QueryFingerprint.of(sql, Dialect.POSTGRESQL) != null, sql);
             assertTrue(QueryFingerprint.of(sql, Dialect.MYSQL) != null, sql);
             assertTrue(QueryFingerprint.of(sql, Dialect.ORACLE) != null, sql);

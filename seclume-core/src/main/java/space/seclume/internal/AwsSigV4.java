@@ -148,6 +148,32 @@ public final class AwsSigV4 {
         return text.toString();
     }
 
+    /**
+     * {@link #urlEncode} for bytes that must not become a {@code String} - a
+     * session token in a query - segment to segment.
+     *
+     * @return the bytes written at {@code at}
+     */
+    public static int urlEncode(MemorySegment source, int length, MemorySegment target,
+                                long at) {
+        long out = at;
+        for (int i = 0; i < length; i++) {
+            int b = source.get(ValueLayout.JAVA_BYTE, i) & 0xff;
+            boolean safe = (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+                    || (b >= '0' && b <= '9') || b == '-' || b == '_' || b == '.' || b == '~';
+            if (safe) {
+                target.set(ValueLayout.JAVA_BYTE, out++, (byte) b);
+            } else {
+                target.set(ValueLayout.JAVA_BYTE, out++, (byte) '%');
+                target.set(ValueLayout.JAVA_BYTE, out++, (byte) HEX_UPPER.charAt(b >> 4));
+                target.set(ValueLayout.JAVA_BYTE, out++, (byte) HEX_UPPER.charAt(b & 0xf));
+            }
+        }
+        return (int) (out - at);
+    }
+
+    private static final String HEX_UPPER = "0123456789ABCDEF";
+
     /** What AWS expects: RFC 3986, and a slash is not safe. */
     public static String urlEncode(String text) {
         StringBuilder out = new StringBuilder(text.length() + 8); // seclume-allow: a user name, a key id or a secret's name - never the secret

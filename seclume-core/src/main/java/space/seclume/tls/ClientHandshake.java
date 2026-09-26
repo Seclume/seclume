@@ -149,9 +149,12 @@ public final class ClientHandshake {
         RecordStream records = new RecordStream(transport);
         List<X509Certificate> serverChain = new ArrayList<>();
         boolean done = false;
+        boolean presented = false;
         try (Arena arena = Arena.ofConfined();
                 NativeP256 keyExchange = NativeP256.generate();
-                SecretScope shared = SecretScope.allocate(32)) {
+                space.seclume.crypto.HybridMlKem hybrid = postQuantum()
+                        ? space.seclume.crypto.HybridMlKem.generate() : null;
+                SecretScope shared = SecretScope.allocate(space.seclume.crypto.HybridMlKem.SECRET)) {
 
             // ---- ClientHello ------------------------------------------------
             MemorySegment random = arena.allocate(32);
@@ -161,9 +164,20 @@ public final class ClientHandshake {
             MemorySegment publicShare = arena.allocate(65);
             keyExchange.publicKey(publicShare);
 
-            MemorySegment hello = arena.allocate(1024);
-            int helloLength = ClientHello.write(hello, 0, random, sessionId,
-                    ClientHello.SECP256R1, publicShare, serverNameFor(host), alpn);
+            MemorySegment hello = arena.allocate(2048);
+            int helloLength;
+            if (hybrid != null) {
+                // The hybrid first, P-256 beside it: a server without the
+                // hybrid picks P-256 at once - this client does not retry.
+                MemorySegment hybridShare = arena.allocate(space.seclume.crypto.HybridMlKem.CLIENT_SHARE);
+                hybrid.publicShare(hybridShare);
+                helloLength = ClientHello.write(hello, 0, random, sessionId,
+                        new int[] {ClientHello.X25519MLKEM768, ClientHello.SECP256R1},
+                        new MemorySegment[] {hybridShare, publicShare}, serverNameFor(host), alpn);
+            } else {
+                helloLength = ClientHello.write(hello, 0, random, sessionId,
+                        ClientHello.SECP256R1, publicShare, serverNameFor(host), alpn);
+            }
             records.write((byte) 22, hello, 0, helloLength);
 
             // ---- ServerHello ------------------------------------------------
@@ -180,11 +194,18 @@ public final class ClientHandshake {
             }
             MemorySegment serverHello = arena.allocate(serverHelloLength);
             MemorySegment.copy(first.data(), first.offset(), serverHello, 0, serverHelloLength);
-            ServerHelloFacts facts = readServerHello(serverHello, sessionId);
+            ServerHelloFacts facts = readServerHello(serverHello, sessionId, hybrid != null);
 
             // ---- the handshake keys -----------------------------------------
-            keyExchange.derive(serverHello.asSlice(facts.keyShareAt(), facts.keyShareLength()),
-                    shared.segment());
+            MemorySegment serverShare = serverHello.asSlice(facts.keyShareAt(), facts.keyShareLength());
+            MemorySegment secret;
+            if (facts.group() == ClientHello.X25519MLKEM768) {
+                hybrid.derive(serverShare, shared.segment());
+                secret = shared.segment().asSlice(0, space.seclume.crypto.HybridMlKem.SECRET);
+            } else {
+                secret = shared.segment().asSlice(0, 32);
+                keyExchange.derive(serverShare, secret);
+            }
 
             HashAlgorithm hash = facts.hash();
             int keyLength = facts.keyLength();
@@ -196,7 +217,7 @@ public final class ClientHandshake {
                 transcript.update(serverHello, 0, serverHelloLength);
                 transcript.current(digest.segment(), 0);         // ClientHello..ServerHello
 
-                schedule.deriveHandshakeSecret(shared.segment());
+                schedule.deriveHandshakeSecret(secret);
                 schedule.deriveHandshakeTrafficSecrets(digest.segment().asSlice(0, hash.digestLength()));
                 records.readWith(RecordProtection.fromSecret(
                         hash, schedule.serverHandshakeTrafficSecret(), keyLength));
@@ -220,6 +241,10 @@ public final class ClientHandshake {
 
                 MemorySegment beforeFinished = throughServerFinished;
                 if (certificateRequest != null) {
+                    // One version of the identity for the whole of this: the
+                    // chain sent and the key signing have to belong together,
+                    // and a rotation on disk may land in between.
+                    identity = identity == null ? null : identity.forHandshake();
                     // Our own Certificate and CertificateVerify go into the
                     // transcript before the Finished, so the hash the Finished
                     // is computed over is no longer the one the application
@@ -235,7 +260,14 @@ public final class ClientHandshake {
                     transcript.current(digest.segment(), 0);
                     beforeFinished = digest.segment().asSlice(0, hash.digestLength());
                 }
-                sendFinished(records, schedule, beforeFinished, hash, arena);
+                presented = certificateRequest != null && identity != null;
+                try {
+                    sendFinished(records, schedule, beforeFinished, hash, arena);
+                } catch (TlsAlertException alert) {
+                    throw alert;
+                } catch (IOException gone) {
+                    throw refusedAfterCertificate(gone, presented);
+                }
 
                 // ---- and from here on, application keys --------------------
                 records.readWith(RecordProtection.fromSecret(
@@ -250,6 +282,11 @@ public final class ClientHandshake {
             // rather than what was offered.
             connection.describe(serverChain.isEmpty() ? null : serverChain.get(0),
                     facts.cipherSuite());
+            if (presented) {
+                // In TLS 1.3 the server judges our certificate after our
+                // Finished, so its refusal usually meets the first read.
+                connection.certificatePresented();
+            }
             done = true;
             return connection;
         } finally {
@@ -259,13 +296,43 @@ public final class ClientHandshake {
         }
     }
 
+    /**
+     * A connection that dies right after our certificate went out.
+     *
+     * <p>A server that does not accept a client certificate - an issuer it
+     * does not trust, an expired one, the wrong key usage - sends an alert and
+     * closes. But it closes with our Finished still unread in its socket, and
+     * a TCP stack answers that with a reset, which on the client throws away
+     * the alert that had already arrived. What is left is "connection reset",
+     * which sends everybody looking at the network. The certificate is the
+     * likelier cause, so it is named; the original is kept as the cause.
+     */
+    static IOException refusedAfterCertificate(IOException gone, boolean presented) {
+        if (!presented) {
+            return gone;
+        }
+        return new IOException(gone.getMessage() + " - right after the client certificate was "
+                + "sent, which is how a server refuses one: check that it trusts the "
+                + "certificate's issuer, and that the certificate is valid and meant for "
+                + "client authentication", gone);
+    }
+
     /** What a ServerHello has to tell us, once it has been checked. */
     private record ServerHelloFacts(HashAlgorithm hash, int keyLength,
-            long keyShareAt, int keyShareLength, String cipherSuite) {
+            long keyShareAt, int keyShareLength, String cipherSuite, int group) {
+    }
+
+    /**
+     * Whether to offer the post-quantum hybrid: where OpenSSL 3.5 is there,
+     * unless {@code -Dseclume.tls.postQuantum=false} says otherwise.
+     */
+    private static boolean postQuantum() {
+        return !"false".equalsIgnoreCase(System.getProperty("seclume.tls.postQuantum"))
+                && space.seclume.crypto.HybridMlKem.available();
     }
 
     private static ServerHelloFacts readServerHello(MemorySegment serverHello,
-            MemorySegment sentSessionId) throws IOException {
+            MemorySegment sentSessionId, boolean offeredHybrid) throws IOException {
         long body = Handshake.HEADER;
         if (serverHello.asSlice(Handshake.randomOffset(body), 32)
                 .mismatch(MemorySegment.ofArray(HELLO_RETRY_REQUEST)) == -1) {
@@ -291,15 +358,18 @@ public final class ClientHandshake {
 
         int[] extensionsLength = new int[1];
         long extensionsAt = Handshake.serverHelloExtensions(serverHello, body, extensionsLength);
-        long[] share = {0, 0};
+        long[] share = {0, 0, 0};
         boolean[] seen = {false, false};
         Handshake.extensions(serverHello, extensionsAt, extensionsLength[0], (type, at, length) -> {
             if (type == Handshake.EXTENSION_KEY_SHARE) {
                 long[] out = new long[2];
                 int group = Handshake.serverKeyShare(serverHello, at, out);
-                if (group == ClientHello.SECP256R1 && out[1] == 65) {
+                if (group == ClientHello.SECP256R1 && out[1] == 65
+                        || offeredHybrid && group == ClientHello.X25519MLKEM768
+                                && out[1] == space.seclume.crypto.HybridMlKem.SERVER_SHARE) {
                     share[0] = out[0];
                     share[1] = out[1];
+                    share[2] = group;
                     seen[0] = true;
                 }
             } else if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS
@@ -312,11 +382,16 @@ public final class ClientHandshake {
                     + "nothing, and supported_versions did not say 0x0304");
         }
         if (!seen[0]) {
-            throw new IOException("the server sent no usable P-256 key share");
+            throw new IOException("the server sent no usable key share for a group that was "
+                    + "offered (" + (offeredHybrid ? "X25519MLKEM768 or P-256" : "P-256") + ")");
         }
         String name = suite == ClientHello.AES_256_GCM_SHA384
                 ? "TLS_AES_256_GCM_SHA384" : "TLS_AES_128_GCM_SHA256";
-        return new ServerHelloFacts(hash, keyLength, share[0], (int) share[1], name);
+        if (share[2] == ClientHello.X25519MLKEM768) {
+            name += " with X25519MLKEM768";
+        }
+        return new ServerHelloFacts(hash, keyLength, share[0], (int) share[1], name,
+                (int) share[2]);
     }
 
     /**

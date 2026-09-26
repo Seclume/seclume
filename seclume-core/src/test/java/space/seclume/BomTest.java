@@ -76,18 +76,35 @@ class BomTest {
                         || !built.contains(module.getFileName().toString())) {
                     continue;
                 }
-                String text = Files.readString(pom, StandardCharsets.UTF_8);
-                if (text.contains("<maven.install.skip>true</maven.install.skip>")) {
-                    continue;
-                }
                 String name = module.getFileName().toString();
                 // The BOM manages the others, not itself.
                 if (!name.equals("seclume-bom")) {
-                    published.add(name);
+                    addPublished(module, published);
                 }
             }
         }
         return published;
+    }
+
+    /**
+     * A module by the artifact id its POM declares - or, for an aggregator
+     * such as seclume-quarkus, the modules it builds: the aggregator itself is
+     * only a parent POM, and a directory name is not an artifact id.
+     */
+    private static void addPublished(Path module, Set<String> published) throws IOException {
+        String text = Files.readString(module.resolve("pom.xml"), StandardCharsets.UTF_8);
+        if (text.contains("<maven.install.skip>true</maven.install.skip>")) {
+            return;
+        }
+        if (text.contains("<packaging>pom</packaging>") && text.contains("<modules>")) {
+            for (String child : builtModules(module.resolve("pom.xml"))) {
+                addPublished(module.resolve(child), published);
+            }
+            return;
+        }
+        int afterParent = Math.max(0, text.indexOf("</parent>"));
+        int start = text.indexOf("<artifactId>", afterParent) + "<artifactId>".length();
+        published.add(text.substring(start, text.indexOf("</artifactId>", start)).trim());
     }
 
     /** The module directories the parent POM lists. */

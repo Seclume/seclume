@@ -35,9 +35,11 @@ public enum ServerRole {
     /**
      * {@code read_only} rather than {@code super_read_only}: a replica sets
      * both, and a primary being briefly made read-only for maintenance is a
-     * server an application should also stay away from.
+     * server an application should also stay away from. And
+     * {@code innodb_read_only} as well: an Aurora MySQL reader says so there,
+     * and not necessarily in {@code read_only}.
      */
-    public static final String MYSQL = "select @@read_only";
+    public static final String MYSQL = "select @@read_only or @@innodb_read_only";
 
     /**
      * The database's own updateability, which answers for an Always On

@@ -57,24 +57,21 @@ final class AesTables {
 
     /** Multiplication by x in GF(2^8) using the AES polynomial. */
     static int xtime(int value) {
+        // No branch on the top bit: MixColumns feeds secret state through
+        // here, and a branch is a timing difference.
         int shifted = value << 1;
-        if ((shifted & 0x100) != 0) {
-            shifted ^= 0x11b;
-        }
-        return shifted & 0xff;
+        return (shifted ^ (0x11b & -((shifted >>> 8) & 1))) & 0xff;
     }
 
     /** Multiplication of two values in GF(2^8). */
     static int multiply(int a, int b) {
+        // Eight rounds whatever the operands, and a mask instead of a branch:
+        // either operand may be secret.
         int result = 0;
         int x = a & 0xff;
-        int y = b & 0xff;
-        while (y != 0) {
-            if ((y & 1) != 0) {
-                result ^= x;
-            }
+        for (int bit = 0; bit < 8; bit++) {
+            result ^= x & -((b >>> bit) & 1);
             x = xtime(x);
-            y >>>= 1;
         }
         return result & 0xff;
     }

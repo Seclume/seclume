@@ -88,6 +88,9 @@ public final class DriverXaConnection implements XAConnection {
             handle.detached = true;
         }
         handle = new Handle();
+        if (session instanceof Fronted fronted) {
+            fronted.front(handle);                // statements name the handle - see Fronted
+        }
         return handle;
     }
 
@@ -207,6 +210,9 @@ public final class DriverXaConnection implements XAConnection {
         public void close() {
             if (!detached) {
                 detached = true;
+                if (session instanceof Fronted fronted) {
+                    fronted.front(null);
+                }
                 ConnectionEvent event = new ConnectionEvent(DriverXaConnection.this);
                 for (ConnectionEventListener listener : listeners) {
                     listener.connectionClosed(event);

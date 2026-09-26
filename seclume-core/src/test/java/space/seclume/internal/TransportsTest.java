@@ -49,4 +49,49 @@ class TransportsTest {
         assertTrue(failure.getMessage() != null && !failure.getMessage().isBlank(),
                 "a refused connection should say something");
     }
+
+    /**
+     * The URL option names a transport for one connection, the properties
+     * winning over the URL as they do for every other option.
+     *
+     * <p>Documented from the start and read by no driver until 25.09.2026: a
+     * connection that asked for {@code transport=splice} got a socket, and the
+     * only way to choose was the system property - for every connection in the
+     * process at once.
+     */
+    @Test
+    void theUrlOptionNamesTheTransportOfOneConnection() {
+        assertEquals("splice", Transports.option(
+                "jdbc:seclume:postgresql://h:5432/db?user=u&transport=splice&tls=require", null));
+        assertEquals(null, Transports.option("jdbc:seclume:postgresql://h:5432/db?user=u", null));
+        assertEquals(null, Transports.option("jdbc:seclume:postgresql://h:5432/db", null));
+        java.util.Properties properties = new java.util.Properties();
+        properties.setProperty("transport", "socket");
+        assertEquals("socket", Transports.option(
+                "jdbc:seclume:postgresql://h:5432/db?transport=splice", properties));
+    }
+
+    /** The choice holds for the opens inside, on this thread, and ends with them. */
+    @Test
+    void aChosenTransportIsAskedForAndThenForgotten() throws Exception {
+        IOException inside = assertThrows(IOException.class, () -> {
+            try {
+                Transports.using("quantum", () -> {
+                    try {
+                        return Transports.open(null, "127.0.0.1", 1, 10);
+                    } catch (IOException e) {
+                        throw new java.sql.SQLException(e.getMessage(), e);
+                    }
+                });
+            } catch (java.sql.SQLException e) {
+                throw (IOException) e.getCause();
+            }
+        });
+        assertTrue(inside.getMessage().contains("'quantum'"), inside.getMessage());
+        // Afterwards the system property decides again - a socket, refused by a closed port.
+        IOException after = assertThrows(IOException.class,
+                () -> Transports.open(null, "127.0.0.1", 1, 200));
+        assertTrue(!after.getMessage().contains("quantum"), after.getMessage());
+        assertDoesNotThrow(() -> Transports.using(null, () -> "no transport named"));
+    }
 }

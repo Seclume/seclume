@@ -104,6 +104,124 @@ public final class SeclumeEvents {
     }
 
     /**
+     * The login, on its own.
+     *
+     * <p>Separate from the connection for the reason the handshake above is
+     * separate, and it is not tidiness: <b>the three phases of an open fail
+     * for different reasons and are slow for different reasons.</b> A connect
+     * that takes a second is a route or a firewall; a handshake that takes a
+     * second is a distant CA or an OCSP lookup; a login that takes a second is
+     * the directory behind the database - LDAP, PAM, Kerberos, an AWS IAM
+     * token - and none of the three is visible in the one number an operator
+     * otherwise has.
+     *
+     * <p>The method is the server's own name for what it asked for:
+     * {@code scram-sha-256}, {@code caching_sha2_password}, {@code ntlm},
+     * {@code o5logon}. It says what was negotiated and nothing about what was
+     * sent, which is the line this whole library draws - and it is worth being
+     * explicit that the <b>absence</b> of a length here is deliberate. See
+     * {@link space.seclume.Flight}, where the same question was answered the
+     * same way for four protocols.
+     */
+    @Name("space.seclume.Authentication")
+    @Label("Authentication")
+    @Category({CATEGORY, "Connection"})
+    @Description("The login exchange of one connection, without the connect or the handshake")
+    @StackTrace(false)
+    public static final class Authentication extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public Authentication() {
+        }
+
+        @Label("Database Kind")
+        public String kind;
+
+        @Label("Server")
+        @Description("Host and port, never the user and never the secret")
+        public String server;
+
+        @Label("Method")
+        @Description("What the server asked for, by its own name")
+        public String method;
+
+        @Label("Succeeded")
+        public boolean succeeded;
+    }
+
+    /**
+     * A client certificate that changed on disk, and whether it was taken up.
+     *
+     * <p>The failures are the reason this exists. A rotation that lands the
+     * certificate before its key is refused by the pair check and the
+     * previous identity keeps working - which is right, and which would be
+     * invisible until the old certificate expired and every connection failed
+     * at once. A recording that shows a string of refused reloads is the
+     * warning, hours or days before that.
+     *
+     * <p>The path is where the certificate lives, which the configuration
+     * already says and which is no secret. Nothing about the key is here.
+     */
+    @Name("space.seclume.CertificateReload")
+    @Label("Certificate Reload")
+    @Category({CATEGORY, "Connection"})
+    @Description("A client certificate that changed on disk, taken up or refused")
+    @StackTrace(false)
+    public static final class CertificateReload extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public CertificateReload() {
+        }
+
+        @Label("Certificate")
+        @Description("The file the certificate chain is read from")
+        public String certificate;
+
+        @Label("Succeeded")
+        public boolean succeeded;
+
+        @Label("Reason")
+        @Description("Why a changed certificate was not taken up; empty when it was")
+        public String reason;
+    }
+
+    /**
+     * One statement shape run many times in a moment, on one thread.
+     *
+     * <p>No threshold annotation and no duration: this is not a slow event,
+     * it is a <b>counted</b> one. The problem it names is the opposite of a
+     * slow query - two hundred statements of a millisecond each, every one of
+     * which looks perfectly healthy in the Query event above, and which
+     * together are the reason a page takes a second. Nothing that looks at
+     * statements one at a time can see it.
+     */
+    @Name("space.seclume.QueryStorm")
+    @Label("Query Storm")
+    @Category({CATEGORY, "Statement"})
+    @Description("The same statement shape, run many times in a moment on one thread")
+    @StackTrace(true)
+    public static final class QueryStorm extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public QueryStorm() {
+        }
+
+        @Label("Database Kind")
+        public String kind;
+
+        @Label("Fingerprint")
+        @Description("The statement with every literal and parameter replaced by a question mark")
+        public String fingerprint;
+
+        @Label("Executions")
+        @Description("How many times this shape ran inside the window")
+        public int executions;
+
+        @Label("Window (ms)")
+        public long windowMillis;
+    }
+
+    /**
      * A statement, named by its shape.
      *
      * <p>The threshold is what makes this a slow-query event by default: at
@@ -141,7 +259,18 @@ public final class SeclumeEvents {
         public boolean failed;
     }
 
-    /** A connection moving to another server of the list. */
+    /**
+     * A connection moving to another server of the list.
+     *
+     * <p><b>Timed, and the duration is the point.</b> What it measures is how
+     * long that server took to not answer, which is the number an operator
+     * asks about after a switchover: a list of three behind a connect timeout
+     * of ten seconds can cost twenty before the connection that works, and
+     * every one of those seconds is spent inside {@code getConnection} with
+     * nothing to show for it. A refused connection costs a millisecond and a
+     * silently dropped packet costs the whole timeout; they read identically
+     * in a count and not at all alike here.
+     */
     @Name("space.seclume.Failover")
     @Label("Failover")
     @Category({CATEGORY, "Connection"})
@@ -162,6 +291,10 @@ public final class SeclumeEvents {
         @Label("Reason")
         @Description("The failure that caused it - a message, never a credential")
         public String reason;
+
+        @Label("Attempt")
+        @Description("Which server of the list this was, counting from one")
+        public int attempt;
     }
 
     /**

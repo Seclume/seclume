@@ -72,13 +72,9 @@ public final class SeclumeTls implements TlsLayer {
         return new SeclumeTls(ClientHandshake.connect(transport, host, trust, identity, alpn));
     }
 
+    /** The JVM's trust store - or the CA file this connection named, see {@link TrustChoice}. */
     private static CertificateTrust defaultTrust() throws IOException {
-        try {
-            return CertificateTrust.ofDefaultTrustStore();
-        } catch (GeneralSecurityException e) {
-            throw new IOException("cannot read the trust store, so no certificate could be "
-                    + "checked: " + e.getMessage(), e);
-        }
+        return TrustChoice.certificateTrust();
     }
 
     private static SeclumeTls startWithoutAlpn(Transport transport, String host, boolean verify,
@@ -153,6 +149,16 @@ public final class SeclumeTls implements TlsLayer {
     @Override
     public int freeze(MemorySegment out, long offset) {
         return connection.freeze(out, offset);
+    }
+
+    @Override
+    public int snapshot(MemorySegment out, long offset) {
+        return connection.snapshot(out, offset);
+    }
+
+    @Override
+    public void snapshotReleased() {
+        connection.snapshotReleased();
     }
 
     /**

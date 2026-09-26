@@ -56,6 +56,24 @@ public interface ClientIdentity extends AutoCloseable {
      */
     byte[] sign(byte[] content);
 
+    /**
+     * The identity one handshake uses, from its first byte to its last.
+     *
+     * <p>A handshake asks three things of an identity - its chain, its
+     * scheme, a signature - and all three have to come from the <b>same</b>
+     * key. An identity that can change underneath (a certificate rotated on
+     * disk, see {@link ClientIdentities}) answers this with the version that
+     * is current now, and the handshake keeps that one to the end even if a
+     * rotation lands halfway through it. Sending one certificate and signing
+     * with the next key would be refused by the server with no hint why.
+     *
+     * <p>An identity that never changes is its own snapshot, which is the
+     * default.
+     */
+    default ClientIdentity forHandshake() {
+        return this;
+    }
+
     @Override
     void close();
 }

@@ -206,6 +206,11 @@ class CloudVaultProvidersTest {
             assertTrue(request.startsWith("POST / HTTP/1.1"), request);
             assertTrue(request.contains("X-Amz-Target: secretsmanager.GetSecretValue"), request);
             assertTrue(request.contains("{\"SecretId\":\"prod/db\"}"), request);
+            // Exactly one Content-Type, the signed one: a second
+            // "application/json" made AWS join both and refuse every
+            // signature (InvalidSignatureException, found live 26.09.2026).
+            assertEquals(1, request.split("(?i)\r\ncontent-type:", -1).length - 1, request);
+            assertTrue(request.contains("Content-Type: application/x-amz-json-1.1\r\n"), request);
         }
     }
 

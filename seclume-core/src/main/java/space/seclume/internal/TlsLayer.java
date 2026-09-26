@@ -83,6 +83,26 @@ public interface TlsLayer extends AutoCloseable {
     }
 
     /**
+     * The state {@link #freeze} writes, <b>keeping the layer</b>: it goes on
+     * working, and the bytes describe it until its next record. Key material,
+     * like {@code freeze}'s - a {@link space.seclume.secret.SecretScope}.
+     *
+     * @throws UnsupportedOperationException on a layer whose {@link #movable()}
+     *         is {@code false}
+     */
+    default int snapshot(MemorySegment out, long offset) {
+        throw new UnsupportedOperationException(notMovable());
+    }
+
+    /**
+     * No copy {@link #snapshot} made can be taken up any more - after which
+     * the layer writes again. Until then it refuses to, because a record here
+     * and one from a thawed copy would share an AES-GCM nonce.
+     */
+    default void snapshotReleased() {
+    }
+
+    /**
      * Writes this layer's encryption state out and gives the layer up,
      * <b>without closing the transport underneath and without saying goodbye
      * to the peer</b>.
