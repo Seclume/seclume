@@ -139,7 +139,9 @@ public final class TestHosts {
      * standing answer, the property is this run's.
      */
     private static void loadLocalFile() {
-        for (Path candidate : List.of(Path.of(FILE), Path.of("..", FILE))) {
+        // Two levels up as well: a nested module (seclume-quarkus/deployment).
+        for (Path candidate : List.of(Path.of(FILE), Path.of("..", FILE),
+                Path.of("..", "..", FILE))) {
             if (!Files.isReadable(candidate)) {
                 continue;
             }

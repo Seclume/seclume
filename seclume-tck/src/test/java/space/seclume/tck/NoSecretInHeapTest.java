@@ -54,6 +54,19 @@ class NoSecretInHeapTest {
         assertTrue(result.output().contains("on the heap"), result.output());
     }
 
+    /** The same check called in the middle of a test: clean passes, a leak is found. */
+    @Test
+    void theCheckCanBeCalledWhenTheTestWantsIt(@TempDir Path directory) throws Exception {
+        Path secretFile = writeSecret(directory);
+        ChildJvm.Result clean = ChildJvm.run(AssertAbsentProbe.class,
+                List.of(secretFile.toString(), "clean"), 180);
+        assertEquals(0, clean.exitCode(), clean.output());
+        ChildJvm.Result leaking = ChildJvm.run(AssertAbsentProbe.class,
+                List.of(secretFile.toString(), "leak"), 180);
+        assertEquals(1, leaking.exitCode(), leaking.output());
+        assertTrue(leaking.output().contains("on the heap at this point"), leaking.output());
+    }
+
     /** The old way is refused, and the message says why it cannot work. */
     @Test
     void namingTheSecretInAPropertyIsRefused() {
@@ -117,6 +130,28 @@ class NoSecretInHeapTest {
                     case "equals" -> proxy == arguments[0];
                     default -> null;
                 });
+    }
+
+    /** {@code assertAbsent} in the middle of a program - clean, or after leaking. */
+    public static final class AssertAbsentProbe {
+
+        static String password;
+
+        public static void main(String[] arguments) throws Exception {
+            if (arguments[1].equals("leak")) {
+                password = Files.readString(Path.of(arguments[0])); // seclume-allow: this probe leaks on purpose
+            }
+            try {
+                NoSecretInHeap.assertAbsent(Path.of(arguments[0]));
+            } catch (AssertionError found) {
+                System.out.println(found.getMessage());
+                System.exit(1);
+            }
+            if (password != null && password.isEmpty()) {
+                System.out.println("never");
+            }
+            System.exit(0);
+        }
     }
 
     /** A process that only knows where the secret is, never what it is. */

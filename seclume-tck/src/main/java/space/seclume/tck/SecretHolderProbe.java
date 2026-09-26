@@ -14,7 +14,7 @@ import space.seclume.secret.SecretScope;
 
 /**
  * The specimen: a <b>JVM of its own</b> that uses a secret and
- * anschliessend ihren eigenen Heap ausschreibt.
+ * then writes out its own heap.
  *
  * <p>Why a JVM of its own: the test runner itself keeps test data, assertion
  * messages and expected values on the heap - the searched-for password among

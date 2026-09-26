@@ -56,7 +56,8 @@ public final class BreakableRelay implements AutoCloseable {
 
     /** Listens on the loopback and forwards to that server. */
     public static BreakableRelay to(String host, int port) throws IOException {
-        ServerSocket listener = new ServerSocket();
+        // A test relay on the loopback address, for breaking connections on purpose.
+        ServerSocket listener = new ServerSocket(); // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         listener.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
         return new BreakableRelay(listener, host, port);
     }
@@ -114,7 +115,7 @@ public final class BreakableRelay implements AutoCloseable {
             }
             connections++;
             open.add(from);
-            Socket to = new Socket();
+            Socket to = new Socket(); // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
             try {
                 to.connect(new InetSocketAddress(host, port), 5_000);
             } catch (IOException unreachable) {

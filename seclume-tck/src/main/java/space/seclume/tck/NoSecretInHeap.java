@@ -73,6 +73,33 @@ public final class NoSecretInHeap implements AfterEachCallback {
                     + secretFile + ", which cannot be read - without the secret there is "
                     + "nothing to look for.");
         }
+        check(secretFile, "after " + context.getDisplayName());
+    }
+
+    /**
+     * The same check at a moment of the test's choosing - right after the
+     * login, between two steps, before the connection is closed - rather than
+     * only after the test.
+     *
+     * <pre>
+     *   dataSource.getConnection().close();
+     *   NoSecretInHeap.assertAbsent(Path.of("/run/secrets/db"));
+     * </pre>
+     *
+     * @param secretFile the file holding the secret - never the secret itself,
+     *                   see the class comment for why
+     * @throws AssertionError when the secret is on the heap, saying where
+     */
+    public static void assertAbsent(Path secretFile) throws IOException, InterruptedException {
+        if (!Files.isReadable(secretFile)) {
+            throw new IllegalStateException(secretFile + " cannot be read - without the "
+                    + "secret there is nothing to look for.");
+        }
+        check(secretFile, "at this point");
+    }
+
+    private static void check(Path secretFile, String when)
+            throws IOException, InterruptedException {
         Path dump = Files.createTempFile("seclume-heap-", ".hprof");
         Files.delete(dump);                      // the JVM insists on writing it itself
         try {
@@ -84,7 +111,7 @@ public final class NoSecretInHeap implements AfterEachCallback {
             ChildJvm.Result result = ChildJvm.run(ScanDump.class,
                     List.of(dump.toString(), secretFile.toString()), 120);
             if (result.exitCode() == 1) {
-                throw new AssertionError(message(context, result.output()));
+                throw new AssertionError(message(when, result.output()));
             }
             if (result.exitCode() != 0) {
                 throw new IllegalStateException("the heap search did not run: "
@@ -95,10 +122,10 @@ public final class NoSecretInHeap implements AfterEachCallback {
         }
     }
 
-    private static String message(ExtensionContext context, String findings) {
+    private static String message(String when, String findings) {
         StringBuilder text = new StringBuilder(); // seclume-allow: a test report, the secret itself is never in it
-        text.append("the secret is on the heap after ")
-                .append(context.getDisplayName())
+        text.append("the secret is on the heap ")
+                .append(when)
                 .append(":\n").append(findings.strip());
         text.append("\n\nWhere it usually comes from: a configuration object that keeps it "
                 + "as a String, a log line, the toString() of a data source, or an exception "
