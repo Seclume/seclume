@@ -6,7 +6,7 @@
 
   <groupId>space.seclume</groupId>
   <artifactId>seclume-parent</artifactId>
-  <version>0.10.0</version>
+  <version>0.11.0-SNAPSHOT</version>
   <packaging>pom</packaging>
 
   <name>seclume</name>
@@ -90,7 +90,7 @@
     <junit.version>5.11.4</junit.version>
     <jazzer.version>0.30.0</jazzer.version>
     <!-- Reproducible builds: a fixed timestamp in the archives. -->
-    <project.build.outputTimestamp>2026-09-26T13:35:32Z</project.build.outputTimestamp>
+    <project.build.outputTimestamp>2026-09-26T14:05:34Z</project.build.outputTimestamp>
   </properties>
 
   <dependencyManagement>
