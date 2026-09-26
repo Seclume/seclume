@@ -1,0 +1,16 @@
+name: "seclume"
+description: "JDBC drivers for PostgreSQL, MySQL/MariaDB, SQL Server and Oracle that keep secrets off the Java heap"
+metadata:
+  keywords:
+    - "jdbc"
+    - "datasource"
+    - "secrets"
+    - "postgresql"
+    - "mysql"
+    - "mariadb"
+    - "sqlserver"
+    - "oracle"
+  categories:
+    - "data"
+    - "security"
+  status: "experimental"

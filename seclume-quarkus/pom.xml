@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.10.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-quarkus-parent</artifactId>
+  <packaging>pom</packaging>
+  <name>seclume Quarkus extension - parent</name>
+  <description>
+    The Quarkus extension: the four drivers as datasource kinds for Agroal, in
+    JVM mode and in a native image, and a build that refuses a password in the
+    configuration.</description>
+
+  <properties>
+    <quarkus.version>3.40.0</quarkus.version>
+  </properties>
+
+  <modules>
+    <module>runtime</module>
+    <module>deployment</module>
+  </modules>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-bom</artifactId>
+        <version>${quarkus.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <configuration>
+            <annotationProcessorPaths>
+              <path>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-extension-processor</artifactId>
+                <version>${quarkus.version}</version>
+              </path>
+            </annotationProcessorPaths>
+            <compilerArgs combine.self="override">
+              <!-- -processing: Quarkus' own annotations have no processor
+                   claiming them in every round, which is not a finding. -->
+              <arg>-Xlint:all,-restricted,-processing</arg>
+              <arg>-Werror</arg>
+            </compilerArgs>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+</project>
