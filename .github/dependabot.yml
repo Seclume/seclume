@@ -28,6 +28,11 @@ updates:
       # move when Spring Boot moves.
       - dependency-name: "org.flywaydb:*"
       - dependency-name: "io.micrometer:*"
+      # ojdbc 23.26.3 fails the vendor side of ApiSurfaceTest on logoff with
+      # ORA-01435 against Oracle Free 23; 23.6 passes (26.09.2026, two runs
+      # each). Only the comparison uses it - seclume never loads ojdbc.
+      - dependency-name: "com.oracle.database.jdbc:ojdbc*"
+        versions: ["23.26.3.0.0"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
