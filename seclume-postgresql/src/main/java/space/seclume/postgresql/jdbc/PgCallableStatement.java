@@ -245,4 +245,11 @@ final class PgCallableStatement extends PgPreparedStatement implements OutParame
         }
         values = read.toArray();
     }
+
+    /** The call's parameters, the return value counted - not the statement's underneath. */
+    @Override
+    public java.sql.ParameterMetaData getParameterMetaData() throws java.sql.SQLException {
+        checkOpen();
+        return space.seclume.internal.jdbc.PlaceholderMetaData.ofCall(call.totalParameters());
+    }
 }

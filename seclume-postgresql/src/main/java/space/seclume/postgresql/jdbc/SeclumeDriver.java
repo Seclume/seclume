@@ -47,8 +47,15 @@ public final class SeclumeDriver implements Driver {
             return null;
         }
         PgSession.Settings settings = SeclumeUrl.settings(url, properties);
-        return new PgConnection(PgSession.open(settings), url,
+        boolean pooler = SeclumeUrl.transactionPooler(url, properties);
+        PgConnection connection = new PgConnection(space.seclume.internal.TrustChoice.using(
+                space.seclume.internal.TrustChoice.of(url, properties),
+                () -> space.seclume.internal.Transports.using(
+                        space.seclume.internal.Transports.option(url, properties),
+                        () -> PgSession.open(settings))), url,
                 SeclumeUrl.statementCacheSize(url, properties));
+        connection.transactionPooler(pooler);
+        return connection;
     }
 
     @Override

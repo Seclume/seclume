@@ -113,7 +113,7 @@ final class PgSqlRewriter {
             i++;
         }
         throw new SQLException("unterminated " + (quote == '\'' ? "string literal" : "identifier")
-                + " in: " + sql);
+                + " in: " + shape(sql));
     }
 
     private static int copyLineComment(String sql, int start, StringBuilder out) {
@@ -148,7 +148,7 @@ final class PgSqlRewriter {
                 i++;
             }
         }
-        throw new SQLException("unterminated block comment in: " + sql);
+        throw new SQLException("unterminated block comment in: " + shape(sql));
     }
 
     /**
@@ -173,4 +173,18 @@ final class PgSqlRewriter {
         int end = sql.indexOf(tag, i + 1);
         return end < 0 ? -1 : end + tag.length();
     }
+
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.POSTGRESQL);
+    }
+
 }

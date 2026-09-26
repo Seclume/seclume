@@ -46,6 +46,12 @@ public final class PgProtocol {
     public static final byte NO_DATA = 'n';
     public static final byte PARAMETER_DESCRIPTION = 't';
     public static final byte PORTAL_SUSPENDED = 's';
+    public static final byte COPY_IN_RESPONSE = 'G';
+    public static final byte COPY_OUT_RESPONSE = 'H';
+    public static final byte COPY_BOTH_RESPONSE = 'W';
+    public static final byte COPY_DATA = 'd';
+    public static final byte COPY_DONE = 'c';
+    public static final byte COPY_FAIL = 'f';
 
     // codes of the authentication message
     public static final int AUTH_OK = 0;
@@ -58,6 +64,50 @@ public final class PgProtocol {
     public static final int AUTH_SASL = 10;
     public static final int AUTH_SASL_CONTINUE = 11;
     public static final int AUTH_SASL_FINAL = 12;
+
+    /**
+     * The name of a message type, for a diagnostic.
+     *
+     * <p>Both directions in one table, because a tag means one thing going out
+     * and another coming back - {@code D} is Describe from the client and
+     * DataRow from the server, {@code E} is Execute and ErrorResponse - and a
+     * recording that did not say which would be worse than none. The direction
+     * is in the record beside it, so the name carries both readings where they
+     * differ.
+     *
+     * <p>A constant per tag and never a byte off the wire turned into text: an
+     * unknown tag comes back as its hex, which is what a desynchronised stream
+     * produces and exactly what somebody reading the recording needs to see.
+     */
+    public static String nameOf(byte tag) {
+        return switch (tag) {
+            case 0 -> "Startup";
+            case QUERY -> "Query";
+            case PARSE -> "Parse";
+            case BIND -> "Bind";
+            case 'D' -> "Describe/DataRow";
+            case 'E' -> "Execute/ErrorResponse";
+            case 'S' -> "Sync/ParameterStatus";
+            case 'C' -> "Close/CommandComplete";
+            case FLUSH -> "Flush";
+            case TERMINATE -> "Terminate";
+            case PASSWORD -> "PasswordMessage";
+            case AUTHENTICATION -> "Authentication";
+            case BACKEND_KEY_DATA -> "BackendKeyData";
+            case READY_FOR_QUERY -> "ReadyForQuery";
+            case ROW_DESCRIPTION -> "RowDescription";
+            case EMPTY_QUERY -> "EmptyQueryResponse";
+            case NOTICE_RESPONSE -> "NoticeResponse";
+            case NOTIFICATION_RESPONSE -> "NotificationResponse";
+            case PARSE_COMPLETE -> "ParseComplete";
+            case BIND_COMPLETE -> "BindComplete";
+            case CLOSE_COMPLETE -> "CloseComplete";
+            case NO_DATA -> "NoData";
+            case PARAMETER_DESCRIPTION -> "ParameterDescription";
+            case PORTAL_SUSPENDED -> "PortalSuspended";
+            default -> "0x" + Integer.toHexString(tag & 0xff);
+        };
+    }
 
     private PgProtocol() {
     }

@@ -801,8 +801,14 @@ class LocalJdbcTest {
     void unsupportedThingsSayNo() throws Exception {
         try (Connection connection = connect();
              Statement statement = connection.createStatement()) {
-            assertThrows(java.sql.SQLFeatureNotSupportedException.class,
-                    () -> statement.setQueryTimeout(5));
+            // setQueryTimeout used to stand here: it refused every non-zero
+            // value, because accepting a limit the driver could not enforce
+            // would have been a lie. It can enforce one now - see
+            // LocalQueryTimeoutTest - so what it refuses is a nonsensical one.
+            statement.setQueryTimeout(5);
+            assertEquals(5, statement.getQueryTimeout());
+            assertThrows(SQLException.class, () -> statement.setQueryTimeout(-1));
+            statement.setQueryTimeout(0);
             // getGeneratedKeys works now; what it answers when nobody asked
             // for keys is an empty result set, as JDBC prescribes - not an
             // exception.
@@ -820,6 +826,13 @@ class LocalJdbcTest {
     }
 
     /**
+     * A port nobody listens on, on a host whose firewall drops rather than
+     * refuses, answers with silence - and the default connect timeout is ten
+     * seconds per dead port. One second proves the same thing.
+     */
+    private static final String DEAD_PORT_TIMEOUT = "&connectTimeout=1000";
+
+    /**
      * A dead server first in the list, the real one behind it.
      *
      * <p>This is failover at the moment of connecting - the case that covers a
@@ -830,7 +843,7 @@ class LocalJdbcTest {
     void connectsToTheSecondServerWhenTheFirstIsDead() throws Exception {
         String alive = TestHosts.postgres() + ":" + TestHosts.postgresPort();
         String withDeadHead = url.replace("//" + alive + "/",
-                "//" + TestHosts.postgres() + ":1," + alive + "/");
+                "//" + TestHosts.postgres() + ":1," + alive + "/") + DEAD_PORT_TIMEOUT;
         try (Connection connection = DriverManager.getConnection(withDeadHead);
              Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery("select 1")) {
@@ -845,7 +858,7 @@ class LocalJdbcTest {
         String dead = TestHosts.postgres();
         String allDead = url.replace(
                 "//" + dead + ":" + TestHosts.postgresPort() + "/",
-                "//" + dead + ":1," + dead + ":2/");
+                "//" + dead + ":1," + dead + ":2/") + DEAD_PORT_TIMEOUT;
         SQLException thrown = assertThrows(SQLException.class,
                 () -> DriverManager.getConnection(allDead));
         assertTrue(thrown.getMessage().contains(dead + ":1")
@@ -1434,13 +1447,27 @@ class LocalJdbcTest {
         }
     }
 
-    /** What is not a call is refused before anything reaches the server. */
+    /**
+     * What is not a call runs as the query it is - and only OUT parameters
+     * are refused.
+     *
+     * <p>This used to refuse {@code prepareCall("select 1")} outright. pgjdbc,
+     * ojdbc and mssql-jdbc accept it, and Liquibase depends on it: it reads
+     * its default schema through {@code prepareCall("select current_schema()")}
+     * and went on without one when this said no. See QueryAsCallable.
+     */
     @Test
-    void refusesSqlThatIsNotACall() throws Exception {
-        try (Connection connection = DriverManager.getConnection(url)) {
+    void aPlainQueryThroughPrepareCallRunsAsAQuery() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             java.sql.CallableStatement call = connection.prepareCall("select current_schema()")) {
+            try (java.sql.ResultSet rows = call.executeQuery()) {
+                assertTrue(rows.next());
+                assertEquals("public", rows.getString(1));
+            }
             SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(
-                    SQLException.class, () -> connection.prepareCall("select 1"));
-            assertTrue(refused.getMessage().contains("{call p(?)}"), refused.getMessage());
+                    SQLException.class,
+                    () -> call.registerOutParameter(1, java.sql.Types.VARCHAR));
+            assertTrue(refused.getMessage().contains("no OUT parameters"), refused.getMessage());
         }
     }
 }

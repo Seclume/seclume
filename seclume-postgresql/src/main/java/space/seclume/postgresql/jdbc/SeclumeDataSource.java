@@ -44,6 +44,13 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
     private int connectTimeoutMillis = 10_000;
     private int statementCacheSize = SeclumeUrl.DEFAULT_STATEMENT_CACHE;
     private boolean deferSessionState = true;
+
+    /** A transaction pooler in front - see PgConnection#transactionPooler. */
+    private boolean transactionPooler;
+
+    public void setProxyMode(String mode) {
+        this.transactionPooler = "transaction".equalsIgnoreCase(mode == null ? "" : mode.trim());
+    }
     private SecretProvider secret;
     private space.seclume.tls.ClientIdentity identity;
     private PrintWriter logWriter;
@@ -146,21 +153,62 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
     }
 
     /**
+     * The transport this data source's connections run on, as the URL option
+     * {@code transport} names it - null for the system property's choice.
+     */
+    private String transport;
+
+    /** PostgreSQL 17's direct TLS - {@code tlsNegotiation=direct} in the URL. */
+    private boolean directTls;
+
+    /** The trust the URL chose - {@code tlsRootCert}, {@code tlsPin} - or null for the JVM's. */
+    private space.seclume.internal.TrustChoice.Choice trust;
+
+    public void setTransport(String transport) {
+        this.transport = transport == null || transport.isBlank() ? null : transport.trim();
+    }
+
+    public String getTransport() {
+        return transport;
+    }
+
+    /**
      * Takes over a whole URL, so that the same text means the same thing in
      * the driver and in the {@code DataSource}.
+     *
+     * <p><b>Every</b> setting the URL can carry, not the ones that happened to
+     * exist when this was written: a {@code tls=verify-full} that the driver
+     * honoured and this method dropped would connect without checking the
+     * server, through exactly the door Spring Boot uses.
      */
     public void setUrl(String url) throws SQLException {
-        PgSession.Settings settings = SeclumeUrl.settings(url, null);
+        setUrl(url, null);
+    }
+
+    /**
+     * The same, with settings beside the URL - the user and the secret
+     * provider, when the configuration keeps them apart from it.
+     */
+    public void setUrl(String url, java.util.Properties properties) throws SQLException {
+        PgSession.Settings settings = SeclumeUrl.settings(url, properties);
+        this.transactionPooler = SeclumeUrl.transactionPooler(url, properties);
+        this.transport = space.seclume.internal.Transports.option(url, properties);
+        this.trust = space.seclume.internal.TrustChoice.of(url, properties);
         this.host = settings.host();
         this.port = settings.port();
-        this.database = settings.database();
         this.user = settings.user();
         this.secret = settings.secret();
-        this.applicationName = settings.applicationName();
         this.connectTimeoutMillis = settings.connectTimeoutMillis();
         this.hosts = settings.hosts();
         this.maxResultBytes = settings.resultLimit().maxBytes();
         this.maxResultRows = settings.resultLimit().maxRows();
+        this.tlsStack = settings.tlsStack();
+        this.identity = settings.identity();
+        this.directTls = settings.directTls();
+        this.database = settings.database();
+        this.applicationName = settings.applicationName();
+        this.tls = settings.tls();
+        this.statementCacheSize = SeclumeUrl.statementCacheSize(url, properties);
     }
 
     /**
@@ -212,15 +260,19 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
                 provider, applicationName, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity());
-        PgSession session = PgSession.open(settings);
+                resolvedIdentity(), directTls);
+        PgSession session = space.seclume.internal.TrustChoice.using(trust,
+                () -> space.seclume.internal.Transports.using(transport,
+                        () -> PgSession.open(settings)));
         // Off only for whoever asks: it decides whether a syntax error shows
         // up at prepareStatement or at the first execution. See
         // PgSession#setDeferSessionState.
         session.setDeferSessionState(deferSessionState);
-        return new PgConnection(session,
+        PgConnection connection = new PgConnection(session,
                 SeclumeUrl.PREFIX + "//" + host + ":" + port + "/" + database,
                 statementCacheSize);
+        connection.transactionPooler(transactionPooler);
+        return connection;
     }
 
     /**

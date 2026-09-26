@@ -21,7 +21,7 @@ import space.seclume.postgresql.PgSession;
  * access. Whoever calls {@code getLong} gets the number without the detour
  * through a {@code String}.
  */
-public final class PgResultSet extends ReadOnlyResultSet {
+public final class PgResultSet extends ReadOnlyResultSet implements space.seclume.Sensitive {
 
     private final ResultBlock block;
     /**
@@ -134,6 +134,34 @@ public final class PgResultSet extends ReadOnlyResultSet {
         return rawText(column);
     }
 
+    // ---- the native window, for space.seclume.Sensitive ------------------
+
+    @Override
+    protected java.lang.foreign.MemorySegment rawSegmentAt(int column) {
+        return block.data().segment();
+    }
+
+    @Override
+    protected long rawOffsetAt(int column) {
+        return block.offset(row, column);
+    }
+
+    @Override
+    protected int rawLengthAt(int column) {
+        return block.length(row, column);
+    }
+
+    @Override
+    public int readInto(int columnIndex, java.lang.foreign.MemorySegment target)
+            throws java.sql.SQLException {
+        return copyRaw(columnIndex, target);
+    }
+
+    @Override
+    public int length(int columnIndex) throws java.sql.SQLException {
+        return rawLength(columnIndex);
+    }
+
     /** The bytes the server sent, as they were sent. */
     private String rawText(int column) {
         int offset = block.offset(row, column);
@@ -195,6 +223,9 @@ public final class PgResultSet extends ReadOnlyResultSet {
 
     @Override
     protected double doubleAt(int column) {
+        if (block.fields().get(column).typeOid() == PgOids.MONEY) {
+            return money(stringAt(column));
+        }
         if (binaryAt(column)) {
             int length = block.length(row, column);
             try {
@@ -286,6 +317,31 @@ public final class PgResultSet extends ReadOnlyResultSet {
         return super.binaryStreamAt(column);
     }
 
+    /**
+     * An {@code oid} column read as a {@code Clob}: the large object's bytes,
+     * as UTF-8 - how {@code setClob} stored them.
+     */
+    @Override
+    protected java.sql.Clob clobAt(int column) throws SQLException {
+        if (block.fields().get(column).typeOid() == PgOids.OID) {
+            return space.seclume.internal.jdbc.Lobs.text(largeObjectText(column));
+        }
+        return super.clobAt(column);
+    }
+
+    @Override
+    protected java.io.Reader readerAt(int column) throws SQLException {
+        if (block.fields().get(column).typeOid() == PgOids.OID) {
+            return new java.io.StringReader(largeObjectText(column));
+        }
+        return super.readerAt(column);
+    }
+
+    private String largeObjectText(int column) throws SQLException {
+        return new String(largeObjects().read(longAt(column)), // seclume-allow: user payload read from a large object, not a secret
+                java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private PgLargeObjects largeObjects() throws SQLException {
         if (owner == null) {
             throw new SQLException("this result set has no connection to read a large object "
@@ -360,19 +416,45 @@ public final class PgResultSet extends ReadOnlyResultSet {
             // Integer for smallint as well - see PgOids.javaClass, and keep
             // the two in step: an ORM reads the class name and then casts.
             case PgOids.INT2, PgOids.INT4 -> getInt(index);
-            case PgOids.INT8 -> getLong(index);
+            case PgOids.INT8, PgOids.OID -> getLong(index);
+            // One bit is a truth value, as pgjdbc reads it; a longer string
+            // of bits stays text.
+            case PgOids.BIT -> {
+                String bits = stringAt(column);
+                yield bits.length() == 1 ? (Object) Boolean.valueOf(bits.equals("1")) : bits;
+            }
             case PgOids.FLOAT4 -> getFloat(index);
             case PgOids.FLOAT8 -> getDouble(index);
+            case PgOids.MONEY -> money(stringAt(column));
             case PgOids.NUMERIC -> getBigDecimal(index);
             case PgOids.BYTEA -> getBytes(index);
             case PgOids.DATE -> getDate(index);
-            case PgOids.TIME -> getTime(index);
+            case PgOids.TIME, PgOids.TIMETZ -> getTime(index);
             case PgOids.TIMESTAMP, PgOids.TIMESTAMPTZ -> getTimestamp(index);
             case PgOids.UUID -> UUID.fromString(stringAt(column));
             case PgOids.XML -> getSQLXML(index);
             case PgOids.TID -> getRowId(index);
             default -> stringAt(column);
         };
+    }
+
+    /**
+     * {@code money} as pgjdbc reads it: the text the server wrote in its
+     * lc_monetary, without the currency sign and the thousands separators,
+     * negative in parentheses or with a minus. A locale that writes the
+     * decimal point as a comma defeats this as it defeats pgjdbc.
+     */
+    static Double money(String text) {
+        boolean negative = text.indexOf('-') >= 0 || text.indexOf('(') >= 0;
+        StringBuilder digits = new StringBuilder(text.length());
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c >= '0' && c <= '9') || c == '.') {
+                digits.append(c);
+            }
+        }
+        double value = Double.parseDouble(digits.toString());
+        return negative ? -value : value;
     }
 
     @Override

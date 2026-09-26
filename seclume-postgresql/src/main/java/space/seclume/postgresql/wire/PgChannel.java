@@ -70,6 +70,66 @@ public final class PgChannel implements AutoCloseable {
     }
 
     /**
+     * Asks the server to stop what another connection is doing.
+     *
+     * <p>Sixteen bytes and no type tag, the same shape as the TLS request: a
+     * length of 16, the marker 80877102, and the process id and secret key the
+     * server handed out in {@code BackendKeyData} when <b>that other</b>
+     * connection logged in. There is no answer and there is no acknowledgement
+     * - the server either finds a backend with that key and signals it, or
+     * does nothing, and either way it closes this connection.
+     *
+     * <p>That is why cancellation needs a second connection at all. The one
+     * running the query is busy waiting for its answer; a message written into
+     * it would sit in the send buffer until the query it was meant to stop had
+     * finished.
+     *
+     * <p>The key is a capability, not a credential: anyone holding it can stop
+     * that backend's current query and nothing else. It travels over TLS when
+     * the connection it belongs to used TLS, for the same reason - it should
+     * not be readable off the wire.
+     */
+    public void sendCancelRequest(int processId, int secretKey) throws IOException {
+        out.clear();
+        out.putInt(16);
+        out.putInt(80877102);
+        out.putInt(processId);
+        out.putInt(secretKey);
+        flush();
+        out.clear();
+    }
+
+    /**
+     * Whether a request has gone out whose answer has not arrived in full.
+     *
+     * <p>What {@code cancel()} asks before sending anything. PostgreSQL's
+     * CancelRequest names a backend and not a statement: sent in the gap
+     * between two statements it stops the <b>next</b> one, and the caller
+     * sees a statement it never cancelled fail with 57014. libpq has that
+     * race and does not close it; this closes the wide half of it, which is
+     * the half a query-timeout thread hits every time its query finishes
+     * first.
+     *
+     * <p>The narrow half stays: a cancellation decided here can still be
+     * overtaken by the answer arriving. Nothing on the client can prevent
+     * that, and nothing here pretends to.
+     *
+     * <p>Volatile: set and cleared on the working thread, read on the thread
+     * that cancels.
+     */
+    public boolean isAwaitingAnswer() {
+        return awaitingAnswer;
+    }
+
+    private volatile boolean awaitingAnswer;
+
+    /** ReadyForQuery messages asked for and not yet flushed. */
+    private int unsentReady;
+
+    /** ReadyForQuery messages flushed and not yet read. */
+    private int outstandingReady;
+
+    /**
      * Asks the server for TLS and reads its one-byte answer.
      *
      * <p>The message is eight bytes and has no type tag: a length of 8 and the
@@ -145,6 +205,14 @@ public final class PgChannel implements AutoCloseable {
                 identity);
     }
 
+    /** The same, offering one application protocol and requiring it back - direct TLS. */
+    public void startTls(String host, int port, boolean verify,
+            space.seclume.internal.jdbc.TlsStack stack,
+            space.seclume.tls.ClientIdentity identity, String alpn) throws IOException {
+        this.tls = space.seclume.internal.TlsLayers.start(stack, channel, host, port, verify,
+                identity, alpn);
+    }
+
     /** The server's certificate, or {@code null} without TLS - for channel binding. */
     public java.security.cert.X509Certificate peerCertificate() throws IOException {
         return tls == null ? null : tls.peerCertificate();
@@ -188,8 +256,43 @@ public final class PgChannel implements AutoCloseable {
 
     // ---- writing ---------------------------------------------------------
 
+    /**
+     * The flight recorder, or {@code null} when nobody asked for one.
+     *
+     * <p>Null rather than a recorder that does nothing: this is checked once
+     * per message on every connection, and the common case is that it is not
+     * there. See {@link space.seclume.Flight}.
+     */
+    private space.seclume.internal.FlightRecorder flight;
+    /** The tag of the message being written, for the recorder. */
+    private byte writing;
+
+    /** Switches the recording on - see {@link space.seclume.Flight}. */
+    public void recordFlight(space.seclume.internal.FlightRecorder recorder) {
+        this.flight = recorder;
+    }
+
+    /** What this connection last sent and received, oldest first. */
+    public java.util.List<space.seclume.Flight.Message> recentMessages() {
+        return flight == null ? java.util.List.of() : flight.recent();
+    }
+
+    /** How many messages have crossed this connection. */
+    public long recordedMessages() {
+        return flight == null ? 0 : flight.messages();
+    }
+
+    /** The tail of the recording, or {@code null} when there is none. */
+    public String flightTail() {
+        return flight == null ? null : flight.tail(8);
+    }
+
     /** Starts a message with a type tag. */
     public WireBuffer begin(byte tag) {
+        if (tag == 'Q' || tag == 'S') {
+            unsentReady++;          // each Query and each Sync ends in one ReadyForQuery
+        }
+        writing = tag;
         out.putByte(tag);
         lengthAt = out.position();
         out.putInt(0);              // a placeholder
@@ -198,6 +301,7 @@ public final class PgChannel implements AutoCloseable {
 
     /** Starts the startup message, which has no type tag. */
     public WireBuffer beginUntagged() {
+        writing = 0;
         lengthAt = out.position();
         out.putInt(0);
         return out;
@@ -208,8 +312,21 @@ public final class PgChannel implements AutoCloseable {
         if (lengthAt < 0) {
             throw new IllegalStateException("no message was started");
         }
-        out.putInt(lengthAt, out.position() - lengthAt);
+        int length = out.position() - lengthAt;
+        out.putInt(lengthAt, length);
         lengthAt = -1;
+        if (flight != null) {
+            // Recorded when the message is finished rather than when it is
+            // flushed: several messages go out in one flush, and a recording
+            // that showed them as one would hide exactly the case it exists
+            // for.
+            // The count is withheld for the message that carries the
+            // credential - under cleartext authentication its length is the
+            // password's length. See space.seclume.Flight.WITHHELD.
+            flight.record(true, space.seclume.postgresql.PgProtocol.nameOf(writing),
+                    writing == space.seclume.postgresql.PgProtocol.PASSWORD
+                            ? space.seclume.Flight.WITHHELD : length + 1);
+        }
     }
 
     /**
@@ -276,6 +393,9 @@ public final class PgChannel implements AutoCloseable {
 
     /** Sends everything buffered and zeroes the send buffer. */
     public void flush() throws IOException {
+        outstandingReady += unsentReady;
+        unsentReady = 0;
+        awaitingAnswer = true;
         roundTrips++;
         ByteBuffer view = out.view();
         view.clear().position(0).limit(out.position());
@@ -301,12 +421,30 @@ public final class PgChannel implements AutoCloseable {
         compactIfNeeded();
         fill(5);
         byte tag = in.getByte();
+        if (tag == 'Z') {
+            // ReadyForQuery: the server has finished and is waiting for the
+            // next request. From here until something is flushed, nobody is
+            // running and a cancellation has nothing to cancel - see
+            // isAwaitingAnswer. Unless more were asked for in the same
+            // flush: a deferred BEGIN rides in front of a statement, answers
+            // at once, and the statement behind it is still running. Taking
+            // the first ReadyForQuery for the last made every query timeout
+            // inside a transaction a no-op - the cancel was judged to have
+            // nothing to cancel. Found by the Spring JDBC suite.
+            if (outstandingReady > 0) {
+                outstandingReady--;
+            }
+            awaitingAnswer = outstandingReady > 0;
+        }
         int length = in.getInt();
-        if (length < 4) {
+        if (length < 4 || length > MAX_MESSAGE) {
             throw new IOException("the server announced a message of " + length + " bytes");
         }
         int payload = length - 4;
         fill(payload);
+        if (flight != null) {
+            flight.record(false, space.seclume.postgresql.PgProtocol.nameOf(tag), length + 1);
+        }
         messageEnd = in.position() + payload;
         // Set the limit to the end of the message: no reader can then run
         // into the next message by accident.
@@ -337,9 +475,36 @@ public final class PgChannel implements AutoCloseable {
     /** While true the receive buffer is not compacted - see keepBuffer. */
     private boolean keeping;
 
+    /**
+     * PostgreSQL's own ceiling for one message, and therefore this driver's.
+     *
+     * <p>Not a guess: the server refuses to build a message larger than a
+     * gigabyte, so anything above it did not come from PostgreSQL.
+     */
+    private static final int MAX_MESSAGE = 0x3fff_ffff;
+
+    /**
+     * Reads until the buffer holds {@code needed} bytes beyond the cursor.
+     *
+     * <p><b>The buffer grows towards the announcement, never to it.</b> The
+     * first version passed the announced size straight to
+     * {@code ensureCapacity}, which is fine when the bytes are coming and
+     * catastrophic when they are not: a message announcing a gigabyte and
+     * sending sixty bytes made every single read allocate a gigabyte, copy
+     * into it, and wipe the old one - the wipe being the thing this project
+     * does on purpose, and the thing that turns a large allocation into a
+     * large amount of work. Sixty bytes cost sixty gigabyte-wipes, and the
+     * fuzz sweep saw it as a session that never returned.
+     *
+     * <p>Growing geometrically instead means the cost follows the bytes that
+     * actually arrive. The stream then ends where it always would, and the
+     * message is refused for the right reason.
+     */
     private void fill(int needed) throws IOException {
         while (filled - in.position() < needed) {
-            in.ensureCapacity(Math.max(filled + needed, in.capacity()));
+            long wanted = Math.min((long) filled + needed,
+                    Math.max((long) in.capacity() * 2, filled + 1L));
+            in.ensureCapacity((int) Math.min(wanted, MAX_MESSAGE + 8L));
             ByteBuffer view = in.view();
             view.clear().position(filled).limit(in.capacity());
             int read = tls != null ? tls.read(view) : channel.read(view);

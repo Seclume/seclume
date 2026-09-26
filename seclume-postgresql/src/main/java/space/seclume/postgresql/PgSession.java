@@ -17,6 +17,7 @@ import space.seclume.internal.WireBuffer;
 import space.seclume.internal.jdbc.HostList;
 import space.seclume.internal.jdbc.TlsMode;
 import space.seclume.internal.jdbc.ResultLimit;
+import space.seclume.secret.NoSecretProvider;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
 
@@ -46,7 +47,18 @@ public final class PgSession implements AutoCloseable {
                            int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
                            TlsMode tls,
                            space.seclume.internal.jdbc.TlsStack tlsStack,
-                           space.seclume.tls.ClientIdentity identity) {
+                           space.seclume.tls.ClientIdentity identity,
+                           boolean directTls) {
+
+        /** Asking for TLS first, as every server before PostgreSQL 17 needs. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
+                        TlsMode tls, space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    hosts, resultLimit, tls, tlsStack, identity, false);
+        }
 
         /**
          * Without a client certificate - what almost every connection is.
@@ -114,7 +126,7 @@ public final class PgSession implements AutoCloseable {
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, hosts, resultLimit, tls, tlsStack,
-                    identity);
+                    identity, directTls);
         }
     }
 
@@ -159,14 +171,31 @@ public final class PgSession implements AutoCloseable {
     private int[] rowLengths = new int[0]; // seclume-allow: column lengths of a row, not a secret
     private int backendProcessId;
     private int backendSecretKey;
+    /**
+     * How this connection was made, kept for {@link #cancel()}.
+     *
+     * <p>Null on a session that was resumed rather than opened: whoever handed
+     * the stream over knows where it came from and this object does not, so
+     * cancellation on a resumed session says it cannot rather than guessing.
+     */
+    private Settings settings;
     private char transactionStatus = 'I';
     /** Settings that ride along with the next statement - see runLater. */
     private final List<String> pending = new ArrayList<>();
     /** Plans to be released with the next block - see writePendingCloses. */
     private final List<String> pendingCloses = new ArrayList<>();
-    /** A prepared plan announced but not yet parsed - see parseLater. */
-    private String pendingParseName;
-    private String pendingParseSql;
+    /**
+     * Plans announced and not yet parsed, by statement name - see parseLater.
+     *
+     * <p>A map and not one slot. With one slot, a second prepareStatement
+     * before the first one ran replaced the first one's Parse - which then
+     * bound against a name the server had never seen: "prepared statement
+     * seclume_3 does not exist". And whichever statement ran next sent
+     * whatever Parse was waiting, its own or another's. Each statement now
+     * sends its own Parse with its own first execution, and nothing else's.
+     * Found by Liquibase, which prepares two statements before it runs either.
+     */
+    private final java.util.Map<String, String> pendingParses = new java.util.LinkedHashMap<>();
     /** More than this many settings waiting means: send them now. */
     private static final int PENDING_LIMIT = 16;
     /**
@@ -310,7 +339,44 @@ public final class PgSession implements AutoCloseable {
         // what it is before its connection is kept - see TargetServer. With
         // one server, or none asked for, nothing is asked and this is the
         // connect it always was.
-        return settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
+        PgSession session;
+        try {
+            session = settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
+        } catch (SQLException noneFits) {
+            // aurora=true and nothing known yet: the cluster endpoint leads to
+            // the writer only, so a first "secondary" found none. Ask whichever
+            // instance answers what the cluster looks like, and try once more.
+            if (!(settings.hosts().topology()
+                    instanceof space.seclume.internal.jdbc.AuroraTopology aurora)
+                    || !aurora.hosts(space.seclume.internal.jdbc.TargetServer.ANY).isEmpty()) {
+                throw noneFits;
+            }
+            PgSession any = settings.hosts().looking(space.seclume.internal.jdbc.TargetServer.ANY)
+                    .open(server -> openOne(settings.at(server)));
+            try {
+                learn(aurora, any);
+            } finally {
+                any.close();
+            }
+            if (aurora.hosts(space.seclume.internal.jdbc.TargetServer.ANY).isEmpty()) {
+                throw noneFits;
+            }
+            session = settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
+        }
+        if (settings.hosts().topology()
+                instanceof space.seclume.internal.jdbc.AuroraTopology aurora && aurora.due()) {
+            learn(aurora, session);
+        }
+        return session;
+    }
+
+    /** What the cluster says about itself, remembered - see AuroraTopology. */
+    private static void learn(space.seclume.internal.jdbc.AuroraTopology aurora, PgSession session) {
+        try {
+            aurora.learn(session.askOneValue(space.seclume.internal.jdbc.AuroraTopology.POSTGRESQL));
+        } catch (SQLException notAurora) {
+            aurora.refused();
+        }
     }
 
     private static PgSession openOne(Settings settings) throws SQLException {
@@ -322,6 +388,7 @@ public final class PgSession implements AutoCloseable {
         PgSession opened = null;
         try {
             opened = connectAndLogIn(settings);
+            space.seclume.internal.Transports.loggedIn(opened.transport());
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "postgresql",
@@ -335,7 +402,7 @@ public final class PgSession implements AutoCloseable {
         try {
             channel = PgChannel.connect(settings.host(), settings.port(),
                     settings.connectTimeoutMillis());
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             // Not brokenConnection: there is no channel yet to close, and a
             // server that cannot be reached is 08001 rather than 08006.
             throw new SQLNonTransientConnectionException(
@@ -343,9 +410,27 @@ public final class PgSession implements AutoCloseable {
         }
         PgSession session = new PgSession(channel);
         session.setResultLimit(settings.resultLimit());
+        session.settings = settings;
+        // Null: nothing in the URL asks for this yet, so what decides is the
+        // system property. See space.seclume.Flight for why that is where it
+        // stands rather than in the settings record.
+        channel.recordFlight(space.seclume.internal.FlightRecorder.from(null));
         try {
             session.negotiateTls(channel, settings);
-            session.startup(settings);
+            // The login alone, timed apart from the connect and the handshake:
+            // a slow one here is the directory behind the database and nothing
+            // this process did. See SeclumeEvents.Authentication.
+            space.seclume.jfr.SeclumeEvents.Authentication login =
+                    space.seclume.jfr.Observed.beginLogin();
+            boolean loggedIn = false;
+            try {
+                session.startup(settings);
+                loggedIn = true;
+            } finally {
+                space.seclume.jfr.Observed.endLogin(login, "postgresql",
+                        settings.host() + ":" + settings.port(),
+                        session.authenticationMethod(), loggedIn);
+            }
             return session;
         } catch (SQLException | RuntimeException e) {
             channel.close();
@@ -365,6 +450,16 @@ public final class PgSession implements AutoCloseable {
             return;
         }
         try {
+            if (settings.directTls()) {
+                // PostgreSQL 17's direct TLS: the handshake at once, no
+                // SSLRequest before it and no round trip for its answer. The
+                // server tells TLS for it from plain text by the ClientHello
+                // and insists on ALPN "postgresql", so nothing else speaking
+                // TLS on the port can be mistaken for it.
+                channel.startTls(settings.host(), settings.port(), mode.verifies(),
+                        settings.tlsStack(), settings.identity(), "postgresql");
+                return;
+            }
             if (!channel.requestTls()) {
                 if (mode.demands()) {
                     throw new SQLNonTransientConnectionException(
@@ -376,16 +471,46 @@ public final class PgSession implements AutoCloseable {
             }
             channel.startTls(settings.host(), settings.port(), mode.verifies(),
                     settings.tlsStack(), settings.identity());
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "TLS to " + settings.host() + ":" + settings.port() + " failed: "
                     + e.getMessage(), "08001", e);
         }
     }
 
+    /** The certificate the server presented, or null in the clear. */
+    public java.security.cert.X509Certificate serverCertificate() {
+        space.seclume.internal.TlsLayer layer = channel.tlsLayer();
+        try {
+            return layer == null ? null : layer.peerCertificate();
+        } catch (java.io.IOException e) {
+            return null;
+        }
+    }
+
+
     /** What TLS this connection uses, or {@code null} without it. */
     public String tlsDescription() {
         return channel.tlsDescription();
+    }
+
+    /**
+     * The JVM's default zone as PostgreSQL reads it. Java's {@code GMT+1}
+     * means one hour east, POSIX's one hour west, so the sign flips - the same
+     * translation pgjdbc makes.
+     */
+    static String sessionTimeZone() {
+        String id = java.util.TimeZone.getDefault().getID();
+        if (id.length() > 4 && id.startsWith("GMT")) {
+            char sign = id.charAt(3);
+            if (sign == '+') {
+                return "GMT-" + id.substring(4);
+            }
+            if (sign == '-') {
+                return "GMT+" + id.substring(4);
+            }
+        }
+        return id;
     }
 
     private void startup(Settings settings) throws SQLException {
@@ -401,13 +526,16 @@ public final class PgSession implements AutoCloseable {
             out.putCString("database").putCString(settings.database());
             out.putCString("application_name").putCString(settings.applicationName());
             out.putCString("client_encoding").putCString("UTF8");
+            // The JVM's zone, as pgjdbc sends it: ::date, date_trunc and
+            // timestamptz text then agree with the vendor driver.
+            out.putCString("TimeZone").putCString(sessionTimeZone());
             out.putByte((byte) 0);
             channel.end();
             channel.flush();
 
             authenticate(settings);
             waitForReady();
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             // 08001: the connection was being established, not lost in the
             // middle of work. Without a SQLState this failure is invisible to
             // everything that reacts to one - a host list would not move on to
@@ -415,7 +543,7 @@ public final class PgSession implements AutoCloseable {
             // cause it to do.
             channel.close();
             throw new SQLNonTransientConnectionException(
-                    "the connection failed during startup", "08001", e);
+                    "the connection failed during startup: " + e.getMessage(), "08001", e);
         }
     }
 
@@ -427,9 +555,32 @@ public final class PgSession implements AutoCloseable {
      * second reach into the secret source.
      */
     private void authenticate(Settings settings) throws IOException, SQLException {
+        try {
+            authenticating(settings);
+        } catch (IllegalStateException refused) {
+            // Every refusal SCRAM can raise - a server nonce that is not ours,
+            // an implausible iteration count, a server signature that does not
+            // verify - used to leave here as an IllegalStateException, out of
+            // a method whose signature promises SQLException. That is the
+            // wrong shape for any failure and the wrong shape twice over for
+            // this one: "the server could not prove that it knows the
+            // password" is not a mishap, it is the driver saying the far end
+            // may not be the database. An application catches SQLException;
+            // what went past it here was the one exception it most needed to
+            // see. Found by the login fuzz corpus on 23.09.2026.
+            throw new java.sql.SQLInvalidAuthorizationSpecException(
+                    "the authentication exchange was refused: " + refused.getMessage(),
+                    "28000", refused);
+        }
+    }
+
+    private void authenticating(Settings settings) throws IOException, SQLException {
+        space.seclume.internal.Gssapi.Context gss = null;
         try (SecretScope secret = SecretScope.fromProvider(settings.secret());
              ScramSha256 scram = new ScramSha256()) {
             boolean scramStarted = false;
+            boolean scramServerProved = false;
+            boolean oauthStarted = false;
             while (true) {
                 byte tag = channel.nextMessage();
                 WireBuffer in = channel.message();
@@ -445,9 +596,45 @@ public final class PgSession implements AutoCloseable {
                     continue;
                 }
                 int code = in.getInt();
+                boolean kerberos = code == PgProtocol.AUTH_GSS || code == PgProtocol.AUTH_GSS_CONTINUE;
+                if (code != PgProtocol.AUTH_OK && !kerberos
+                        && NoSecretProvider.isNone(settings.secret())) {
+                    throw new java.sql.SQLInvalidAuthorizationSpecException(
+                            "the server asks for a password (authentication request " + code
+                            + "), but this connection has provider=none - it was meant to log "
+                            + "in by client certificate alone. pg_hba.conf has to say 'cert' "
+                            + "for this user and address; nothing was sent", "28000");
+                }
                 switch (code) {
                     case PgProtocol.AUTH_OK -> {
                         channel.endMessage();
+                        // An OK is only as good as the exchange before it. A
+                        // server that skips SCRAM's final message never proved
+                        // it knows the password (and skips channel binding with
+                        // it), and one that skips Kerberos's reply never proved
+                        // it is the service the ticket was for. Either would
+                        // otherwise be let in (found in review, 25.09.2026).
+                        if (scramStarted && !scramServerProved) {
+                            throw new java.sql.SQLInvalidAuthorizationSpecException(
+                                    "the server accepted the SCRAM login without its final "
+                                    + "message, so it never proved it knows the password - "
+                                    + "refused as a server that may not be the database",
+                                    "28000");
+                        }
+                        if (gss != null && !gss.complete()) {
+                            throw new java.sql.SQLInvalidAuthorizationSpecException(
+                                    "the server accepted the Kerberos login before mutual "
+                                    + "authentication was complete - refused as a server that "
+                                    + "may not be the service the ticket was for", "28000");
+                        }
+                        if (settings.identity() != null
+                                && NoSecretProvider.isNone(settings.secret())) {
+                            // Nothing was asked and no password exists: the
+                            // certificate is what let this session in. (With
+                            // a password configured, an unasked login is
+                            // trust, whatever certificate went along.)
+                            authenticationMethod = "cert";
+                        }
                         return;
                     }
                     case PgProtocol.AUTH_CLEARTEXT -> {
@@ -462,13 +649,29 @@ public final class PgSession implements AutoCloseable {
                         channel.endMessage();
                     }
                     case PgProtocol.AUTH_SASL -> {
-                        String mechanism = chooseMechanism(in, scram);
+                        String mechanism = chooseMechanism(in, scram, settings);
                         authenticationMethod = mechanism.toLowerCase(java.util.Locale.ROOT);
                         channel.endMessage();
-                        startScram(scram, mechanism);
-                        scramStarted = true;
+                        if (OAUTHBEARER.equals(mechanism)) {
+                            sendBearerToken(secret);
+                            oauthStarted = true;
+                        } else {
+                            startScram(scram, mechanism);
+                            scramStarted = true;
+                        }
                     }
                     case PgProtocol.AUTH_SASL_CONTINUE -> {
+                        if (oauthStarted) {
+                            // The token was refused; the server says why in
+                            // JSON (RFC 7628) and waits for the one-byte
+                            // acknowledgement before it sends the error.
+                            channel.endMessage();
+                            WireBuffer out = channel.begin(PgProtocol.PASSWORD);
+                            out.putByte((byte) 0x01);
+                            channel.end();
+                            channel.flush();
+                            continue;
+                        }
                         if (!scramStarted) {
                             throw protocolError("the server continued a SASL exchange "
                                     + "that never started");
@@ -476,21 +679,72 @@ public final class PgSession implements AutoCloseable {
                         continueScram(scram, secret.secret());
                     }
                     case PgProtocol.AUTH_SASL_FINAL -> {
+                        if (!scramStarted) {
+                            throw protocolError("the server finished a SASL exchange that "
+                                    + "was not SCRAM");
+                        }
                         int length = channel.messageRemaining();
                         scram.verifyServerFinal(in.segment(), in.position(), length);
+                        scramServerProved = true;
                         channel.endMessage();
                     }
-                    case PgProtocol.AUTH_GSS, PgProtocol.AUTH_SSPI,
-                         PgProtocol.AUTH_GSS_CONTINUE, PgProtocol.AUTH_KERBEROS_V5 ->
+                    case PgProtocol.AUTH_GSS -> {
+                        // Kerberos: the ticket is the operating system's, in its
+                        // credential cache - nothing secret passes through here.
+                        channel.endMessage();
+                        if (!space.seclume.internal.Gssapi.available()) {
+                            throw new SQLException("this server asks for Kerberos (GSSAPI), "
+                                    + "which seclume speaks through the system's GSSAPI library "
+                                    + "on Linux (libgssapi_krb5) - it is not there on this "
+                                    + "platform; Windows' SSPI is not supported yet", "28000");
+                        }
+                        authenticationMethod = "gss";
+                        gss = kerberos(space.seclume.internal.Gssapi.initiate("postgres",
+                                settings.host()), null, 0, 0);
+                    }
+                    case PgProtocol.AUTH_GSS_CONTINUE -> {
+                        if (gss == null) {
+                            throw protocolError("the server continued a GSSAPI exchange "
+                                    + "that never started");
+                        }
+                        kerberos(gss, in.segment(), in.position(), channel.messageRemaining());
+                        channel.endMessage();
+                    }
+                    case PgProtocol.AUTH_SSPI, PgProtocol.AUTH_KERBEROS_V5 ->
                             throw new SQLException(
-                                    "this server asks for GSSAPI/SSPI authentication, which "
-                                    + "seclume does not implement yet - it is planned as the "
-                                    + "preferred mode, see the README", "28000");
+                                    "this server asks for " + (code == PgProtocol.AUTH_SSPI
+                                    ? "SSPI" : "Kerberos V5 (the pre-GSSAPI kind)")
+                                    + " authentication, which seclume does not speak - "
+                                    + "GSSAPI ('gss' in pg_hba.conf) it does", "28000");
                     default -> throw new SQLException(
                             "unknown authentication request " + code, "28000");
                 }
             }
+        } catch (IllegalStateException kerberosRefused) {
+            if (gss == null) {
+                throw kerberosRefused;
+            }
+            throw new java.sql.SQLInvalidAuthorizationSpecException("the Kerberos login did "
+                    + "not succeed: " + kerberosRefused.getMessage(), "28000", kerberosRefused);
+        } finally {
+            if (gss != null) {
+                gss.close();
+            }
         }
+    }
+
+    /** One GSSAPI step: the server's token in, ours out - when there is one to send. */
+    private space.seclume.internal.Gssapi.Context kerberos(
+            space.seclume.internal.Gssapi.Context gss, MemorySegment token, long at, int length)
+            throws IOException {
+        byte[] next = gss.step(token, at, length);
+        if (next.length > 0) {
+            WireBuffer out = channel.begin(PgProtocol.PASSWORD);
+            out.putBytes(MemorySegment.ofArray(next), 0, next.length);
+            channel.end();
+            channel.flush();
+        }
+        return gss;
     }
 
     private void sendPassword(MemorySegment password) throws IOException {
@@ -539,7 +793,8 @@ public final class PgSession implements AutoCloseable {
      *       to.</li>
      * </ul>
      */
-    private String chooseMechanism(WireBuffer in, ScramSha256 scram) throws SQLException {
+    private String chooseMechanism(WireBuffer in, ScramSha256 scram, Settings settings)
+            throws SQLException {
         List<String> mechanisms = new ArrayList<>();
         while (channel.messageRemaining() > 0) {
             int length = in.cStringLength();
@@ -550,9 +805,29 @@ public final class PgSession implements AutoCloseable {
         }
         if (!mechanisms.contains("SCRAM-SHA-256")
                 && !mechanisms.contains("SCRAM-SHA-256-PLUS")) {
+            if (mechanisms.contains(OAUTHBEARER)) {
+                // A bearer token works for whoever holds it, and unlike SCRAM
+                // nothing in it is bound to this connection - so it goes only
+                // to a server that has proved who it is: verify-full, or the
+                // pinned key. tls=require encrypts but would hand the token to
+                // anybody in the middle (found in review, 25.09.2026).
+                boolean authenticated = channel.tlsDescription() != null
+                        && (settings.tls() == TlsMode.VERIFY_FULL
+                            || space.seclume.internal.TrustChoice.pinned());
+                if (!authenticated) {
+                    throw new java.sql.SQLInvalidAuthorizationSpecException(
+                            "the server asks for an OAuth token (OAUTHBEARER), which may only "
+                            + "go to a server whose certificate was checked - this connection "
+                            + (channel.tlsDescription() == null ? "is not encrypted"
+                               : "does not check it (tls=" + settings.tls().name()
+                                 .toLowerCase(java.util.Locale.ROOT).replace('_', '-') + ")")
+                            + ". Use tls=verify-full or tlsPin; nothing was sent", "28000");
+                }
+                return OAUTHBEARER;
+            }
             throw new SQLException(
-                    "the server offers " + mechanisms + ", but seclume speaks SCRAM-SHA-256 "
-                    + "and SCRAM-SHA-256-PLUS", "28000");
+                    "the server offers " + mechanisms + ", but seclume speaks SCRAM-SHA-256, "
+                    + "SCRAM-SHA-256-PLUS and OAUTHBEARER", "28000");
         }
         if (channel.tlsDescription() == null) {
             return "SCRAM-SHA-256";
@@ -587,6 +862,30 @@ public final class PgSession implements AutoCloseable {
     }
 
     private ScramSha256.Binding channelBinding = ScramSha256.Binding.NOT_POSSIBLE;
+
+    /** PostgreSQL 18's OAuth login (SASL, RFC 7628). */
+    private static final String OAUTHBEARER = "OAUTHBEARER";
+    private static final String BEARER_PREFIX = "n,,auth=Bearer ";
+
+    /**
+     * The OAUTHBEARER client response: {@code n,,^Aauth=Bearer <token>^A^A}.
+     * The token is the provider's secret - an Azure managed identity's, the
+     * GCP metadata server's, a file's - and goes from its scope straight into
+     * the send buffer, as a password does.
+     */
+    private void sendBearerToken(SecretScope token) throws IOException {
+        WireBuffer out = channel.begin(PgProtocol.PASSWORD);
+        out.putCString(OAUTHBEARER);
+        out.putInt(BEARER_PREFIX.length() + token.length() + 2);
+        for (int i = 0; i < BEARER_PREFIX.length(); i++) {
+            out.putByte((byte) BEARER_PREFIX.charAt(i));
+        }
+        out.putBytes(token.secret(), 0, token.length());
+        out.putByte((byte) 0x01);
+        out.putByte((byte) 0x01);
+        channel.end();
+        channel.flush();
+    }
 
     private void startScram(ScramSha256 scram, String mechanism) throws IOException {
         try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
@@ -663,6 +962,12 @@ public final class PgSession implements AutoCloseable {
             for (int i = 0; i < carried; i++) {
                 runUntilReady(null);              // the answers to what rode along
             }
+            // The columns are this statement's to describe, and a statement
+            // without rows sends no RowDescription to overwrite the last
+            // one. Left standing, the "select 1" a pool validates with made
+            // the next plain "delete" look like a query that returned rows -
+            // and executeUpdate refused it. Found by the Spring JDBC suite.
+            fields = List.of();
 
             SQLException failure = null;
             while (true) {
@@ -701,6 +1006,7 @@ public final class PgSession implements AutoCloseable {
                     case PgProtocol.READY_FOR_QUERY -> {
                         transactionStatus = (char) channel.message().getByte();
                         channel.endMessage();
+                        settleParses();
                         if (failure != null) {
                             throw failure;
                         }
@@ -709,9 +1015,217 @@ public final class PgSession implements AutoCloseable {
                     default -> handleAsynchronous(tag);
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while running a statement", e);
         }
+    }
+
+    // ---- COPY -----------------------------------------------------------
+
+    /** How much of the caller's stream goes into one CopyData message. */
+    private static final int COPY_CHUNK = 64 * 1024;
+
+    /**
+     * {@code COPY ... FROM STDIN}: the rows come from {@code data}, as the
+     * statement's format says (text, csv or binary), streamed in chunks - the
+     * whole input is never held.
+     *
+     * <p>A failure reading {@code data} is sent to the server as CopyFail, so
+     * the statement is rolled back there and the session stays in step; the
+     * reading failure is what the caller gets.
+     *
+     * @return the rows the server says it copied
+     */
+    public long copyIn(String sql, java.io.InputStream data) throws SQLException {
+        flushPipeline();
+        java.io.IOException reading = null;
+        try {
+            int carried = writePending();
+            WireBuffer out = channel.begin(PgProtocol.QUERY);
+            out.putCString(sql);
+            channel.end();
+            channel.flush();
+            for (int i = 0; i < carried; i++) {
+                runUntilReady(null);
+            }
+            fields = List.of();
+            SQLException failure = null;
+            while (true) {
+                byte tag = channel.nextMessage();
+                switch (tag) {
+                    case PgProtocol.COPY_IN_RESPONSE -> {
+                        channel.endMessage();
+                        reading = streamIn(data);
+                    }
+                    case PgProtocol.COPY_OUT_RESPONSE, PgProtocol.COPY_BOTH_RESPONSE -> {
+                        channel.endMessage();
+                        throw new SQLException("copyIn was given a COPY ... TO statement - "
+                                + "use copyOut", "42601");
+                    }
+                    case PgProtocol.COMMAND_COMPLETE -> {
+                        lastCommandTag = channel.message().readCString();
+                        channel.endMessage();
+                    }
+                    case PgProtocol.ERROR_RESPONSE -> {
+                        SQLException error = readError();
+                        if (failure == null) {
+                            failure = error;
+                        }
+                    }
+                    case PgProtocol.READY_FOR_QUERY -> {
+                        transactionStatus = (char) channel.message().getByte();
+                        channel.endMessage();
+                        settleParses();
+                        if (reading != null) {
+                            throw new SQLException("reading the data for COPY failed - "
+                                    + "nothing was copied: " + reading.getMessage(), "58030",
+                                    reading);
+                        }
+                        if (failure != null) {
+                            throw failure;
+                        }
+                        return copiedRows();
+                    }
+                    default -> handleAsynchronous(tag);
+                }
+            }
+        } catch (IOException | WireBuffer.Truncated e) {
+            throw brokenConnection("the connection broke during COPY", e);
+        }
+    }
+
+    /**
+     * Sends the caller's stream as CopyData, then CopyDone - or CopyFail when
+     * the stream could not be read, which is then returned.
+     */
+    private java.io.IOException streamIn(java.io.InputStream data) throws IOException {
+        byte[] chunk = new byte[COPY_CHUNK]; // seclume-allow: the caller's bulk data, not a secret
+        java.lang.foreign.MemorySegment view = java.lang.foreign.MemorySegment.ofArray(chunk);
+        while (true) {
+            int read;
+            try {
+                read = data.read(chunk);
+            } catch (java.io.IOException failed) {
+                WireBuffer out = channel.begin(PgProtocol.COPY_FAIL);
+                out.putCString("the client could not read its data: " + failed.getClass().getSimpleName());
+                channel.end();
+                channel.flush();
+                return failed;
+            }
+            if (read < 0) {
+                break;
+            }
+            if (read > 0) {
+                WireBuffer out = channel.begin(PgProtocol.COPY_DATA);
+                out.putBytes(view, 0, read);
+                channel.end();
+                channel.flush();
+            }
+        }
+        channel.begin(PgProtocol.COPY_DONE);
+        channel.end();
+        channel.flush();
+        return null;
+    }
+
+    /**
+     * {@code COPY ... TO STDOUT}: the rows go to {@code sink} as the server
+     * sends them. A failure writing to the sink does not stop the reading -
+     * the rest of the answer is still on the wire and the session has to get
+     * past it - and is what the caller gets at the end.
+     *
+     * @return the rows the server says it copied
+     */
+    public long copyOut(String sql, java.io.OutputStream sink) throws SQLException {
+        flushPipeline();
+        java.io.IOException writing = null;
+        try {
+            int carried = writePending();
+            WireBuffer out = channel.begin(PgProtocol.QUERY);
+            out.putCString(sql);
+            channel.end();
+            channel.flush();
+            for (int i = 0; i < carried; i++) {
+                runUntilReady(null);
+            }
+            fields = List.of();
+            SQLException failure = null;
+            byte[] chunk = new byte[0]; // seclume-allow: the caller's bulk data, not a secret
+            while (true) {
+                byte tag = channel.nextMessage();
+                switch (tag) {
+                    case PgProtocol.COPY_OUT_RESPONSE, PgProtocol.COPY_DONE ->
+                            channel.endMessage();
+                    case PgProtocol.COPY_DATA -> {
+                        int length = channel.messageRemaining();
+                        if (writing == null) {
+                            if (chunk.length < length) {
+                                chunk = new byte[Math.max(length, 8192)]; // seclume-allow: the caller's bulk data, not a secret
+                            }
+                            WireBuffer in = channel.message();
+                            java.lang.foreign.MemorySegment.copy(in.segment(), in.position(),
+                                    java.lang.foreign.MemorySegment.ofArray(chunk), 0, length);
+                            try {
+                                sink.write(chunk, 0, length);
+                            } catch (java.io.IOException failed) {
+                                writing = failed;
+                            }
+                        }
+                        channel.endMessage();
+                    }
+                    case PgProtocol.COPY_IN_RESPONSE -> {
+                        channel.endMessage();
+                        WireBuffer fail = channel.begin(PgProtocol.COPY_FAIL);
+                        fail.putCString("copyOut was given a COPY ... FROM statement");
+                        channel.end();
+                        channel.flush();
+                        if (failure == null) {
+                            failure = new SQLException("copyOut was given a COPY ... FROM "
+                                    + "statement - use copyIn", "42601");
+                        }
+                    }
+                    case PgProtocol.COMMAND_COMPLETE -> {
+                        lastCommandTag = channel.message().readCString();
+                        channel.endMessage();
+                    }
+                    case PgProtocol.ERROR_RESPONSE -> {
+                        SQLException error = readError();
+                        if (failure == null) {
+                            failure = error;
+                        }
+                    }
+                    case PgProtocol.READY_FOR_QUERY -> {
+                        transactionStatus = (char) channel.message().getByte();
+                        channel.endMessage();
+                        settleParses();
+                        if (failure != null) {
+                            throw failure;
+                        }
+                        if (writing != null) {
+                            throw new SQLException("writing the COPY output failed: "
+                                    + writing.getMessage(), "58030", writing);
+                        }
+                        return copiedRows();
+                    }
+                    default -> handleAsynchronous(tag);
+                }
+            }
+        } catch (IOException | WireBuffer.Truncated e) {
+            throw brokenConnection("the connection broke during COPY", e);
+        }
+    }
+
+    /** The count in the last command tag, {@code COPY 42}. */
+    private long copiedRows() {
+        String tag = lastCommandTag;
+        if (tag != null && tag.startsWith("COPY ")) {
+            try {
+                return Long.parseLong(tag.substring(5).trim());
+            } catch (NumberFormatException ignored) {
+                // a server that does not count - none known
+            }
+        }
+        return -1;
     }
 
     // ---- extended protocol -----------------------------------------------
@@ -730,28 +1244,67 @@ public final class PgSession implements AutoCloseable {
             fields = parse(name, sql);
             return;
         }
-        this.pendingParseName = name;
-        this.pendingParseSql = sql;
+        pendingParses.put(name, sql);
     }
 
-    /** Whether a plan is announced but not yet parsed. */
-    public boolean hasPendingParse() {
-        return pendingParseSql != null;
+    /**
+     * Parses sent and not yet confirmed by ParseComplete, oldest first.
+     *
+     * <p>Sending a Parse is not having a plan. When it fails - a table that
+     * does not exist yet is enough - the server has no statement of that
+     * name, and every later Bind against it fails with "prepared statement
+     * does not exist", on and on, because the driver thought the Parse done.
+     * Liquibase met it: it asks for its lock table before creating it, and
+     * the statement stayed broken after the table was there.
+     */
+    private final java.util.ArrayDeque<InFlightParse> unconfirmedParses =
+            new java.util.ArrayDeque<>();
+
+    /**
+     * A Parse on the wire, and the ReadyForQuery that closes its block.
+     *
+     * <p>Not simply the next one: settings queued with runLater ride in
+     * front of it as simple queries, each with a ReadyForQuery of its own,
+     * and those arrive before the Parse has been answered at all.
+     */
+    private record InFlightParse(String name, String sql, long settledAtReady) {
     }
 
-    private int writePendingParse() {
-        if (pendingParseSql == null) {
+    /** ReadyForQuery messages read on this session so far. */
+    private long readyCount;
+
+    /** At ReadyForQuery: a Parse whose block is over and was not confirmed is owed again. */
+    private void settleParses() {
+        readyCount++;
+        while (!unconfirmedParses.isEmpty()
+                && unconfirmedParses.peek().settledAtReady() <= readyCount) {
+            InFlightParse unconfirmed = unconfirmedParses.poll();
+            pendingParses.putIfAbsent(unconfirmed.name(), unconfirmed.sql());
+        }
+    }
+
+    /** Whether this statement's plan is announced but not yet parsed. */
+    public boolean hasPendingParse(String name) {
+        return pendingParses.containsKey(name);
+    }
+
+    /** The Parse of the statement about to run - if it is still owed - and no other. */
+    private int writePendingParse(String statement, int carriedBefore) {
+        String pendingSql = pendingParses.remove(statement);
+        if (pendingSql == null) {
             return 0;
         }
+        unconfirmedParses.add(new InFlightParse(statement, pendingSql,
+                readyCount + carriedBefore + 1));
         WireBuffer out = channel.begin(PgProtocol.PARSE);
-        out.putCString(pendingParseName);
-        out.putCString(pendingParseSql);
+        out.putCString(statement);
+        out.putCString(pendingSql);
         out.putShort((short) 0);              // Typen ueberlaesst der Treiber dem Server
         channel.end();
 
         out = channel.begin(PgProtocol.DESCRIBE);
         out.putByte((byte) 'S');
-        out.putCString(pendingParseName);
+        out.putCString(statement);
         channel.end();
 
         // No Sync of its own. PostgreSQL flushes its output at every Sync, so
@@ -768,8 +1321,6 @@ public final class PgSession implements AutoCloseable {
         // Bind against a statement that was never created. With one, the
         // server skips to the Sync and the caller gets the one error that
         // actually happened.
-        pendingParseSql = null;
-        pendingParseName = null;
         return 0;
     }
 
@@ -784,6 +1335,7 @@ public final class PgSession implements AutoCloseable {
      * @return the columns the statement returns - empty for INSERT/UPDATE
      */
     public List<Field> parse(String name, String sql) throws SQLException {
+        pendingParses.remove(name);           // parsed now; nothing is owed any more
         try {
             WireBuffer out = channel.begin(PgProtocol.PARSE);
             out.putCString(name);
@@ -803,7 +1355,7 @@ public final class PgSession implements AutoCloseable {
             fields = List.of();
             runUntilReady(null);
             return fields;
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while preparing a statement", e);
         }
     }
@@ -837,7 +1389,8 @@ public final class PgSession implements AutoCloseable {
         // for, never a value somebody asked for.
         flushPipeline();
         try {
-            int carried = writePending() + writePendingParse();
+            int carried = writePending();
+            carried += writePendingParse(statement, carried);
             WireBuffer out = channel.begin(PgProtocol.BIND);
             out.putCString("");                       // the unnamed portal
             out.putCString(statement);
@@ -886,7 +1439,7 @@ public final class PgSession implements AutoCloseable {
                 fields = asked;
             }
             runUntilReady(handler);
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while running a prepared statement", e);
         }
     }
@@ -1016,10 +1569,32 @@ public final class PgSession implements AutoCloseable {
         }
     }
 
+    /**
+     * Drops a session context not yet sent - before a reset, so that the
+     * context of one borrower does not reach the next.
+     */
+    public void dropPendingContext() {
+        pending.removeIf(sql -> sql.startsWith("select set_config("));
+    }
+
+    /** What opens a transaction - {@code BEGIN}, or one that carries its own characteristics. */
+    private volatile String beginStatement = "BEGIN";
+
+    /**
+     * The statement a transaction opens with, from the next one on. Behind a
+     * transaction pooler the isolation level and read-only have to travel in
+     * it - {@code BEGIN ISOLATION LEVEL SERIALIZABLE READ ONLY} - because a
+     * session characteristic would stay on a server connection that the next
+     * transaction may belong to another client.
+     */
+    public void setBeginStatement(String beginStatement) {
+        this.beginStatement = beginStatement;
+    }
+
     /** Opens a transaction with the next statement. */
     public void beginLater() throws SQLException {
         if (!defer) {
-            execute("BEGIN");
+            execute(beginStatement);
             return;
         }
         if (!pending.contains("BEGIN")) {
@@ -1065,7 +1640,7 @@ public final class PgSession implements AutoCloseable {
             for (int i = 0; i < carried; i++) {
                 runUntilReady(null);
             }
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while setting the session up", e);
         }
     }
@@ -1079,7 +1654,9 @@ public final class PgSession implements AutoCloseable {
         int carried = pending.size();
         for (String sql : pending) {
             WireBuffer out = channel.begin(PgProtocol.QUERY);
-            out.putCString(sql);
+            // "BEGIN" is the marker the list is searched for; what goes out is
+            // the transaction's own opening - see setBeginStatement.
+            out.putCString(sql.equals("BEGIN") ? beginStatement : sql);
             channel.end();
         }
         pending.clear();
@@ -1170,7 +1747,8 @@ public final class PgSession implements AutoCloseable {
     public int pipelineBindAndExecute(String statement, PgParameters parameters, String sql)
             throws SQLException {
         if (pipelineGroup == 0) {
-            pipelineCarried = writePending() + writePendingParse();
+            pipelineCarried = writePending();
+            pipelineCarried += writePendingParse(statement, pipelineCarried);
         }
         writeBindAndExecute(statement, parameters);
         pipelineGroup++;
@@ -1206,7 +1784,7 @@ public final class PgSession implements AutoCloseable {
             }
             pipelineCarried = 0;
             readPipelineAnswers(group, pipelineCount);
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while sending the pipeline", e);
         }
     }
@@ -1263,13 +1841,18 @@ public final class PgSession implements AutoCloseable {
                 case PgProtocol.READY_FOR_QUERY -> {
                     transactionStatus = (char) channel.message().getByte();
                     channel.endMessage();
+                    settleParses();
                     if (failure != null) {
                         throw pipelineFailure(failure, groupStart + failedAt,
                                 expected - failedAt - 1);
                     }
                     return;
                 }
-                case PgProtocol.PARSE_COMPLETE, PgProtocol.BIND_COMPLETE,
+                case PgProtocol.PARSE_COMPLETE -> {
+                    unconfirmedParses.poll();
+                    channel.endMessage();
+                }
+                case PgProtocol.BIND_COMPLETE,
                      PgProtocol.CLOSE_COMPLETE, PgProtocol.EMPTY_QUERY,
                      PgProtocol.PORTAL_SUSPENDED, PgProtocol.PARAMETER_DESCRIPTION,
                      PgProtocol.NO_DATA -> channel.endMessage();
@@ -1339,7 +1922,7 @@ public final class PgSession implements AutoCloseable {
             channel.end();
             channel.flush();
             runUntilReady(handler);
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while reading the next block of rows", e);
         }
     }
@@ -1365,7 +1948,7 @@ public final class PgSession implements AutoCloseable {
             channel.flush();
             runUntilReady(null);
             portalSuspended = false;
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while closing a portal", e);
         }
     }
@@ -1406,7 +1989,8 @@ public final class PgSession implements AutoCloseable {
                 int start = at;
                 int sent = 0;
                 if (at == 0) {
-                    carried = writePending() + writePendingParse();
+                    carried = writePending();
+                    carried += writePendingParse(statement, carried);
                 }
                 while (at < count && sent < PIPELINE_ROWS
                         && channel.pending() < PIPELINE_BYTES) {
@@ -1424,7 +2008,7 @@ public final class PgSession implements AutoCloseable {
                 carried = 0;
                 readBatchAnswers(counts, start, sent);
             }
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while running a batch", e);
         }
         return counts;
@@ -1483,12 +2067,17 @@ public final class PgSession implements AutoCloseable {
                 case PgProtocol.READY_FOR_QUERY -> {
                     transactionStatus = (char) channel.message().getByte();
                     channel.endMessage();
+                    settleParses();
                     if (failure != null) {
                         throw failure;
                     }
                     return;
                 }
-                case PgProtocol.PARSE_COMPLETE, PgProtocol.BIND_COMPLETE,
+                case PgProtocol.PARSE_COMPLETE -> {
+                    unconfirmedParses.poll();
+                    channel.endMessage();
+                }
+                case PgProtocol.BIND_COMPLETE,
                      PgProtocol.CLOSE_COMPLETE, PgProtocol.EMPTY_QUERY,
                      PgProtocol.PORTAL_SUSPENDED, PgProtocol.PARAMETER_DESCRIPTION,
                      PgProtocol.NO_DATA -> channel.endMessage();
@@ -1532,8 +2121,10 @@ public final class PgSession implements AutoCloseable {
      */
     public void discardPending() {
         pending.clear();
-        pendingParseName = null;
-        pendingParseSql = null;
+        // Not the announced Parses: a prepared statement is not part of a
+        // transaction, and its plan is owed whether or not this one is rolled
+        // back. Discarding it here left the statement believing it was
+        // prepared - and its next execution bound against nothing.
     }
 
     /**
@@ -1544,6 +2135,9 @@ public final class PgSession implements AutoCloseable {
      * trip as the next statement.
      */
     public void closeStatementLater(String name) throws SQLException {
+        if (pendingParses.remove(name) != null) {
+            return;                           // never parsed, so nothing to close
+        }
         if (!defer) {
             closeStatement(name);
             return;
@@ -1566,7 +2160,7 @@ public final class PgSession implements AutoCloseable {
             channel.end();
             channel.flush();
             runUntilReady(null);
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while closing a statement", e);
         }
     }
@@ -1613,7 +2207,11 @@ public final class PgSession implements AutoCloseable {
                     portalSuspended = true;
                     channel.endMessage();
                 }
-                case PgProtocol.PARSE_COMPLETE, PgProtocol.BIND_COMPLETE,
+                case PgProtocol.PARSE_COMPLETE -> {
+                    unconfirmedParses.poll();
+                    channel.endMessage();
+                }
+                case PgProtocol.BIND_COMPLETE,
                      PgProtocol.CLOSE_COMPLETE, PgProtocol.EMPTY_QUERY,
                      PgProtocol.PARAMETER_DESCRIPTION ->
                         channel.endMessage();
@@ -1626,6 +2224,7 @@ public final class PgSession implements AutoCloseable {
                 case PgProtocol.READY_FOR_QUERY -> {
                     transactionStatus = (char) channel.message().getByte();
                     channel.endMessage();
+                    settleParses();
                     if (failure != null) {
                         throw failure;
                     }
@@ -1703,9 +2302,19 @@ public final class PgSession implements AutoCloseable {
                 backendProcessId = in.getInt();
                 backendSecretKey = in.getInt();
             }
-            case PgProtocol.NOTICE_RESPONSE, PgProtocol.NOTIFICATION_RESPONSE -> {
+            case PgProtocol.NOTIFICATION_RESPONSE -> {
+                int from = in.getInt();
+                String name = in.readCString();
+                String payload = in.readCString();
+                if (notifications.size() >= NOTIFICATIONS_KEPT) {
+                    notifications.pollFirst();           // the oldest goes, and is counted
+                    notificationsDropped++;
+                }
+                notifications.addLast(new PgNotification(from, name, payload));
+            }
+            case PgProtocol.NOTICE_RESPONSE -> {
                 // The server's notices are of no interest here yet; they
-                // belong on SQLWarning or the listener later.
+                // belong on SQLWarning later.
             }
             default -> {
                 // Unknown messages are skipped - the server may extend the
@@ -1767,7 +2376,7 @@ public final class PgSession implements AutoCloseable {
 
     /**
      * The method this session was logged in with - {@code scram-sha-256},
-     * {@code md5}, {@code password} or {@code trust}. Useful in bug reports and
+     * {@code md5}, {@code password}, {@code cert} or {@code trust}. Useful in bug reports and
      * the only honest way to show in a test which path actually ran.
      */
     public String authenticationMethod() {
@@ -1783,6 +2392,69 @@ public final class PgSession implements AutoCloseable {
     }
 
     /**
+     * Asks the server to stop whatever this connection is doing.
+     *
+     * <p>Out of band, on a connection of its own, because the one running the
+     * statement is blocked on its answer. A second socket is opened to the
+     * same server, the sixteen bytes of a {@code CancelRequest} go down it,
+     * and it is closed again - see
+     * {@link PgChannel#sendCancelRequest}. The server sends nothing back and
+     * this call does not wait for anything: <b>a cancellation that was ignored
+     * and one that worked look exactly the same from here.</b> What the caller
+     * sees is the statement it interrupted failing, or finishing, on its own
+     * thread.
+     *
+     * <p>The race is in the protocol and not in this method. A cancel sent
+     * while nothing is running is discarded by the server; a cancel sent in
+     * the gap between two statements can stop the second one. Nothing on the
+     * client can close that gap - libpq has it too - so this does not pretend
+     * to, and a caller that needs certainty has to check what the statement
+     * did rather than assume the cancel landed.
+     *
+     * <p>Safe from another thread, and that is the only way it is ever called:
+     * it touches nothing this session owns except two numbers that were
+     * written once during the login.
+     *
+     * @throws SQLException if this session cannot be cancelled - a resumed
+     *                      stream, or a server that sent no key
+     */
+    public void cancel() throws SQLException {
+        Settings where = settings;
+        if (where == null) {
+            throw new SQLException("this session was resumed rather than opened, so it does "
+                    + "not know which server to send a cancellation to", "0A000");
+        }
+        if (backendProcessId == 0) {
+            throw new SQLException("the server sent no BackendKeyData, so there is no key "
+                    + "to cancel with", "0A000");
+        }
+        if (!channel.isAwaitingAnswer()) {
+            // Nothing is running, so there is nothing to cancel - and sending
+            // it anyway would stop the next statement instead, which is the
+            // whole trap in PostgreSQL's cancellation. See
+            // PgChannel#isAwaitingAnswer.
+            return;
+        }
+        PgChannel aside;
+        try {
+            aside = PgChannel.connect(where.host(), where.port(),
+                    where.connectTimeoutMillis());
+        } catch (IOException | WireBuffer.Truncated e) {
+            throw new SQLNonTransientConnectionException("cannot reach "
+                    + where.host() + ":" + where.port() + " to cancel", "08001", e);
+        }
+        try {
+            negotiateTls(aside, where);
+            aside.sendCancelRequest(backendProcessId, backendSecretKey);
+        } catch (IOException | WireBuffer.Truncated e) {
+            throw new SQLNonTransientConnectionException(
+                    "the cancellation could not be sent: " + e.getMessage(), "08006", e);
+        } finally {
+            aside.close();
+        }
+    }
+
+    /**
      * The connection is gone, and the session with it.
      *
      * <p><b>Closing here is the point.</b> After an IO failure the protocol
@@ -1793,10 +2465,47 @@ public final class PgSession implements AutoCloseable {
      * seconds takes the pool with it for as long as requests keep arriving
      * faster than the pool's validation window. Found by the chaos benchmark,
      * where it happened on every request.
+     *
+     * <p><b>Two causes, and they are the same fact seen from two places.</b>
+     * An {@link IOException} is the socket saying so. A
+     * {@link WireBuffer.Truncated} is this driver saying so: a message
+     * announced more bytes than it brought, so what follows it is not where
+     * the protocol says it is, and every byte after that would be read at the
+     * wrong offset.
+     *
+     * <p><b>And what it last saw, when it was recording.</b> The flight
+     * recorder's tail is attached here and not offered separately, because
+     * this is the one place somebody is certain to look: a stream that went
+     * out of step shows it in the order of the last few messages and in
+     * nothing else, and by the time anybody thinks to ask, the connection is
+     * closed. See {@link space.seclume.Flight}.
+     *
+     * <p><b>The second used to escape as an unchecked exception.</b>
+     * {@code Truncated} is an {@code IllegalStateException}, nothing in this
+     * driver caught it, and so a malformed answer came out of
+     * {@code Statement.executeQuery} - a method whose signature promises
+     * {@link SQLException} and nothing else. An application catches
+     * {@code SQLException}; that is what a framework's retry and its
+     * connection-health check are written against. An unchecked exception from
+     * inside a decoder goes past all of it, is logged as a bug in the
+     * application, and leaves a connection in a pool that nobody marked
+     * broken. Found by the fuzz corpus on 23.09.2026.
      */
-    private SQLException brokenConnection(String what, IOException cause) {
+    private SQLException brokenConnection(String what, Exception cause) {
+        String flight = channel.flightTail();
         channel.close();
-        return new SQLNonTransientConnectionException(what, "08006", cause);
+        return new SQLNonTransientConnectionException(
+                flight == null ? what : what + " - " + flight, "08006", cause);
+    }
+
+    /** What this connection last sent and received - see space.seclume.Flight. */
+    public java.util.List<space.seclume.Flight.Message> recentMessages() {
+        return channel.recentMessages();
+    }
+
+    /** How many messages have crossed this connection. */
+    public long recordedMessages() {
+        return channel.recordedMessages();
     }
 
     public boolean isOpen() {
@@ -1877,7 +2586,7 @@ public final class PgSession implements AutoCloseable {
             throws SQLException {
         try {
             channel.replaceTransport(replacement);
-        } catch (IOException e) {
+        } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the transport could not be replaced: " + e.getMessage(), e);
         }
     }
@@ -1967,11 +2676,85 @@ public final class PgSession implements AutoCloseable {
                     + "handed to another session. Open it on seclume's own TLS stack, or "
                     + "terminate TLS where the login happens", "0A000");
         }
+        // A setting waiting for the next statement - the BEGIN of
+        // setAutoCommit(false), an isolation, read-only - goes now. Left
+        // behind, the other side would run in auto-commit while its connection
+        // says it does not: every statement committed at once, and a rollback
+        // that rolls back nothing. Found by handing a JDBC connection over
+        // straight after setAutoCommit(false). One round trip, and only when
+        // something waits.
+        flushPending();
         space.seclume.internal.Transport stream = channel.transport();
         java.util.Map<String, String> snapshot = java.util.Map.copyOf(parameters);
         space.seclume.internal.TlsLayer tls = channel.tlsLayer();
         channel.release(tls != null);
         return new Detached(stream, snapshot, backendProcessId, backendSecretKey, tls);
+    }
+
+    /**
+     * What {@link #detach()} hands out, <b>without handing anything out</b>:
+     * the session goes on, and the stream and the encryption returned are the
+     * live ones - to be described (the encryption's
+     * {@link space.seclume.internal.TlsLayer#snapshot}), never used. The same
+     * refusals as {@code detach}, and a setting waiting for the next
+     * statement goes now, so the description says what the server has.
+     *
+     * <p>For a copy kept elsewhere against this process dying; taken at a
+     * quiet moment, it is exact until the next statement.
+     */
+    public Detached snapshot() throws SQLException {
+        if (!channel.isIdle()) {
+            throw new SQLException("this session has work in flight - it can only be "
+                    + "described at a quiescent point", "25000");
+        }
+        if (channel.isEncrypted() && !channel.encryptionCanTravel()) {
+            throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
+                    + "cannot leave the SSLEngine that holds them", "0A000");
+        }
+        flushPending();
+        return new Detached(channel.transport(), java.util.Map.copyOf(parameters),
+                backendProcessId, backendSecretKey, channel.tlsLayer());
+    }
+
+    /**
+     * Notifications the server sent and nobody has taken yet - they arrive
+     * with any answer, and wait here for {@link #takeNotifications}.
+     */
+    private final java.util.ArrayDeque<PgNotification> notifications = new java.util.ArrayDeque<>();
+
+    /** How many wait here at most; beyond it the oldest go. */
+    private static final int NOTIFICATIONS_KEPT = 10_000;
+
+    /** How many went that way - a listener that never takes them should find out. */
+    private long notificationsDropped;
+
+    /**
+     * The notifications that arrived, oldest first, and taken.
+     *
+     * @param ask when nothing waits here yet, ask the server with a bare
+     *            {@code Sync}: one round trip that brings whatever it has
+     *            queued for this connection - and does nothing else, not
+     *            even begin the transaction a pending {@code BEGIN} would
+     */
+    public java.util.List<PgNotification> takeNotifications(boolean ask) throws SQLException {
+        if (ask && notifications.isEmpty() && channel.isIdle()) {
+            try {
+                channel.begin(PgProtocol.SYNC);
+                channel.end();
+                channel.flush();
+                runUntilReady(null);
+            } catch (IOException | WireBuffer.Truncated e) {
+                throw brokenConnection("the connection broke while asking for notifications", e);
+            }
+        }
+        java.util.List<PgNotification> taken = new java.util.ArrayList<>(notifications);
+        notifications.clear();
+        return taken;
+    }
+
+    /** How many notifications were dropped because nobody took them in time. */
+    public long notificationsDropped() {
+        return notificationsDropped;
     }
 
     /** Cancelling a running query needs this key. */

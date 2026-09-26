@@ -13,15 +13,18 @@ import java.sql.Statement;
  * <p>The information about tables and columns comes from real queries against
  * the system catalog - the same ones {@code psql \d} issues. Everything that
  * gives a fixed answer here gives it the way this driver actually behaves:
- * {@code supportsSavepoints()} is {@code false} because it has none, not
- * {@code true} because PostgreSQL would have them.
+ * {@code supportsSavepoints()} answers for this driver, not for PostgreSQL:
+ * it was {@code false} for as long as the driver had none.
  */
 final class PgDatabaseMetaData implements DatabaseMetaData {
 
     private final PgConnection connection;
+    /** The connection this was made through, as the application sees it - see {@link space.seclume.internal.jdbc.Fronted}. */
+    private final Connection owner;
 
     PgDatabaseMetaData(PgConnection connection) {
         this.connection = connection;
+        this.owner = connection.frontOrSelf();
     }
 
     private ResultSet query(String sql) throws SQLException {
@@ -527,7 +530,7 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public Connection getConnection() {
-        return connection;
+        return owner;
     }
 
     @Override
@@ -1244,7 +1247,7 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsSavepoints() {
-        return false;
+        return true;
     }
 
     @Override
@@ -1259,7 +1262,8 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public boolean supportsGetGeneratedKeys() {
-        return false;
+        // RETURNING, on plain and prepared statements alike - see PgStatement.
+        return true;
     }
 
     @Override

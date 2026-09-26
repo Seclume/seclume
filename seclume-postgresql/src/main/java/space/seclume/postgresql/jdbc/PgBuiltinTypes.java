@@ -1,0 +1,131 @@
+package space.seclume.postgresql.jdbc;
+
+import java.util.Map;
+
+/**
+ * The name of every built-in PostgreSQL type, by its oid.
+ *
+ * <p>Built-in oids are fixed - they are written into the catalog's source and
+ * do not change between releases - so the table can be written down rather
+ * than asked for. It was generated from {@code pg_type} on PostgreSQL 16
+ * ({@code oid < 16384}, schema {@code pg_catalog}, no arrays - an array's name
+ * is its element's with an underscore, see {@link PgOids#typeName}).
+ *
+ * <p>Before it, {@code getColumnTypeName} answered {@code oid1560} for a
+ * {@code bit} column and the same for some sixty other types - found by the
+ * type catalog run against pgjdbc. Tools and ORMs read that name.
+ */
+final class PgBuiltinTypes {
+
+    private PgBuiltinTypes() {
+    }
+
+    static final Map<Integer, String> NAMES = Map.ofEntries(
+            Map.entry(16, "bool"),
+            Map.entry(17, "bytea"),
+            Map.entry(18, "char"),
+            Map.entry(19, "name"),
+            Map.entry(20, "int8"),
+            Map.entry(21, "int2"),
+            Map.entry(22, "int2vector"),
+            Map.entry(23, "int4"),
+            Map.entry(24, "regproc"),
+            Map.entry(25, "text"),
+            Map.entry(26, "oid"),
+            Map.entry(27, "tid"),
+            Map.entry(28, "xid"),
+            Map.entry(29, "cid"),
+            Map.entry(30, "oidvector"),
+            Map.entry(32, "pg_ddl_command"),
+            Map.entry(114, "json"),
+            Map.entry(142, "xml"),
+            Map.entry(194, "pg_node_tree"),
+            Map.entry(269, "table_am_handler"),
+            Map.entry(325, "index_am_handler"),
+            Map.entry(600, "point"),
+            Map.entry(601, "lseg"),
+            Map.entry(602, "path"),
+            Map.entry(603, "box"),
+            Map.entry(604, "polygon"),
+            Map.entry(628, "line"),
+            Map.entry(650, "cidr"),
+            Map.entry(700, "float4"),
+            Map.entry(701, "float8"),
+            Map.entry(705, "unknown"),
+            Map.entry(718, "circle"),
+            Map.entry(774, "macaddr8"),
+            Map.entry(790, "money"),
+            Map.entry(829, "macaddr"),
+            Map.entry(869, "inet"),
+            Map.entry(1033, "aclitem"),
+            Map.entry(1042, "bpchar"),
+            Map.entry(1043, "varchar"),
+            Map.entry(1082, "date"),
+            Map.entry(1083, "time"),
+            Map.entry(1114, "timestamp"),
+            Map.entry(1184, "timestamptz"),
+            Map.entry(1186, "interval"),
+            Map.entry(1266, "timetz"),
+            Map.entry(1560, "bit"),
+            Map.entry(1562, "varbit"),
+            Map.entry(1700, "numeric"),
+            Map.entry(1790, "refcursor"),
+            Map.entry(2202, "regprocedure"),
+            Map.entry(2203, "regoper"),
+            Map.entry(2204, "regoperator"),
+            Map.entry(2205, "regclass"),
+            Map.entry(2206, "regtype"),
+            Map.entry(2249, "record"),
+            Map.entry(2275, "cstring"),
+            Map.entry(2276, "any"),
+            Map.entry(2277, "anyarray"),
+            Map.entry(2278, "void"),
+            Map.entry(2279, "trigger"),
+            Map.entry(2280, "language_handler"),
+            Map.entry(2281, "internal"),
+            Map.entry(2283, "anyelement"),
+            Map.entry(2776, "anynonarray"),
+            Map.entry(2950, "uuid"),
+            Map.entry(2970, "txid_snapshot"),
+            Map.entry(3115, "fdw_handler"),
+            Map.entry(3220, "pg_lsn"),
+            Map.entry(3310, "tsm_handler"),
+            Map.entry(3361, "pg_ndistinct"),
+            Map.entry(3402, "pg_dependencies"),
+            Map.entry(3500, "anyenum"),
+            Map.entry(3614, "tsvector"),
+            Map.entry(3615, "tsquery"),
+            Map.entry(3642, "gtsvector"),
+            Map.entry(3734, "regconfig"),
+            Map.entry(3769, "regdictionary"),
+            Map.entry(3802, "jsonb"),
+            Map.entry(3831, "anyrange"),
+            Map.entry(3838, "event_trigger"),
+            Map.entry(3904, "int4range"),
+            Map.entry(3906, "numrange"),
+            Map.entry(3908, "tsrange"),
+            Map.entry(3910, "tstzrange"),
+            Map.entry(3912, "daterange"),
+            Map.entry(3926, "int8range"),
+            Map.entry(4072, "jsonpath"),
+            Map.entry(4089, "regnamespace"),
+            Map.entry(4096, "regrole"),
+            Map.entry(4191, "regcollation"),
+            Map.entry(4451, "int4multirange"),
+            Map.entry(4532, "nummultirange"),
+            Map.entry(4533, "tsmultirange"),
+            Map.entry(4534, "tstzmultirange"),
+            Map.entry(4535, "datemultirange"),
+            Map.entry(4536, "int8multirange"),
+            Map.entry(4537, "anymultirange"),
+            Map.entry(4538, "anycompatiblemultirange"),
+            Map.entry(4600, "pg_brin_bloom_summary"),
+            Map.entry(4601, "pg_brin_minmax_multi_summary"),
+            Map.entry(5017, "pg_mcv_list"),
+            Map.entry(5038, "pg_snapshot"),
+            Map.entry(5069, "xid8"),
+            Map.entry(5077, "anycompatible"),
+            Map.entry(5078, "anycompatiblearray"),
+            Map.entry(5079, "anycompatiblenonarray"),
+            Map.entry(5080, "anycompatiblerange"));
+}

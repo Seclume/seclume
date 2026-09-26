@@ -138,7 +138,17 @@ final class PgArrayText {
         }
     }
 
+    /**
+     * The literal is not quoted back, and that is deliberate.
+     *
+     * <p>It is a row: whatever the application stored, which can be a name, a
+     * token or a number somebody would rather not see in a log - and an
+     * exception message is where logs come from. The length and where the
+     * parse stopped are enough to find the row; the content is not this
+     * exception's to publish.
+     */
     private static SQLException malformed(String text) {
-        return new SQLException("not a PostgreSQL array literal: " + text, "22P02");
+        return new SQLException("not a PostgreSQL array literal ("
+                + (text == null ? 0 : text.length()) + " characters)", "22P02");
     }
 }

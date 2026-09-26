@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 
+import space.seclume.internal.jdbc.StreamValues;
 import space.seclume.postgresql.PgParameters;
 import space.seclume.postgresql.PgSession;
 
@@ -43,12 +44,21 @@ import space.seclume.postgresql.PgSession;
  * it and output parameters behind it, and everything in between - parse, bind,
  * execute, the plan cache - is this class's and should stay in one place.
  */
-class PgPreparedStatement extends PgStatement implements PreparedStatement {
+class PgPreparedStatement extends PgStatement
+        implements PreparedStatement, space.seclume.SensitiveParameters {
 
-    private final String sql;
-    /** As the caller wrote it - the key the connection caches the plan under. */
+    private String sql;
+    /** As the caller wrote it. */
     private final String originalSql;
-    private final String name;
+    /**
+     * The text of the plan this statement holds, in the caller's spelling -
+     * the key the connection caches it under. The caller's text, or its form
+     * for the lists bound to {@code in (?)}.
+     */
+    private String planSql;
+    /** Lists bound to {@code in (?)}, by parameter index - see InLists; null for none. */
+    private space.seclume.internal.jdbc.InLists.Bound[] lists;
+    private String name;
     private final PgParameters parameters;
     private final int expectedParameters;
     private List<PgSession.Field> described;
@@ -67,6 +77,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         // PostgreSQL knows no question marks; $1, $2 ... are its placeholders.
         PgSqlRewriter.Rewritten rewritten = PgSqlRewriter.rewrite(sql);
         this.originalSql = sql;
+        this.planSql = sql;
         this.sql = rewritten.sql();
         this.expectedParameters = rewritten.parameters();
         this.name = name;
@@ -90,16 +101,39 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
      * trip then; see {@link #getMetaData()}.
      */
     private void prepare() throws SQLException {
+        followLists();
         if (!prepared) {
             connection.session().parseLater(name, sql);
             prepared = true;
         }
     }
 
+    /**
+     * Switches to the plan for the lists now bound, when that is another text
+     * than the plan held - {@code = any(cast(? as bigint[]))} where the caller
+     * wrote {@code in (?)}. The plan held goes back to the connection's cache
+     * under its own text, so switching back and forth parses nothing twice.
+     */
+    private void followLists() throws SQLException {
+        String wanted = space.seclume.internal.jdbc.InLists.apply(originalSql, lists,
+                space.seclume.internal.jdbc.InLists.Dialect.POSTGRESQL);
+        if (wanted.equals(planSql)) {
+            return;
+        }
+        if (prepared) {
+            connection.releasePlan(planSql, name, described);
+        }
+        planSql = wanted;
+        sql = PgSqlRewriter.rewrite(wanted).sql();
+        name = connection.newStatementName();
+        prepared = false;
+        described = null;
+    }
+
     /** Forces the announced plan to be parsed now, because somebody asks. */
     private void describeNow() throws SQLException {
         prepare();
-        if (described == null && connection.session().hasPendingParse()) {
+        if (described == null && connection.session().hasPendingParse(name)) {
             described = connection.session().parse(name, sql);
         }
     }
@@ -109,6 +143,16 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
     @Override
     public boolean execute() throws SQLException {
         runPrepared();
+        if (wantsGeneratedKeys()) {
+            // The rows of the rewritten statement are the keys, and JDBC says
+            // what execute() reports then: false, and the count through
+            // getUpdateCount. It reported true and -1, so MyBatis - which
+            // calls execute() and reads the count - saw an insert that had
+            // changed nothing. executeUpdate() already did this. Found by the
+            // frameworks suite.
+            keepAsGeneratedKeys();
+            return false;
+        }
         return currentResultSet() != null;
     }
 
@@ -117,7 +161,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         runPrepared();
         ResultSet result = currentResultSet();
         if (result == null) {
-            throw new SQLException("the statement returned no rows: " + sql
+            throw new SQLException("the statement returned no rows: " + shape(sql)
                     + " - use executeUpdate for statements that do not select");
         }
         return result;
@@ -158,6 +202,10 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
     }
 
     private void runPrepared() throws SQLException {
+        underDeadline(sql, this::runPreparedNow);
+    }
+
+    private void runPreparedNow() throws SQLException {
         checkOpen();
         prepare();
         if (parameters.count() < expectedParameters) {
@@ -171,7 +219,31 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         // row description coming back, and rebuilding the Field objects and
         // column names from it - measured at some five hundred bytes per
         // execution on a one-row query.
-        beginExecution(session, parameters, name, executeLimit(), sql, described);
+        try {
+            beginExecution(session, parameters, name, executeLimit(), sql, described);
+        } catch (SQLException e) {
+            if (described == null || !"0A000".equals(e.getSQLState())) {
+                throw e;
+            }
+            // "cached plan must not change result type": the table under the
+            // plan changed - dropped and re-created, a column added - since it
+            // was parsed, and the server will not run it in the old shape. The
+            // plan is useless from now on, on this statement and in the
+            // connection's cache, so it goes and a new one takes its name.
+            // Outside a transaction nothing was spoilt and the statement runs
+            // again at once, as pgjdbc does with autosave; inside one the
+            // transaction is aborted and only its owner can decide, so the
+            // error goes out - and the retry after the rollback parses afresh.
+            session.closeStatementLater(name);
+            name = connection.newStatementName();
+            described = null;
+            prepared = false;
+            if (!connection.getAutoCommit()) {
+                throw e;
+            }
+            prepare();
+            beginExecution(session, parameters, name, executeLimit(), sql, null);
+        }
         if (described == null) {
             // Empty counts as known: a statement that returns no rows has no
             // description, and there is no point asking again for that either.
@@ -184,6 +256,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
     @Override
     public void addBatch() throws SQLException {
         checkOpen();
+        space.seclume.internal.jdbc.InLists.refuseInBatch(lists);
         if (batch == null) {
             batch = new ArrayList<>();
         }
@@ -216,14 +289,21 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         // latency of the network while the database waits - measured at fifty
         // times the pipelined path on a loopback connection, and the gap grows
         // with every millisecond of distance to the server.
-        long[] counts = connection.session().bindAndExecuteBatch(name, parameters,
-                rows.size(), index -> {
-                    Object[] values = rows.get(index);
-                    parameters.clear();
-                    for (int p = 0; p < values.length; p++) {
-                        parameters.set(p + 1, values[p]);
-                    }
-                });
+        // A batch in auto-commit mode commits as it goes, so a lost answer
+        // here is a lost commit - see inDoubt.
+        long[] counts;
+        try {
+            counts = connection.session().bindAndExecuteBatch(name, parameters,
+                    rows.size(), index -> {
+                        Object[] values = rows.get(index);
+                        parameters.clear();
+                        for (int p = 0; p < values.length; p++) {
+                            parameters.set(p + 1, values[p]);
+                        }
+                    });
+        } catch (SQLException failure) {
+            throw inDoubt(failure, null);
+        }
         for (int i = 0; i < counts.length; i++) {
             counts[i] = Math.max(counts[i], 0);
         }
@@ -256,6 +336,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
     public void clearParameters() throws SQLException {
         checkOpen();
         parameters.clear();
+        lists = null;
     }
 
     @Override
@@ -401,15 +482,39 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         set(index, value);
     }
 
+    /** JDBC 4.2's form with a {@code JDBCType}; the interface's default refuses it. */
+    @Override
+    public void setObject(int index, Object value, java.sql.SQLType targetSqlType)
+            throws SQLException {
+        setObject(index, value, space.seclume.internal.jdbc.ParameterSetters.typeNumber(
+                targetSqlType));
+    }
+
+    @Override
+    public void setObject(int index, Object value, java.sql.SQLType targetSqlType,
+                          int scaleOrLength) throws SQLException {
+        setObject(index, value, space.seclume.internal.jdbc.ParameterSetters.typeNumber(
+                targetSqlType), scaleOrLength);
+    }
+
     /**
      * Every one of the forty-eight setters above ends here, which is what
      * makes a subclass able to renumber them: a call written
      * {@code {? = call f(?)}} counts its return value as parameter 1, and the
      * statement underneath has only the one placeholder.
      */
+    @Override
+    public void setSensitive(int parameterIndex, java.lang.foreign.MemorySegment value)
+            throws SQLException {
+        set(parameterIndex, new space.seclume.internal.jdbc.NativeValue(value));
+    }
+
     void set(int index, Object value) throws SQLException {
         checkOpen();
-        parameters.set(index, value);
+        space.seclume.internal.jdbc.InLists.Bound list = space.seclume.internal.jdbc.InLists.of(
+                value, space.seclume.internal.jdbc.InLists.Dialect.POSTGRESQL);
+        lists = space.seclume.internal.jdbc.InLists.note(lists, index, list);
+        parameters.set(index, list == null ? value : list.payload());
     }
 
     /** What has been bound so far - the callable checks its outputs against it. */
@@ -435,143 +540,200 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
 
     @Override
     public ParameterMetaData getParameterMetaData() throws SQLException {
-        throw new SQLFeatureNotSupportedException(
-                "seclume does not ask the server for parameter types - it sends every "
-                + "parameter in text form and lets the server decide");
+        checkOpen();
+        return space.seclume.internal.jdbc.PlaceholderMetaData.ofText(originalSql);
     }
 
-    // ---- the unsupported remainder ---------------------------------------
+    // ---- streams: read to the end, then sent as a value ------------------
+
+    /*
+     * The same rule as ParameterSetters, which this class does not implement:
+     * the stream is read here, a given length is held to, and the value goes
+     * out as text or bytea like any other. See StreamValues.
+     */
 
     @Override
     public void setAsciiStream(int index, InputStream stream, int length) throws SQLException {
-        throw streams();
+        setAsciiStream(index, stream, (long) length);
     }
 
     @SuppressWarnings("deprecation")
     @Override
     public void setUnicodeStream(int index, InputStream stream, int length) throws SQLException {
-        throw streams();
+        throw new SQLFeatureNotSupportedException("setUnicodeStream is deprecated since "
+                + "JDBC 2.0 - use setCharacterStream");
     }
 
     @Override
     public void setBinaryStream(int index, InputStream stream, int length) throws SQLException {
-        throw streams();
+        setBinaryStream(index, stream, (long) length);
     }
 
     @Override
     public void setAsciiStream(int index, InputStream stream, long length) throws SQLException {
-        throw streams();
+        setString(index, StreamValues.ascii(stream, length));
     }
 
     @Override
     public void setBinaryStream(int index, InputStream stream, long length) throws SQLException {
-        throw streams();
+        setBytes(index, StreamValues.bytes(stream, length));
     }
 
     @Override
     public void setAsciiStream(int index, InputStream stream) throws SQLException {
-        throw streams();
+        setAsciiStream(index, stream, StreamValues.UNKNOWN);
     }
 
     @Override
     public void setBinaryStream(int index, InputStream stream) throws SQLException {
-        throw streams();
+        setBinaryStream(index, stream, StreamValues.UNKNOWN);
     }
 
     @Override
     public void setCharacterStream(int index, Reader reader, int length) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader, (long) length);
     }
 
     @Override
     public void setCharacterStream(int index, Reader reader, long length) throws SQLException {
-        throw streams();
+        setString(index, StreamValues.text(reader, length));
     }
 
     @Override
     public void setCharacterStream(int index, Reader reader) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader, StreamValues.UNKNOWN);
     }
 
     @Override
     public void setNCharacterStream(int index, Reader reader, long length) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader, length);
     }
 
     @Override
     public void setNCharacterStream(int index, Reader reader) throws SQLException {
-        throw streams();
+        setCharacterStream(index, reader);
     }
 
-    private static SQLFeatureNotSupportedException streams() {
-        return new SQLFeatureNotSupportedException(
-                "seclume does not take streams as parameters - read the value yourself "
-                + "and pass a String or byte[], so the size stays visible at the call site");
-    }
+    // ---- the unsupported remainder ---------------------------------------
 
     @Override
     public void setRef(int index, Ref value) throws SQLException {
+        if (value == null) {
+            set(index, null);
+            return;
+        }
         throw unsupported("REF");
     }
 
+    // ---- Blob and Clob: a large object, and its oid as the value ---------
+
+    /*
+     * On PostgreSQL a LOB column is an oid, and the value it holds is the
+     * number of a large object. So a Blob or Clob parameter creates one and
+     * binds its oid - what pgjdbc does, and what Hibernate's @Lob mapping on
+     * PostgreSQL depends on.
+     *
+     * Only inside a transaction. There the large object and the row that
+     * points at it commit or roll back together; under auto-commit the object
+     * would be committed on its own before the statement runs, and a failed
+     * insert would leave it behind. pgjdbc refuses the same.
+     *
+     * What remains is PostgreSQL's model, not the driver's: a large object
+     * outlives the row that pointed at it. Deleting or updating the row leaves
+     * the old one in pg_largeobject until something unlinks it - the lo
+     * extension's lo_manage trigger, or vacuumlo. See PgLargeObjects.
+     */
+
     @Override
     public void setBlob(int index, Blob value) throws SQLException {
-        throw unsupported("BLOB");
+        setLargeObject(index, value == null ? null
+                : StreamValues.bytes(value.getBinaryStream(), value.length()), "Blob");
     }
 
     @Override
     public void setBlob(int index, InputStream stream, long length) throws SQLException {
-        throw unsupported("BLOB");
+        setLargeObject(index, StreamValues.bytes(stream, length), "Blob");
     }
 
     @Override
     public void setBlob(int index, InputStream stream) throws SQLException {
-        throw unsupported("BLOB");
+        setBlob(index, stream, StreamValues.UNKNOWN);
     }
 
     @Override
     public void setClob(int index, Clob value) throws SQLException {
-        throw unsupported("CLOB");
+        setClobText(index, value == null ? null
+                : StreamValues.text(value.getCharacterStream(), value.length()));
     }
 
     @Override
     public void setClob(int index, Reader reader, long length) throws SQLException {
-        throw unsupported("CLOB");
+        setClobText(index, StreamValues.text(reader, length));
     }
 
     @Override
     public void setClob(int index, Reader reader) throws SQLException {
-        throw unsupported("CLOB");
+        setClob(index, reader, StreamValues.UNKNOWN);
     }
 
     @Override
     public void setNClob(int index, NClob value) throws SQLException {
-        throw unsupported("NCLOB");
+        setClob(index, value);
     }
 
     @Override
     public void setNClob(int index, Reader reader, long length) throws SQLException {
-        throw unsupported("NCLOB");
+        setClob(index, reader, length);
     }
 
     @Override
     public void setNClob(int index, Reader reader) throws SQLException {
-        throw unsupported("NCLOB");
+        setClob(index, reader);
+    }
+
+    /** A Clob's text is stored as UTF-8 - the encoding this driver talks. */
+    private void setClobText(int index, String text) throws SQLException {
+        setLargeObject(index, text == null ? null
+                : text.getBytes(java.nio.charset.StandardCharsets.UTF_8), "Clob"); // seclume-allow: user payload on its way into a large object, not a secret
+    }
+
+    private void setLargeObject(int index, byte[] content, String kind) throws SQLException {
+        checkOpen();
+        if (content == null) {
+            setNull(index, java.sql.Types.BIGINT);
+            return;
+        }
+        if (connection.getAutoCommit()) {
+            throw new SQLException("a " + kind + " parameter on PostgreSQL creates a large "
+                    + "object, and outside a transaction it would outlive a statement that "
+                    + "fails - call setAutoCommit(false) first, or map the column as bytea "
+                    + "or text and use setBytes or setString", "25P01");
+        }
+        setLong(index, new PgLargeObjects(connection).create(content));
     }
 
     @Override
     public void setArray(int index, Array value) throws SQLException {
+        if (value == null) {
+            set(index, null);
+            return;
+        }
         throw unsupported("ARRAY");
     }
 
     @Override
     public void setRowId(int index, RowId value) throws SQLException {
+        if (value == null) {
+            set(index, null);
+            return;
+        }
         throw unsupported("ROWID");
     }
 
     @Override
     public void setSQLXML(int index, SQLXML value) throws SQLException {
-        throw unsupported("SQLXML");
+        // As its text; the server parses it into the xml column.
+        set(index, value == null ? null : value.getString());
     }
 
     @Override
@@ -582,7 +744,8 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
 
     @Override
     public void setURL(int index, URL value) throws SQLException {
-        throw unsupported("URL");
+        // As its text: PostgreSQL has no type of its own for a URL.
+        set(index, value == null ? null : value.toString());
     }
 
     private static SQLFeatureNotSupportedException unsupported(String type) {
@@ -604,7 +767,7 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
                 // described is the condition, not a convenience: it is set once
                 // the statement has run, so a plan whose Parse failed is never
                 // offered to anybody.
-                connection.releasePlan(originalSql, name, described);
+                connection.releasePlan(planSql, name, described);
             } catch (SQLException ignored) {
                 // On close the server plan is the lesser problem; it goes
                 // away with the connection at the latest anyway.
@@ -612,4 +775,18 @@ class PgPreparedStatement extends PgStatement implements PreparedStatement {
         }
         super.close();
     }
+
+    /**
+     * A statement named in a message, with its values taken out.
+     *
+     * <p>The text must not travel: a literal in it can be a password, a card
+     * number or a person, and an exception message is precisely what ends up
+     * in a log. The shape says which statement it was and carries none of
+     * that - see {@link space.seclume.QueryFingerprint}.
+     */
+    private static String shape(String sql) {
+        return space.seclume.QueryFingerprint.of(sql,
+                space.seclume.QueryFingerprint.Dialect.POSTGRESQL);
+    }
+
 }

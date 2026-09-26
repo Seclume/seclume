@@ -50,10 +50,19 @@ public final class PgParameters {
         count = 0;
     }
 
-    /** Sets the parameter with a 1-based index, the way JDBC counts. */
-    public void set(int index, Object value) {
+    /**
+     * Sets the parameter with a 1-based index, the way JDBC counts.
+     *
+     * <p>A {@link SQLException} and not an {@code IllegalArgumentException}
+     * for the index, because this is reached straight from
+     * {@code setInt(0, ...)} - a caller's off-by-one, and the caller's
+     * {@code catch} is written against the JDBC signature. Oracle and SQL
+     * Server already refused it this way; these two did not.
+     */
+    public void set(int index, Object value) throws java.sql.SQLException {
         if (index < 1) {
-            throw new IllegalArgumentException("parameter indexes start at 1, got " + index);
+            throw new java.sql.SQLException(
+                    "parameter indexes start at 1, got " + index, "07009");
         }
         if (index > values.length) {
             values = Arrays.copyOf(values, Math.max(index, values.length * 2));
@@ -76,6 +85,14 @@ public final class PgParameters {
             Object value = values[i];
             if (value == null) {
                 out.putInt(-1);
+                continue;
+            }
+            if (value instanceof space.seclume.internal.jdbc.NativeValue nativeValue) {
+                // Straight from the caller's memory into the send buffer. No
+                // byte[] in between, which is the whole point - see
+                // space.seclume.SensitiveParameters.
+                out.putInt(nativeValue.length());
+                out.putBytes(nativeValue.memory(), 0, nativeValue.length());
                 continue;
             }
             byte[] text = encode(value); // seclume-allow: user payload, not a database password

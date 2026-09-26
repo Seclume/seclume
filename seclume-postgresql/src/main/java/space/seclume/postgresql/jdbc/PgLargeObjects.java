@@ -35,6 +35,13 @@ import java.sql.SQLException;
  * }
  * }</pre>
  *
+ * <p>{@code setBlob} and {@code setClob} on a prepared statement do the same
+ * inside a transaction - create an object, bind its oid - which is what
+ * Hibernate's {@code @Lob} on an {@code oid} column needs. The object still
+ * outlives its row: the {@code lo} extension's {@code lo_manage} trigger or a
+ * periodic {@code vacuumlo} is how a database with such columns stays clean,
+ * with this driver as with pgjdbc.
+ *
  * <p>Reading needs none of this: {@code getBlob} and {@code getBinaryStream}
  * on an {@code oid} column follow the pointer by themselves.
  *

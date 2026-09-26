@@ -71,7 +71,11 @@ final class SeclumeUrl {
                     // A client certificate, when one is configured. Building
                     // it here rather than per connection is deliberate - see
                     // ClientIdentities: the key is loaded once and shared.
-                    space.seclume.tls.ClientIdentities.of(parsed.options()));
+                    space.seclume.tls.ClientIdentities.of(parsed.options()),
+                    // tlsNegotiation=direct (libpq's sslnegotiation=direct):
+                    // PostgreSQL 17 and later, one round trip fewer per connect.
+                    directTls(parsed.option("tlsNegotiation",
+                            parsed.option("sslnegotiation", "postgres"))));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }
@@ -95,6 +99,38 @@ final class SeclumeUrl {
         }
     }
 
+    /**
+     * {@code proxyMode=transaction}: a transaction pooler (PgBouncer in
+     * transaction mode, RDS Proxy) sits in front, so the server session is
+     * shared between clients from one transaction to the next. See
+     * PgConnection#transactionPooler.
+     */
+    static boolean transactionPooler(String url, java.util.Properties properties)
+            throws SQLException {
+        String value;
+        try {
+            value = JdbcUrl.parse(url, properties, PREFIX, DEFAULT_PORT).option("proxyMode", "none");
+        } catch (RuntimeException e) {
+            return false;                     // reported by settings() already
+        }
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "none", "session", "off" -> false;
+            case "transaction" -> true;
+            default -> throw new SQLException("proxyMode=" + value
+                    + " - it is none or transaction", "08001");
+        };
+    }
+
     /** Enough for the statements one request touches, small enough to forget. */
     static final int DEFAULT_STATEMENT_CACHE = 32;
+
+    /** {@code direct} or {@code postgres} (the SSLRequest first, the default). */
+    private static boolean directTls(String value) throws SQLException {
+        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
+            case "direct" -> true;
+            case "postgres", "postgresql" -> false;
+            default -> throw new SQLException("tlsNegotiation is direct or postgres, not '"
+                    + value + "'", "08001");
+        };
+    }
 }

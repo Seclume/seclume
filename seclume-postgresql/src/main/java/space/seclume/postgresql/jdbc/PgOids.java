@@ -34,12 +34,16 @@ public final class PgOids {
     public static final int TIMESTAMPTZ = 1184;
     public static final int INTERVAL = 1186;
     public static final int TIMETZ = 1266;
+    /** {@code bit(n)} - a single bit reads as a Boolean, as in pgjdbc. */
+    public static final int BIT = 1560;
     public static final int NUMERIC = 1700;
     public static final int UUID = 2950;
     public static final int JSONB = 3802;
 
     /** The row address of a heap tuple - PostgreSQL's {@code ctid}. */
     public static final int TID = 27;
+    public static final int MONEY = 790;
+    public static final int REFCURSOR = 1790;
 
     /**
      * The array types.
@@ -139,11 +143,16 @@ public final class PgOids {
             return Types.ARRAY;
         }
         return switch (oid) {
-            case BOOL -> Types.BOOLEAN;
+            // BIT, as pgjdbc has always reported it; code written against
+            // pgjdbc switches on that.
+            case BOOL -> Types.BIT;
             case BYTEA -> Types.BINARY;
             case CHAR, BPCHAR -> Types.CHAR;
             case INT2 -> Types.SMALLINT;
-            case INT4, OID -> Types.INTEGER;
+            case INT4 -> Types.INTEGER;
+            // Unsigned 32 bits: an oid past 2^31 does not fit an int.
+            case OID -> Types.BIGINT;
+            case BIT -> Types.BIT;
             case INT8 -> Types.BIGINT;
             case FLOAT4 -> Types.REAL;
             case FLOAT8 -> Types.DOUBLE;
@@ -151,7 +160,11 @@ public final class PgOids {
             case DATE -> Types.DATE;
             case TIME, TIMETZ -> Types.TIME;
             case TIMESTAMP -> Types.TIMESTAMP;
-            case TIMESTAMPTZ -> Types.TIMESTAMP_WITH_TIMEZONE;
+            // TIMESTAMP, as in pgjdbc: getObject hands out a Timestamp, and
+            // TIMESTAMP_WITH_TIMEZONE would promise an OffsetDateTime.
+            case TIMESTAMPTZ -> Types.TIMESTAMP;
+            case MONEY -> Types.DOUBLE;
+            case REFCURSOR -> Types.REF_CURSOR;
             case VARCHAR, NAME, TEXT -> Types.VARCHAR;
             case XML -> Types.SQLXML;
             case TID -> Types.ROWID;
@@ -194,7 +207,7 @@ public final class PgOids {
             case UUID -> "uuid";
             case JSONB -> "jsonb";
             case TID -> "tid";
-            default -> "oid" + oid;
+            default -> PgBuiltinTypes.NAMES.getOrDefault(oid, "oid" + oid);
         };
     }
 
@@ -221,10 +234,11 @@ public final class PgOids {
             // an int2[] too, and matching the specification there while every
             // other driver does something else would trade one incompatibility
             // for another. Checked with ArrayElementProbe rather than assumed.
-            case INT2, INT4, OID -> "java.lang.Integer";
-            case INT8 -> "java.lang.Long";
+            case INT2, INT4 -> "java.lang.Integer";
+            case INT8, OID -> "java.lang.Long";
+            case BIT -> "java.lang.Boolean";
             case FLOAT4 -> "java.lang.Float";
-            case FLOAT8 -> "java.lang.Double";
+            case FLOAT8, MONEY -> "java.lang.Double";
             case NUMERIC -> "java.math.BigDecimal";
             case DATE -> "java.sql.Date";
             case TIME, TIMETZ -> "java.sql.Time";
