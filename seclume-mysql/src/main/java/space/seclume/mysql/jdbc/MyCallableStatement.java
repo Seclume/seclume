@@ -188,9 +188,8 @@ final class MyCallableStatement extends MyStatement implements ParameterSetters,
 
     @Override
     public java.sql.ParameterMetaData getParameterMetaData() throws SQLException {
-        throw new java.sql.SQLFeatureNotSupportedException(
-                "seclume does not read the parameter descriptions the server sends - it "
-                + "encodes every parameter from its Java type instead");
+        checkOpen();
+        return space.seclume.internal.jdbc.PlaceholderMetaData.ofCall(call.totalParameters());
     }
 
     /**

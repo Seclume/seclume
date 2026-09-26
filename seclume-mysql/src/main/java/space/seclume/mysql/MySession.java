@@ -220,10 +220,43 @@ public final class MySession implements AutoCloseable {
                     + "handed to another session. Open it on seclume's own TLS stack, or "
                     + "terminate TLS where the login happens", "0A000");
         }
+        // A setting waiting for the next statement - the BEGIN of
+        // setAutoCommit(false), an isolation, read-only - goes now. Left
+        // behind, the other side would run in auto-commit while its connection
+        // says it does not: every statement committed at once, and a rollback
+        // that rolls back nothing. Found by handing a JDBC connection over
+        // straight after setAutoCommit(false). One round trip, and only when
+        // something waits.
+        flushPending();
         space.seclume.internal.TlsLayer tls = channel.tlsLayer();
         Detached detached = new Detached(channel.transport(), capabilities, connectionId, tls);
         channel.release(tls != null);
         return detached;
+    }
+
+    /**
+     * What {@link #detach()} hands out, <b>without handing anything out</b>:
+     * the session goes on, and the stream and the encryption returned are the
+     * live ones - to be described (the encryption's
+     * {@link space.seclume.internal.TlsLayer#snapshot}), never used. The same
+     * refusals as {@code detach}, and a setting waiting for the next
+     * statement goes now, so the description says what the server has.
+     *
+     * <p>For a copy kept elsewhere against this process dying; taken at a
+     * quiet moment, it is exact until the next statement.
+     */
+    public Detached snapshot() throws SQLException {
+        if (!channel.isIdle()) {
+            throw new SQLException("this session has work in flight - it can only be "
+                    + "described at a quiescent point", "25000");
+        }
+        if (channel.isEncrypted() && !channel.encryptionCanTravel()) {
+            throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
+                    + "cannot leave the SSLEngine that holds them", "0A000");
+        }
+        flushPending();
+        return new Detached(channel.transport(), capabilities, connectionId,
+                channel.tlsLayer());
     }
 
     /**
@@ -273,7 +306,7 @@ public final class MySession implements AutoCloseable {
             throws SQLException {
         try {
             channel.replaceTransport(replacement);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "the transport could not be replaced: " + e.getMessage(), "08006", e);
         }
@@ -322,7 +355,7 @@ public final class MySession implements AutoCloseable {
     private ResultLimit resultLimit = ResultLimit.NONE;
     private final MyChannel channel;
     /** A session setting that rides along with the next statement. */
-    private String pending;
+    private final java.util.Map<String, String> pending = new java.util.LinkedHashMap<>();
     /** Plans to release with the next command - they need no answer. */
     private final java.util.List<Integer> pendingClose = new java.util.ArrayList<>();
     /**
@@ -387,6 +420,14 @@ public final class MySession implements AutoCloseable {
     private final String serverVersion;
     private final long connectionId;
     private final String authenticationPlugin;
+    /**
+     * How this connection was made, kept for {@link #cancel()}.
+     *
+     * <p>Null on a session that was resumed rather than opened: whoever handed
+     * the stream over knows where it came from and this object does not, so
+     * cancellation on a resumed session says it cannot rather than guessing.
+     */
+    private Settings settings;
     private List<Field> fields = List.of();
     private long affectedRows;
     private long lastInsertId;
@@ -411,7 +452,44 @@ public final class MySession implements AutoCloseable {
         // what it is before its connection is kept - see TargetServer. With
         // one server, or none asked for, nothing is asked and this is the
         // connect it always was.
-        return settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
+        MySession session;
+        try {
+            session = settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
+        } catch (SQLException noneFits) {
+            // aurora=true and nothing known yet: the cluster endpoint leads to
+            // the writer only, so a first "secondary" found none. Ask whichever
+            // instance answers what the cluster looks like, and try once more.
+            if (!(settings.hosts().topology()
+                    instanceof space.seclume.internal.jdbc.AuroraTopology aurora)
+                    || !aurora.hosts(space.seclume.internal.jdbc.TargetServer.ANY).isEmpty()) {
+                throw noneFits;
+            }
+            MySession any = settings.hosts().looking(space.seclume.internal.jdbc.TargetServer.ANY)
+                    .open(server -> openOne(settings.at(server)));
+            try {
+                learn(aurora, any);
+            } finally {
+                any.close();
+            }
+            if (aurora.hosts(space.seclume.internal.jdbc.TargetServer.ANY).isEmpty()) {
+                throw noneFits;
+            }
+            session = settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
+        }
+        if (settings.hosts().topology()
+                instanceof space.seclume.internal.jdbc.AuroraTopology aurora && aurora.due()) {
+            learn(aurora, session);
+        }
+        return session;
+    }
+
+    /** What the cluster says about itself, remembered - see AuroraTopology. */
+    private static void learn(space.seclume.internal.jdbc.AuroraTopology aurora, MySession session) {
+        try {
+            aurora.learn(session.askOneValue(space.seclume.internal.jdbc.AuroraTopology.MYSQL));
+        } catch (SQLException notAurora) {
+            aurora.refused();
+        }
     }
 
     private static MySession openOne(Settings settings) throws SQLException {
@@ -423,7 +501,12 @@ public final class MySession implements AutoCloseable {
         MySession opened = null;
         try {
             opened = connectAndLogIn(settings);
+            space.seclume.internal.Transports.loggedIn(opened.transport());
             opened.tinyInt1isBit = settings.tinyInt1isBit();
+            // The settings of this server, not of the list: cancellation has
+            // to reach the same instance, and on a host list the one that
+            // answered is not necessarily the first.
+            opened.settings = settings;
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "mysql",
@@ -437,7 +520,12 @@ public final class MySession implements AutoCloseable {
         try {
             channel = MyChannel.connect(settings.host(), settings.port(),
                     settings.connectTimeoutMillis());
-        } catch (IOException e) {
+            // Here and not after the login: a login that fails is exactly the
+            // case where somebody wants to know what the server said, and by
+            // then the session does not exist. Null asks the system property -
+            // see space.seclume.Flight.
+            channel.recordFlight(space.seclume.internal.FlightRecorder.from(null));
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "cannot reach " + settings.host() + ":" + settings.port(), "08001", e);
         }
@@ -456,7 +544,11 @@ public final class MySession implements AutoCloseable {
             MemorySegment scramble = arena.allocate(NativePassword.SCRAMBLE_LENGTH);
             Handshake greeting = readHandshake(channel, scramble);
 
-            int clientCapabilities = MyCapabilities.CLIENT_DEFAULTS & greeting.capabilities();
+            int wanted = MyCapabilities.CLIENT_DEFAULTS;
+            if (Boolean.TRUE.equals(LOCAL_DATA.get())) {
+                wanted |= MyCapabilities.LOCAL_FILES;   // loadDataLocal=true - see loadData
+            }
+            int clientCapabilities = wanted & greeting.capabilities();
             if (!MyCapabilities.has(clientCapabilities, MyCapabilities.PROTOCOL_41)) {
                 throw new SQLException(
                         "the server does not speak protocol 4.1 - seclume needs it "
@@ -471,13 +563,34 @@ public final class MySession implements AutoCloseable {
             clientCapabilities = negotiateTls(channel, settings, clientCapabilities, greeting);
 
             String plugin = greeting.plugin();
-            writeHandshakeResponse(channel, settings, clientCapabilities, plugin, scramble);
+            // From here on it is the login and nothing else - the greeting is
+            // read and TLS is up. Timed apart because the three phases of an
+            // open are slow for three different reasons; see
+            // SeclumeEvents.Authentication.
+            space.seclume.jfr.SeclumeEvents.Authentication login =
+                    space.seclume.jfr.Observed.beginLogin();
+            MySession session = null;
+            // Not "session != null": the object exists before the server has
+            // said OK, so a failure in finishAuthentication would otherwise be
+            // recorded as a login that succeeded.
+            boolean loggedIn = false;
+            try {
+                writeHandshakeResponse(channel, settings, clientCapabilities, plugin, scramble);
 
-            MySession session = new MySession(channel, clientCapabilities, greeting.version(),
-                    greeting.connectionId(), plugin);
-            session.finishAuthentication(settings, plugin, scramble, arena);
-            session.setResultLimit(settings.resultLimit());
-            return session;
+                session = new MySession(channel, clientCapabilities, greeting.version(),
+                        greeting.connectionId(), plugin);
+                session.finishAuthentication(settings, plugin, scramble, arena);
+                session.setResultLimit(settings.resultLimit());
+                loggedIn = true;
+                return session;
+            } finally {
+                // The plugin the server named, where the login never got far
+                // enough to record the one that settled it. Both are the
+                // server's own word and neither is derived from what was sent.
+                space.seclume.jfr.Observed.endLogin(login, "mysql",
+                        settings.host() + ":" + settings.port(),
+                        loggedIn ? session.authenticationMethod() : plugin, loggedIn);
+            }
         } finally {
             // The send buffer was carrying the login answer.
             channel.clearSendBuffer();
@@ -522,13 +635,39 @@ public final class MySession implements AutoCloseable {
             channel.flush();
             channel.startTls(settings.host(), settings.port(), mode.verifies(),
                     settings.tlsStack(), settings.identity());
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "TLS to " + settings.host() + ":" + settings.port() + " failed: "
                     + e.getMessage(), "08001", e);
         }
         return withSsl;
     }
+
+    /** What the login used; set when the server finally says OK. */
+    private String authenticationMethod = "unknown";
+
+    /**
+     * Which authentication plugin settled this login.
+     *
+     * <p>MySQL is the one of the four where this is a real question rather
+     * than a constant: the server names a plugin in its greeting and may
+     * switch to another one part-way through, so the answer is recorded when
+     * the OK packet arrives instead of being assumed at the start.
+     */
+    public String authenticationMethod() {
+        return authenticationMethod;
+    }
+
+    /** The certificate the server presented, or null in the clear. */
+    public java.security.cert.X509Certificate serverCertificate() {
+        space.seclume.internal.TlsLayer layer = channel.tlsLayer();
+        try {
+            return layer == null ? null : layer.peerCertificate();
+        } catch (java.io.IOException e) {
+            return null;
+        }
+    }
+
 
     /** What TLS this connection uses, or {@code null} without it. */
     public String tlsDescription() {
@@ -586,6 +725,10 @@ public final class MySession implements AutoCloseable {
             throw new SQLNonTransientConnectionException(
                     "the connection broke during the handshake", "08006", e);
         } catch (WireBuffer.Truncated e) {
+            // Left alone on purpose where the blanket rule below was applied
+            // everywhere else: this one says more than "the connection broke",
+            // and it says it with the SQLState that fits a greeting rather
+            // than a statement.
             // Anything that can answer on the port reaches this parser before
             // a single credential is exchanged, so it has to fail the way a
             // library fails. A greeting that runs out mid-field used to come
@@ -610,6 +753,7 @@ public final class MySession implements AutoCloseable {
                                                int clientCapabilities, String plugin,
                                                MemorySegment scramble) throws SQLException {
         try {
+            channel.nextPacketCarriesTheCredential();
             WireBuffer out = channel.beginPacket();
             out.putIntLe(clientCapabilities);
             out.putIntLe(MyPackets.MAX_PAYLOAD);   // groesstes Paket, das wir annehmen
@@ -639,7 +783,7 @@ public final class MySession implements AutoCloseable {
             }
             channel.end();
             channel.flush();
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "the connection broke while sending the login", "08006", e);
         }
@@ -651,9 +795,12 @@ public final class MySession implements AutoCloseable {
                                          boolean encrypted)
             throws SQLException {
         int at = out.position();
-        out.putZeroes(256);      // room for a hash or, inside TLS, the password itself
-        out.position(at);
         try (SecretScope password = SecretScope.fromProvider(settings.secret())) {
+            // Room for a hash or, inside TLS, the secret itself - which can be
+            // longer than any hash: an RDS IAM token is some 370 bytes, and a
+            // fixed 256 broke every IAM login (found against RDS, 26.09.2026).
+            out.putZeroes(Math.max(256, password.length() + 1));
+            out.position(at);
             int written = switch (plugin) {
                 case "mysql_native_password" -> NativePassword.response(
                         password.secret(), 0, password.length(), scramble, 0,
@@ -713,6 +860,11 @@ public final class MySession implements AutoCloseable {
                     case MyPackets.OK -> {
                         readOk(in);
                         channel.endPacket();
+                        // Whatever the exchange ended on, not what it started
+                        // with: a server may switch the client to another
+                        // plugin mid-login, and the one that actually settled
+                        // it is the one worth reporting.
+                        authenticationMethod = currentPlugin;
                         return;
                     }
                     case MyPackets.ERR -> {
@@ -728,6 +880,12 @@ public final class MySession implements AutoCloseable {
                     case MyPackets.AUTH_SWITCH -> {
                         in.skip(1);
                         currentPlugin = in.readCString();
+                        if (KERBEROS_PLUGIN.equals(currentPlugin)) {
+                            String principal = in.readCString();
+                            channel.endPacket();
+                            kerberos(principal);
+                            continue;
+                        }
                         int available = Math.min(in.remaining(),
                                 NativePassword.SCRAMBLE_LENGTH);
                         if (available > 0) {
@@ -742,9 +900,61 @@ public final class MySession implements AutoCloseable {
                             + " during authentication", "08P01");
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "the connection broke during authentication", "08006", e);
+        }
+    }
+
+    /**
+     * MariaDB's {@code auth_gssapi_client}: Kerberos, with the operating
+     * system's ticket and no password anywhere. The server named its principal
+     * in the switch; the tokens go back and forth as plain packets until the
+     * library says the context stands, and the server's OK follows.
+     */
+    private static final String KERBEROS_PLUGIN = "auth_gssapi_client";
+
+    private void kerberos(String principal) throws SQLException, IOException {
+        if (!space.seclume.internal.Gssapi.available()) {
+            throw new java.sql.SQLInvalidAuthorizationSpecException(
+                    "the server asks for Kerberos (auth_gssapi_client), which seclume speaks "
+                    + "through the system's GSSAPI library (libgssapi_krb5.so.2) on 64-bit "
+                    + "Linux - it is not there", "28000");
+        }
+        try (space.seclume.internal.Gssapi.Context gss =
+                     space.seclume.internal.Gssapi.initiatePrincipal(principal)) {
+            byte[] token = gss.step(null, 0, 0);
+            while (true) {
+                if (token.length > 0) {
+                    WireBuffer out = channel.beginPacket();
+                    out.putBytes(MemorySegment.ofArray(token), 0, token.length);
+                    channel.end();
+                    channel.flush();
+                }
+                if (gss.complete()) {
+                    return;
+                }
+                int first = channel.nextPacket();
+                WireBuffer in = channel.packet();
+                if (first == MyPackets.ERR) {
+                    SQLException failure = readError(in, "the server rejected the login");
+                    channel.endPacket();
+                    throw failure;
+                }
+                // The server escapes a token that would look like a status
+                // byte with a leading 0x01.
+                long at = in.position();
+                int length = channel.packetRemaining();
+                if (first == MyPackets.AUTH_MORE_DATA) {
+                    at++;
+                    length--;
+                }
+                token = gss.step(in.segment(), at, length);
+                channel.endPacket();
+            }
+        } catch (IllegalStateException e) {
+            throw new java.sql.SQLInvalidAuthorizationSpecException(
+                    "Kerberos login to " + principal + " failed: " + e.getMessage(), "28000", e);
         }
     }
 
@@ -787,7 +997,23 @@ public final class MySession implements AutoCloseable {
         // Everything else is the public key in PEM format.
         int length = in.remaining();
         MemorySegment pem = in.slice(in.position(), length);
-        RsaPublicKey key = ServerPublicKey.parsePem(pem, 0, length);
+        RsaPublicKey key;
+        try {
+            key = ServerPublicKey.parsePem(pem, 0, length);
+        } catch (IllegalArgumentException notAKey) {
+            // The most sensitive refusal in this driver, and it used to leave
+            // as an IllegalArgumentException out of open(). This is the point
+            // where the password is about to be encrypted under a key the
+            // *server* just supplied: a server that sends something which is
+            // not a key is either broken or is not the server. Either way the
+            // caller has to be able to catch it, and 28000 says what it is -
+            // the authentication exchange, refused. Found by the login fuzz
+            // corpus on 23.09.2026, and only by the full corpus: the sample
+            // never produced a packet that reached this line.
+            throw new java.sql.SQLInvalidAuthorizationSpecException(
+                    "the server's public key cannot be used: " + notAKey.getMessage(),
+                    "28000", notAKey);
+        }
         channel.endPacket();
         try (key) {
             sendEncryptedPassword(settings, key, scramble, arena);
@@ -836,11 +1062,15 @@ public final class MySession implements AutoCloseable {
     /** The answer to a plugin switch - the same computation, a new packet. */
     private void sendAuthResponse(Settings settings, String plugin, MemorySegment scramble)
             throws SQLException, IOException {
+        channel.nextPacketCarriesTheCredential();
         WireBuffer out = channel.beginPacket();
         int at = out.position();
-        out.putZeroes(256);      // room for a hash or, inside TLS, the password itself
-        out.position(at);
         try (SecretScope password = SecretScope.fromProvider(settings.secret())) {
+            // Room for a hash or, inside TLS, the secret itself - which can be
+            // longer than any hash: an RDS IAM token is some 370 bytes, and a
+            // fixed 256 broke every IAM login (found against RDS, 26.09.2026).
+            out.putZeroes(Math.max(256, password.length() + 1));
+            out.position(at);
             int written = switch (plugin) {
                 case "mysql_native_password" -> NativePassword.response(
                         password.secret(), 0, password.length(), scramble, 0, out.segment(), at);
@@ -893,10 +1123,10 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             if (carried) {
-                readOkOrError("the session setting");
+                readCarriedSetting();
             }
             readResult(handler, false);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -904,6 +1134,94 @@ public final class MySession implements AutoCloseable {
     /** Short form for statements without a result. */
     public void execute(String sql) throws SQLException {
         query(sql, null);
+    }
+
+    // ---- LOAD DATA LOCAL -------------------------------------------------
+
+    /** Set around opening a session that may answer LOCAL INFILE - see allowingLocalData. */
+    private static final ThreadLocal<Boolean> LOCAL_DATA = new ThreadLocal<>();
+
+    /**
+     * Opens a session that offers LOCAL INFILE ({@code loadDataLocal=true}).
+     * Off by default, because with it a server may ask the client for any
+     * file - see MyCapabilities. Here it never gets one: the only data sent is
+     * the stream handed to {@link #loadData}.
+     */
+    public static <T> T allowingLocalData(boolean on,
+            space.seclume.internal.Transports.Opening<T> opening) throws SQLException {
+        if (!on) {
+            return opening.open();
+        }
+        LOCAL_DATA.set(Boolean.TRUE);
+        try {
+            return opening.open();
+        } finally {
+            LOCAL_DATA.remove();
+        }
+    }
+
+    /** The stream a running loadData sends; null at any other time. */
+    private java.io.InputStream localData;
+
+    /**
+     * {@code LOAD DATA LOCAL INFILE '...' INTO TABLE ...}, fed from
+     * {@code data}. The file name in the statement is whatever the statement
+     * says - it is not opened; the server gets {@code data}.
+     *
+     * @return the rows loaded
+     */
+    public long loadData(String sql, java.io.InputStream data) throws SQLException {
+        if (!MyCapabilities.has(capabilities, MyCapabilities.LOCAL_FILES)) {
+            throw new SQLException("LOAD DATA LOCAL needs loadDataLocal=true on the URL and "
+                    + "local_infile=ON on the server - this session has not both", "42000");
+        }
+        localData = data;
+        try {
+            query(sql, null);
+            return affectedRows;
+        } finally {
+            localData = null;
+        }
+    }
+
+    /** How much of the stream goes into one packet. */
+    private static final int LOCAL_CHUNK = 64 * 1024;
+
+    /**
+     * The answer to a LOCAL INFILE request: the stream of the running
+     * loadData, or nothing. A stream that cannot be read breaks the
+     * connection on purpose - an empty packet would end the file, and the
+     * server would keep the rows sent so far; a broken connection makes it
+     * roll the statement back.
+     */
+    private void sendLocalData() throws SQLException, IOException {
+        java.io.InputStream data = localData;
+        if (data != null) {
+            byte[] chunk = new byte[LOCAL_CHUNK]; // seclume-allow: the caller's bulk data, not a secret
+            java.lang.foreign.MemorySegment view = java.lang.foreign.MemorySegment.ofArray(chunk);
+            while (true) {
+                int read;
+                try {
+                    read = data.read(chunk);
+                } catch (java.io.IOException failed) {
+                    throw brokenConnection(new java.io.IOException("reading the data for "
+                            + "LOAD DATA failed - the connection is closed so that the server "
+                            + "keeps none of it: " + failed.getMessage(), failed));
+                }
+                if (read < 0) {
+                    break;
+                }
+                if (read > 0) {
+                    WireBuffer out = channel.beginPacket();
+                    out.putBytes(view, 0, read);
+                    channel.end();
+                    channel.flush();
+                }
+            }
+        }
+        channel.beginPacket();                      // the empty packet: end of file
+        channel.end();
+        channel.flush();
     }
 
     /**
@@ -956,16 +1274,27 @@ public final class MySession implements AutoCloseable {
     /** Prepares a statement on the server. */
     public Prepared prepare(String sql) throws SQLException {
         try {
+            // The settings that are waiting go first, here too: MySQL judges
+            // some statements when it prepares them. An UPDATE prepared in a
+            // session still read-only - because the "transaction_read_only =
+            // 0" was waiting for the next execute - was refused with 1792 at
+            // prepare time, the transaction after any read-only one. Found by
+            // Spring Data JDBC, whose save follows its findById.
+            boolean carried = writePending();
             WireBuffer out = channel.beginCommand(COM_STMT_PREPARE);
             out.putText(sql);
             channel.end();
             channel.flush();
+            if (carried) {
+                readCarriedSetting();
+            }
 
             int first = channel.nextPacket();
             WireBuffer in = channel.packet();
             if (first == MyPackets.ERR) {
-                SQLException failure = readError(in, "the server rejected the statement");
+                SQLException failure = serverError(in, "the server rejected the statement");
                 channel.endPacket();
+                closeIfConnectionFailure(failure);
                 throw failure;
             }
             in.skip(1);                              // 0x00
@@ -979,7 +1308,7 @@ public final class MySession implements AutoCloseable {
             List<Field> columns = readFieldDescriptions(columnCount);
             this.fields = columns;
             return new Prepared(statementId, parameterCount, columns);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -998,10 +1327,10 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             if (carried) {
-                readOkOrError("the session setting");
+                readCarriedSetting();
             }
             readResult(handler, true);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1015,25 +1344,63 @@ public final class MySession implements AutoCloseable {
      * Sent together with the statement that follows, it is free: two commands
      * in one flush, one wait.
      *
-     * <p>Only one is ever pending, and only settings go through here - things
-     * whose answer nobody looks at.
+     * <p>Only settings go through here - things whose answer nobody looks
+     * at - and they are collected as <b>assignments</b>, one per variable, and
+     * sent as a single {@code SET a = ..., b = ...}. That is still one command
+     * and one answer, which is what every caller of {@link #writePending}
+     * counts on.
+     *
+     * <p>It used to hold one statement, and each new one replaced the last.
+     * Spring prepares a transaction with {@code setReadOnly},
+     * {@code setTransactionIsolation} and {@code setAutoCommit(false)}, in that
+     * order - so only {@code set autocommit=0} ever reached the server, and a
+     * read-only or serializable transaction ran as an ordinary one while
+     * {@code isReadOnly()} and {@code getTransactionIsolation()} said
+     * otherwise. Found by the Spring JDBC suite. A later assignment to the
+     * same variable still replaces an earlier one, because that is what it
+     * would have done on the server too.
+     *
+     * @param variable the session variable, {@code autocommit} or
+     *                 {@code session transaction_isolation}
+     * @param value    its new value, as SQL
      */
-    public void runLater(String sql) {
-        this.pending = sql;
+    public void runLater(String variable, String value) {
+        pending.put(variable, value);
+    }
+
+    /**
+     * Drops user variables not yet sent - a session context meant for the
+     * borrower before a reset must not ride along with the next one's first
+     * statement.
+     */
+    public void dropPendingVariables() {
+        pending.keySet().removeIf(variable -> variable.startsWith("@"));
     }
 
     /** Whether a setting is waiting for a statement to ride along with. */
     public boolean hasPending() {
-        return pending != null;
+        return !pending.isEmpty();
     }
 
     /** Sends what is pending right now, for whoever cannot wait. */
     public void flushPending() throws SQLException {
-        if (pending != null) {
-            String sql = pending;
-            pending = null;
+        if (!pending.isEmpty()) {
+            String sql = pendingStatement();
+            pending.clear();
             query(sql, null);
         }
+    }
+
+    /** The waiting assignments as one {@code SET}. */
+    private String pendingStatement() {
+        StringBuilder sql = new StringBuilder("set ");
+        pending.forEach((variable, value) -> {
+            if (sql.length() > 4) {
+                sql.append(", ");
+            }
+            sql.append(variable).append(" = ").append(value);
+        });
+        return sql.toString();
     }
 
     private boolean writePending() {
@@ -1043,13 +1410,13 @@ public final class MySession implements AutoCloseable {
             channel.end();                       // COM_STMT_CLOSE gets no answer
         }
         pendingClose.clear();
-        if (pending == null) {
+        if (pending.isEmpty()) {
             return false;
         }
         WireBuffer out = channel.beginCommand(COM_QUERY);
-        out.putText(pending);
+        out.putText(pendingStatement());
         channel.end();
-        pending = null;
+        pending.clear();
         return true;
     }
 
@@ -1147,7 +1514,7 @@ public final class MySession implements AutoCloseable {
         try {
             channel.flush();
             if (pipelineCarried) {
-                readOkOrError("the session setting");
+                readCarriedSetting();
                 pipelineCarried = false;
             }
             for (int i = 0; i < group; i++) {
@@ -1162,7 +1529,7 @@ public final class MySession implements AutoCloseable {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
         if (failure != null) {
@@ -1231,13 +1598,13 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             if (carried) {
-                readOkOrError("the session setting");
+                readCarriedSetting();
             }
             readResult(null, true);
             // The execute answered with the descriptions and an EOF; whether
             // there are rows is what the first fetch says.
             cursorOpen = true;
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1263,7 +1630,7 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             readRowsOfBlock(handler);
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1280,7 +1647,7 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             readOkOrError("closing the cursor");
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1350,7 +1717,7 @@ public final class MySession implements AutoCloseable {
                 }
                 channel.flush();
                 if (carried) {
-                    readOkOrError("the session setting");
+                    readCarriedSetting();
                     carried = false;
                 }
                 for (int i = 0; i < sent; i++) {
@@ -1365,11 +1732,15 @@ public final class MySession implements AutoCloseable {
                     }
                 }
             }
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
         if (failure != null) {
-            throw failure;
+            // With the counts: the rows pipelined after the failing one ran
+            // too, and a caller - Spring, Hibernate, a retry - has to know
+            // which landed. EXECUTE_FAILED marks the ones that did not.
+            throw new java.sql.BatchUpdateException(failure.getMessage(), failure.getSQLState(),
+                    failure.getErrorCode(), counts, failure);
         }
         return counts;
     }
@@ -1382,7 +1753,7 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             // COM_STMT_CLOSE gets no answer - that is by design.
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1395,8 +1766,52 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             readOkOrError("resetting the statement");
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
+        }
+    }
+
+    /**
+     * Asks the server to stop whatever this connection is doing.
+     *
+     * <p>MySQL has no out-of-band message for this. What it has is a
+     * statement - {@code KILL QUERY <id>} - and a statement needs a connection
+     * to run on, which cannot be this one: it is blocked waiting for the
+     * answer to the query being cancelled. So a second connection is opened,
+     * logged in, used for one statement and closed again.
+     *
+     * <p><b>That is expensive and it is not an oversight.</b> A cancellation
+     * costs a full handshake here, where PostgreSQL costs sixteen bytes, and
+     * on {@code caching_sha2_password} it costs a key derivation as well. The
+     * alternative would be to hold a spare connection open per session, which
+     * doubles a pool's footprint to pay for something that almost never
+     * happens. Connector/J makes the same trade.
+     *
+     * <p>{@code KILL QUERY} and not {@code KILL}: the first ends the running
+     * statement, the second ends the session. A timeout that closed the
+     * connection would turn a slow query into a lost connection, and in a pool
+     * under load that is the worse of the two.
+     *
+     * <p>Safe from another thread - it touches nothing this session owns
+     * except two values written once during the login.
+     *
+     * @throws SQLException if this session cannot be cancelled, or the second
+     *                      connection could not be made
+     */
+    public void cancel() throws SQLException {
+        Settings where = settings;
+        if (where == null) {
+            throw new SQLException("this session was resumed rather than opened, so it does "
+                    + "not know which server to send a cancellation to", "0A000");
+        }
+        if (!channel.isAwaitingAnswer()) {
+            // Nothing is running, so there is nothing to kill - and killing
+            // anyway would stop the next statement instead. See
+            // MyChannel#isAwaitingAnswer.
+            return;
+        }
+        try (MySession aside = openOne(where)) {
+            aside.execute("kill query " + connectionId);
         }
     }
 
@@ -1407,7 +1822,7 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             readOkOrError("ping");
-        } catch (IOException e) {
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1423,7 +1838,11 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             readOkOrError("resetting the connection");
-        } catch (IOException e) {
+            // The server dropped every prepared statement with the rest. A
+            // cached plan kept here would name a statement id that no longer
+            // exists - "Unknown prepared statement handler" on its next use.
+            plans.clear();
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
     }
@@ -1434,9 +1853,20 @@ public final class MySession implements AutoCloseable {
             throws SQLException, IOException {
         int first = channel.nextPacket();
         WireBuffer in = channel.packet();
-        if (first == MyPackets.ERR) {
-            SQLException failure = readError(in, "the statement failed");
+        if (first == MyPackets.NULL_LENGTH
+                && MyCapabilities.has(capabilities, MyCapabilities.LOCAL_FILES)) {
+            // LOCAL INFILE: the server asks for a file by name. The name is
+            // never opened - see loadData. Answered with the caller's stream
+            // during loadData, with an empty file at any other time.
             channel.endPacket();
+            sendLocalData();
+            readResult(handler, binary);
+            return;
+        }
+        if (first == MyPackets.ERR) {
+            SQLException failure = serverError(in, "the statement failed");
+            channel.endPacket();
+            closeIfConnectionFailure(failure);
             throw failure;
         }
         if (first == MyPackets.OK) {
@@ -1460,6 +1890,22 @@ public final class MySession implements AutoCloseable {
     private List<Field> readFieldDescriptions(int count) throws SQLException, IOException {
         if (count == 0) {
             return List.of();
+        }
+        // The count is a length-encoded number off the wire. Negative reached
+        // ArrayList's constructor as "Illegal Capacity: -1" - an
+        // IllegalArgumentException out of executeQuery, which promises
+        // SQLException. The upper bound is MySQL's own: a table cannot have
+        // more than 4096 columns, so anything above it is not a result set.
+        if (count < 0 || count > 4096) {
+            // Through brokenConnection, and not a bare throw: an 08xxx that
+            // leaves the session reporting itself open is a connection a pool
+            // hands to the next caller, with a stream nobody can make sense
+            // of. The first version of this check threw directly and the fuzz
+            // contract caught it at once - which is what that requirement is
+            // for.
+            throw brokenConnection(new java.io.IOException(
+                    "the server announced a result of " + count + " columns, which is not a "
+                    + "result set"));
         }
         List<Field> list = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -1516,8 +1962,9 @@ public final class MySession implements AutoCloseable {
             int first = channel.nextPacket();
             WireBuffer in = channel.packet();
             if (first == MyPackets.ERR) {
-                SQLException failure = readError(in, "the result was cut short");
+                SQLException failure = serverError(in, "the result was cut short");
                 channel.endPacket();
+                closeIfConnectionFailure(failure);
                 throw failure;
             }
             // A 0xfe packet under nine bytes ends the result. Longer it
@@ -1529,10 +1976,12 @@ public final class MySession implements AutoCloseable {
                     affectedRows = MyPackets.readLengthEncoded(in);
                     lastInsertId = MyPackets.readLengthEncoded(in);
                     statusFlags = in.getShortLe() & 0xffff;
+                    channel.answerFinished();
                     warnings = in.getShortLe() & 0xffff;
                 } else {
                     warnings = in.getShortLe() & 0xffff;
                     statusFlags = in.getShortLe() & 0xffff;
+                    channel.answerFinished();
                 }
                 channel.endPacket();
                 if (refused != null) {
@@ -1558,7 +2007,26 @@ public final class MySession implements AutoCloseable {
         lastInsertId = MyPackets.readLengthEncoded(in);
         if (MyCapabilities.has(capabilities, MyCapabilities.PROTOCOL_41)) {
             statusFlags = in.getShortLe() & 0xffff;
+            channel.answerFinished();
             warnings = in.getShortLe() & 0xffff;
+        }
+    }
+
+    /**
+     * The answer to a setting that rode in front of a statement.
+     *
+     * <p>Read like any OK - but it does not end the wait: the statement it
+     * rode with has not answered yet. Ending it here made the cancellation
+     * think nothing was running, so a query timeout inside a transaction
+     * (whose {@code set autocommit=0} always rides along) never cancelled
+     * anything and the statement ran to its end. Found by the Spring JDBC
+     * suite.
+     */
+    private void readCarriedSetting() throws SQLException, IOException {
+        try {
+            readOkOrError("the session setting");
+        } finally {
+            channel.answerStillExpected();
         }
     }
 
@@ -1566,12 +2034,32 @@ public final class MySession implements AutoCloseable {
         int first = channel.nextPacket();
         WireBuffer in = channel.packet();
         if (first == MyPackets.ERR) {
-            SQLException failure = readError(in, what + " failed");
+            SQLException failure = serverError(in, what + " failed");
             channel.endPacket();
+            closeIfConnectionFailure(failure);
             throw failure;
         }
         readOk(in);
         channel.endPacket();
+    }
+
+    /**
+     * An error packet in an open session - see closeIfConnectionFailure: a SQLState of class 08 is the
+     * server saying the connection itself is broken (08S01, a communication
+     * failure, say) - so the session closes, rather than go on reporting
+     * itself usable to a pool that would hand it out again. Found by Jazzer
+     * on 25.09.2026: an error packet with state 08 left the session open.
+     */
+    private SQLException serverError(WireBuffer in, String context) {
+        return readError(in, context);
+    }
+
+    /** After the error packet has been consumed: close on a connection-class state. */
+    private void closeIfConnectionFailure(SQLException failure) {
+        String state = failure.getSQLState();
+        if (state != null && state.startsWith("08")) {
+            channel.close();
+        }
     }
 
     /** An error packet: number, SQLState and message. */
@@ -1584,7 +2072,27 @@ public final class MySession implements AutoCloseable {
             sqlState = in.readString(5);
         }
         String message = in.readString(in.remaining());
-        return new MyException(context + ": " + message, sqlState, errorNumber);
+        return failure(context + ": " + message, sqlState, errorNumber);
+    }
+
+    /**
+     * The server's error as the type an application catches.
+     *
+     * <p>A value that does not fit - out of range, too long, a division by
+     * zero in strict mode - is a {@link java.sql.DataTruncation}, state 22001,
+     * as Connector/J raises it; code that catches that type or checks 22001
+     * for "the value did not fit" sees it here too. A state with a JDBC 4 type
+     * of its own gets that type; anything else is a {@link MyException}.
+     */
+    static SQLException failure(String message, String sqlState, int errorNumber) {
+        return switch (errorNumber) {
+            case 1264, 1265, 1365, 1406 -> new MyDataTruncation(message, errorNumber);
+            default -> switch (sqlState.substring(0, 2)) {
+                case "22", "23", "28", "40", "42", "0A" ->
+                        space.seclume.internal.jdbc.SqlErrors.of(message, sqlState, errorNumber);
+                default -> new MyException(message, sqlState, errorNumber);
+            };
+        };
     }
 
     /**
@@ -1597,8 +2105,20 @@ public final class MySession implements AutoCloseable {
      * of handing it out again; without it a database that goes away for two
      * seconds takes the pool with it for as long as requests keep arriving.
      * Found by the chaos benchmark, where it happened on every request.
+
+     * <p><b>And a second cause, which used to escape as an unchecked
+     * exception.</b> {@code WireBuffer.Truncated} is an
+     * {@code IllegalStateException} thrown when a message announces more bytes
+     * than it brought, and nothing caught it - so a malformed answer came out
+     * of {@code Statement.executeQuery}, a method whose signature promises
+     * {@link SQLException} and nothing else. An application catches
+     * {@code SQLException}; that is what a framework's retry and its
+     * connection-health check are written against. It is the same fact as an
+     * IO failure seen from one layer up: what follows the message is not where
+     * the protocol says it is, so every byte after it would be read at the
+     * wrong offset. Found by the fuzz corpus on 23.09.2026.
      */
-    private SQLException brokenConnection(IOException cause) {
+    private SQLException brokenConnection(Exception cause) {
         channel.close();
         return new SQLNonTransientConnectionException(
                 "the connection to the server broke", "08006", cause);
@@ -1643,6 +2163,16 @@ public final class MySession implements AutoCloseable {
 
     public boolean isMariaDb() {
         return serverVersion.contains("MariaDB");
+    }
+
+    /** What this connection last sent and received - see space.seclume.Flight. */
+    public java.util.List<space.seclume.Flight.Message> recentMessages() {
+        return channel.recentMessages();
+    }
+
+    /** How many packets have crossed this connection. */
+    public long recordedMessages() {
+        return channel.recordedMessages();
     }
 
     public boolean isOpen() {

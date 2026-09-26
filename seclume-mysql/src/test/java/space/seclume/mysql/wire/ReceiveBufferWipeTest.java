@@ -101,9 +101,17 @@ class ReceiveBufferWipeTest {
         Field field = MyChannel.class.getDeclaredField("in");
         field.setAccessible(true);
         WireBuffer buffer = (WireBuffer) field.get(channel);
+        // Straight off the memory rather than through getByte(int), and the
+        // distinction matters: this is looking for residue *beyond* the valid
+        // region, which is precisely what the protocol accessor now refuses -
+        // it gained a bounds check when the fuzz sweep found a decoder walking
+        // past a buffer through it. A test that inspects memory should say so
+        // and reach for the segment; a decoder should not be able to.
+        java.lang.foreign.MemorySegment memory = buffer.segment();
         StringBuilder text = new StringBuilder(buffer.capacity());
         for (int i = 0; i < buffer.capacity(); i++) {
-            text.append((char) (buffer.getByte(i) & 0xff));
+            text.append((char) (memory.get(
+                    java.lang.foreign.ValueLayout.JAVA_BYTE, i) & 0xff));
         }
         return text.toString();
     }

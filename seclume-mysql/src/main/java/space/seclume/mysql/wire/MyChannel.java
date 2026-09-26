@@ -244,12 +244,65 @@ public final class MyChannel implements AutoCloseable {
     // ---- writing ---------------------------------------------------------
 
     /**
+     * The flight recorder, or {@code null} when nobody asked for one.
+     *
+     * <p>See {@link space.seclume.Flight}. Null rather than a recorder that
+     * does nothing, because this is checked once per packet on every
+     * connection.
+     */
+    private space.seclume.internal.FlightRecorder flight;
+    /** The first byte of the packet being written, for the recorder. */
+    private int writing = -1;
+    /**
+     * Whether what is being written carries the credential.
+     *
+     * <p><b>MySQL needs this decided differently from PostgreSQL.</b> The
+     * handshake response packet contains the scramble, and for
+     * {@code mysql_native_password} and the {@code caching_sha2_password} fast
+     * path that is a fixed twenty or thirty-two bytes, which says nothing. For
+     * {@code mysql_clear_password} - which exists, and which LDAP and PAM
+     * authentication use - the packet carries the password itself, and its
+     * length is the password's length. One plugin is enough for the count to
+     * be worth withholding on all of them.
+     */
+    private boolean writingCredential;
+
+    /** Switches the recording on - see {@link space.seclume.Flight}. */
+    public void recordFlight(space.seclume.internal.FlightRecorder recorder) {
+        this.flight = recorder;
+    }
+
+    /** What this connection last sent and received, oldest first. */
+    public java.util.List<space.seclume.Flight.Message> recentMessages() {
+        return flight == null ? java.util.List.of() : flight.recent();
+    }
+
+    /** How many packets have crossed this connection. */
+    public long recordedMessages() {
+        return flight == null ? 0 : flight.messages();
+    }
+
+    /** The tail of the recording, or {@code null} when there is none. */
+    public String flightTail() {
+        return flight == null ? null : flight.tail(8);
+    }
+
+    /**
+     * The next packet written carries the credential - see
+     * {@link #writingCredential}.
+     */
+    public void nextPacketCarriesTheCredential() {
+        this.writingCredential = true;
+    }
+
+    /**
      * Starts a command: the sequence number begins at 0 again, and the first
      * byte of the payload is the command tag.
      */
     public WireBuffer beginCommand(byte command) {
         sequence = 0;
         WireBuffer buffer = beginPacket();
+        writing = command & 0xff;
         buffer.putByte(command);
         return buffer;
     }
@@ -278,6 +331,13 @@ public final class MyChannel implements AutoCloseable {
         }
         out.putUnsignedLeAt(headerAt, payload, 3);
         out.putByteAt(headerAt + 3, (byte) (sequence & 0xff));
+        if (flight != null) {
+            flight.record(true,
+                    writingCredential ? "AuthResponse" : MyPackets.nameOf(true, writing),
+                    writingCredential ? space.seclume.Flight.WITHHELD : payload + HEADER);
+        }
+        writing = -1;
+        writingCredential = false;
         sequence++;
         headerAt = -1;
     }
@@ -295,8 +355,39 @@ public final class MyChannel implements AutoCloseable {
         return roundTrips;
     }
 
+    /**
+     * Whether a command has gone out whose answer has not arrived in full.
+     *
+     * <p>What {@code cancel()} asks before opening its second connection.
+     * {@code KILL QUERY} names a session and not a statement: run in the gap
+     * between two statements it stops the <b>next</b> one, and the caller sees
+     * a statement it never cancelled fail. The gap is wide here because the
+     * cancellation has to log in first, so this is not a theoretical race - it
+     * is the ordinary case of a query-timeout thread whose query finished
+     * first.
+     *
+     * <p>Volatile: set and cleared on the working thread, read on the thread
+     * that cancels.
+     */
+    public boolean isAwaitingAnswer() {
+        return awaitingAnswer;
+    }
+
+    /** The answer is complete - see {@link #isAwaitingAnswer}. */
+    public void answerFinished() {
+        awaitingAnswer = false;
+    }
+
+    private volatile boolean awaitingAnswer;
+
+    /** Part of the answer came, and more is still owed - a carried setting's OK. */
+    public void answerStillExpected() {
+        awaitingAnswer = true;
+    }
+
     /** Sends everything buffered and zeroes the send buffer. */
     public void flush() throws IOException {
+        awaitingAnswer = true;
         roundTrips++;
         ByteBuffer view = out.view();
         view.clear().position(0).limit(out.position());
@@ -352,7 +443,11 @@ public final class MyChannel implements AutoCloseable {
                     "the server sent a payload split across packets - seclume does not "
                     + "reassemble split payloads yet");
         }
-        return length == 0 ? -1 : (in.getByte(in.position()) & 0xff);
+        int first = length == 0 ? -1 : (in.getByte(in.position()) & 0xff);
+        if (flight != null) {
+            flight.record(false, MyPackets.nameOf(false, first), length + HEADER);
+        }
+        return first;
     }
 
     /** The buffer of the packet in flight. */

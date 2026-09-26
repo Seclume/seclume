@@ -95,4 +95,42 @@ public final class MyPackets {
         writeLengthEncoded(out, bytes.length);
         out.putBytes(java.lang.foreign.MemorySegment.ofArray(bytes), 0, bytes.length);
     }
+
+    /**
+     * The name of a client command or a server answer, for a diagnostic.
+     *
+     * <p>MySQL has no type tag on an answer: the first byte of a response
+     * packet is {@code 0x00} for OK, {@code 0xff} for an error, {@code 0xfe}
+     * for EOF and anything else is a row or a column. That ambiguity is the
+     * protocol's and is left visible here rather than guessed at - a
+     * recording that called a row an EOF would be worse than one that said
+     * "row or column".
+     */
+    public static String nameOf(boolean sent, int first) {
+        if (first < 0) {
+            return "empty";
+        }
+        if (sent) {
+            return switch (first) {
+                case 0x01 -> "Quit";
+                case 0x03 -> "Query";
+                case 0x0e -> "Ping";
+                case 0x16 -> "StmtPrepare";
+                case 0x17 -> "StmtExecute";
+                case 0x19 -> "StmtClose";
+                case 0x1a -> "StmtReset";
+                case 0x1c -> "StmtFetch";
+                case 0x1f -> "ResetConnection";
+                default -> "0x" + Integer.toHexString(first);
+            };
+        }
+        return switch (first) {
+            case 0x00 -> "OK";
+            case 0xfe -> "EOF/AuthSwitch";
+            case 0xff -> "Error";
+            case 0x01 -> "AuthMoreData";
+            default -> "row or column";
+        };
+    }
+
 }

@@ -35,6 +35,29 @@ final class MyUrl {
         return url != null && (url.startsWith(PREFIX) || url.startsWith(MARIADB_PREFIX));
     }
 
+    /** {@code loadDataLocal=true}: the session offers LOCAL INFILE - see MySession#loadData. */
+    static boolean loadDataLocal(String url, java.util.Properties properties) {
+        try {
+            return JdbcUrl.parse(url, properties, PREFIX, DEFAULT_PORT)
+                    .flag("loadDataLocal", false);
+        } catch (RuntimeException e) {
+            return false;                     // reported by settings() already
+        }
+    }
+
+    /**
+     * {@code rewriteBatchedInserts=true}: a batch of {@code INSERT ... VALUES (?, ...)}
+     * goes as multi-row inserts - see MyPreparedStatement#executeLargeBatch.
+     */
+    static boolean rewriteBatchedInserts(String url, java.util.Properties properties) {
+        try {
+            return JdbcUrl.parse(url, properties, PREFIX, DEFAULT_PORT)
+                    .flag("rewriteBatchedInserts", false);
+        } catch (RuntimeException e) {
+            return false;                     // reported by settings() already
+        }
+    }
+
     static MySession.Settings settings(String url, Properties properties) throws SQLException {
         String prefix = url != null && url.startsWith(MARIADB_PREFIX) ? MARIADB_PREFIX : PREFIX;
         JdbcUrl.Parsed parsed;

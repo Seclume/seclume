@@ -74,12 +74,16 @@ public final class MyTypes {
     }
 
     public static int sqlType(int type, int flags) {
-        boolean unsigned = (flags & FLAG_UNSIGNED) != 0;
         boolean binary = (flags & FLAG_BINARY) != 0;
         return switch (type) {
             case TINY -> Types.TINYINT;
-            case SHORT, YEAR -> Types.SMALLINT;
-            case INT24, LONG -> unsigned ? Types.BIGINT : Types.INTEGER;
+            case SHORT -> Types.SMALLINT;
+            // A date, the way Connector/J reports it (its yearIsDateType, on by
+            // default): an ORM mapping by type code expects a DATE here.
+            case YEAR -> Types.DATE;
+            // INTEGER even when unsigned - Connector/J says so, and hands an int
+            // unsigned out as a Long all the same.
+            case INT24, LONG -> Types.INTEGER;
             case LONGLONG -> Types.BIGINT;
             case FLOAT -> Types.REAL;
             case DOUBLE -> Types.DOUBLE;
@@ -94,6 +98,7 @@ public final class MyTypes {
             case VARCHAR, VAR_STRING -> binary ? Types.VARBINARY : Types.VARCHAR;
             case STRING -> binary ? Types.BINARY : Types.CHAR;
             case GEOMETRY -> Types.BINARY;
+            case JSON -> Types.LONGVARCHAR;
             default -> Types.VARCHAR;
         };
     }
@@ -129,22 +134,26 @@ public final class MyTypes {
             case GEOMETRY -> "GEOMETRY";
             default -> "UNKNOWN";
         };
-        return unsigned && !name.equals("UNKNOWN") ? name + " UNSIGNED" : name;
+        // The server flags bit and year unsigned too; nobody writes them so.
+        return unsigned && type != BIT && type != YEAR && !name.equals("UNKNOWN")
+                ? name + " UNSIGNED" : name;
     }
 
     public static String javaClass(int type, int flags) {
         boolean unsigned = (flags & FLAG_UNSIGNED) != 0;
         boolean binary = (flags & FLAG_BINARY) != 0;
         return switch (type) {
-            case TINY, SHORT, YEAR -> "java.lang.Integer";
-            case INT24, LONG -> unsigned ? "java.lang.Long" : "java.lang.Integer";
+            case TINY, SHORT, INT24 -> "java.lang.Integer";
+            case YEAR -> "java.sql.Date";
+            case LONG -> unsigned ? "java.lang.Long" : "java.lang.Integer";
             case LONGLONG -> unsigned ? "java.math.BigInteger" : "java.lang.Long";
             case FLOAT -> "java.lang.Float";
             case DOUBLE -> "java.lang.Double";
             case DECIMAL, NEWDECIMAL -> "java.math.BigDecimal";
             case DATE, NEWDATE -> "java.sql.Date";
             case TIME -> "java.sql.Time";
-            case TIMESTAMP, DATETIME -> "java.sql.Timestamp";
+            case TIMESTAMP -> "java.sql.Timestamp";
+            case DATETIME -> "java.time.LocalDateTime";
             case TINY_BLOB, MEDIUM_BLOB, LONG_BLOB, BLOB, GEOMETRY ->
                     binary ? "[B" : "java.lang.String";
             case VARCHAR, VAR_STRING, STRING -> binary ? "[B" : "java.lang.String";

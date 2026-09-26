@@ -144,20 +144,72 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
     }
 
     /**
+     * The transport this data source's connections run on, as the URL option
+     * {@code transport} names it - null for the system property's choice.
+     */
+    private String transport;
+
+    /** The trust the URL chose - {@code tlsRootCert}, {@code tlsPin} - or null for the JVM's. */
+    private space.seclume.internal.TrustChoice.Choice trust;
+
+    public void setTransport(String transport) {
+        this.transport = transport == null || transport.isBlank() ? null : transport.trim();
+    }
+
+    public String getTransport() {
+        return transport;
+    }
+
+    /**
      * Takes over a whole URL, so that the same text means the same thing in
      * the driver and in the {@code DataSource}.
+     *
+     * <p><b>Every</b> setting the URL can carry, not the ones that happened to
+     * exist when this was written: a {@code tls=verify-full} that the driver
+     * honoured and this method dropped would connect without checking the
+     * server, through exactly the door Spring Boot uses.
      */
     public void setUrl(String url) throws SQLException {
-        MySession.Settings settings = MyUrl.settings(url, null);
+        setUrl(url, null);
+    }
+
+    /** Whether sessions offer LOCAL INFILE - see MySession#loadData; off by default. */
+    private boolean loadDataLocal;
+
+    /** Batches of plain inserts as multi-row inserts; off by default. */
+    private boolean rewriteBatchedInserts;
+
+    public void setRewriteBatchedInserts(boolean rewriteBatchedInserts) {
+        this.rewriteBatchedInserts = rewriteBatchedInserts;
+    }
+
+    public void setLoadDataLocal(boolean loadDataLocal) {
+        this.loadDataLocal = loadDataLocal;
+    }
+
+    /**
+     * The same, with settings beside the URL - the user and the secret
+     * provider, when the configuration keeps them apart from it.
+     */
+    public void setUrl(String url, java.util.Properties properties) throws SQLException {
+        MySession.Settings settings = MyUrl.settings(url, properties);
+        this.loadDataLocal = MyUrl.loadDataLocal(url, properties);
+        this.rewriteBatchedInserts = MyUrl.rewriteBatchedInserts(url, properties);
+        this.transport = space.seclume.internal.Transports.option(url, properties);
+        this.trust = space.seclume.internal.TrustChoice.of(url, properties);
         this.host = settings.host();
         this.port = settings.port();
-        this.database = settings.database();
         this.user = settings.user();
         this.secret = settings.secret();
-        this.applicationName = settings.applicationName();
         this.connectTimeoutMillis = settings.connectTimeoutMillis();
-        this.allowPublicKeyRetrieval = settings.allowPublicKeyRetrieval();
         this.hosts = settings.hosts();
+        this.maxResultBytes = settings.resultLimit().maxBytes();
+        this.maxResultRows = settings.resultLimit().maxRows();
+        this.tlsStack = settings.tlsStack();
+        this.identity = settings.identity();
+        this.database = settings.database();
+        this.applicationName = settings.applicationName();
+        this.allowPublicKeyRetrieval = settings.allowPublicKeyRetrieval();
         this.tls = settings.tls();
     }
 
@@ -211,8 +263,12 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
                 resolvedIdentity());
-        return new MyConnection(MySession.open(settings),
-                MyUrl.PREFIX + "//" + host + ":" + port + "/" + database);
+        return new MyConnection(space.seclume.internal.TrustChoice.using(trust,
+                () -> space.seclume.internal.Transports.using(transport,
+                        () -> MySession.allowingLocalData(loadDataLocal,
+                                () -> MySession.open(settings)))),
+                MyUrl.PREFIX + "//" + host + ":" + port + "/" + database)
+                .rewriteBatchedInserts(rewriteBatchedInserts);
     }
 
     /**

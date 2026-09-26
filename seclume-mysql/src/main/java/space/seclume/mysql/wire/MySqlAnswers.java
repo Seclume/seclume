@@ -199,17 +199,48 @@ public final class MySqlAnswers implements AnswerBoundary {
         return true;
     }
 
+    /**
+     * The column count at the head of a result set.
+     *
+     * <p><b>The width is announced by the first byte and the bytes it
+     * announces may not be there.</b> A packet holding the single byte
+     * {@code 0xfc} says "a two-byte number follows" and then ends, and reading
+     * the number walked off the end of the buffer - an
+     * {@code ArrayIndexOutOfBoundsException} with no message, from a server
+     * that sent five bytes. Found by the fuzz corpus on 23.09.2026, and not by
+     * the version of it that flipped bytes to {@code 00 ff 80 5a}: no
+     * arbitrary byte is ever {@code 0xfc}, so the corpus had to learn what
+     * this protocol's bytes mean before it could express the input that breaks
+     * it.
+     *
+     * <p>Refused rather than guessed, which is what the other three walkers do
+     * with a length that cannot be right. A count of zero would have been
+     * survivable and wrong: it says "no columns" about a packet whose shape
+     * nobody understood, and the phase machine would then read column
+     * definitions as rows.
+     */
     private long lengthEncoded() {
         int first = payload[0] & 0xff;
         if (first < 0xfb) {
             return first;
         }
-        return switch (first) {
-            case 0xfc -> (payload[1] & 0xffL) | ((payload[2] & 0xffL) << 8);
-            case 0xfd -> (payload[1] & 0xffL) | ((payload[2] & 0xffL) << 8)
-                    | ((payload[3] & 0xffL) << 16);
-            default -> 1;                            // 0xfe as a count: absurd, treat as one
+        int width = switch (first) {
+            case 0xfc -> 2;
+            case 0xfd -> 3;
+            default -> 0;                            // 0xfe as a count: absurd, treat as one
         };
+        if (width == 0) {
+            return 1;
+        }
+        if (payloadFilled < 1 + width) {
+            throw new IllegalStateException("the server announced a column count of "
+                    + width + " bytes in a packet holding " + payloadFilled);
+        }
+        long count = 0;
+        for (int i = 0; i < width; i++) {
+            count |= (payload[1 + i] & 0xffL) << (8 * i);
+        }
+        return count;
     }
 
     private int skipLengthEncoded(int at) {

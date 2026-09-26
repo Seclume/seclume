@@ -50,10 +50,19 @@ public final class MyParameters {
         count = 0;
     }
 
-    /** Sets the parameter with a 1-based index, the way JDBC counts. */
-    public void set(int index, Object value) {
+    /**
+     * Sets the parameter with a 1-based index, the way JDBC counts.
+     *
+     * <p>A {@link java.sql.SQLException} and not an
+     * {@code IllegalArgumentException} for the index: this is reached straight
+     * from {@code setInt(0, ...)}, which is a caller's off-by-one, and the
+     * caller's {@code catch} is written against the JDBC signature. Oracle and
+     * SQL Server already refused it this way; these two did not.
+     */
+    public void set(int index, Object value) throws java.sql.SQLException {
         if (index < 1) {
-            throw new IllegalArgumentException("parameter indexes start at 1, got " + index);
+            throw new java.sql.SQLException(
+                    "parameter indexes start at 1, got " + index, "07009");
         }
         if (index > values.length) {
             values = Arrays.copyOf(values, Math.max(index, values.length * 2));
@@ -137,6 +146,14 @@ public final class MyParameters {
         }
         if (value instanceof Boolean flag) {
             out.putLongLe(flag ? 1 : 0);
+            return;
+        }
+        if (value instanceof space.seclume.internal.jdbc.NativeValue nativeValue) {
+            // Straight from the caller's memory into the send buffer, with no
+            // byte[] in between - see space.seclume.SensitiveParameters. The
+            // type tag is VAR_STRING, so the bytes are the value's text.
+            MyPackets.writeLengthEncoded(out, nativeValue.length());
+            out.putBytes(nativeValue.memory(), 0, nativeValue.length());
             return;
         }
         if (value instanceof byte[] bytes) {

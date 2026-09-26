@@ -45,7 +45,14 @@ public final class MyDriver implements Driver {
             return null;
         }
         MySession.Settings settings = MyUrl.settings(url, properties);
-        return new MyConnection(MySession.open(settings), url);
+        boolean loadDataLocal = MyUrl.loadDataLocal(url, properties);
+        return new MyConnection(space.seclume.internal.TrustChoice.using(
+                space.seclume.internal.TrustChoice.of(url, properties),
+                () -> space.seclume.internal.Transports.using(
+                        space.seclume.internal.Transports.option(url, properties),
+                        () -> MySession.allowingLocalData(loadDataLocal,
+                                () -> MySession.open(settings)))), url)
+                .rewriteBatchedInserts(MyUrl.rewriteBatchedInserts(url, properties));
     }
 
     @Override

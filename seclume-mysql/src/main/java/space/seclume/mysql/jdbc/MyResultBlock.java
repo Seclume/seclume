@@ -124,6 +124,11 @@ final class MyResultBlock implements ValueCells, AutoCloseable {
     }
 
 
+    /** The buffer the rows live in - for the native window, see Sensitive. */
+    WireBuffer data() {
+        return data;
+    }
+
     /**
      * How many bytes of row data are in here.
      *

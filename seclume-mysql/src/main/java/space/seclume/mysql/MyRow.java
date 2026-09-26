@@ -53,7 +53,13 @@ public final class MyRow implements ValueCells {
         int end = offset + length;
         for (int column = 0; column < fields.size(); column++) {
             if (at >= end) {
-                throw new IllegalStateException(
+                // Truncated rather than a bare IllegalStateException, and the
+                // difference is the whole point: the session maps Truncated to
+                // a connection failure, so this refusal reaches an application
+                // as a SQLException instead of as an unchecked exception from
+                // inside a decoder. The wording was already right; the type
+                // was not. Found by the decoder fuzz sweep on 23.09.2026.
+                throw space.seclume.internal.WireBuffer.Truncated.because(
                         "the row ended after " + column + " of " + fields.size() + " columns");
             }
             int first = buffer.getByte(at) & 0xff;

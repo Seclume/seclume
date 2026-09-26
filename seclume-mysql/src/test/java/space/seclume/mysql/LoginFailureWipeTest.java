@@ -68,6 +68,25 @@ class LoginFailureWipeTest {
     }
 
     /**
+     * MariaDB's switch to Kerberos, with no ticket to answer it - or, on a
+     * machine without the GSSAPI library, no Kerberos at all: a refusal that
+     * says so, as a login failure, and nothing left open.
+     */
+    @Test
+    void aSwitchToKerberosWithoutATicketIsRefusedAsALoginFailure() throws Exception {
+        long open = SecretScope.open();
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.switchToKerberos().start();
+            SQLException refused = assertThrows(SQLException.class,
+                    () -> MySession.open(settings(server)).close());
+            assertEquals("28000", refused.getSQLState(), refused.getMessage());
+            assertTrue(refused.getMessage().contains("Kerberos"), refused.getMessage());
+            server.awaitDone();
+        }
+        assertEquals(open, SecretScope.open());
+    }
+
+    /**
      * A server that cannot be reached is never worth a secret.
      *
      * <p>The stronger statement of the two, and the cheaper one: the login

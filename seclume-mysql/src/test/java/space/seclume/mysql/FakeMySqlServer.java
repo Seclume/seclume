@@ -60,6 +60,8 @@ final class FakeMySqlServer implements AutoCloseable {
     /** Whether to refuse the login itself - see {@link #rejectLogin()}. */
     private volatile boolean rejectLogin;
     private volatile boolean stopped;
+    /** Whether to switch the login to MariaDB's Kerberos plugin - see {@link #switchToKerberos()}. */
+    private volatile boolean kerberos;
 
     FakeMySqlServer(String user, String password) throws IOException {
         this.serverSocket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
@@ -89,6 +91,16 @@ final class FakeMySqlServer implements AutoCloseable {
      */
     FakeMySqlServer rejectLogin() {
         this.rejectLogin = true;
+        return this;
+    }
+
+    /**
+     * Answer the login with a switch to {@code auth_gssapi_client}, naming a
+     * service principal, as a MariaDB with {@code IDENTIFIED VIA gssapi} does;
+     * then wait for the client to give up.
+     */
+    FakeMySqlServer switchToKerberos() {
+        this.kerberos = true;
         return this;
     }
 
@@ -152,6 +164,21 @@ final class FakeMySqlServer implements AutoCloseable {
                 return;
             }
             checkLogin(login);
+            if (kerberos) {
+                java.io.ByteArrayOutputStream request = new java.io.ByteArrayOutputStream();
+                request.write(0xfe);
+                request.writeBytes("auth_gssapi_client\0mariadb/db.test@TEST.REALM\0Kerberos\0"
+                        .getBytes(StandardCharsets.US_ASCII));
+                writePacket(out, request.toByteArray(), 2);
+                try {
+                    while (readPacket(in) != null) {
+                        // whatever a client that has no ticket still sends
+                    }
+                } catch (IOException hungUp) {
+                    // the client gave up, as it should
+                }
+                return;
+            }
             sendOk(out, 2, 0, 0);
 
             while (true) {

@@ -96,10 +96,21 @@ public final class BinaryValues {
             case MyTypes.DOUBLE ->
                     Double.toString(Double.longBitsToDouble(row.unsignedAt(at, 8)));
             case MyTypes.DATE, MyTypes.NEWDATE -> date(row, at, length);
-            case MyTypes.DATETIME, MyTypes.TIMESTAMP -> timestamp(row, at, length);
-            case MyTypes.TIME -> time(row, at, length);
+            case MyTypes.DATETIME, MyTypes.TIMESTAMP ->
+                    timestamp(row, at, length, field.decimals());
+            case MyTypes.TIME -> time(row, at, length, field.decimals());
             default -> row.textAt(at, length);
         };
+    }
+
+    /**
+     * The fraction to as many digits as the column declares, as the text
+     * protocol writes it: a {@code timestamp(3)} is {@code .123}, not
+     * {@code .123000}. The wire always carries microseconds.
+     */
+    private static String fraction(long micros, int decimals) {
+        String six = String.format(".%06d", micros);
+        return decimals >= 1 && decimals < 6 ? six.substring(0, 1 + decimals) : six;
     }
 
     /** {@code YYYY-MM-DD}; zero bytes mean the zero date. */
@@ -114,7 +125,7 @@ public final class BinaryValues {
     }
 
     /** {@code YYYY-MM-DD HH:MM:SS[.ffffff]}. */
-    private static String timestamp(ValueCells row, int at, int length) {
+    private static String timestamp(ValueCells row, int at, int length, int decimals) {
         if (length == 0) {
             return "0000-00-00 00:00:00";
         }
@@ -130,14 +141,14 @@ public final class BinaryValues {
             return base;
         }
         long micros = row.unsignedAt(at + 7, 4);
-        return base + String.format(".%06d", micros);
+        return base + fraction(micros, decimals);
     }
 
     /**
      * {@code [-]HH:MM:SS[.ffffff]} - and the hours can go past 24, because in
      * MySQL {@code TIME} is a span of time, not a time of day.
      */
-    private static String time(ValueCells row, int at, int length) {
+    private static String time(ValueCells row, int at, int length, int decimals) {
         if (length == 0) {
             return "00:00:00";
         }
@@ -152,6 +163,6 @@ public final class BinaryValues {
             return base;
         }
         long micros = row.unsignedAt(at + 8, 4);
-        return base + String.format(".%06d", micros);
+        return base + fraction(micros, decimals);
     }
 }

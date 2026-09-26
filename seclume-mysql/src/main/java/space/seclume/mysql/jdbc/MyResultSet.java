@@ -19,7 +19,7 @@ import space.seclume.mysql.MyTypes;
  * same column arrives as a run of digits or as four bytes little-endian. That
  * is why every access branches once on {@code binary}.
  */
-public final class MyResultSet extends ReadOnlyResultSet {
+public final class MyResultSet extends ReadOnlyResultSet implements space.seclume.Sensitive {
 
     private final MyResultBlock block;
 
@@ -65,6 +65,18 @@ public final class MyResultSet extends ReadOnlyResultSet {
 
     @Override
     protected String stringAt(int column) {
+        int type = block.fields().get(column).type();
+        if (type == MyTypes.YEAR) {
+            // As a date, the way Connector/J writes it: 2024-01-01.
+            long year = block.isBinary() ? BinaryValues.toLong(block, column)
+                    : block.decimalAt(block.offset(column), block.length(column));
+            return String.format("%04d-01-01", year);
+        }
+        if (type == MyTypes.BIT && !block.isBinary()) {
+            // The bits as a number in both protocols - the text one sends
+            // the raw bytes here, not digits.
+            return Long.toString(BinaryValues.toLong(block, column));
+        }
         if (block.isBinary()) {
             return BinaryValues.toText(block, column);
         }
@@ -117,6 +129,9 @@ public final class MyResultSet extends ReadOnlyResultSet {
 
     @Override
     protected java.math.BigDecimal decimalAt(int column) throws SQLException {
+        if (block.fields().get(column).type() == MyTypes.YEAR) {
+            return java.math.BigDecimal.valueOf(longAt(column));
+        }
         if (block.isBinary()) {
             // The binary protocol sends a decimal as text inside the row, but
             // everything around it is binary - stringAt knows which, this does
@@ -124,6 +139,16 @@ public final class MyResultSet extends ReadOnlyResultSet {
             return super.decimalAt(column);
         }
         return block.bigDecimalAt(block.offset(column), block.length(column));
+    }
+
+    /**
+     * MySQL has no XML type: XML lives in a text column, and that is where
+     * {@code getSQLXML} has to read it from - Connector/J does the same. On
+     * PostgreSQL, SQL Server and Oracle only a real XML column answers.
+     */
+    @Override
+    protected java.sql.SQLXML sqlXmlAt(int column) throws SQLException {
+        return new space.seclume.internal.jdbc.XmlValue(stringAt(column));
     }
 
     @Override
@@ -173,9 +198,14 @@ public final class MyResultSet extends ReadOnlyResultSet {
             return booleanAt(column);
         }
         return switch (field.type()) {
-            case MyTypes.TINY, MyTypes.SHORT, MyTypes.YEAR -> (int) longAt(column);
-            case MyTypes.LONG, MyTypes.INT24 ->
+            case MyTypes.TINY, MyTypes.SHORT, MyTypes.INT24 -> (int) longAt(column);
+            // A date on the first of January, as Connector/J hands it out.
+            case MyTypes.YEAR -> java.sql.Date.valueOf(stringAt(column));
+            case MyTypes.LONG ->
                     field.unsigned() ? (Object) longAt(column) : (Object) (int) longAt(column);
+            // bit(1) is a flag and reads as one; a wider bit is its bytes.
+            case MyTypes.BIT -> field.columnLength() == 1 ? (Object) booleanAt(column)
+                    : bytesAt(column);
             // bigint unsigned goes up to 2^64-1 and a long stops at
             // 2^63-1, so the top half of the range came back as a negative
             // number: 18446744073709551615 read as -1. Not an exception, not
@@ -203,11 +233,20 @@ public final class MyResultSet extends ReadOnlyResultSet {
                     new java.math.BigDecimal(stringAt(column).trim());
             case MyTypes.DATE, MyTypes.NEWDATE -> java.sql.Date.valueOf(stringAt(column));
             case MyTypes.TIME -> java.sql.Time.valueOf(shortTime(stringAt(column)));
-            case MyTypes.DATETIME, MyTypes.TIMESTAMP ->
+            // DATETIME has no zone and so is a LocalDateTime, as in Connector/J
+            // since 8.0.23; TIMESTAMP stays a Timestamp there as well.
+            case MyTypes.DATETIME -> java.time.LocalDateTime.parse(
+                    stringAt(column).replace(' ', 'T'));
+            case MyTypes.TIMESTAMP ->
                     java.sql.Timestamp.valueOf(stringAt(column));
             case MyTypes.TINY_BLOB, MyTypes.MEDIUM_BLOB, MyTypes.LONG_BLOB, MyTypes.BLOB,
                  MyTypes.VARCHAR, MyTypes.VAR_STRING, MyTypes.STRING, MyTypes.GEOMETRY ->
-                    field.binary() ? bytesAt(column) : stringAt(column);
+                    // The character set decides, not the BINARY flag: MySQL
+                    // sets that flag for text in a _bin collation too -
+                    // utf8mb4_bin, and information_schema's own names - and
+                    // those came back as byte[]. Liquibase cast one to String
+                    // and stopped. Set 63 is binary; everything else is text.
+                    field.charset() == 63 ? bytesAt(column) : stringAt(column);
             default -> stringAt(column);
         };
     }
@@ -274,4 +313,33 @@ public final class MyResultSet extends ReadOnlyResultSet {
     static String text(byte[] bytes) {
         return new String(bytes, StandardCharsets.UTF_8); // seclume-allow: user payload, not a secret
     }
+
+    // ---- the native window, for space.seclume.Sensitive ------------------
+
+    @Override
+    protected java.lang.foreign.MemorySegment rawSegmentAt(int column) {
+        return block.data().segment();
+    }
+
+    @Override
+    protected long rawOffsetAt(int column) {
+        return block.offset(column);
+    }
+
+    @Override
+    protected int rawLengthAt(int column) {
+        return block.length(column);
+    }
+
+    @Override
+    public int readInto(int columnIndex, java.lang.foreign.MemorySegment target)
+            throws java.sql.SQLException {
+        return copyRaw(columnIndex, target);
+    }
+
+    @Override
+    public int length(int columnIndex) throws java.sql.SQLException {
+        return rawLength(columnIndex);
+    }
+
 }

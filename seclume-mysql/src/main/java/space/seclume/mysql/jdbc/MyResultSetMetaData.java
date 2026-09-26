@@ -59,7 +59,7 @@ final class MyResultSetMetaData implements ResultSetMetaData {
         if (isBoolean(f)) {
             return java.sql.Types.BIT;
         }
-        return isLobFamily(f) ? lobSqlType(f) : MyTypes.sqlType(f.type(), f.flags());
+        return isLobFamily(f) ? lobSqlType(f) : MyTypes.sqlType(f.type(), flags(f));
     }
 
     @Override
@@ -68,13 +68,27 @@ final class MyResultSetMetaData implements ResultSetMetaData {
         if (isBoolean(f)) {
             return "BIT";
         }
-        return isLobFamily(f) ? lobTypeName(f) : MyTypes.typeName(f.type(), f.flags());
+        return isLobFamily(f) ? lobTypeName(f) : MyTypes.typeName(f.type(), flags(f));
     }
 
     @Override
     public String getColumnClassName(int column) throws SQLException {
         MySession.Field f = field(column);
-        return isBoolean(f) ? "java.lang.Boolean" : MyTypes.javaClass(f.type(), f.flags());
+        return isBoolean(f) ? "java.lang.Boolean" : MyTypes.javaClass(f.type(), flags(f));
+    }
+
+    /**
+     * The flags, with BINARY only where the character set is binary.
+     *
+     * <p>MySQL sets the flag for text in a {@code _bin} collation too -
+     * {@code json_unquote}, {@code json_value}, {@code json_type} answer in
+     * {@code utf8mb4_bin} - and those reported {@code VARBINARY} while
+     * getObject handed out a String. The character set decides here as it
+     * already did for the value; Connector/J does the same. Found by
+     * {@code JsonFunctionTest}.
+     */
+    private static int flags(MySession.Field f) {
+        return f.charset() == 63 ? f.flags() : f.flags() & ~MyTypes.FLAG_BINARY;
     }
 
     /**

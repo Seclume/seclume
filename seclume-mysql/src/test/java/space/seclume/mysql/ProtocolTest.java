@@ -120,9 +120,11 @@ class ProtocolTest {
             server.start();
 
             try (MySession session = MySession.open(settings(server))) {
-                MyException failure = assertThrows(MyException.class,
-                        () -> session.execute("selct 1"));
-                assertEquals(1064, failure.errorNumber());
+                // A syntax error is the JDBC 4 type for its state class, as
+                // Connector/J raises it; the number stays the server's.
+                java.sql.SQLSyntaxErrorException failure = assertThrows(
+                        java.sql.SQLSyntaxErrorException.class, () -> session.execute("selct 1"));
+                assertEquals(1064, failure.getErrorCode());
                 assertEquals("42000", failure.getSQLState());
                 assertTrue(failure.getMessage().contains("error in your SQL syntax"));
             }
