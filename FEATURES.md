@@ -364,6 +364,84 @@ the test JVM holds no copy of the password. Jedis configured the ordinary way le
 and the same check finds it. Lettuce is not covered: it takes the password as a `char[]` and
 encodes it into Netty's buffers.
 
+## Mail
+
+`seclume-mail` sends over SMTP and reads over IMAP and POP3 with the password or the OAuth
+token off the heap. For Jakarta Mail, and so for Spring's `JavaMailSenderImpl`, Spring
+Integration's mail adapters and Camel, it is one session:
+
+```java
+Session session = SeclumeMail.session(
+        "smtps://mail.example.com?user=reports&provider=file&path=/run/secrets/mail",
+        "imaps://mail.example.com?user=reports&provider=file&path=/run/secrets/mail");
+
+Transport.send(message);                        // smtps, logged in by seclume
+Store store = session.getStore();               // imaps
+store.connect();                                // no user, no password
+Folder inbox = store.getFolder("INBOX");
+
+sender.setSession(session);                     // Spring: no host, no user, no password
+
+// Microsoft 365 with the machine's identity - no stored credential at all
+"imaps://outlook.office365.com?user=reports@example.com&auth=xoauth2"
+        + "&provider=azure-managed-identity&resource=https://outlook.office365.com"
+```
+
+With Spring Boot and `seclume-spring-boot-starter` it is two lines of `application.properties`
+and no code: they make the `Session` and a `JavaMailSender` on it, and Boot's own mail sender
+steps aside. `spring.mail.properties.*` still reach the session, and `spring.mail.password` is
+refused, since it would sit in the `Environment` as a `String` and not be used.
+
+```properties
+seclume.mail.send=smtps://mail.example.com?user=reports&provider=file&path=/run/secrets/mail
+seclume.mail.read=imaps://mail.example.com?user=reports&provider=file&path=/run/secrets/mail
+```
+
+In that session `smtp`, `imap` and `pop3` (and `smtps`, `imaps`, `pop3s`) are served by
+seclume under their usual names. Nothing is registered globally: every other session in the
+JVM is Jakarta Mail's as before. Without Jakarta Mail, `SeclumeMail.of(url).send(...)` sends
+a message and `SeclumeMail.of(url).store()` opens a mailbox.
+
+Jakarta Mail given a password keeps it as a `String` in its `Session` and builds the base64
+login argument as another one, and JSSE encrypts it from heap buffers. Here Jakarta Mail gets
+no password, and a password handed to it is refused. seclume logs in itself, the argument
+built and base64-encoded in native memory and written to its own TLS 1.3 stack:
+
+| Protocol | Logins | TLS |
+|---|---|---|
+| SMTP | `AUTH PLAIN`, `LOGIN`, `XOAUTH2` | `smtp://` STARTTLS, `smtps://` implicit |
+| IMAP | `AUTHENTICATE PLAIN`, `XOAUTH2` (SASL-IR or not), `LOGIN` with the password as a literal | `imap://` STARTTLS, `imaps://` implicit |
+| POP3 | `AUTH PLAIN`, `XOAUTH2`, `USER`/`PASS` | `pop3://` STLS, `pop3s://` implicit |
+
+Left out, `auth=` picks PLAIN where the server offers it and the protocol's own login
+otherwise; XOAUTH2 is used only when named. A server without STARTTLS is refused, and so are
+bytes it sends after its STARTTLS reply and before the handshake: anyone on the path could
+have injected them. `tls=none` exists for an SMTP relay without login and never logs in, since
+a credential is never sent in the clear. The secret providers are the JDBC drivers': a file,
+Vault, a cloud secret manager, or an OAuth token from the machine's Azure or GCP identity.
+
+**Reading.** Folders, search, fetching and flags are Angus Mail's IMAP and POP3 stores,
+unchanged, on a socket seclume has already connected, encrypted and logged in. IMAP has a word
+for that: the store is greeted with `PREAUTH` and skips its login. POP3 does not, so the
+session has the store log in with `USER` and `PASS` alone, and the socket answers both itself.
+They carry a placeholder, not the password, and never reach the server. Each connection
+Angus opens, pooled ones included, is logged in the same way.
+
+**What is not off the heap: the mail.** Subject, addresses and bodies are the application's
+data, written or read by the application. This is the same line the JDBC drivers draw: the
+password is not a `String`, the rows are. MIME is Jakarta Mail's.
+
+Shown by `NoCredentialOnTheHeapTest`: SMTP, IMAP and POP3 servers in a JVM of their own make
+up a password and a token and write them, and the base64 forms they take on the wire, to
+files. This JVM sends with PLAIN, LOGIN and XOAUTH2, reads over IMAP with AUTHENTICATE PLAIN,
+LOGIN and XOAUTH2 and over POP3 with USER/PASS and XOAUTH2, alone and through Jakarta Mail.
+Then it dumps its heap and searches it for all five: none is found. As a control, the PLAIN
+argument read into a `String` on purpose is found. The protocols themselves (every login,
+dot-stuffing, partial deliveries, a wrong certificate, the STARTTLS injection, reading a
+mailbox through Jakarta Mail, Spring's `JavaMailSenderImpl`) are covered by
+`SmtpConnectionTest`, `MailboxLoginTest`, `SeclumeTransportTest`, `SeclumeStoreTest` and
+`SpringJavaMailSenderTest`.
+
 ## GraalVM native image
 
 The library builds as a native image and connects from one to all four databases, with the

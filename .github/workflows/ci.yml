@@ -54,7 +54,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool -am test
+      # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
+      # own for the heap proof), so it needs nothing started beside it.
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail -am test
 
   postgresql:
     runs-on: ubuntu-latest

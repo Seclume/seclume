@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.11.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-mail</artifactId>
+  <name>seclume Mail</name>
+  <description>
+    Mail with the password or OAuth token off the heap - sending (SMTP) and
+    receiving (IMAP, POP3). seclume connects, encrypts with its own TLS 1.3
+    and logs in with PLAIN, XOAUTH2 or the protocol's own login written from
+    native memory; Jakarta Mail gets the logged-in connection under the
+    standard protocol names of a session seclume sets up, and never holds the
+    credential. Works with Spring's JavaMailSender, Spring Integration and
+    Camel through that session.</description>
+
+  <properties>
+    <jakarta.mail.version>2.1.3</jakarta.mail.version>
+    <angus.mail.version>2.0.3</angus.mail.version>
+    <spring.boot.version>4.1.1</spring.boot.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Only for the Spring test's version of spring-context-support. -->
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring.boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>jakarta.mail</groupId>
+      <artifactId>jakarta.mail-api</artifactId>
+      <version>${jakarta.mail.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <!-- The IMAP and POP3 stores are Angus Mail's, handed a connection seclume
+         has logged in; an application using Jakarta Mail has Angus anyway. -->
+    <dependency>
+      <groupId>org.eclipse.angus</groupId>
+      <artifactId>angus-mail</artifactId>
+      <version>${angus.mail.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-context-support</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
