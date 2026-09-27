@@ -60,11 +60,13 @@ public final class SeclumeHttp implements AutoCloseable {
             "proxy-authorization", "proxy-connection");
 
     private final HttpSettings settings;
+    private final OAuthToken token;
     private final ArrayDeque<HttpWire> idle = new ArrayDeque<>();
     private boolean closed;
 
     private SeclumeHttp(HttpSettings settings) {
         this.settings = settings;
+        this.token = settings.oauth == null ? null : new OAuthToken(settings.oauth, settings.secret);
     }
 
     /** One API: {@code https://host[:port][/base]?provider=...} - see {@link HttpSettings}. */
@@ -96,6 +98,7 @@ public final class SeclumeHttp implements AutoCloseable {
         }
         String head = head(verb, requestTarget(target), headers, body);
         boolean retried = false;
+        boolean renewed = false;
         while (true) {
             HttpWire wire = null;
             boolean reused = false;
@@ -103,10 +106,14 @@ public final class SeclumeHttp implements AutoCloseable {
                 wire = take();
                 reused = wire != null;
                 if (wire == null) {
-                    wire = HttpWire.connect(settings);
+                    wire = HttpWire.connect(settings.endpoint());
                 }
                 wire.writeAscii(head);
-                Credential.write(wire, settings);
+                if (token != null) {
+                    token.writeHeader(wire);
+                } else {
+                    Credential.write(wire, settings);
+                }
                 wire.writeAscii("\r\n");
                 if (body != null && body.length > 0) {
                     wire.write(ByteBuffer.wrap(body));
@@ -122,6 +129,14 @@ public final class SeclumeHttp implements AutoCloseable {
                     }
                     throw new IOException(settings.host + " closed the connection without an "
                             + "answer to " + verb);
+                }
+                if (response.status() == 401 && token != null && !renewed) {
+                    // revoked, or expired early: once more with a fresh token. A 401 is
+                    // an answer, so the request was not carried out - also for a POST.
+                    renewed = true;
+                    response.close();
+                    token.invalidate();
+                    continue;
                 }
                 return response;
             } catch (IOException | RuntimeException e) {
@@ -361,7 +376,11 @@ public final class SeclumeHttp implements AutoCloseable {
             idle.clear();
         }
         all.forEach(HttpWire::close);
-        settings.secret.close();
+        if (token != null) {
+            token.close();
+        } else {
+            settings.secret.close();
+        }
     }
 
     @Override

@@ -1,6 +1,7 @@
 package space.seclume.http;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -21,29 +22,29 @@ import space.seclume.internal.jdbc.TlsStack;
  */
 final class HttpWire implements AutoCloseable {
 
-    private final HttpSettings settings;
+    private final HttpSettings.Endpoint settings;
     private final SocketTransport transport;
     private final TlsLayer tls;
     private final ByteBuffer incoming = ByteBuffer.allocateDirect(16 * 1024).flip();
     private boolean open = true;
     private long idleSince;
 
-    private HttpWire(HttpSettings settings, SocketTransport transport, TlsLayer tls) {
+    private HttpWire(HttpSettings.Endpoint settings, SocketTransport transport, TlsLayer tls) {
         this.settings = settings;
         this.transport = transport;
         this.tls = tls;
     }
 
     /** Connected and encrypted, the server's certificate checked. */
-    static HttpWire connect(HttpSettings settings) throws IOException {
-        SocketTransport transport = SocketTransport.connect(settings.host, settings.port,
-                settings.connectTimeout);
+    static HttpWire connect(HttpSettings.Endpoint settings) throws IOException {
+        SocketTransport transport = SocketTransport.connect(settings.host(), settings.port(),
+                settings.connectTimeout());
         try {
-            transport.networkTimeout(settings.timeout);
-            TlsLayer tls = TrustChoice.using(settings.trust, () -> {
+            transport.networkTimeout(settings.timeout());
+            TlsLayer tls = TrustChoice.using(settings.trust(), () -> {
                 try {
-                    return TlsLayers.start(TlsStack.SECLUME, transport, settings.host,
-                            settings.port, true);
+                    return TlsLayers.start(TlsStack.SECLUME, transport, settings.host(),
+                            settings.port(), true);
                 } catch (IOException e) {
                     throw new SQLException(e.getMessage(), "08001", e);
                 }
@@ -86,7 +87,7 @@ final class HttpWire implements AutoCloseable {
                     return line.toString();
                 }
                 if (line.length() >= max) {
-                    throw new IOException("a line of the response from " + settings.host
+                    throw new IOException("a line of the response from " + settings.host()
                             + " is longer than " + max + " bytes");
                 }
                 line.append((char) (b & 0xff));
@@ -95,7 +96,7 @@ final class HttpWire implements AutoCloseable {
                 if (!any) {
                     return null;
                 }
-                throw new IOException(settings.host + " closed the connection in the middle "
+                throw new IOException(settings.host() + " closed the connection in the middle "
                         + "of the response head");
             }
         }
@@ -108,6 +109,21 @@ final class HttpWire implements AutoCloseable {
         }
         int n = Math.min(length, incoming.remaining());
         incoming.get(into, offset, n);
+        return n;
+    }
+
+    /**
+     * Up to {@code length} bytes into native memory - for an answer that holds
+     * a secret, the token endpoint's. What passes through on the way is this
+     * wire's own direct buffer, never a heap array. -1 at the end.
+     */
+    int read(MemorySegment into, long offset, int length) throws IOException {
+        if (!incoming.hasRemaining() && !fill()) {
+            return -1;
+        }
+        int n = Math.min(length, incoming.remaining());
+        MemorySegment.copy(MemorySegment.ofBuffer(incoming), 0, into, offset, n);
+        incoming.position(incoming.position() + n);
         return n;
     }
 

@@ -25,9 +25,10 @@ import space.seclume.tck.NoSecretInHeap;
 /**
  * The claim itself: after calling APIs every way this module knows - a bearer
  * token on its own, Basic through Spring's RestClient, an API key in a header
- * of its own through RestTemplate, each over kept connections - neither the
- * token, the password nor the key is on this JVM's heap, and neither is the
- * base64 the Basic credential travelled in.
+ * of its own through RestTemplate, each over kept connections, and OAuth 2.0
+ * client credentials through RestClient - neither the token, the password, the
+ * key, the client secret nor the access token it bought is on this JVM's heap,
+ * and neither are the base64 forms the Basic credentials travelled in.
  *
  * <p>The servers run in a JVM of their own ({@link FakeHttpsServerMain}); this
  * JVM only ever holds the paths - to hand to the secret provider, and to the
@@ -84,6 +85,18 @@ class NoCredentialOnTheHeapTest {
                         String.class);
             }
 
+            try (SeclumeHttp oauth = SeclumeHttp.of("https://localhost:" + ports[5]
+                    + "/graph?auth=oauth2&tlsPin=" + pki.pin() + "&token-url=https://localhost:"
+                    + ports[4] + "/oauth2/token&token-tlsPin=" + pki.pin()
+                    + "&client-id=app-1&scope=graph&provider=file&path="
+                    + slashes(directory.resolve("client-secret")))) {
+                RestClient rest = RestClient.builder()
+                        .requestFactory(new SeclumeHttpRequestFactory(oauth))
+                        .baseUrl("https://localhost:" + ports[5] + "/graph").build();
+                rest.get().uri("/me").retrieve().body(String.class);
+                rest.get().uri("/users").retrieve().body(String.class);
+            }
+
             server.getOutputStream().close();
             assertTrue(server.waitFor(30, TimeUnit.SECONDS));
             List<String> tail = new ArrayList<>();
@@ -92,9 +105,10 @@ class NoCredentialOnTheHeapTest {
                     tail.add(line);
                 }
             }
-            assertEquals(List.of("RECEIVED 6 AUTHORIZED 6"), tail);
+            assertEquals(List.of("RECEIVED 8 AUTHORIZED 8 TOKENS 1"), tail);
 
-            for (String secret : List.of("token", "password", "api-key", "basic.b64")) {
+            for (String secret : List.of("token", "password", "api-key", "basic.b64",
+                    "client-secret", "access-token", "oauth-basic.b64")) {
                 NoSecretInHeap.assertAbsent(directory.resolve(secret));
             }
 

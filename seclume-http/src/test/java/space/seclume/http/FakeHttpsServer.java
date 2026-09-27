@@ -38,6 +38,8 @@ final class FakeHttpsServer implements AutoCloseable {
     // what it expects
     String headerName = "Authorization";
     byte[] expected = "Bearer ya29.test-token".getBytes(StandardCharsets.UTF_8);
+    /** When set, decides instead of {@link #expected} - for tokens issued as the test runs. */
+    volatile java.util.function.Predicate<String> accepts;
     /** Close each connection after its first answer, without saying so. */
     volatile boolean dropSilently;
 
@@ -98,8 +100,9 @@ final class FakeHttpsServer implements AutoCloseable {
                     headers.computeIfAbsent(name, k -> new CopyOnWriteArrayList<>()).add(value);
                     if (name.equalsIgnoreCase(headerName)) {
                         credentials++;
-                        authorized = Arrays.equals(value.getBytes(StandardCharsets.UTF_8),
-                                expected);
+                        java.util.function.Predicate<String> rule = accepts;
+                        authorized = rule != null ? rule.test(value)
+                                : Arrays.equals(value.getBytes(StandardCharsets.UTF_8), expected);
                     }
                 }
                 int length = headers.containsKey("Content-Length")
