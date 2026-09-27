@@ -36,7 +36,9 @@ Integration's mail adapters or Camel as it is. For reading, Angus Mail's own IMA
 stores run on a socket seclume has already logged in: IMAP is told so with `PREAUTH`, and
 POP3's `USER`/`PASS` are answered by the socket and never reach the server. A password handed
 to Jakarta Mail or Spring is refused. `SeclumeMail.of(url)` sends without Jakarta Mail, or
-opens a store.
+opens a store. With `seclume-spring-boot-starter`, `seclume.mail.send` and `seclume.mail.read`
+in `application.properties` are all it takes: the starter makes the `Session` and a
+`JavaMailSender`, Boot's own mail sender steps aside, and `spring.mail.password` is refused.
 
 The mail itself is the application's data and stays a normal heap object.
 `NoCredentialOnTheHeapTest` proves the claim with the servers in a JVM of their own: after

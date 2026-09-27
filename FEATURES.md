@@ -387,6 +387,16 @@ sender.setSession(session);                     // Spring: no host, no user, no 
         + "&provider=azure-managed-identity&resource=https://outlook.office365.com"
 ```
 
+With Spring Boot and `seclume-spring-boot-starter` it is two lines of `application.properties`
+and no code: they make the `Session` and a `JavaMailSender` on it, and Boot's own mail sender
+steps aside. `spring.mail.properties.*` still reach the session, and `spring.mail.password` is
+refused, since it would sit in the `Environment` as a `String` and not be used.
+
+```properties
+seclume.mail.send=smtps://mail.example.com?user=reports&provider=file&path=/run/secrets/mail
+seclume.mail.read=imaps://mail.example.com?user=reports&provider=file&path=/run/secrets/mail
+```
+
 In that session `smtp`, `imap` and `pop3` (and `smtps`, `imaps`, `pop3s`) are served by
 seclume under their usual names. Nothing is registered globally: every other session in the
 JVM is Jakarta Mail's as before. Without Jakarta Mail, `SeclumeMail.of(url).send(...)` sends
