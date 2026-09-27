@@ -19,6 +19,7 @@ public class TlsAlertException extends IOException {
     public static final int WARNING = 1;
     public static final int FATAL = 2;
     public static final int CLOSE_NOTIFY = 0;
+    public static final int USER_CANCELED = 90;
     public static final int UNEXPECTED_MESSAGE = 10;
     public static final int HANDSHAKE_FAILURE = 40;
     public static final int ILLEGAL_PARAMETER = 47;
@@ -44,6 +45,11 @@ public class TlsAlertException extends IOException {
 
     public boolean isCloseNotify() {
         return description == CLOSE_NOTIFY;
+    }
+
+    /** {@code user_canceled} at warning level - the announcement of a close, not a fault. */
+    public boolean isUserCanceled() {
+        return description == USER_CANCELED && level == WARNING;
     }
 
     /** The names from RFC 8446 section 6; an unknown number is reported as itself. */

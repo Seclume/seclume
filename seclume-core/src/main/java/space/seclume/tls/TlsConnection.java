@@ -191,6 +191,12 @@ public final class TlsConnection implements Transport {
                 endOfStream = true;           // the peer said goodbye; that is an end, not a fault
                 return;
             }
+            if (alert.isUserCanceled()) {
+                // RFC 8446 6.1: a warning that "SHOULD be followed by a close_notify".
+                // The JDK's own server sends it that way when it closes with data still
+                // unread; the goodbye that follows ends the stream.
+                return;
+            }
             throw alert;
         } catch (IOException gone) {
             // The server checks a TLS 1.3 client certificate after our
