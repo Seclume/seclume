@@ -9,11 +9,11 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.MessageDigest;
+import java.security.MessageDigest; // seclume-allow: the checksum of a dump - no secret
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HexFormat;
+import java.util.HexFormat; // seclume-allow: the checksum of a dump, as hex - no secret
 import java.util.List;
 import java.util.stream.Stream;
 

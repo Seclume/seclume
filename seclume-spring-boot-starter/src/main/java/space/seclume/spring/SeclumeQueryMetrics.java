@@ -82,11 +82,13 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
         opened.enable("space.seclume.StatementCache");
         opened.enable("space.seclume.ConnectionOpen");
         opened.enable("space.seclume.Failover");
+        opened.enable("space.seclume.SecretRotation");
 
         opened.onEvent("space.seclume.Query", event -> query(registry, event));
         opened.onEvent("space.seclume.StatementCache", event -> cache(registry, event));
         opened.onEvent("space.seclume.ConnectionOpen", event -> connection(registry, event));
         opened.onEvent("space.seclume.Failover", event -> failover(registry, event));
+        opened.onEvent("space.seclume.SecretRotation", event -> rotation(registry, event));
 
         // Not startAsync's own thread pool: the stream outlives this call and
         // has to be closable from close(), which is what the field is for.
@@ -130,6 +132,22 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
                 .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
                 .register(registry)
                 .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /**
+     * A secret rotated at its source and taken up without a restart - or not.
+     *
+     * <p>Tagged by the watch: a data source's pool, a TLS key's path. Those are
+     * as many as the configuration has, not as many as traffic makes.
+     */
+    private void rotation(MeterRegistry registry, RecordedEvent event) {
+        Counter.builder("seclume.secret.rotations")
+                .description("secrets that changed at their source, and whether taking up "
+                        + "the new one worked")
+                .tag("watch", string(event, "watch"))
+                .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .register(registry)
+                .increment();
     }
 
     /**

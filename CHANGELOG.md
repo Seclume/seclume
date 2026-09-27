@@ -5,6 +5,26 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Rotation without a restart
+
+- `SecretWatch` in the core notices a secret that changed at its source. It compares keyed
+  fingerprints in native memory and holds neither the secret nor a plain hash of it.
+- The pool: `watchSecret(provider, interval)`; Spring:
+  `seclume.datasources.<name>.pool.secret-watch-interval`.
+- TLS server keys and certificates: `SeclumeKeys.keyManager(chain, keySpec, interval)`,
+  `SeclumeTomcat.enableHttps(..., interval)`; Spring:
+  `seclume.ssl.bundles.<name>.reload-interval`. A renewed pair is served from the next
+  handshake on, and a half-finished renewal is refused.
+- The JFR event `space.seclume.SecretRotation`, and the Micrometer counter
+  `seclume.secret.rotations`.
+- `seclume-pool` now requires `seclume.core` transitively.
+
+### Heap check for audits
+
+`seclume-heapcheck` checks existing dumps (`--dump`) and several secrets at once
+(`--secret-file` repeated, `--secret-dir`). It looks for binary secrets as bytes and writes
+Markdown or JSON reports (`--report`) that hold no secret and no hash of one.
+
 ### Any HTTP client: `SeclumeSslSocketFactory`
 
 An `SSLSocketFactory` in `seclume-http` for OkHttp, `HttpsURLConnection` and anything else

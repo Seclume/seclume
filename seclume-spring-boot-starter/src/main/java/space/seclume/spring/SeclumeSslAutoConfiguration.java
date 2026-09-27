@@ -30,6 +30,7 @@ import space.seclume.keys.SeclumeTomcat;
  * <pre>
  * seclume.ssl.bundles.web.certificate=/etc/tls/chain.pem
  * seclume.ssl.bundles.web.key=provider=file&amp;path=/run/secrets/tls.key
+ * seclume.ssl.bundles.web.reload-interval=1m   (a renewed pair, without a restart)
  *
  * seclume.server.ssl.bundle=web          (Tomcat: HTTPS with it)
  * server.ssl.bundle=web                  (Reactor Netty: the same, the Boot way)
@@ -61,6 +62,25 @@ public class SeclumeSslAutoConfiguration {
 
         /** The private key's secret provider, e.g. provider=file&amp;path=... */
         private String key;
+
+        /**
+         * How often to look whether the key or the certificate was renewed on
+         * disk, and serve the new pair from the next handshake on; unset or
+         * zero does not look.
+         */
+        private java.time.Duration reloadInterval;
+
+        public java.time.Duration getReloadInterval() {
+            return reloadInterval;
+        }
+
+        public void setReloadInterval(java.time.Duration reloadInterval) {
+            this.reloadInterval = reloadInterval;
+        }
+
+        boolean reloads() {
+            return reloadInterval != null && !reloadInterval.isZero();
+        }
 
         public String getCertificate() {
             return certificate;
@@ -99,8 +119,10 @@ public class SeclumeSslAutoConfiguration {
         return registry -> bundles(environment).forEach((name, properties) -> {
             bundle(environment, name);                     // both parts are there
             registry.registerBundle(name, SslBundle.of(SslStoreBundle.NONE, null, null,
-                    SslBundle.DEFAULT_PROTOCOL, SslManagerBundle.of(
-                            SeclumeKeys.keyManagerFactory(Path.of(properties.getCertificate()),
+                    SslBundle.DEFAULT_PROTOCOL, SslManagerBundle.of(properties.reloads()
+                            ? SeclumeKeys.keyManagerFactory(Path.of(properties.getCertificate()),
+                                    properties.getKey(), properties.getReloadInterval())
+                            : SeclumeKeys.keyManagerFactory(Path.of(properties.getCertificate()),
                                     properties.getKey()), jvmTrust())));
         });
     }
@@ -127,8 +149,15 @@ public class SeclumeSslAutoConfiguration {
         TomcatConnectorCustomizer seclumeTomcatHttps(Environment environment) {
             BundleProperties bundle = bundle(environment,
                     environment.getRequiredProperty("seclume.server.ssl.bundle"));
-            return connector -> SeclumeTomcat.enableHttps(connector,
-                    Path.of(bundle.getCertificate()), bundle.getKey());
+            return connector -> {
+                if (bundle.reloads()) {
+                    SeclumeTomcat.enableHttps(connector, Path.of(bundle.getCertificate()),
+                            bundle.getKey(), bundle.getReloadInterval());
+                } else {
+                    SeclumeTomcat.enableHttps(connector, Path.of(bundle.getCertificate()),
+                            bundle.getKey());
+                }
+            };
         }
     }
 }

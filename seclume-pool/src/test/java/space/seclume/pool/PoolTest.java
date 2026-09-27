@@ -255,6 +255,36 @@ class PoolTest {
     }
 
     /**
+     * A password replaced at its source rotates the pool on its own - no call
+     * to rotateSecret, no restart - and the watch stops with the pool.
+     */
+    @Test
+    void aWatchedSecretRotatesThePoolWhenItChanges(@org.junit.jupiter.api.io.TempDir
+                                                   java.nio.file.Path directory) throws Exception {
+        java.nio.file.Path password = directory.resolve("password");
+        java.nio.file.Files.writeString(password, "before");
+        StubDataSource source = new StubDataSource();
+        space.seclume.secret.SecretWatch watch;
+        try (SeclumePool pool = new SeclumePool(source, settings(4))) {
+            watch = pool.watchSecret(space.seclume.secret.SecretProviders.of(java.util.Map.of(
+                    "provider", "file", "path", password.toString())), Duration.ofHours(1));
+            Connection first = pool.getConnection();
+            Connection firstReal = ((PooledConnection) first).delegate();
+            first.close();
+
+            assertFalse(watch.checkNow(), "nothing changed, nothing rotated");
+            assertEquals(0, pool.rotations());
+
+            java.nio.file.Files.writeString(password, "after");
+            assertTrue(watch.checkNow());
+            assertEquals(1, pool.rotations());
+            assertTrue(firstReal.isClosed(), "the idle connection outlived the rotation");
+        }
+        java.nio.file.Files.writeString(password, "later");
+        assertFalse(watch.checkNow(), "the watch outlived its pool");
+    }
+
+    /**
      * The maximum holds even when housekeeping keeps stocking up.
      *
      * <p>The permit counts living connections, not borrowings. Whoever opens

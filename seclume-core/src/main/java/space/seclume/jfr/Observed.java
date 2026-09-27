@@ -240,6 +240,30 @@ public final class Observed {
         event.commit();
     }
 
+    public static SeclumeEvents.SecretRotation beginSecretRotation() {
+        SeclumeEvents.SecretRotation event = new SeclumeEvents.SecretRotation();
+        if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    public static void endSecretRotation(SeclumeEvents.SecretRotation event, String watch,
+            boolean succeeded, String reason) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.watch = watch;
+        event.succeeded = succeeded;
+        event.reason = reason == null ? "" : reason;
+        event.commit();
+    }
+
     public static SeclumeEvents.TlsHandshake beginHandshake() {
         SeclumeEvents.TlsHandshake event = new SeclumeEvents.TlsHandshake();
         if (!event.isEnabled()) {

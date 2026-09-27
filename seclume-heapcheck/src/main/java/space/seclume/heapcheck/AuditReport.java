@@ -184,14 +184,12 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
         }
 
         out.append("## Method\n\n");
-        out.append("""
-                - The dump was searched twice: **raw**, over every byte of the file (what \
-                `strings | grep` finds, including memory no object owns any more), and \
-                **structured**, over every `byte[]` and `char[]` in the heap (what a heap \
-                analyser finds).
-                - Text secrets were looked for as UTF-8, UTF-16BE, UTF-16LE and Base64; \
-                binary ones as they are and as Base64.
-                """);
+        out.append("- The dump was searched twice: **raw**, over every byte of the file (what "
+                + "`strings | grep` finds, including memory no object owns any more), and "
+                + "**structured**, over every `byte[]` and `char[]` in the heap (what a heap " // seclume-allow: report text naming array types
+                + "analyser finds).\n");
+        out.append("- Text secrets were looked for as UTF-8, UTF-16BE, UTF-16LE and Base64; "
+                + "binary ones as they are and as Base64.\n");
         if (target.pid() != null) {
             out.append("- The dump included unreachable objects (`live=false`): what an "
                     + "attacker gets from the file, whether or not it was still in use.\n");

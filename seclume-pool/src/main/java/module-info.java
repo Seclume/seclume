@@ -18,7 +18,9 @@ module seclume.pool {
     // For SessionReset: what a borrower's statements set beyond the
     // transaction is put back on return. A driver that does not offer it is
     // simply not asked - the pool still works with anyone's driver.
-    requires seclume.core;
+    // Transitive since watchSecret takes a SecretProvider and gives back a
+    // SecretWatch: a caller of that method needs both types.
+    requires transitive seclume.core;
 
     exports space.seclume.pool;
 }

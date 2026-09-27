@@ -263,6 +263,19 @@ public class SeclumeProperties {
         private Duration leakDetectionThreshold;
         private Boolean warmup;
         private Integer statementCacheSize;
+        /**
+         * How often to look whether the password changed at its source, and
+         * rotate the pool if it did; unset or zero does not look.
+         */
+        private Duration secretWatchInterval;
+
+        public Duration getSecretWatchInterval() {
+            return secretWatchInterval;
+        }
+
+        public void setSecretWatchInterval(Duration secretWatchInterval) {
+            this.secretWatchInterval = secretWatchInterval;
+        }
 
         public Integer getMaximumPoolSize() {
             return maximumPoolSize;

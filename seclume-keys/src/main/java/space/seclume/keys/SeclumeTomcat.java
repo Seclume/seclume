@@ -45,11 +45,26 @@ public final class SeclumeTomcat {
 
     /** Makes {@code connector} an HTTPS connector serving {@code chain} with the key. */
     public static void enableHttps(Connector connector, Path chain, String keySpec) {
+        enable(connector, () -> SeclumeKeys.keyManager(chain, keySpec));
+    }
+
+    /**
+     * The same, taking up a renewed key and certificate every {@code interval}
+     * without a restart - see {@link SeclumeKeys#keyManager(Path, String,
+     * java.time.Duration)}.
+     */
+    public static void enableHttps(Connector connector, Path chain, String keySpec,
+                                   java.time.Duration interval) {
+        enable(connector, () -> SeclumeKeys.keyManager(chain, keySpec, interval));
+    }
+
+    private static void enable(Connector connector,
+                               java.util.function.Supplier<X509ExtendedKeyManager> managers) {
         if (!(connector.getProtocolHandler() instanceof AbstractHttp11Protocol<?> protocol)) {
             throw new IllegalArgumentException("HTTPS is set up on an HTTP/1.1 connector, not "
                     + "on " + connector.getProtocolHandler().getClass().getName());
         }
-        X509ExtendedKeyManager manager = SeclumeKeys.keyManager(chain, keySpec);
+        X509ExtendedKeyManager manager = managers.get();
         javax.net.ssl.SSLContext context;
         try {
             context = javax.net.ssl.SSLContext.getInstance("TLSv1.3");

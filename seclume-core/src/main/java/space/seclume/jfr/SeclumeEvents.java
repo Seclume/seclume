@@ -186,6 +186,36 @@ public final class SeclumeEvents {
     }
 
     /**
+     * A secret that changed at its source and was taken up without a restart
+     * - see {@code SecretWatch}.
+     *
+     * <p>The watch is named by what it is for - a data source, a key file -
+     * which the configuration already says. Nothing about the secret is here.
+     */
+    @Name("space.seclume.SecretRotation")
+    @Label("Secret Rotation")
+    @Category({CATEGORY, "Secret"})
+    @Description("A secret that changed at its source, and whether taking it up worked")
+    @StackTrace(false)
+    public static final class SecretRotation extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public SecretRotation() {
+        }
+
+        @Label("Watch")
+        @Description("What the secret is for - a data source, a key")
+        public String watch;
+
+        @Label("Succeeded")
+        public boolean succeeded;
+
+        @Label("Reason")
+        @Description("Why the new secret was not taken up; empty when it was")
+        public String reason;
+    }
+
+    /**
      * One statement shape run many times in a moment, on one thread.
      *
      * <p>No threshold annotation and no duration: this is not a slow event,

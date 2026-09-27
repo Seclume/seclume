@@ -73,6 +73,23 @@ class QueryMetricsTest {
         }
     }
 
+    /** A rotation becomes a counter under its watch, with how it went. */
+    @Test
+    void aSecretRotationBecomesACounter() throws Exception {
+        MeterRegistry registry = new SimpleMeterRegistry();
+        try (SeclumeQueryMetrics metrics = new SeclumeQueryMetrics(Duration.ZERO, 100)) {
+            metrics.bindTo(registry);
+
+            Observed.endSecretRotation(Observed.beginSecretRotation(), "seclume-main", true, "");
+
+            until(() -> registry.find("seclume.secret.rotations").counter() != null,
+                    "the rotation to reach the registry");
+            var counter = registry.find("seclume.secret.rotations").counter();
+            assertEquals("seclume-main", counter.getId().getTag("watch"));
+            assertEquals("ok", counter.getId().getTag("outcome"));
+        }
+    }
+
     /** A cache lookup arrives with its answer, not with its statement. */
     @Test
     void aCacheLookupBecomesACounter() throws Exception {

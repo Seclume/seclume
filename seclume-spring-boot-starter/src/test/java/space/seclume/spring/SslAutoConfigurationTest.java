@@ -71,6 +71,21 @@ class SslAutoConfigurationTest {
     @Test
     void aBundleServesTls() throws Exception {
         try (AnnotationConfigApplicationContext context = context()) {
+            serveOnce(context);
+        }
+    }
+
+    /** With reload-interval the key manager is the reloading one - and serves the same. */
+    @Test
+    void aReloadingBundleServesTls() throws Exception {
+        try (AnnotationConfigApplicationContext context =
+                     context("seclume.ssl.bundles.web.reload-interval=1m")) {
+            serveOnce(context);
+        }
+    }
+
+    private static void serveOnce(AnnotationConfigApplicationContext context) throws Exception {
+        {
             SslBundle bundle = context.getBean(SslBundles.class).getBundle("web");
             SSLContext server = bundle.createSslContext();
             try (SSLServerSocket listener = (SSLServerSocket) server.getServerSocketFactory()

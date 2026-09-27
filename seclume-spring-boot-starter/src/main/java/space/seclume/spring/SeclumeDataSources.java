@@ -24,6 +24,15 @@ final class SeclumeDataSources {
 
     static DataSource create(String name, SeclumeProperties.DataSourceProperties properties,
                              BeanFactory beans) {
+        return built(name, properties, beans).source();
+    }
+
+    /** The driver's DataSource, and the secret provider it reads from - for a watch. */
+    record Built(DataSource source, SecretProvider secret) {
+    }
+
+    static Built built(String name, SeclumeProperties.DataSourceProperties properties,
+                       BeanFactory beans) {
         String configured = properties.getUrl();
         if (configured == null || configured.isBlank()) {
             throw new IllegalStateException(
@@ -53,7 +62,7 @@ final class SeclumeDataSources {
                     "seclume.datasources." + name + ".username is missing - seclume does not "
                     + "guess the database user");
         }
-        return forUrl(name, url, user, secret);
+        return new Built(forUrl(name, url, user, secret), secret);
     }
 
     /** The driver's DataSource for a {@code jdbc:seclume:} URL - by its prefix. */
