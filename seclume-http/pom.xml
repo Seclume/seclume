@@ -50,6 +50,13 @@
       <version>${project.version}</version>
       <scope>test</scope>
     </dependency>
+    <!-- SeclumeSslSocketFactory under OkHttp, as the Kubernetes clients use it. -->
+    <dependency>
+      <groupId>com.squareup.okhttp3</groupId>
+      <artifactId>okhttp</artifactId>
+      <version>4.12.0</version>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

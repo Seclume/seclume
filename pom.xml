@@ -83,6 +83,9 @@
     <module>seclume-ldap</module>
     <module>seclume-azure</module>
     <module>seclume-gcp</module>
+    <module>seclume-kubernetes</module>
+    <module>seclume-jgit</module>
+    <module>seclume-grpc</module>
     <module>seclume-quarkus</module>
     <module>seclume-spring-boot-starter</module>
     <module>seclume-bench</module>

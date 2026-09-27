@@ -5,6 +5,27 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Any HTTP client: `SeclumeSslSocketFactory`
+
+An `SSLSocketFactory` in `seclume-http` for OkHttp, `HttpsURLConnection` and anything else
+that takes one. The client holds placeholders. seclume's TLS writes the secrets into
+HTTP/1.1 heads, Basic logins included, or into HTTP/2 header blocks (`http2()`).
+
+### Kubernetes: `seclume-kubernetes`
+
+The official Java client, in a pod or with an explicit API server. The service account
+token is read from its file for each request.
+
+### Git: `seclume-jgit`
+
+JGit over HTTPS: the password or access token is written into the Basic login from native
+memory.
+
+### gRPC: `seclume-grpc`
+
+The OkHttp transport over seclume's TLS with call credentials that hold a placeholder: a
+bearer token or an API key header.
+
 ### AWS: temporary credentials and presigned URLs
 
 - `credentials=instance`, `container` and `web-identity` cover EC2, ECS and EKS Pod Identity,
