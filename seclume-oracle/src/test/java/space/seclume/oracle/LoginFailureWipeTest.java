@@ -169,13 +169,21 @@ class LoginFailureWipeTest {
         long open = SecretScope.open();
         long read = SecretScope.allocations();
 
-        BreakableRelay relay = BreakableRelay.to(host, port);
-        int gone = relay.port();
-        relay.close();
+        // A port held by a socket that is bound and does not listen: a connection
+        // to it is refused, and nothing else can take it while the test runs.
+        // Closing a relay and dialling its port instead was a race - with Oracle
+        // on the host network its own processes take free ports, and on
+        // 27.09.2026 one of them answered on the port just given up, and the
+        // login succeeded.
+        try (Socket holder = new Socket()) {
+            holder.setReuseAddress(false);
+            holder.bind(new InetSocketAddress(0));
+            int gone = holder.getLocalPort();
 
-        assertThrows(SQLException.class,
-                () -> OracleSession.open(settings("127.0.0.1", gone,
-                        new FileSecretProvider(password, 256))));
+            assertThrows(SQLException.class,
+                    () -> OracleSession.open(settings("127.0.0.1", gone,
+                            new FileSecretProvider(password, 256))));
+        }
 
         assertEquals(read, SecretScope.allocations(),
                 "the secret was read although there was nothing to log in to");
