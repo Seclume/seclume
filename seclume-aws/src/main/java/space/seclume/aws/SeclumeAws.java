@@ -43,8 +43,7 @@ import space.seclume.secret.SecretProviders;
  * <p>Long-term keys - an IAM user's, MinIO's, Ceph's. Temporary credentials
  * with a session token (instance roles, IRSA, AssumeRole) would put the token
  * into a header the SDK holds as a {@code String}; they are refused rather
- * than half protected. Presigned URLs, SigV4a and async clients that sign
- * their body are not supported yet.
+ * than half protected. Presigned URLs and SigV4a are not supported yet.
  */
 public final class SeclumeAws {
 

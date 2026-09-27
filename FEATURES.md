@@ -623,6 +623,129 @@ sent. `amqps://` only. The token of RabbitMQ's OAuth 2 plugin goes in the same p
 `RabbitBrokerTest` runs against a real broker in CI: publish and receive, Spring AMQP, a wrong
 password, recovery after the broker drops the connection, and the heap proof with its control.
 
+## Private keys: TLS servers, client certificates, SSH
+
+`seclume-keys` keeps a private key where the JVM cannot see it. The key file is read by a
+secret provider into native memory and decoded by OpenSSL, and the key stays in OpenSSL's
+memory. Java gets a `PrivateKey` that holds none of it (`getEncoded()` is `null`, as for a key
+in a hardware module). Signatures are made by seclume's JCA provider, which the JDK chooses
+by itself for these keys. For all other keys nothing changes.
+
+```java
+String key = "provider=file&path=/run/secrets/tls.key";           // any secret provider
+SSLContext server = SeclumeKeys.sslContext(Path.of("/etc/tls/chain.pem"), key);
+KeyManagerFactory kmf = SeclumeKeys.keyManagerFactory(Path.of("/etc/tls/chain.pem"), key);
+SeclumeTomcat.enableHttps(connector, Path.of("/etc/tls/chain.pem"), key);   // embedded Tomcat
+```
+
+With Spring Boot:
+
+```properties
+seclume.ssl.bundles.web.certificate=/etc/tls/chain.pem
+seclume.ssl.bundles.web.key=provider=file&path=/run/secrets/tls.key
+seclume.server.ssl.bundle=web      # Tomcat: HTTPS with that key
+# server.ssl.bundle=web            # Reactor Netty, and clients that present a certificate
+```
+
+- **Keys:** RSA and EC, PEM or DER (PKCS#8, PKCS#1, SEC 1); an encrypted key goes through
+  `provider=encrypted`.
+- **Signatures:** TLS 1.3 and 1.2 with RSA-PSS, RSA PKCS#1 and ECDSA.
+- **Checks:** a certificate chain that does not belong to the key is refused.
+- **Platform:** OpenSSL 3 on 64-bit Linux.
+
+Tests run the JDK's own client against an `SSLServerSocket` and against an embedded Tomcat.
+The heap proof searches for the key's DER encoding and for its prime (RSA) or scalar (EC), the
+form a `BigInteger` would hold. The control loads the same key the usual way, and the proof
+finds it.
+
+**SSH and SFTP.** `seclume-ssh` gives Apache MINA SSHD, and Spring Integration's SFTP on top
+of it, such a key for public-key logins:
+
+```java
+SshClient client = SeclumeSsh.withIdentity(SshClient.setUpDefaultClient(),
+        "provider=file&path=/run/secrets/id_ecdsa");
+```
+
+- **Keys:** RSA (`rsa-sha2-256/512`), and ECDSA on P-256, P-384 and P-521. An OpenSSH-format
+  key is converted once with `ssh-keygen -p -m PEM`. Ed25519 is not supported yet.
+- **Passwords:** a password login cannot be protected, because SSHD encrypts it in Java before
+  it reaches a socket.
+- **Spring Boot:** `seclume.ssh.key` makes a started `SshClient` bean.
+  - Host keys are checked against `seclume.ssh.known-hosts`. An unknown server is refused
+    unless `seclume.ssh.allow-unknown-hosts=true`.
+  - With `seclume.sftp.host`, `.port` and `.user` there is also Spring Integration's
+    `DefaultSftpSessionFactory` on that client.
+- **Tests:** they use SSHD's own SFTP server.
+
+## AWS
+
+`seclume-aws` signs AWS SDK requests without the secret access key on the heap. The SDK's
+signer derives the signing key from a `String` with `javax.crypto.Mac`. seclume's signer
+reads the key from a secret provider into native memory for each request, runs the SigV4
+derivation there and wipes the key. The SDK only holds a placeholder.
+
+```java
+S3Client s3 = SeclumeAws.configure(S3Client.builder(),
+        "access-key-id=AKIA...&region=eu-central-1&provider=file&path=/run/secrets/aws-secret-key")
+    .build();
+// SqsClient, DynamoDbClient, SnsClient ... the same. MinIO, Ceph:
+//   .endpointOverride(URI.create("https://minio.internal:9000")).forcePathStyle(true)
+```
+
+With Spring Cloud AWS, every client it makes (S3, SQS and its listeners, SNS, DynamoDB, SES
+and more) signs this way:
+
+```properties
+seclume.aws.access-key-id=AKIA...
+seclume.aws.secret-access-key=provider=file&path=/run/secrets/aws-secret-key   # the provider, not the key
+seclume.aws.region=eu-central-1                                                 # optional
+```
+
+**How it is tested:**
+- For thirteen request shapes the signature is compared byte for byte with the SDK's own
+  signer: S3 with and without a signed body, CRC32 checksums, queries, non-ASCII, dot
+  segments and more.
+- The key derivation is checked against AWS's published test vector.
+- The S3 and SQS clients, sync and async, run against a local server that checks every
+  signature with the SDK's signer. S3 is also tested over HTTPS, where the body goes unsigned
+  and the checksum goes in a header.
+- The heap proof runs in a JVM of its own.
+
+**Limits:**
+- Long-term keys only (IAM users, MinIO, Ceph). Temporary credentials with a session token
+  are refused, because the token would sit in a header the SDK holds as a `String`.
+- Not supported yet: presigned URLs and SigV4a.
+- An async client's body is collected in memory before it is signed. This is meant for the
+  small bodies of SQS, SNS and DynamoDB. S3 over HTTPS sends its body unsigned, so nothing is
+  collected there.
+
+## LDAP and Active Directory
+
+`seclume-ldap` gives JNDI, and with it Spring LDAP and Spring Security's LDAP support, a
+socket factory. JNDI holds a placeholder instead of the service account's password. The
+socket encrypts with seclume's TLS 1.3. In the simple bind that carries the placeholder, it
+writes the real password and the BER lengths that follow from it, both from native memory.
+
+```java
+SeclumeLdap ldap = SeclumeLdap.of("ldaps://ad.example.com/dc=example,dc=com"
+        + "?user=svc-app@example.com&provider=file&path=/run/secrets/ldap");
+DirContext context = new InitialDirContext(ldap.environment());
+
+LdapContextSource source = new LdapContextSource();          // Spring LDAP
+source.setUrl(ldap.url()); source.setBase(ldap.base());
+source.setUserDn(ldap.user()); source.setPassword(ldap.password());
+source.setBaseEnvironmentProperties(ldap.socketFactory());
+```
+
+- **What passes through unchanged:** binds with any other password. An end user logging in
+  through Spring Security binds with what they typed.
+- **Limits:** `ldaps://` only, no StartTLS, no SASL binds.
+- **Spring Boot:** `seclume.ldap.url=ldaps://...?user=...&provider=...` makes the
+  `LdapContextSource` bean. Boot's `LdapTemplate` and Spring Security's LDAP authentication
+  use it.
+- **Tests:** they run against UnboundID's directory server in a process of its own, so the
+  password is never in the test JVM.
+
 ## GraalVM native image
 
 The library builds as a native image and connects from one to all four databases, with the

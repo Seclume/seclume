@@ -40,10 +40,12 @@ class SslAutoConfigurationTest {
     @BeforeAll
     static void keys() throws Exception {
         assumeTrue(OpenSslSigningKey.available(), "OpenSSL 3 on 64-bit Linux");
-        Process process = new ProcessBuilder("sh", "-c", "cd '" + directory + "' && "
+        Path script = directory.resolve("make-key.sh");
+        java.nio.file.Files.writeString(script, "cd '" + directory + "' && "
                 + "openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out key.pem"
                 + " && openssl req -x509 -new -key key.pem -out cert.pem -days 2"
-                + " -subj /CN=localhost -addext subjectAltName=DNS:localhost")
+                + " -subj /CN=localhost -addext subjectAltName=DNS:localhost\n");
+        Process process = new ProcessBuilder("sh", script.toString())
                 .redirectErrorStream(true).start();
         assertTrue(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0);
         certificate = directory.resolve("cert.pem");

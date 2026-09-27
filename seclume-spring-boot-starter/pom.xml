@@ -78,6 +78,69 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- AWS, optional: seclume.aws.* turns into customizers that Spring Cloud
+         AWS applies to every client it makes. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-aws</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>io.awspring.cloud</groupId>
+      <artifactId>spring-cloud-aws-autoconfigure</artifactId>
+      <version>4.1.1</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>aws-core</artifactId>
+      <version>2.55.6</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>http-auth-aws</artifactId>
+      <version>2.55.6</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- LDAP, optional: seclume.ldap.url turns into Spring LDAP's context
+         source (and so LdapTemplate and Spring Security's LDAP support). -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-ldap</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.ldap</groupId>
+      <artifactId>spring-ldap-core</artifactId>
+      <version>4.1.1</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- SSH, optional: seclume.ssh.key turns into an SshClient, and
+         seclume.sftp.* into Spring Integration's SFTP session factory. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-ssh</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.sshd</groupId>
+      <artifactId>sshd-core</artifactId>
+      <version>2.19.0</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.integration</groupId>
+      <artifactId>spring-integration-sftp</artifactId>
+      <version>7.1.1</version>
+      <optional>true</optional>
+    </dependency>
+
     <!-- Mail, optional: seclume.mail.send / seclume.mail.read turn into a
          Jakarta Mail Session and a JavaMailSender - only when seclume-mail
          and Spring's mail support are there. -->
@@ -191,6 +254,12 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-mail</artifactId>
       <version>${spring.boot.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>s3</artifactId>
+      <version>2.55.6</version>
       <scope>test</scope>
     </dependency>
     <dependency>

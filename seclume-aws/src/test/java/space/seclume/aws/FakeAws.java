@@ -52,19 +52,42 @@ final class FakeAws implements AutoCloseable {
 
     /** @param secret the key to check signatures with, or {@code null} for none */
     FakeAws(Supplier<String> secret) throws IOException {
+        this(secret, null);
+    }
+
+    /** Over HTTPS with {@code tls}, as S3 is - where the SDK sends bodies unsigned. */
+    FakeAws(Supplier<String> secret, javax.net.ssl.SSLContext tls) throws IOException {
         this.secret = secret;
-        server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        InetSocketAddress address = new InetSocketAddress(InetAddress.getLoopbackAddress(), 0);
+        if (tls == null) {
+            server = HttpServer.create(address, 0);
+        } else {
+            com.sun.net.httpserver.HttpsServer https =
+                    com.sun.net.httpserver.HttpsServer.create(address, 0);
+            https.setHttpsConfigurator(new com.sun.net.httpserver.HttpsConfigurator(tls));
+            server = https;
+        }
+        this.scheme = tls == null ? "http" : "https";
         server.createContext("/", this::handle);
         server.start();
     }
 
+    private final String scheme;
+
     URI endpoint() {
-        return URI.create("http://127.0.0.1:" + server.getAddress().getPort());
+        return URI.create(scheme + "://localhost:" + server.getAddress().getPort());
     }
 
     private void handle(HttpExchange exchange) throws IOException {
         try (exchange) {
             byte[] body = exchange.getRequestBody().readAllBytes();
+            if ("aws-chunked".equals(exchange.getRequestHeaders().getFirst("Content-Encoding"))) {
+                rejected.add(exchange.getRequestMethod() + " " + exchange.getRequestURI()
+                        + ": aws-chunked announced, which this signer does not write");
+                respond(exchange, 400, "<Error><Code>InvalidRequest</Code></Error>",
+                        "application/xml");
+                return;
+            }
             if (secret != null) {
                 String problem = check(exchange, body);
                 if (problem != null) {
@@ -160,7 +183,7 @@ final class FakeAws implements AutoCloseable {
         }
         String service = parsed.group(4);
         String host = exchange.getRequestHeaders().getFirst("Host");
-        URI uri = URI.create("http://" + host + exchange.getRequestURI().getRawPath()
+        URI uri = URI.create(scheme + "://" + host + exchange.getRequestURI().getRawPath()
                 + (exchange.getRequestURI().getRawQuery() == null ? ""
                         : "?" + exchange.getRequestURI().getRawQuery()));
         SdkHttpRequest.Builder request = SdkHttpRequest.builder()

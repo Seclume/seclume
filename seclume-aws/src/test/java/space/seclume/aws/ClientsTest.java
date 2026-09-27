@@ -50,6 +50,60 @@ class ClientsTest {
         }
     }
 
+    /**
+     * Over HTTPS, as S3 is: the SDK asks for the body unsigned and for a
+     * checksum - which this signer puts into a header, not a chunked trailer.
+     */
+    @Test
+    void s3OverHttpsWithUnsignedBodies() throws Exception {
+        Path key = SecretKeyFile.make(directory);
+        Tls tls = Tls.make(directory.resolve("tls"));
+        try (FakeAws aws = new FakeAws(() -> read(key), tls.server());
+             S3Client s3 = SeclumeAws.configure(S3Client.builder(),
+                             SecretKeyFile.spec("AKIAEXAMPLE", key))
+                     .endpointOverride(aws.endpoint()).forcePathStyle(true)
+                     .httpClient(software.amazon.awssdk.http.apache5.Apache5HttpClient.builder()
+                             .tlsTrustManagersProvider(tls::trustManagers).build())
+                     .build()) {
+            byte[] large = new byte[3 * 1024 * 1024 + 17];
+            new java.util.Random(7).nextBytes(large);
+            s3.putObject(b -> b.bucket("b").key("large.bin"), RequestBody.fromBytes(large));
+            s3.putObject(b -> b.bucket("b").key("small.txt"), RequestBody.fromString("small"));
+            assertTrue(java.util.Arrays.equals(large, s3.getObjectAsBytes(
+                    b -> b.bucket("b").key("large.bin")).asByteArray()));
+            assertEquals(List.of(), aws.rejected);
+        }
+    }
+
+    /** A self-signed certificate for localhost, as a server context and a trust list. */
+    private record Tls(javax.net.ssl.SSLContext server,
+                       javax.net.ssl.TrustManager[] trustManagers) {
+
+        static Tls make(Path directory) throws Exception {
+            Files.createDirectories(directory);
+            Path script = directory.resolve("tls.sh");
+            Files.writeString(script, "cd '" + directory + "' && openssl req -x509 -newkey "
+                    + "rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2 -subj /CN=localhost"
+                    + " -addext subjectAltName=DNS:localhost 2>/dev/null && openssl pkcs12 "
+                    + "-export -in cert.pem -inkey key.pem -out store.p12 -passout pass:store\n");
+            Process process = new ProcessBuilder("sh", script.toString()).start();
+            assertEquals(0, process.waitFor());
+            java.security.KeyStore store = java.security.KeyStore.getInstance("PKCS12");
+            try (var in = Files.newInputStream(directory.resolve("store.p12"))) {
+                store.load(in, "store".toCharArray());
+            }
+            javax.net.ssl.KeyManagerFactory keys = javax.net.ssl.KeyManagerFactory
+                    .getInstance("PKIX");
+            keys.init(store, "store".toCharArray());
+            javax.net.ssl.SSLContext server = javax.net.ssl.SSLContext.getInstance("TLS");
+            server.init(keys.getKeyManagers(), null, null);
+            javax.net.ssl.TrustManagerFactory trust = javax.net.ssl.TrustManagerFactory
+                    .getInstance("PKIX");
+            trust.init(store);
+            return new Tls(server, trust.getTrustManagers());
+        }
+    }
+
     @Test
     void sqsSendMessage() throws Exception {
         Path key = SecretKeyFile.make(directory);
@@ -61,6 +115,21 @@ class ClientsTest {
                     .messageBody("order 42")).messageId();
             assertEquals("m-1", id);
             assertEquals(List.of("order 42"), aws.messages);
+            assertEquals(List.of(), aws.rejected);
+        }
+    }
+
+    @Test
+    void anAsyncClientSignsItsBody() throws Exception {
+        Path key = SecretKeyFile.make(directory);
+        try (FakeAws aws = new FakeAws(() -> read(key));
+             software.amazon.awssdk.services.sqs.SqsAsyncClient sqs = SeclumeAws.configure(
+                     software.amazon.awssdk.services.sqs.SqsAsyncClient.builder(),
+                     SecretKeyFile.spec("AKIAEXAMPLE", key))
+                     .endpointOverride(aws.endpoint()).build()) {
+            sqs.sendMessage(b -> b.queueUrl(aws.endpoint() + "/123/orders")
+                    .messageBody("async order")).get();
+            assertEquals(List.of("async order"), aws.messages);
             assertEquals(List.of(), aws.rejected);
         }
     }

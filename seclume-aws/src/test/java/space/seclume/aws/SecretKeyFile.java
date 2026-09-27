@@ -15,8 +15,10 @@ final class SecretKeyFile {
 
     static Path make(Path directory) throws IOException, InterruptedException {
         Path file = directory.resolve("aws-secret-key");
-        Process process = new ProcessBuilder("sh", "-c", "head -c 30 /dev/urandom | base64 "
-                + "| tr -d '\\n' > '" + file + "'").start();
+        Path script = directory.resolve("make-key.sh");
+        java.nio.file.Files.writeString(script, "head -c 30 /dev/urandom | base64 "
+                + "| tr -d '\\n' > '" + file + "'\n");
+        Process process = new ProcessBuilder("sh", script.toString()).start();
         if (!process.waitFor(30, TimeUnit.SECONDS) || process.exitValue() != 0) {
             throw new IllegalStateException("the key file could not be written");
         }

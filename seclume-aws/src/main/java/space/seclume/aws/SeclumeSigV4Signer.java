@@ -59,7 +59,8 @@ import space.seclume.secret.SecretProvider;
  * <p>Not here: presigned URLs, SigV4a (multi-region access points) and the
  * chunked ({@code aws-chunked}) upload encoding - a body is signed in one
  * piece, or, where the SDK allows it over HTTPS, sent as
- * {@code UNSIGNED-PAYLOAD}; an S3 checksum goes into its header.
+ * {@code UNSIGNED-PAYLOAD}; an S3 checksum goes into its header. An async
+ * client's body is collected before it is signed.
  */
 final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
 
@@ -87,24 +88,62 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
         return SignedRequest.builder().request(signed).payload(payload).build();
     }
 
+    /**
+     * An async client's body is a publisher. When it has to be hashed or
+     * checksummed, it is collected first - request bodies of SQS, SNS or
+     * DynamoDB are small - and signed as a synchronous one would be; S3 over
+     * HTTPS sends its body unsigned, and nothing is collected there.
+     */
     @Override
     public CompletableFuture<AsyncSignedRequest> signAsync(
             AsyncSignRequest<? extends AwsCredentialsIdentity> request) {
-        CompletableFuture<AsyncSignedRequest> result = new CompletableFuture<>();
-        try {
-            if (request.payload().isPresent() && (signsPayload(request)
-                    || request.property(AwsV4FamilyHttpSigner.CHECKSUM_ALGORITHM) != null)) {
-                throw new UnsupportedOperationException("an async client that signs its "
-                        + "request body is not supported by seclume's signer - use the "
-                        + "synchronous client, or HTTPS where S3 sends the body unsigned");
+        boolean needsBody = request.payload().isPresent() && (signsPayload(request)
+                || request.property(AwsV4FamilyHttpSigner.CHECKSUM_ALGORITHM) != null);
+        if (!needsBody) {
+            try {
+                return CompletableFuture.completedFuture(AsyncSignedRequest.builder()
+                        .request(signed(request, null))
+                        .payload(request.payload().orElse(null)).build());
+            } catch (RuntimeException e) {
+                return CompletableFuture.failedFuture(e);
             }
-            SdkHttpRequest signed = signed(request, null);
-            result.complete(AsyncSignedRequest.builder().request(signed)
-                    .payload(request.payload().orElse(null)).build());
-        } catch (RuntimeException e) {
-            result.completeExceptionally(e);
         }
-        return result;
+        return collect(request.payload().get()).thenApply(body -> AsyncSignedRequest.builder()
+                .request(signed(request, ContentStreamProvider.fromByteArrayUnsafe(body)))
+                .payload(software.amazon.awssdk.core.async.AsyncRequestBody.fromBytesUnsafe(body))
+                .build());
+    }
+
+    /** The body, all of it - public, it is sent as it is. */
+    private static CompletableFuture<byte[]> collect(
+            org.reactivestreams.Publisher<java.nio.ByteBuffer> publisher) {
+        CompletableFuture<byte[]> done = new CompletableFuture<>();
+        publisher.subscribe(new org.reactivestreams.Subscriber<>() {
+            private final java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+
+            @Override
+            public void onSubscribe(org.reactivestreams.Subscription subscription) {
+                subscription.request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onNext(java.nio.ByteBuffer chunk) {
+                byte[] bytes = new byte[chunk.remaining()];
+                chunk.get(bytes);
+                body.write(bytes, 0, bytes.length);
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                done.completeExceptionally(error);
+            }
+
+            @Override
+            public void onComplete() {
+                done.complete(body.toByteArray());
+            }
+        });
+        return done;
     }
 
     private static boolean signsPayload(BaseSignRequest<?, ?> request) {

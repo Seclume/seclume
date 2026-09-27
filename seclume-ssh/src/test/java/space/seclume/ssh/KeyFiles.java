@@ -35,7 +35,9 @@ record KeyFiles(Path directory, Path key, Path certificate, Path der, Path secre
                         + " | sed -n '/^" + part + ":/,/^[a-zA-Z]/p' | sed '1d;$d'"
                         + " | tr -d ' :\\n' | sed 's/^00//' | perl -ne 'print pack(\"H*\", $_)' > secret.bin",
                 "test -s secret.bin");
-        Process process = new ProcessBuilder("sh", "-c", script).redirectErrorStream(true)
+        Path file = directory.resolve("make-key.sh");
+        Files.writeString(file, script);
+        Process process = new ProcessBuilder("sh", file.toString()).redirectErrorStream(true)
                 .start();
         String output = new String(process.getInputStream().readAllBytes());
         if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) {
