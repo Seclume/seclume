@@ -59,6 +59,16 @@ public final class SecretScope implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private SecretScope(Arena arena, boolean ownsArena, int capacity) {
+        // While a checkpoint is being taken, no new secret: it would land in
+        // the image. Returns at once in every other moment of the process.
+        try {
+            space.seclume.internal.Checkpoint.awaitOpen();
+        } catch (RuntimeException interrupted) {
+            if (ownsArena) {
+                arena.close();
+            }
+            throw interrupted;
+        }
         if (capacity <= 0) {
             if (ownsArena) {
                 arena.close();

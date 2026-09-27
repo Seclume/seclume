@@ -121,7 +121,7 @@ class QuiesceTest {
             SeclumeCrac.quiesce(pool, 2000);
             assertEquals(0, pool.activeCount());
             assertEquals(0, pool.idleCount(), "the idle connection survived the checkpoint");
-            pool.resume();
+            SeclumeCrac.restored(pool);
         }
     }
 
@@ -142,7 +142,7 @@ class QuiesceTest {
             assertTrue(System.nanoTime() - start >= Duration.ofMillis(250).toNanos(),
                     "the checkpoint did not wait for the borrowed connection");
             returner.join();
-            pool.resume();
+            SeclumeCrac.restored(pool);
         }
     }
 
@@ -167,6 +167,47 @@ class QuiesceTest {
             IllegalStateException refused = assertThrows(IllegalStateException.class,
                     () -> SeclumeCrac.quiesce(pool, 300));
             assertTrue(refused.getMessage().contains("secret"), refused.getMessage());
+        }
+    }
+
+    /**
+     * P4: from the barrier to the restore, a login that starts waits - its
+     * secret would otherwise be made in the window before the image is
+     * written, and end up in it.
+     */
+    @Test
+    void aSecretRequestedAfterTheBarrierWaitsForTheRestore() throws Exception {
+        try (SeclumePool pool = pool()) {
+            SeclumeCrac.quiesce(pool, 2000);
+            assertTrue(space.seclume.internal.Checkpoint.holding(), "nothing holds new secrets");
+            java.util.concurrent.CountDownLatch made = new java.util.concurrent.CountDownLatch(1);
+            Thread login = Thread.ofPlatform().start(() -> {
+                try (SecretScope scope = SecretScope.allocate(16)) {
+                    assertEquals(16, scope.segment().byteSize());
+                    made.countDown();
+                }
+            });
+            assertTrue(!made.await(300, java.util.concurrent.TimeUnit.MILLISECONDS),
+                    "a secret was made while the checkpoint was being taken");
+            SeclumeCrac.restored(pool);
+            assertTrue(made.await(5, java.util.concurrent.TimeUnit.SECONDS),
+                    "the restore did not let it through");
+            login.join();
+        }
+    }
+
+    /** A refused checkpoint lets new secrets through again. */
+    @Test
+    void aRefusedCheckpointHoldsNothingBack() throws Exception {
+        try (SeclumePool pool = pool()) {
+            Connection borrowed = pool.getConnection();
+            try {
+                assertThrows(IllegalStateException.class, () -> SeclumeCrac.quiesce(pool, 200));
+                assertTrue(!space.seclume.internal.Checkpoint.holding(),
+                        "a refused checkpoint kept new secrets waiting");
+            } finally {
+                borrowed.close();
+            }
         }
     }
 }
