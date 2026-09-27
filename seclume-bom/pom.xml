@@ -110,6 +110,16 @@
       </dependency>
       <dependency>
         <groupId>space.seclume</groupId>
+        <artifactId>seclume-azure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-gcp</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
         <artifactId>seclume-quarkus</artifactId>
         <version>${project.version}</version>
       </dependency>

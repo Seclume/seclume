@@ -31,13 +31,14 @@ final class OpenSslSignature extends SignatureSpi {
     private final ByteArrayOutputStream data = new ByteArrayOutputStream();
 
     /**
-     * @param keyType {@code RSA} or {@code EC}
+     * @param keyType {@code RSA}, {@code EC} or {@code Ed25519}
      * @param digest  {@code SHA256}, {@code SHA384}, {@code SHA512}; {@code null}
-     *                for RSASSA-PSS, which takes it from its parameters
+     *                for RSASSA-PSS, which takes it from its parameters, and
+     *                for Ed25519, which has none
      */
     OpenSslSignature(String keyType, String digest) {
         this.keyType = keyType;
-        this.pss = digest == null;
+        this.pss = digest == null && keyType.equals("RSA");
         this.digest = digest;
     }
 
@@ -48,7 +49,7 @@ final class OpenSslSignature extends SignatureSpi {
                     + "OpenSSL, not with a " + (privateKey == null ? "null key"
                     : privateKey.getClass().getName()));
         }
-        if (!opaque.getAlgorithm().equals(keyType)) {
+        if (!opaque.nativeKey().type.equals(keyType)) {
             throw new InvalidKeyException("this signature needs an " + keyType + " key, not "
                     + "an " + opaque.getAlgorithm() + " key");
         }
@@ -76,7 +77,7 @@ final class OpenSslSignature extends SignatureSpi {
         if (key == null) {
             throw new SignatureException("not initialized for signing");
         }
-        if (digest == null) {
+        if (digest == null && pss) {
             throw new SignatureException("RSASSA-PSS needs its parameters (PSSParameterSpec) "
                     + "before signing");
         }

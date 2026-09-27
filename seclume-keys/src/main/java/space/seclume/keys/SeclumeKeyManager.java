@@ -35,6 +35,7 @@ final class SeclumeKeyManager extends X509ExtendedKeyManager {
         return switch (key.getAlgorithm()) {
             case "RSA" -> keyType.equals("RSA") || keyType.equals("RSASSA-PSS");
             case "EC" -> keyType.equals("EC");
+            case "EdDSA" -> keyType.equals("EdDSA") || keyType.equals("Ed25519");
             default -> false;
         };
     }

@@ -61,6 +61,12 @@
       <artifactId>sdk-core</artifactId>
       <scope>provided</scope>
     </dependency>
+    <!-- Temporary credentials travel through the SDK's Apache 5 client. -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>apache5-client</artifactId>
+      <scope>provided</scope>
+    </dependency>
 
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
@@ -70,11 +76,6 @@
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>sqs</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>software.amazon.awssdk</groupId>
-      <artifactId>apache5-client</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>

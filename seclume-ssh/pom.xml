@@ -35,10 +35,25 @@
       <scope>provided</scope>
     </dependency>
 
+    <!-- JSch (the maintained fork), for Ed25519 and for Apache Camel's SFTP. -->
+    <dependency>
+      <groupId>com.github.mwiede</groupId>
+      <artifactId>jsch</artifactId>
+      <version>2.28.7</version>
+      <scope>provided</scope>
+    </dependency>
+
     <dependency>
       <groupId>org.apache.sshd</groupId>
       <artifactId>sshd-sftp</artifactId>
       <version>${sshd.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Lets the test's SSHD server verify Ed25519 signatures. -->
+    <dependency>
+      <groupId>net.i2p.crypto</groupId>
+      <artifactId>eddsa</artifactId>
+      <version>0.3.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>

@@ -48,6 +48,8 @@ final class FakeAws implements AutoCloseable {
     final List<String> rejected = new CopyOnWriteArrayList<>();
     private final HttpServer server;
     private final Supplier<String> secret;
+    /** The session token requests must carry, or {@code null} for long-term keys. */
+    volatile Supplier<String> sessionToken;
 
     /** @param secret the key to check signatures with, or {@code null} for none */
     FakeAws(Supplier<String> secret) throws IOException {
@@ -174,6 +176,10 @@ final class FakeAws implements AutoCloseable {
 
     /** Signs the request again with the SDK's signer; {@code null} when it matches. */
     private String check(HttpExchange exchange, byte[] body) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query != null && query.contains("X-Amz-Signature=")) {
+            return checkPresigned(exchange);
+        }
         String authorization = exchange.getRequestHeaders().getFirst("Authorization");
         Matcher parsed = authorization == null ? null : AUTHORIZATION.matcher(authorization);
         if (parsed == null || !parsed.matches()) {
@@ -197,8 +203,17 @@ final class FakeAws implements AutoCloseable {
                 ZoneOffset.UTC);
         boolean unsigned = "UNSIGNED-PAYLOAD".equals(
                 exchange.getRequestHeaders().getFirst("x-amz-content-sha256"));
-        SignRequest.Builder<AwsCredentialsIdentity> sign = SignRequest.builder(
-                        AwsCredentialsIdentity.create(parsed.group(1), secret.get()))
+        AwsCredentialsIdentity identity = AwsCredentialsIdentity.create(parsed.group(1),
+                secret.get());
+        if (sessionToken != null) {
+            String token = sessionToken.get();
+            if (!token.equals(exchange.getRequestHeaders().getFirst("X-Amz-Security-Token"))) {
+                return "the session token is not the one issued";
+            }
+            identity = software.amazon.awssdk.identity.spi.AwsSessionCredentialsIdentity.create(
+                    parsed.group(1), secret.get(), token);
+        }
+        SignRequest.Builder<AwsCredentialsIdentity> sign = SignRequest.builder(identity)
                 .request(request.build())
                 .payload(ContentStreamProvider.fromByteArray(body))
                 .putProperty(AwsV4HttpSigner.REGION_NAME, parsed.group(3))
@@ -213,6 +228,54 @@ final class FakeAws implements AutoCloseable {
                 .firstMatchingHeader("Authorization").orElse("");
         return expected.equals(authorization) ? null
                 : exchange.getRequestMethod() + " " + uri + ": the signature does not match";
+    }
+
+    /** A presigned URL: the query signed again, at the time and for the duration it names. */
+    private String checkPresigned(HttpExchange exchange) {
+        Map<String, String> parameters = new java.util.LinkedHashMap<>();
+        StringBuilder rest = new StringBuilder();
+        for (String pair : exchange.getRequestURI().getRawQuery().split("&")) {
+            String name = pair.substring(0, pair.indexOf('='));
+            String value = java.net.URLDecoder.decode(pair.substring(pair.indexOf('=') + 1),
+                    StandardCharsets.UTF_8);
+            if (name.startsWith("X-Amz-")) {
+                parameters.put(name, value);
+            } else {
+                rest.append(rest.length() == 0 ? "" : "&").append(pair);
+            }
+        }
+        String[] credential = parameters.get("X-Amz-Credential").split("/");
+        Clock clock = Clock.fixed(LocalDateTime.parse(parameters.get("X-Amz-Date"),
+                DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")).toInstant(ZoneOffset.UTC),
+                ZoneOffset.UTC);
+        URI uri = URI.create(scheme + "://" + exchange.getRequestHeaders().getFirst("Host")
+                + exchange.getRequestURI().getRawPath() + (rest.length() == 0 ? "" : "?" + rest));
+        SignRequest<AwsCredentialsIdentity> sign = SignRequest.builder(
+                        AwsCredentialsIdentity.create(credential[0], secret.get()))
+                .request(SdkHttpRequest.builder().method(SdkHttpMethod.fromValue(
+                        exchange.getRequestMethod())).uri(uri).build())
+                .putProperty(AwsV4HttpSigner.REGION_NAME, credential[2])
+                .putProperty(AwsV4FamilyHttpSigner.SERVICE_SIGNING_NAME, credential[3])
+                .putProperty(AwsV4FamilyHttpSigner.DOUBLE_URL_ENCODE, false)
+                .putProperty(AwsV4FamilyHttpSigner.NORMALIZE_PATH, false)
+                .putProperty(AwsV4FamilyHttpSigner.PAYLOAD_SIGNING_ENABLED, false)
+                .putProperty(AwsV4FamilyHttpSigner.AUTH_LOCATION,
+                        AwsV4FamilyHttpSigner.AuthLocation.QUERY_STRING)
+                .putProperty(AwsV4FamilyHttpSigner.EXPIRATION_DURATION, expires(parameters))
+                .putProperty(HttpSigner.SIGNING_CLOCK, clock).build();
+        String expected = AwsV4HttpSigner.create().sign(sign).request().rawQueryParameters()
+                .get("X-Amz-Signature").get(0);
+        return expected.equals(parameters.get("X-Amz-Signature")) ? null
+                : exchange.getRequestMethod() + " " + uri + ": the presigned signature does not "
+                + "match";
+    }
+
+    private static java.time.Duration expires(Map<String, String> parameters) {
+        try {
+            return java.time.Duration.ofSeconds(Long.parseLong(parameters.get("X-Amz-Expires")));
+        } catch (NumberFormatException e) {
+            return java.time.Duration.ZERO;              // and the signature will not match
+        }
     }
 
     private static void respond(HttpExchange exchange, int status, String text, String type)

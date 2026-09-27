@@ -70,6 +70,17 @@ public final class SeclumeKeys {
         }
     }
 
+    /**
+     * The private key {@code secret} writes - PEM or DER - read once and
+     * decoded by OpenSSL; for a caller that finds the key inside something
+     * else, such as a cloud's service account file. The provider stays the
+     * caller's.
+     */
+    public static PrivateKey privateKey(SecretProvider secret) {
+        SeclumeKeyProvider.install();
+        return OpenSslPrivateKey.of(NativeKey.read(secret));
+    }
+
     /** The key and its public half - what an SSH client logs in with. */
     public static KeyPair keyPair(String keySpec) {
         OpenSslPrivateKey key = (OpenSslPrivateKey) privateKey(keySpec);

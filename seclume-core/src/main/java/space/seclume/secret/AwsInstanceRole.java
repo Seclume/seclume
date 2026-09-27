@@ -83,6 +83,15 @@ public final class AwsInstanceRole {
         return use.with(accessKeyId, view(secretKey), view(sessionToken));
     }
 
+    /**
+     * When the credentials {@link #use} last handed out stop being valid -
+     * {@link Instant#EPOCH} before the first use. A caller that copies them
+     * knows from this when its copy is stale.
+     */
+    public synchronized Instant validUntil() {
+        return expires;
+    }
+
     private static SecretProvider view(SecretScope scope) {
         return new SecretProvider() {
             @Override

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.11.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-gcp</artifactId>
+  <name>seclume Google Cloud</name>
+  <description>
+    Google Cloud service accounts with the private key off the heap: the key
+    file is read into native memory, the key in it decoded by OpenSSL, and the
+    Google auth library signs its JWTs through it - for every Google Cloud
+    client library.</description>
+
+  <properties>
+    <google-auth.version>1.53.0</google-auth.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-keys</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The application brings its Google libraries. -->
+    <dependency>
+      <groupId>com.google.auth</groupId>
+      <artifactId>google-auth-library-oauth2-http</artifactId>
+      <version>${google-auth.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

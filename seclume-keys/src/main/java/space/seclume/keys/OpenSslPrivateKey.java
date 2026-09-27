@@ -30,7 +30,7 @@ import javax.security.auth.Destroyable;
  * declare those interfaces as what they support, and JCA moves on to this one.
  */
 public abstract sealed class OpenSslPrivateKey implements PrivateKey, Destroyable
-        permits OpenSslPrivateKey.Rsa, OpenSslPrivateKey.Ec {
+        permits OpenSslPrivateKey.Rsa, OpenSslPrivateKey.Ec, OpenSslPrivateKey.Ed {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -42,7 +42,11 @@ public abstract sealed class OpenSslPrivateKey implements PrivateKey, Destroyabl
     }
 
     static OpenSslPrivateKey of(NativeKey key) {
-        return key.type.equals("RSA") ? new Rsa(key) : new Ec(key);
+        return switch (key.type) {
+            case "RSA" -> new Rsa(key);
+            case "EC" -> new Ec(key);
+            default -> new Ed(key);
+        };
     }
 
     NativeKey nativeKey() {
@@ -106,6 +110,28 @@ public abstract sealed class OpenSslPrivateKey implements PrivateKey, Destroyabl
         @Override
         public AlgorithmParameterSpec getParams() {
             return ((RSAPublicKey) nativeKey().publicKey).getParams();
+        }
+    }
+
+    /** An Ed25519 key: its curve's name, and nothing else. */
+    static final class Ed extends OpenSslPrivateKey implements java.security.interfaces.EdECKey {
+
+        @Serial
+        private static final long serialVersionUID = 1L;
+
+        Ed(NativeKey key) {
+            super(key);
+        }
+
+        /** {@code EdDSA}, as the JDK names Ed25519 keys - JSSE asks by that name. */
+        @Override
+        public String getAlgorithm() {
+            return "EdDSA";
+        }
+
+        @Override
+        public java.security.spec.NamedParameterSpec getParams() {
+            return java.security.spec.NamedParameterSpec.ED25519;
         }
     }
 

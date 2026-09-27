@@ -54,9 +54,11 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      # Azure's storage emulator, for seclume-azure's end-to-end test.
+      - run: npm install -g azurite@3
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-crac -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-crac -am test
       # A red run names its failing tests as annotations, so that they can be
       # read on the pull request without opening the log.
       - if: failure()

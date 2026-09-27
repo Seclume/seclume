@@ -97,6 +97,16 @@ class IntegrationsAutoConfigurationTest {
     }
 
     @Test
+    void temporaryAwsCredentialsCustomizeOnlySynchronousClients() {
+        try (AnnotationConfigApplicationContext context = context(
+                SeclumeAwsAutoConfiguration.class, "seclume.aws.credentials=instance",
+                "seclume.aws.region=eu-central-1")) {
+            assertEquals(1, context.getBeansOfType(AwsSyncClientCustomizer.class).size());
+            assertTrue(context.getBeansOfType(AwsAsyncClientCustomizer.class).isEmpty());
+        }
+    }
+
+    @Test
     void ldapContextSourceFromTheUrl() throws Exception {
         Path password = directory.resolve("ldap");
         Files.writeString(password, "an-ldap-password");

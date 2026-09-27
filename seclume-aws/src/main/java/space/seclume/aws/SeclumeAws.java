@@ -16,6 +16,7 @@ import software.amazon.awssdk.identity.spi.IdentityProviders;
 import software.amazon.awssdk.identity.spi.ResolveIdentityRequest;
 import software.amazon.awssdk.regions.Region;
 
+import space.seclume.internal.TrustChoice;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretProviders;
 
@@ -40,10 +41,20 @@ import space.seclume.secret.SecretProviders;
  * in every request) and is given as it is; {@code region} is optional when the
  * builder gets one otherwise.
  *
- * <p>Long-term keys - an IAM user's, MinIO's, Ceph's. Temporary credentials
- * with a session token (instance roles, IRSA, AssumeRole) would put the token
- * into a header the SDK holds as a {@code String}; they are refused rather
- * than half protected. Presigned URLs and SigV4a are not supported yet.
+ * <p>Long-term keys - an IAM user's, MinIO's, Ceph's - or temporary
+ * credentials, which is how AWS means workloads to get them:
+ *
+ * <pre>
+ * SeclumeAws.configure(S3Client.builder(), "credentials=instance&amp;region=eu-central-1")      // EC2
+ * SeclumeAws.configure(S3Client.builder(), "credentials=container&amp;region=eu-central-1")     // ECS, EKS Pod Identity
+ * SeclumeAws.configure(S3Client.builder(), "credentials=web-identity&amp;region=eu-central-1")  // EKS IRSA
+ * </pre>
+ *
+ * <p>With temporary credentials the secret key <b>and the session token</b>
+ * stay in native memory: the token is signed from there, and written into the
+ * request by seclume's TLS, which becomes the client's HTTP transport (the
+ * SDK's Apache 5 client over {@link SessionTokenSocket}) - so a synchronous
+ * client. SigV4a is not supported yet.
  */
 public final class SeclumeAws {
 
@@ -53,18 +64,63 @@ public final class SeclumeAws {
     private SeclumeAws() {
     }
 
-    /** Sets up {@code builder} to sign with the key named by {@code spec}. */
+    /**
+     * Sets up {@code builder} to sign with the credentials {@code spec} names:
+     * a long-term key ({@code access-key-id=...&provider=...}), or temporary
+     * ones ({@code credentials=instance}, {@code container} or
+     * {@code web-identity}) - which need a synchronous client, whose HTTP
+     * client is then seclume's TLS carrying the session token.
+     */
     public static <B extends AwsClientBuilder<B, ?>> B configure(B builder, String spec) {
         Settings settings = Settings.of(spec);
-        SeclumeSigV4Signer signer = new SeclumeSigV4Signer(settings.accessKeyId,
-                settings.secret);
-        IdentityProvider<AwsCredentialsIdentity> identity = identity(settings.accessKeyId);
-        builder.credentialsProvider(identity);
-        builder.putAuthScheme(new Scheme(signer, identity));
+        if (settings.temporary != null) {
+            if (!(builder instanceof software.amazon.awssdk.awscore.client.builder
+                    .AwsSyncClientBuilder<?, ?> sync)) {
+                throw new IllegalArgumentException("temporary credentials (credentials="
+                        + settings.temporary.name() + ") need a synchronous client: the session "
+                        + "token is written by seclume's TLS, which the SDK's asynchronous "
+                        + "clients cannot use");
+            }
+            sync.httpClient(software.amazon.awssdk.http.apache5.Apache5HttpClient.builder()
+                    .tlsSocketStrategy(new SeclumeTlsStrategy(settings.trust)).build());
+            IdentityProvider<AwsCredentialsIdentity> identity = session(settings.temporary);
+            builder.credentialsProvider(identity);
+            builder.putAuthScheme(new Scheme(new SeclumeSigV4Signer(null, null), identity));
+        } else {
+            SeclumeSigV4Signer signer = new SeclumeSigV4Signer(settings.accessKeyId,
+                    settings.secret);
+            IdentityProvider<AwsCredentialsIdentity> identity = identity(settings.accessKeyId);
+            builder.credentialsProvider(identity);
+            builder.putAuthScheme(new Scheme(signer, identity));
+        }
         if (settings.region != null) {
             builder.region(Region.of(settings.region));
         }
         return builder;
+    }
+
+    /** The current generation of temporary credentials, with placeholders for the secrets. */
+    private static IdentityProvider<AwsCredentialsIdentity> session(TemporaryCredentials source) {
+        return new IdentityProvider<>() {
+            @Override
+            public Class<AwsCredentialsIdentity> identityType() {
+                return AwsCredentialsIdentity.class;
+            }
+
+            @Override
+            public CompletableFuture<AwsCredentialsIdentity> resolveIdentity(
+                    ResolveIdentityRequest request) {
+                try {
+                    TemporaryCredentials.Generation current = source.current();
+                    return CompletableFuture.completedFuture(
+                            software.amazon.awssdk.identity.spi.AwsSessionCredentialsIdentity
+                                    .create(current.accessKeyId, PLACEHOLDER,
+                                            current.placeholder));
+                } catch (RuntimeException e) {
+                    return CompletableFuture.failedFuture(e);
+                }
+            }
+        };
     }
 
     /**
@@ -73,6 +129,10 @@ public final class SeclumeAws {
      */
     public static HttpSigner<AwsCredentialsIdentity> signer(String spec) {
         Settings settings = Settings.of(spec);
+        if (settings.temporary != null) {
+            throw new IllegalArgumentException("the signer on its own takes a long-term key; "
+                    + "temporary credentials go through SeclumeAws.configure");
+        }
         return new SeclumeSigV4Signer(settings.accessKeyId, settings.secret);
     }
 
@@ -114,8 +174,14 @@ public final class SeclumeAws {
         }
     }
 
-    /** {@code access-key-id=...&region=...&provider=...}. */
-    private record Settings(String accessKeyId, String region, SecretProvider secret) {
+    /**
+     * {@code access-key-id=...&region=...&provider=...} for a long-term key, or
+     * {@code credentials=instance|container|web-identity&region=...} for
+     * temporary ones; {@code tlsRootCert} or {@code tlsPin} for a server whose
+     * CA the JVM does not know.
+     */
+    private record Settings(String accessKeyId, String region, SecretProvider secret,
+                            TemporaryCredentials temporary, TrustChoice.Choice trust) {
 
         static Settings of(String spec) {
             Map<String, String> options = new LinkedHashMap<>();
@@ -127,21 +193,49 @@ public final class SeclumeAws {
                             StandardCharsets.UTF_8));
                 }
             }
-            String accessKeyId = options.remove("access-key-id");
             String region = options.remove("region");
-            if (accessKeyId == null || accessKeyId.isBlank()) {
-                throw new IllegalArgumentException("access-key-id= is missing - the public "
-                        + "half of the key, e.g. AKIA...");
-            }
+            String kind = options.remove("credentials");
+            TrustChoice.Choice trust = trust(options);
             if (options.containsKey("secret-access-key")) {
                 throw new IllegalArgumentException("the secret access key is not given here: "
                         + "name it with provider= (provider=file&path=..., provider=vault&...)");
+            }
+            if (kind != null && !kind.equals("static")) {
+                return new Settings(null, region, null,
+                        CredentialSources.of(kind, options, trust, region), trust);
+            }
+            String accessKeyId = options.remove("access-key-id");
+            if (accessKeyId == null || accessKeyId.isBlank()) {
+                throw new IllegalArgumentException("access-key-id= is missing - the public "
+                        + "half of the key, e.g. AKIA... - or credentials=instance, container "
+                        + "or web-identity for temporary credentials");
             }
             if (!options.containsKey("provider")) {
                 throw new IllegalArgumentException("no secret key named: add provider= and "
                         + "its options, e.g. provider=file&path=/run/secrets/aws-secret-key");
             }
-            return new Settings(accessKeyId.trim(), region, SecretProviders.of(options));
+            return new Settings(accessKeyId.trim(), region, SecretProviders.of(options), null,
+                    trust);
+        }
+
+        private static TrustChoice.Choice trust(Map<String, String> options) {
+            String rootCert = options.remove(TrustChoice.ROOT_CERT);
+            String pin = options.remove(TrustChoice.PIN);
+            if (rootCert == null && pin == null) {
+                return null;
+            }
+            java.util.Properties named = new java.util.Properties();
+            if (rootCert != null) {
+                named.setProperty(TrustChoice.ROOT_CERT, rootCert);
+            }
+            if (pin != null) {
+                named.setProperty(TrustChoice.PIN, pin);
+            }
+            try {
+                return TrustChoice.of(null, named);
+            } catch (java.sql.SQLException e) {
+                throw new IllegalArgumentException(e.getMessage(), e);
+            }
         }
     }
 }

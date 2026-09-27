@@ -691,9 +691,11 @@ seclume.server.ssl.bundle=web      # Tomcat: HTTPS with that key
 # server.ssl.bundle=web            # Reactor Netty, and clients that present a certificate
 ```
 
-- **Keys:** RSA and EC, PEM or DER (PKCS#8, PKCS#1, SEC 1); an encrypted key goes through
-  `provider=encrypted`.
-- **Signatures:** TLS 1.3 and 1.2 with RSA-PSS, RSA PKCS#1 and ECDSA.
+- **Keys:** RSA, EC and Ed25519, as PEM or DER (PKCS#8, PKCS#1, SEC 1), or as OpenSSH's own
+  format, which `ssh-keygen` writes. An OpenSSH file is converted in native memory, and RSA's
+  CRT values are computed there too, without `BigInteger`. A passphrase-protected OpenSSH key
+  is refused with a hint; an encrypted key goes through `provider=encrypted`.
+- **Signatures:** TLS 1.3 and 1.2 with RSA-PSS, RSA PKCS#1, ECDSA and Ed25519.
 - **Checks:** a certificate chain that does not belong to the key is refused.
 - **Platform:** OpenSSL 3 on 64-bit Linux.
 
@@ -710,8 +712,12 @@ SshClient client = SeclumeSsh.withIdentity(SshClient.setUpDefaultClient(),
         "provider=file&path=/run/secrets/id_ecdsa");
 ```
 
-- **Keys:** RSA (`rsa-sha2-256/512`), and ECDSA on P-256, P-384 and P-521. An OpenSSH-format
-  key is converted once with `ssh-keygen -p -m PEM`. Ed25519 is not supported yet.
+- **Keys with SSHD:** RSA (`rsa-sha2-256/512`) and ECDSA on P-256, P-384 and P-521, in any
+  of the formats above, including OpenSSH's.
+- **Ed25519, and JSch:** SSHD signs Ed25519 only with the key classes of `net.i2p` or Bouncy
+  Castle, which cannot stand in for a key held by OpenSSL. JSch (the maintained fork, also used
+  by Apache Camel's SFTP) takes an identity that signs by itself: `SeclumeJschIdentity.add(jsch,
+  "provider=file&path=/run/secrets/id_ed25519")` covers Ed25519, ECDSA and RSA.
 - **Passwords:** a password login cannot be protected, because SSHD encrypts it in Java before
   it reaches a socket.
 - **Spring Boot:** `seclume.ssh.key` makes a started `SshClient` bean.
@@ -719,7 +725,8 @@ SshClient client = SeclumeSsh.withIdentity(SshClient.setUpDefaultClient(),
     unless `seclume.ssh.allow-unknown-hosts=true`.
   - With `seclume.sftp.host`, `.port` and `.user` there is also Spring Integration's
     `DefaultSftpSessionFactory` on that client.
-- **Tests:** they use SSHD's own SFTP server.
+- **Tests:** they use SSHD's own SFTP server. Keys come from `ssh-keygen`, and each public key
+  seclume derives must be the one `ssh-keygen` exports.
 
 ## AWS
 
@@ -745,6 +752,40 @@ seclume.aws.secret-access-key=provider=file&path=/run/secrets/aws-secret-key   #
 seclume.aws.region=eu-central-1                                                 # optional
 ```
 
+**Temporary credentials**, the way AWS means workloads to get them:
+
+```java
+SeclumeAws.configure(S3Client.builder(), "credentials=instance&region=eu-central-1")      // EC2
+SeclumeAws.configure(S3Client.builder(), "credentials=container&region=eu-central-1")     // ECS, EKS Pod Identity
+SeclumeAws.configure(S3Client.builder(), "credentials=web-identity&region=eu-central-1")  // EKS IRSA
+```
+
+- **Where they come from:** the EC2 metadata service, the container credentials endpoint, or
+  STS. For STS, the pod's web identity token goes in the body of `AssumeRoleWithWebIdentity`.
+  Every secret on the way stays in native memory: the fetch tokens, the secret key and the
+  session token.
+- **How the session token is sent:**
+  - The token is signed in native memory.
+  - The SDK's Apache 5 client gets seclume's TLS as its socket, and that socket writes the
+    token into each request's header block.
+  - The socket follows the HTTP framing, so request bodies are never touched.
+  - Credentials are refreshed five minutes before they expire. The last generations are kept,
+    so a request signed just before a refresh goes out with its own token.
+- **Limits:** only synchronous clients. With Spring Boot, `seclume.aws.credentials=...`
+  customizes the synchronous clients only.
+
+**Presigned URLs**, for a browser to upload or download directly:
+
+```java
+SeclumeS3Presigner presigner = SeclumeS3Presigner.of("access-key-id=AKIA...&region=eu-central-1&provider=...");
+URL download = presigner.presignGet("reports", "2026/q3.pdf", Duration.ofMinutes(10));
+```
+
+- **Why not the SDK's own presigner:** `S3Presigner` signs with the SDK's signer and the
+  credentials it was given. With a client set up here those are a placeholder, and S3 refuses
+  the URLs.
+- **Temporary credentials** are refused, because the session token would be part of the URL.
+
 **How it is tested:**
 - For thirteen request shapes the signature is compared byte for byte with the SDK's own
   signer: S3 with and without a signed body, CRC32 checksums, queries, non-ASCII, dot
@@ -753,15 +794,51 @@ seclume.aws.region=eu-central-1                                                 
 - The S3 and SQS clients, sync and async, run against a local server that checks every
   signature with the SDK's signer. S3 is also tested over HTTPS, where the body goes unsigned
   and the checksum goes in a header.
-- The heap proof runs in a JVM of its own.
+- A presigned URL is compared with the SDK signer's in query mode. It is also used the way a
+  browser would, with a plain PUT and GET.
+- Temporary credentials are tested against a container endpoint, STS and S3, all in a process
+  of their own, so no secret is ever in the test JVM.
+- The heap proofs cover the secret key, the session token, the container token and the web
+  identity token. They run in JVMs of their own.
 
 **Limits:**
-- Long-term keys only (IAM users, MinIO, Ceph). Temporary credentials with a session token
-  are refused, because the token would sit in a header the SDK holds as a `String`.
-- Not supported yet: presigned URLs and SigV4a.
+- SigV4a is not supported yet.
 - An async client's body is collected in memory before it is signed. This is meant for the
   small bodies of SQS, SNS and DynamoDB. S3 over HTTPS sends its body unsigned, so nothing is
   collected there.
+
+## Azure Storage
+
+`seclume-azure` signs Azure Storage requests (Blob, Queue, File, Data Lake) with Shared Key.
+The account key, base64 as the portal shows it, is decoded in native memory, and the HMAC is
+computed there. The SDK's `StorageSharedKeyCredential` keeps it as a `String` instead.
+
+```java
+HttpPipelinePolicy signing = SeclumeAzure.sharedKey("account=mystorage&provider=file&path=/run/secrets/storage-key");
+BlobServiceClient blobs = new BlobServiceClientBuilder()
+        .endpoint("https://mystorage.blob.core.windows.net").addPolicy(signing).buildClient();
+```
+
+- **Equivalence:** five request shapes are compared with the SDK's own credential.
+- **End to end:** Blob and Queue run against Azurite, Microsoft's emulator, in a process that
+  reads the key from its file. A wrong key gets 403.
+- **Heap proof:** it searches for the key as text and as decoded bytes.
+
+## Google Cloud
+
+`seclume-gcp` reads a service account's JSON key file into native memory. The `private_key` in
+it is unescaped there and decoded by OpenSSL.
+
+```java
+GoogleCredentials credentials = SeclumeGcp.credentials(
+        "provider=file&path=/run/secrets/service-account.json&scopes=https://www.googleapis.com/auth/cloud-platform");
+```
+
+- **Signing:** the auth library signs its JWTs through seclume's JCA provider. The public
+  fields (e-mail, key id, project) are ordinary strings.
+- **Limits:** the access token it gets back, valid for an hour, is the library's own
+  `String`. The key itself, valid until it is deleted, stays in OpenSSL.
+- **Test:** a token endpoint checks every assertion against the account's public key.
 
 ## LDAP and Active Directory
 
