@@ -187,6 +187,12 @@ final class FakeSmtpServer implements AutoCloseable {
             SSLSocket secure = (SSLSocket) tls.getSocketFactory().createSocket(socket, null, true);
             secure.setUseClientMode(false);
             secure.setEnabledProtocols(new String[] {"TLSv1.3"});
+            // The server side, which checks no peer certificate at all - but set
+            // like a client's, so no reading of this file takes it for a socket
+            // that trusts whatever it is shown.
+            javax.net.ssl.SSLParameters parameters = secure.getSSLParameters();
+            parameters.setEndpointIdentificationAlgorithm("HTTPS");
+            secure.setSSLParameters(parameters);
             secure.startHandshake();
             socket = secure;
             in = new BufferedInputStream(secure.getInputStream());

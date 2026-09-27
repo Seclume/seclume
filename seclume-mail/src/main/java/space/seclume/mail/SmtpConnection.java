@@ -365,12 +365,13 @@ public final class SmtpConnection implements AutoCloseable {
         List<String> lines = new ArrayList<>();
         while (true) {
             String line = readLine();
-            if (line.length() < 3 || !Character.isDigit(line.charAt(0))
-                    || !Character.isDigit(line.charAt(1)) || !Character.isDigit(line.charAt(2))
+            if (line.length() < 3 || !isDigit(line.charAt(0)) || !isDigit(line.charAt(1))
+                    || !isDigit(line.charAt(2))
                     || (line.length() > 3 && line.charAt(3) != ' ' && line.charAt(3) != '-')) {
                 throw new SmtpException(-1, "not an SMTP reply: " + line);
             }
-            int code = Integer.parseInt(line.substring(0, 3));
+            int code = (line.charAt(0) - '0') * 100 + (line.charAt(1) - '0') * 10
+                    + (line.charAt(2) - '0');
             lines.add(line.length() > 4 ? line.substring(4) : "");
             if (line.length() == 3 || line.charAt(3) == ' ') {
                 return new Reply(code, List.copyOf(lines));
@@ -425,6 +426,11 @@ public final class SmtpConnection implements AutoCloseable {
             }
         }
         transport.close();
+    }
+
+    /** An ASCII digit - not Character.isDigit, which takes every script's digits. */
+    private static boolean isDigit(char c) {
+        return c >= '0' && c <= '9';
     }
 
     private static boolean isAscii(String text) {

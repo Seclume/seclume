@@ -54,9 +54,8 @@ class NoCredentialOnTheHeapTest {
                 pki.keystore.toString(), directory.toString()))
                 .redirectError(ProcessBuilder.Redirect.INHERIT)
                 .start();
-        try {
-            BufferedReader out = new BufferedReader(new InputStreamReader(
-                    server.getInputStream(), StandardCharsets.UTF_8));
+        try (BufferedReader out = new BufferedReader(new InputStreamReader(
+                server.getInputStream(), StandardCharsets.UTF_8))) {
             String ready = out.readLine();
             assertTrue(ready != null && ready.startsWith("READY "), "the server said: " + ready);
             String[] ports = ready.split(" ");
