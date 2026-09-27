@@ -5,6 +5,29 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### JWT and webhooks: `seclume-jwt`, signing keys off the heap
+
+A new module. `SeclumeJwt` signs tokens with HS256/384/512, computed in native memory with
+the key read per use and wiped. It signs RS, PS and ES tokens (256/384/512) with a private key
+that OpenSSL decodes from native memory and holds, so the JVM never sees it. It also verifies
+HMAC tokens: the algorithm is taken from the key, `none` and swapped algorithms are refused,
+signatures are compared in constant time, and `exp`/`nbf` are checked. `SeclumeHmac` checks
+GitHub, Stripe and any other HMAC webhook signature. In `seclume-core`, the new
+`OpenSslSigningKey` decodes PEM or DER private keys with `OSSL_DECODER` and signs with
+`EVP_DigestSign`. `NoKeyOnTheHeapTest` proves it, and every signature is checked against the
+JDK's own crypto.
+
+### HTTP: OAuth 2.0 without a client secret (`client-auth=private_key_jwt`)
+
+The token request carries a JWT assertion signed with the application's private key (RFC
+7523), with the `x5t#S256` thumbprint from `assertion-certificate=` for Entra ID. No client secret
+is needed at all.
+
+### TCK: secrets of bytes
+
+`NoSecretInHeap.assertAbsent` searches a `.bin` or `.der` file as bytes and in base64. A key
+decoded on the heap, its DER in a `byte[]`, is found as surely as a password in a `String`.
+
 ### HTTP: OAuth 2.0 client credentials with the client secret and the token off the heap
 
 `auth=oauth2` in `seclume-http` fetches an access token from the token endpoint (Entra ID,

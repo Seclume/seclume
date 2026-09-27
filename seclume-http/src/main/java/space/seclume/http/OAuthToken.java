@@ -46,6 +46,7 @@ final class OAuthToken implements AutoCloseable {
 
     private final OAuthSettings oauth;
     private final SecretProvider clientSecret;
+    private final space.seclume.jwt.SeclumeJwt assertions;   // private_key_jwt only
     private SecretScope token;             // guarded by this
     private long refreshAt;                // System.nanoTime() after which it is renewed
     private boolean closed;
@@ -53,6 +54,10 @@ final class OAuthToken implements AutoCloseable {
     OAuthToken(OAuthSettings oauth, SecretProvider clientSecret) {
         this.oauth = oauth;
         this.clientSecret = clientSecret;
+        this.assertions = oauth.clientAuth == OAuthSettings.ClientAuth.PRIVATE_KEY_JWT
+                ? space.seclume.jwt.SeclumeJwt.of(oauth.assertionAlg, oauth.assertionKid,
+                        clientSecret)
+                : null;
     }
 
     /** The header line, CRLF included - with a token renewed first if it is due. */
@@ -92,7 +97,11 @@ final class OAuthToken implements AutoCloseable {
     public synchronized void close() {
         closed = true;
         invalidate();
-        clientSecret.close();
+        if (assertions != null) {
+            assertions.close();
+        } else {
+            clientSecret.close();
+        }
     }
 
     // ---- the token request ---------------------------------------------------
@@ -109,6 +118,16 @@ final class OAuthToken implements AutoCloseable {
                 + "Accept: application/json\r\n"
                 + "Content-Type: application/x-www-form-urlencoded\r\n"
                 + "Connection: close\r\n";
+        if (assertions != null) {
+            String form = publicForm + "&client_assertion_type="
+                    + form("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+                    + "&client_assertion=" + assertion();
+            try (HttpWire wire = HttpWire.connect(oauth.endpoint)) {
+                wire.writeAscii(head + "Content-Length: " + form.length() + "\r\n\r\n" + form);
+                readAnswer(wire);
+            }
+            return;
+        }
         try (HttpWire wire = HttpWire.connect(oauth.endpoint);
              SecretScope secret = SecretScope.fromProvider(clientSecret)) {
             wire.writeAscii(head);
@@ -121,6 +140,30 @@ final class OAuthToken implements AutoCloseable {
             }
             readAnswer(wire);
         }
+    }
+
+    /**
+     * RFC 7523: a JWT the application signs with its private key - which is
+     * held by OpenSSL, never the JVM - for this token endpoint only, valid for
+     * five minutes and never twice ({@code jti}). It is a credential for that
+     * long and goes onto the heap as the String it is sent as; the key that
+     * made it does not.
+     */
+    private String assertion() {
+        long now = java.time.Instant.now().getEpochSecond();
+        java.util.Map<String, Object> header = new java.util.LinkedHashMap<>();
+        if (oauth.x5tS256 != null) {
+            header.put("x5t#S256", oauth.x5tS256);
+        }
+        java.util.Map<String, Object> claims = new java.util.LinkedHashMap<>();
+        claims.put("iss", oauth.clientId);
+        claims.put("sub", oauth.clientId);
+        claims.put("aud", oauth.tokenUrl);
+        claims.put("jti", java.util.UUID.randomUUID().toString());
+        claims.put("iat", now);
+        claims.put("nbf", now);
+        claims.put("exp", now + 300);
+        return assertions.sign(header, claims);
     }
 
     /** {@code Authorization: Basic base64(form(id):form(secret))} - RFC 6749 2.3.1. */
