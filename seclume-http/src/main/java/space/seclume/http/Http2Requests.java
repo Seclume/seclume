@@ -51,6 +51,7 @@ final class Http2Requests {
     private static final int MAX_BLOCK = 1 << 20;
 
     private final Sink sink;
+    private final String target;
     private int preface = PREFACE;
     private final byte[] header = new byte[9];
     private int headerFill;
@@ -64,8 +65,9 @@ final class Http2Requests {
     private boolean inBlock;
     private final Table table = new Table();
 
-    Http2Requests(Sink sink) {
+    Http2Requests(Sink sink, String target) {
         this.sink = sink;
+        this.target = target;
     }
 
     void consume(byte[] source, int offset, int length) throws IOException {
@@ -274,6 +276,7 @@ final class Http2Requests {
             int frames = Math.max(1, (length + FRAME - 1) / FRAME);
             int total = length + 9 * frames + (priority == null ? 0 : 5);
             if (!secrets.isEmpty()) {
+                space.seclume.jfr.Observed.secretUse("h2", target, "header");
                 try (SecretScope out = SecretScope.allocate(total)) {
                     write(out.segment(), decoded, spans, secrets, length);
                     sink.write(out.segment().asSlice(0, total).asByteBuffer());

@@ -34,11 +34,20 @@ final class ProcessHeap {
     }
 
     /**
+     * What the report says about the process: its JVM, and what it runs - the
+     * main class or jar only, because the rest of the command line can hold
+     * exactly what is being looked for.
+     */
+    record Jvm(String version, String vendor, String main) {
+    }
+
+    /**
      * Asks the process to write its heap to {@code target}.
      *
+     * @return what the process is
      * @throws IOException if the process cannot be attached to or refuses
      */
-    static void dump(String pid, Path target) throws IOException {
+    static Jvm dump(String pid, Path target) throws IOException {
         VirtualMachine machine;
         try {
             machine = VirtualMachine.attach(pid);
@@ -48,6 +57,13 @@ final class ProcessHeap {
                     + "version: " + e.getMessage(), e);
         }
         try {
+            Properties properties = machine.getSystemProperties();
+            String command = properties.getProperty("sun.java.command", "").strip();
+            int space = command.indexOf(' ');
+            Jvm jvm = new Jvm(properties.getProperty("java.runtime.version",
+                    properties.getProperty("java.version", "?")),
+                    properties.getProperty("java.vm.vendor", "?"),
+                    space < 0 ? command : command.substring(0, space));
             String address = startAgent(machine);
             try (JMXConnector connector =
                          JMXConnectorFactory.connect(new JMXServiceURL(address))) {
@@ -63,6 +79,7 @@ final class ProcessHeap {
                 // object in it was still reachable is of no interest to them.
                 diagnostic.dumpHeap(target.toAbsolutePath().toString(), false);
             }
+            return jvm;
         } finally {
             machine.detach();
         }

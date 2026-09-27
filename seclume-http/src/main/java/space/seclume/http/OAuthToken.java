@@ -129,12 +129,16 @@ final class OAuthToken implements BearerSource {
                     + "&client_assertion=" + assertion();
             try (HttpWire wire = HttpWire.connect(oauth.endpoint)) {
                 wire.writeAscii(head + "Content-Length: " + form.length() + "\r\n\r\n" + form);
+                space.seclume.jfr.Observed.secretUse("http", oauth.endpoint.host() + ":"
+                        + oauth.endpoint.port(), "oauth2-client-assertion");
                 readAnswer(wire);
             }
             return;
         }
         try (HttpWire wire = HttpWire.connect(oauth.endpoint);
              SecretScope secret = SecretScope.fromProvider(clientSecret)) {
+            space.seclume.jfr.Observed.secretUse("http", oauth.endpoint.host() + ":"
+                    + oauth.endpoint.port(), "oauth2-client-secret");
             wire.writeAscii(head);
             if (oauth.clientAuth == OAuthSettings.ClientAuth.BASIC) {
                 basic(wire, secret);

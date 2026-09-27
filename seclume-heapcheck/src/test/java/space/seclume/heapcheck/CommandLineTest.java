@@ -49,4 +49,25 @@ class CommandLineTest {
         assertEquals(2, result.exitCode(),
                 "a check that could not run reported a clean heap: " + result.output());
     }
+
+    /** A dump and a process at once is a misuse, not a guess at which was meant. */
+    @Test
+    void aDumpAndAProcessTogetherAreRefused() throws Exception {
+        ChildJvm.Result result = ChildJvm.run(HeapCheck.class,
+                List.of("--pid", "1", "--dump", "x.hprof", "--secret-file", "s"), 60);
+        assertEquals(2, result.exitCode(), result.output());
+        assertTrue(result.output().contains("one of them"), result.output());
+    }
+
+    /** A dump that is not there is a failure, not a clean heap. */
+    @Test
+    void aDumpThatIsNotThereIsAFailure(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path secret = dir.resolve("s");
+        java.nio.file.Files.writeString(secret, "some-secret-value");
+        ChildJvm.Result result = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", dir.resolve("missing.hprof").toString(), "--secret-file",
+                        secret.toString()), 60);
+        assertEquals(2, result.exitCode(), result.output());
+    }
 }

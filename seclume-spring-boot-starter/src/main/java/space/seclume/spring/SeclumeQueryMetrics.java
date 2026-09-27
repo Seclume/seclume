@@ -33,7 +33,8 @@ import jdk.jfr.consumer.RecordingStream;
  * <p><b>Off by default.</b> Starting a recording stream changes the state of
  * the process it runs in and costs a thread; a library that does that without
  * being asked has made a decision that belongs to whoever runs the
- * application. One property turns it on:
+ * application. One property turns it on - {@code seclume.metrics.events=true}
+ * does the same, for applications without a database:
  *
  * <pre>
  * seclume.metrics.queries=true
@@ -82,11 +83,23 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
         opened.enable("space.seclume.StatementCache");
         opened.enable("space.seclume.ConnectionOpen");
         opened.enable("space.seclume.Failover");
+        opened.enable("space.seclume.SecretRotation");
+        opened.enable("space.seclume.Authentication");
+        opened.enable("space.seclume.SecretUse");
+        opened.enable("space.seclume.Signature");
+        opened.enable("space.seclume.CredentialRotation");
+        opened.enable("space.seclume.TlsHandshake");
 
         opened.onEvent("space.seclume.Query", event -> query(registry, event));
         opened.onEvent("space.seclume.StatementCache", event -> cache(registry, event));
         opened.onEvent("space.seclume.ConnectionOpen", event -> connection(registry, event));
         opened.onEvent("space.seclume.Failover", event -> failover(registry, event));
+        opened.onEvent("space.seclume.SecretRotation", event -> rotation(registry, event));
+        opened.onEvent("space.seclume.Authentication", event -> login(registry, event));
+        opened.onEvent("space.seclume.SecretUse", event -> use(registry, event));
+        opened.onEvent("space.seclume.Signature", event -> signature(registry, event));
+        opened.onEvent("space.seclume.CredentialRotation", event -> read(registry, event));
+        opened.onEvent("space.seclume.TlsHandshake", event -> handshake(registry, event));
 
         // Not startAsync's own thread pool: the stream outlives this call and
         // has to be closable from close(), which is what the field is for.
@@ -128,6 +141,82 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
                 .description("physical connections opened, including login and any handshake")
                 .tag("kind", string(event, "kind"))
                 .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .register(registry)
+                .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /**
+     * A secret rotated at its source and taken up without a restart - or not.
+     *
+     * <p>Tagged by the watch: a data source's pool, a TLS key's path. Those are
+     * as many as the configuration has, not as many as traffic makes.
+     */
+    private void rotation(MeterRegistry registry, RecordedEvent event) {
+        Counter.builder("seclume.secret.rotations")
+                .description("secrets that changed at their source, and whether taking up "
+                        + "the new one worked")
+                .tag("watch", string(event, "watch"))
+                .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * A login: a database's, or a mail server's. By kind and method - never by
+     * user, which would be a tag per person.
+     */
+    private void login(MeterRegistry registry, RecordedEvent event) {
+        Timer.builder("seclume.authentications")
+                .description("logins, by protocol and the method the server asked for")
+                .tag("kind", string(event, "kind"))
+                .tag("method", string(event, "method"))
+                .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .register(registry)
+                .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /**
+     * A secret written into a request - by kind and mechanism, not by target:
+     * an S3 bucket per host name would make the target a tag per bucket.
+     */
+    private void use(MeterRegistry registry, RecordedEvent event) {
+        Counter.builder("seclume.secret.uses")
+                .description("secrets written into requests from native memory")
+                .tag("kind", string(event, "kind"))
+                .tag("mechanism", string(event, "mechanism"))
+                .register(registry)
+                .increment();
+    }
+
+    /** A signature made or checked with a key held off the heap. */
+    private void signature(MeterRegistry registry, RecordedEvent event) {
+        Timer.builder("seclume.signatures")
+                .description("signatures made or checked with keys held off the heap")
+                .tag("algorithm", string(event, "algorithm"))
+                .tag("operation", string(event, "operation"))
+                .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .register(registry)
+                .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /**
+     * A secret read from its provider - a file, Vault, a cloud's secret
+     * manager. The time is the provider's: Vault's latency shows here first.
+     */
+    private void read(MeterRegistry registry, RecordedEvent event) {
+        Timer.builder("seclume.secret.reads")
+                .description("secrets read from their providers into native memory")
+                .tag("provider", string(event, "provider"))
+                .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .register(registry)
+                .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /** A TLS handshake - by stack, not by server. */
+    private void handshake(MeterRegistry registry, RecordedEvent event) {
+        Timer.builder("seclume.tls.handshakes")
+                .description("TLS handshakes, by the stack that made them")
+                .tag("stack", string(event, "stack"))
                 .register(registry)
                 .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
     }

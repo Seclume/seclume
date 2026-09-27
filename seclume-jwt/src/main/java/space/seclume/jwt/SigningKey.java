@@ -140,7 +140,16 @@ final class SigningKey implements AutoCloseable {
 
     /** The signature over {@code input} - public, and so on the heap. */
     byte[] sign(byte[] input) {
-        return family == Family.HMAC ? mac(input) : signPrivate(input);
+        space.seclume.jfr.SeclumeEvents.Signature event =
+                space.seclume.jfr.Observed.beginSignature();
+        boolean signed = false;
+        try {
+            byte[] signature = family == Family.HMAC ? mac(input) : signPrivate(input);
+            signed = true;
+            return signature;
+        } finally {
+            space.seclume.jfr.Observed.endSignature(event, algorithm, "sign", signed);
+        }
     }
 
     /** HMAC over the concatenation of {@code parts}, the key read and wiped around it. */

@@ -57,6 +57,13 @@ public final class SeclumeHmac implements AutoCloseable {
         return key.mac(parts);
     }
 
+    /** Records a webhook check - whether it matched, nothing about what was checked. */
+    private boolean checked(boolean matches) {
+        space.seclume.jfr.Observed.endSignature(space.seclume.jfr.Observed.beginSignature(),
+                key.algorithm, "verify", matches);
+        return matches;
+    }
+
     /** Whether {@code signature} - hex, either case - is the HMAC of {@code parts}. */
     public boolean verifyHex(String signature, byte[]... parts) {
         byte[] given;
@@ -65,7 +72,7 @@ public final class SeclumeHmac implements AutoCloseable {
         } catch (IllegalArgumentException e) {
             return false;
         }
-        return MessageDigest.isEqual(mac(parts), given);
+        return checked(MessageDigest.isEqual(mac(parts), given));
     }
 
     /** Whether {@code signature} - base64 - is the HMAC of {@code parts}. */
@@ -76,7 +83,7 @@ public final class SeclumeHmac implements AutoCloseable {
         } catch (IllegalArgumentException e) {
             return false;
         }
-        return MessageDigest.isEqual(mac(parts), given);
+        return checked(MessageDigest.isEqual(mac(parts), given));
     }
 
     /** GitHub's {@code X-Hub-Signature-256: sha256=<hex>}. */

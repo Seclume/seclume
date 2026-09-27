@@ -84,6 +84,18 @@ class ServerKeyTest {
         assertEquals("hello", roundTrip(server, files, protocol, scheme));
     }
 
+    /** The server's CertificateVerify, signed with the opaque key, is a Signature event. */
+    @Test
+    void aHandshakeSignatureIsRecorded() throws Exception {
+        SSLContext server = SeclumeKeys.sslContext(ec256.certificate(), ec256.spec());
+        var events = space.seclume.tck.Recorded.during(
+                () -> roundTrip(server, ec256, "TLSv1.3", null), "space.seclume.Signature");
+        assertTrue(!events.isEmpty(), "no signature was recorded");
+        assertEquals("SHA256withEC", events.get(0).getString("algorithm"));
+        assertEquals("sign", events.get(0).getString("operation"));
+        assertTrue(events.get(0).getBoolean("succeeded"));
+    }
+
     @Test
     void aCertificateThatIsNotTheKeysIsRefused() {
         IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,

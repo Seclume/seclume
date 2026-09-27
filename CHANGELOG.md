@@ -5,6 +5,39 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Events and metrics for every module
+
+- New JFR events: `space.seclume.SecretUse` for every secret seclume writes into a request
+  (HTTP, Kubernetes, JGit, gRPC, AWS, Azure Storage, LDAP, RabbitMQ), and `space.seclume.Signature` for every
+  signature made or checked with a key held off the heap (TLS server keys, SSH, Google, JWT,
+  webhooks).
+- Mail logins (SMTP, IMAP, POP3) are `space.seclume.Authentication` events, like database
+  logins. The event's `kind` field is now labelled "Kind".
+- The Spring starter's metrics bridge adds `seclume.authentications`, `seclume.secret.uses`,
+  `seclume.signatures`, `seclume.secret.reads` and `seclume.tls.handshakes`.
+  `seclume.metrics.events=true` turns the bridge on without a database.
+- `seclume-tck`: `Recorded.during(...)` returns the events a piece of code emitted.
+
+### Rotation without a restart
+
+- `SecretWatch` in the core notices a secret that changed at its source. It compares keyed
+  fingerprints in native memory and holds neither the secret nor a plain hash of it.
+- The pool: `watchSecret(provider, interval)`; Spring:
+  `seclume.datasources.<name>.pool.secret-watch-interval`.
+- TLS server keys and certificates: `SeclumeKeys.keyManager(chain, keySpec, interval)`,
+  `SeclumeTomcat.enableHttps(..., interval)`; Spring:
+  `seclume.ssl.bundles.<name>.reload-interval`. A renewed pair is served from the next
+  handshake on, and a half-finished renewal is refused.
+- The JFR event `space.seclume.SecretRotation`, and the Micrometer counter
+  `seclume.secret.rotations`.
+- `seclume-pool` now requires `seclume.core` transitively.
+
+### Heap check for audits
+
+`seclume-heapcheck` checks existing dumps (`--dump`) and several secrets at once
+(`--secret-file` repeated, `--secret-dir`). It looks for binary secrets as bytes and writes
+Markdown or JSON reports (`--report`) that hold no secret and no hash of one.
+
 ### Any HTTP client: `SeclumeSslSocketFactory`
 
 An `SSLSocketFactory` in `seclume-http` for OkHttp, `HttpsURLConnection` and anything else

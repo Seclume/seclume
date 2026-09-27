@@ -13,6 +13,7 @@ import java.security.PrivateKey;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -103,6 +104,23 @@ public final class SeclumeKeys {
                     + "the ones that issued it");
         }
         return new SeclumeKeyManager(certificates, key);
+    }
+
+    /**
+     * A key manager that takes up a renewed key and certificate without a
+     * restart: both are looked at every {@code interval}, and a new pair is
+     * used from the next handshake on - if the certificate is the key's. Close
+     * it (it is {@code AutoCloseable}) to stop watching.
+     */
+    public static X509ExtendedKeyManager keyManager(Path chain, String keySpec,
+                                                    Duration interval) {
+        return new ReloadingKeyManager(chain, keySpec, provider(keySpec), interval);
+    }
+
+    /** {@link #keyManager(Path, String, Duration)} as a factory. */
+    public static KeyManagerFactory keyManagerFactory(Path chain, String keySpec,
+                                                      Duration interval) {
+        return new Factory(keyManager(chain, keySpec, interval));
     }
 
     /** {@link #keyManager} as a factory - what Netty, Spring's SSL bundles and others take. */

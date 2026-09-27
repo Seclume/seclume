@@ -32,6 +32,21 @@ class ClientsTest {
                 .endpointOverride(aws.endpoint()).forcePathStyle(true).build();
     }
 
+    /** Each signed request is a SecretUse event: aws, sigv4 - and no key in it. */
+    @Test
+    void eachSignatureIsRecorded() throws Exception {
+        Path key = SecretKeyFile.make(directory);
+        try (FakeAws aws = new FakeAws(() -> read(key));
+             S3Client s3 = s3(aws, SecretKeyFile.spec("AKIAEXAMPLE", key))) {
+            var events = space.seclume.tck.Recorded.during(() -> s3.putObject(
+                    b -> b.bucket("reports").key("k"), RequestBody.fromString("v")),
+                    "space.seclume.SecretUse");
+            assertEquals(1, events.size(), events.toString());
+            assertEquals("aws", events.get(0).getString("kind"));
+            assertEquals("sigv4", events.get(0).getString("mechanism"));
+        }
+    }
+
     @Test
     void s3PutGetListDelete() throws Exception {
         Path key = SecretKeyFile.make(directory);

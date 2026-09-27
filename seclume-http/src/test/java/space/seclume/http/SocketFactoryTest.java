@@ -113,6 +113,19 @@ class SocketFactoryTest {
                 .startsWith("refused"));
     }
 
+    /** A head with a placeholder is a SecretUse event; one without is not. */
+    @Test
+    void aWrittenSecretIsRecorded() throws Exception {
+        OkHttpClient client = okHttp();
+        var events = space.seclume.tck.Recorded.during(() -> {
+            call(client, "/bearer", "Authorization", "Bearer " + token, null);
+            call(client, "/bearer", "X-Nothing", "none", null);
+        }, "space.seclume.SecretUse");
+        assertEquals(1, events.size(), events.toString());
+        assertEquals("http", events.get(0).getString("kind"));
+        assertEquals("header", events.get(0).getString("mechanism"));
+    }
+
     @Test
     void httpsUrlConnection() throws Exception {
         HttpsURLConnection connection = (HttpsURLConnection) URI.create(base + "/basic").toURL()

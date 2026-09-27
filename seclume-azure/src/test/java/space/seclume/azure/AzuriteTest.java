@@ -125,6 +125,16 @@ class AzuriteTest {
         assertEquals("order 42", queue.receiveMessage().getBody().toString());
     }
 
+    /** Each signed request is a SecretUse event: azure-storage, shared-key. */
+    @Test
+    void eachSignedRequestIsRecorded() throws Exception {
+        var events = space.seclume.tck.Recorded.during(() -> exercise("events"),
+                "space.seclume.SecretUse");
+        assertTrue(!events.isEmpty(), "no request was recorded");
+        assertEquals("azure-storage", events.get(0).getString("kind"));
+        assertEquals("shared-key", events.get(0).getString("mechanism"));
+    }
+
     @Test
     void blobAndQueue() {
         exercise("reports");

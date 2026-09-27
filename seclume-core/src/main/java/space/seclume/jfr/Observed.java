@@ -240,6 +240,66 @@ public final class Observed {
         event.commit();
     }
 
+    public static SeclumeEvents.SecretRotation beginSecretRotation() {
+        SeclumeEvents.SecretRotation event = new SeclumeEvents.SecretRotation();
+        if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    public static void endSecretRotation(SeclumeEvents.SecretRotation event, String watch,
+            boolean succeeded, String reason) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.watch = watch;
+        event.succeeded = succeeded;
+        event.reason = reason == null ? "" : reason;
+        event.commit();
+    }
+
+    /** A secret written into a request: one line at the call site, nothing when nobody records. */
+    public static void secretUse(String kind, String target, String mechanism) {
+        SeclumeEvents.SecretUse event = new SeclumeEvents.SecretUse();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.kind = kind;
+        event.target = target == null ? "" : target;
+        event.mechanism = mechanism;
+        event.commit();
+    }
+
+    public static SeclumeEvents.Signature beginSignature() {
+        SeclumeEvents.Signature event = new SeclumeEvents.Signature();
+        if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    public static void endSignature(SeclumeEvents.Signature event, String algorithm,
+            String operation, boolean succeeded) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.algorithm = algorithm;
+        event.operation = operation;
+        event.succeeded = succeeded;
+        event.commit();
+    }
+
     public static SeclumeEvents.TlsHandshake beginHandshake() {
         SeclumeEvents.TlsHandshake event = new SeclumeEvents.TlsHandshake();
         if (!event.isEnabled()) {

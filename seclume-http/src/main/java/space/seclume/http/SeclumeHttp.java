@@ -116,6 +116,8 @@ public final class SeclumeHttp implements AutoCloseable {
                 } else {
                     Credential.write(wire, settings);
                 }
+                space.seclume.jfr.Observed.secretUse("http", settings.host + ":" + settings.port,
+                        settings.auth.name().toLowerCase(java.util.Locale.ROOT));
                 wire.writeAscii("\r\n");
                 if (body != null && body.length > 0) {
                     wire.write(ByteBuffer.wrap(body));

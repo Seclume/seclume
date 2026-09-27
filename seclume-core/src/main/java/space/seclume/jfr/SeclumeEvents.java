@@ -134,7 +134,8 @@ public final class SeclumeEvents {
         public Authentication() {
         }
 
-        @Label("Database Kind")
+        @Label("Kind")
+        @Description("The database or protocol: postgresql, oracle, smtp, imap, pop3 ...")
         public String kind;
 
         @Label("Server")
@@ -183,6 +184,99 @@ public final class SeclumeEvents {
         @Label("Reason")
         @Description("Why a changed certificate was not taken up; empty when it was")
         public String reason;
+    }
+
+    /**
+     * A secret that changed at its source and was taken up without a restart
+     * - see {@code SecretWatch}.
+     *
+     * <p>The watch is named by what it is for - a data source, a key file -
+     * which the configuration already says. Nothing about the secret is here.
+     */
+    @Name("space.seclume.SecretRotation")
+    @Label("Secret Rotation")
+    @Category({CATEGORY, "Secret"})
+    @Description("A secret that changed at its source, and whether taking it up worked")
+    @StackTrace(false)
+    public static final class SecretRotation extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public SecretRotation() {
+        }
+
+        @Label("Watch")
+        @Description("What the secret is for - a data source, a key")
+        public String watch;
+
+        @Label("Succeeded")
+        public boolean succeeded;
+
+        @Label("Reason")
+        @Description("Why the new secret was not taken up; empty when it was")
+        public String reason;
+    }
+
+    /**
+     * A secret written into a request by seclume - a bearer token into an
+     * HTTP header, a password into an LDAP bind, a session token into an AWS
+     * request, an HMAC over a request for AWS or Azure.
+     *
+     * <p>An instant, not a duration: the time it takes is the request's. What
+     * it carries is what an operator asks after an incident - which credential
+     * went where, how often - and nothing that would help anybody else: the
+     * kind of credential, never its value, its length or a hash of it.
+     */
+    @Name("space.seclume.SecretUse")
+    @Label("Secret Use")
+    @Category({CATEGORY, "Secret"})
+    @Description("A secret written into a request from native memory")
+    @StackTrace(false)
+    public static final class SecretUse extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public SecretUse() {
+        }
+
+        @Label("Kind")
+        @Description("Where: http, h2, aws, azure-storage, ldap, rabbitmq ...")
+        public String kind;
+
+        @Label("Target")
+        @Description("Host and port the request went to")
+        public String target;
+
+        @Label("Mechanism")
+        @Description("How: bearer, basic, api-key, sigv4, session-token, shared-key, simple-bind ...")
+        public String mechanism;
+    }
+
+    /**
+     * A signature made - or checked - with a key seclume holds: an opaque
+     * OpenSSL key for TLS, SSH or a Google service account, an HMAC key for a
+     * JWT or a webhook.
+     */
+    @Name("space.seclume.Signature")
+    @Label("Signature")
+    @Category({CATEGORY, "Secret"})
+    @Description("A signature made or checked with a key held off the heap")
+    @StackTrace(false)
+    public static final class Signature extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public Signature() {
+        }
+
+        @Label("Algorithm")
+        @Description("SHA256withECDSA, Ed25519, HS256 ...")
+        public String algorithm;
+
+        @Label("Operation")
+        @Description("sign or verify")
+        public String operation;
+
+        @Label("Succeeded")
+        @Description("For verify: whether the signature matched")
+        public boolean succeeded;
     }
 
     /**

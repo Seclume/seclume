@@ -63,7 +63,8 @@ java -jar seclume-heapcheck.jar --pid <pid> --secret-file /run/secrets/db-passwo
 
 It attaches to the running JVM, takes a dump, searches it for the secret in every encoding it
 could be in, and deletes the dump again. The secret comes from a file, never from the command
-line.
+line. For audits it also checks existing dumps and several secrets at once, and writes a
+Markdown or JSON report: `--dump`, `--secret-dir`, `--report`.
 
 ### How
 
@@ -198,7 +199,7 @@ Everything below works on all four databases unless the row says otherwise.
 | | Read replicas with `ReadWriteSplit`, read-your-writes on PostgreSQL | [FEATURES.md](FEATURES.md#several-servers-and-which-one-to-take) |
 | **Frameworks** | Spring Data JPA, Hibernate, Flyway, Liquibase, jOOQ, MyBatis, Spring Data JDBC, all tested on all four | [FRAMEWORKS.md](FRAMEWORKS.md) |
 | | Testcontainers `@ServiceConnection` and Docker Compose: the pool comes from the container | [FEATURES.md](FEATURES.md#spring-data-and-jpa) |
-| **Observability** | JFR events, Micrometer meters, OpenTelemetry spans, all without values | [OBSERVABILITY.md](OBSERVABILITY.md) |
+| **Observability** | JFR events, Micrometer meters, OpenTelemetry spans, all without values - for the databases and every module: logins, secrets written into requests, signatures, rotations | [OBSERVABILITY.md](OBSERVABILITY.md) |
 | | `/actuator/seclume`: login method, TLS, certificate expiry and server capacity per data source | [OBSERVABILITY.md](OBSERVABILITY.md#actuatorseclume-how-every-data-source-is-secured) |
 | | N+1 detection (`QueryStorms`), the last messages before a break (`Flight`) | [OBSERVABILITY.md](OBSERVABILITY.md#diagnostics-for-specific-defects) |
 | **Tools** | `seclume-verify`: a one-shot connection report, for a ticket or a readiness probe | [OBSERVABILITY.md](OBSERVABILITY.md#seclume-verify) |
@@ -221,6 +222,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **gRPC** | Bearer tokens and API keys written into HTTP/2 header blocks from native memory: `seclume-grpc` | [FEATURES.md](FEATURES.md#kubernetes-git-and-grpc) |
 | | Any HTTP client that takes an `SSLSocketFactory` (OkHttp, `HttpsURLConnection`): `SeclumeSslSocketFactory` in `seclume-http` | [FEATURES.md](FEATURES.md#kubernetes-git-and-grpc) |
 | **LDAP / Active Directory** | JNDI, Spring LDAP and Spring Security binds with the password written from native memory over TLS 1.3: `seclume-ldap` | [FEATURES.md](FEATURES.md#ldap-and-active-directory) |
+| **Rotation** | Passwords, TLS server keys and certificates rotated at their source, taken up without a restart; a JFR event and a metric for each rotation | [FEATURES.md](FEATURES.md#rotation-without-a-restart) |
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
 | | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build | [FEATURES.md](FEATURES.md#quarkus) |
 | | CRaC / Lambda SnapStart with `seclume-crac`: the checkpoint image holds no password | [FEATURES.md](FEATURES.md#the-pool) |

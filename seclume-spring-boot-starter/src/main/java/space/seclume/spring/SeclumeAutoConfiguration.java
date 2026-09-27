@@ -100,8 +100,8 @@ public class SeclumeAutoConfiguration {
          */
         @Bean(destroyMethod = "close")
         @ConditionalOnMissingBean(SeclumeQueryMetrics.class)
-        @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
-                name = "seclume.metrics.queries", havingValue = "true")
+        @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression(
+                "${seclume.metrics.queries:false} or ${seclume.metrics.events:false}")
         SeclumeQueryMetrics seclumeQueryMetrics(Environment environment) {
             java.time.Duration threshold = environment.getProperty(
                     "seclume.metrics.query-threshold", java.time.Duration.class,
@@ -290,7 +290,8 @@ public class SeclumeAutoConfiguration {
         private static SeclumePool build(String name,
                                           SeclumeProperties.DataSourceProperties properties,
                                           BeanFactory beans) {
-            DataSource source = SeclumeDataSources.create(name, properties, beans);
+            SeclumeDataSources.Built built = SeclumeDataSources.built(name, properties, beans);
+            DataSource source = built.source();
             PoolSettings settings = poolSettings(name, properties.getPool());
             // The one place that knows both halves. The pool deliberately
             // knows nothing about secret sources - see its module comment -
@@ -306,6 +307,12 @@ public class SeclumeAutoConfiguration {
             beans.getBeanProvider(SeclumeSessionContext.class)
                     .ifAvailable(context -> settings.setSessionContext(context::current));
             SeclumePool pool = new SeclumePool(source, settings);
+            // A password rotated at its source - a mounted Kubernetes secret, a
+            // new Vault version - is taken up without a restart.
+            java.time.Duration watch = properties.getPool().getSecretWatchInterval();
+            if (watch != null && !watch.isZero()) {
+                pool.watchSecret(built.secret(), watch);
+            }
             if (settings.isWarmup()) {
                 try {
                     pool.warmup();

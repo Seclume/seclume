@@ -235,6 +235,8 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
             signature = AwsSigV4.hex(AwsSigV4.sign(arena, key::writeSecret, toSign, day,
                     region, service));
         }
+        space.seclume.jfr.Observed.secretUse("aws", unsigned.host() + ":" + unsigned.port(),
+                presign ? "sigv4-presign" : "sigv4");
         if (presign) {
             return builder.putRawQueryParameter("X-Amz-Signature", signature).build();
         }

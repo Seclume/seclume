@@ -162,8 +162,12 @@ public final class SeclumeJwt implements AutoCloseable {
             throw new InvalidTokenException("the token says alg " + alg + ", this key is "
                     + key.algorithm);
         }
+        space.seclume.jfr.SeclumeEvents.Signature event =
+                space.seclume.jfr.Observed.beginSignature();
         byte[] expected = key.mac(token.substring(0, second).getBytes(StandardCharsets.US_ASCII)); // seclume-allow: JWS header, claims, signature or MAC - public
-        if (!MessageDigest.isEqual(expected, signature)) {
+        boolean matches = MessageDigest.isEqual(expected, signature);
+        space.seclume.jfr.Observed.endSignature(event, key.algorithm, "verify", matches);
+        if (!matches) {
             throw new InvalidTokenException("the signature does not match");
         }
         long now = clock.instant().getEpochSecond();

@@ -20,6 +20,9 @@ import java.util.logging.Logger;
 
 import javax.sql.DataSource;
 
+import space.seclume.secret.SecretProvider;
+import space.seclume.secret.SecretWatch;
+
 /**
  * The connection pool.
  *
@@ -1395,6 +1398,32 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         return rotation;
     }
 
+    /** The watches this pool stops when it closes. */
+    private final List<SecretWatch> watches = new CopyOnWriteArrayList<>();
+
+    /**
+     * Rotates on its own: looks at {@code source} - the provider the driver
+     * reads the password from - every {@code interval}, and calls
+     * {@link #rotateSecret rotateSecret(true)} when it changed. For the
+     * password in a mounted Kubernetes secret, a new Vault version, a file a
+     * deployment replaced; the connections that stand are retired as they
+     * come back, new ones use the new password.
+     *
+     * <p>The pool still knows nothing about the secret: the watch compares
+     * keyed fingerprints in native memory, see {@link SecretWatch}. It stops
+     * with the pool.
+     */
+    public SecretWatch watchSecret(SecretProvider source, Duration interval) {
+        if (closed) {
+            throw new IllegalStateException(settings.getName() + " is closed, so there is "
+                    + "nothing left to rotate - watch the secret of the pool that replaced it");
+        }
+        SecretWatch watch = SecretWatch.start(settings.getName(), source, interval,
+                () -> rotateSecret(true));
+        watches.add(watch);
+        return watch;
+    }
+
     /** Counter values for metrics - all numbers, nothing confidential. */
     public PoolStatistics statistics() {
         return new PoolStatistics(settings.getName(), totalCount(), activeCount(), idleCount(),
@@ -1433,6 +1462,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             return;
         }
         closed = true;
+        for (SecretWatch watch : watches) {
+            watch.close();
+        }
         housekeeper.interrupt();
         for (Thread waiter : waiters) {
             LockSupport.unpark(waiter);

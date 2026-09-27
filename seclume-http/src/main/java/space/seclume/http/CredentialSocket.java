@@ -78,7 +78,7 @@ final class CredentialSocket extends SSLSocket {
         this.host = host;
         this.port = port;
         this.tls = tls;
-        this.http2 = http2 ? new Http2Requests(this::write) : null;
+        this.http2 = http2 ? new Http2Requests(this::write, host + ":" + port) : null;
     }
 
     /**
@@ -213,6 +213,8 @@ final class CredentialSocket extends SSLSocket {
             write(ByteBuffer.wrap(bytes));
             return;
         }
+        space.seclume.jfr.Observed.secretUse("http", host + ":" + port,
+                text.contains(": basic ") ? "basic" : "header");
         try (SecretScope out = SecretScope.allocate(bytes.length * 2 + 64 * 1024)) {
             MemorySegment w = out.segment();
             int at = 0;

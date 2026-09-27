@@ -202,6 +202,12 @@ message names the oldest holders. Beyond that, what matters is what a connection
   they are named in the log.
 - **Rotating credentials without an empty pool.** The pool retires a connection before its
   credential expires and opens the replacement first. See [PROVIDERS.md](PROVIDERS.md).
+- **A password rotated at its source, taken up on its own.** `pool.watchSecret(provider,
+  interval)`, or `seclume.datasources.<name>.pool.secret-watch-interval=30s` in Spring, looks
+  at the password's source: a mounted Kubernetes secret, a new Vault version, a replaced file.
+  When the password changed, the pool rotates: idle connections go at once, borrowed ones
+  when they come back, and new ones use the new password. See
+  [Rotation without a restart](#rotation-without-a-restart).
 - **Keepalive, at two levels.** Every connection has TCP keepalive on and probes after a
   minute of silence, which keeps an idle pooled connection alive through firewalls, NATs and
   load balancers that forget quiet flows. And the pool reads the server's own idle limit
@@ -956,10 +962,63 @@ It starts in three milliseconds, against fifty-eight on the JVM. But once a data
 connection is in the picture that difference is noise. The native image is for a process that
 starts often, not for one that then talks to a server over a network.
 
+## Rotation without a restart
+
+Passwords, keys and certificates are replaced at their source, and nothing should need a
+restart for it. `SecretWatch` (in the core) notices the change:
+
+```java
+SecretWatch watch = SecretWatch.start("orders-db", provider, Duration.ofSeconds(30),
+        () -> pool.rotateSecret(true));
+```
+
+- **How it compares:** it reads the secret into native memory, as for a login, and keeps
+  only an HMAC-SHA256 of it under a random key. Both the key and the fingerprint are in native
+  memory, so the watch holds neither the secret nor anything a dictionary could turn back
+  into it.
+- **What is not a change:** a source that cannot be read for a moment (Vault restarting, a
+  file mid-swap). The watch keeps what it knew and looks again at the next tick.
+- **Each rotation** is a `space.seclume.SecretRotation` JFR event with the watch's name and
+  whether taking up the new secret worked. With `seclume.metrics.queries=true` it is also the
+  Micrometer counter `seclume.secret.rotations{watch, outcome}`.
+
+What uses it:
+
+| | |
+|---|---|
+| **Pool** | `pool.watchSecret(provider, interval)`; Spring: `seclume.datasources.<name>.pool.secret-watch-interval` |
+| **TLS server key and certificate** | `SeclumeKeys.keyManager(chain, keySpec, interval)`, `keyManagerFactory(...)`, `SeclumeTomcat.enableHttps(..., interval)`; Spring: `seclume.ssl.bundles.<name>.reload-interval` |
+| **Client certificates** of the drivers | reloaded when the file changes, as before (`CertificateReload` event) |
+| **HTTP, gRPC, Kubernetes, JGit, AWS static keys** | read for each request anyway: nothing to watch |
+
+- **Server keys renew as a pair.** cert-manager and certbot replace the key and the
+  certificate together, and each file on its own is a change. A new pair is served from the
+  next handshake on, and only if the certificate is the key's. A renewal that is only half
+  there (the new key, the old certificate) is refused while the old pair keeps serving; the
+  second half arriving completes it.
+- **In-flight handshakes are safe.** Each generation has an alias of its own, so a handshake
+  that chose the old pair gets the old key and chain, and so does a TLS library that caches
+  key material by alias. The old key is freed a minute after it was replaced.
+
 ## Proving there is no secret on the heap, for any application
 
 - **`seclume-heapcheck`** proves for **any** running Java process whether a given secret is in
-  its heap, including applications that do not use this library.
+  its heap, including applications that do not use this library. For an audit it also:
+  - checks a dump that exists already (`--dump app.hprof`, e.g. from
+    `-XX:+HeapDumpOnOutOfMemoryError`);
+  - checks several secrets at once (`--secret-file` again and again, or `--secret-dir` for a
+    mounted Kubernetes secret); a file that is not UTF-8, such as a DER key, is looked for as
+    bytes;
+  - writes a report (`--report heapcheck.md`, `--report heapcheck.json`): the JVM, the dump's
+    size and SHA-256, the method, and for each secret where it was found. Secrets are named by
+    their files; the report holds neither a secret nor a hash of one.
+
+  ```
+  java -jar seclume-heapcheck.jar --dump app.hprof --secret-dir /run/secrets/app \
+          --report heapcheck.md --report heapcheck.json
+  ```
+
+  Exit code 0: nothing found; 1: a secret is in the heap; 2: the check could not run.
 - **`seclume-tck`'s `NoSecretInHeap`** runs the same proof in **your own test suite**:
   - `@ExtendWith(NoSecretInHeap.class)` checks after every test.
   - `NoSecretInHeap.assertAbsent(secretFile)` checks at a moment you choose, say right after

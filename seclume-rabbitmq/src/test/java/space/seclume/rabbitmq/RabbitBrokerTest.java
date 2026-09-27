@@ -69,6 +69,17 @@ class RabbitBrokerTest {
                 + passwordFile.replace('\\', '/');
     }
 
+    /** The login is a SecretUse event - rabbitmq, plain - and no password. */
+    @Test
+    void theLoginIsRecorded() throws Exception {
+        ConnectionFactory factory = SeclumeRabbit.connectionFactory(url(PASSWORD));
+        var events = space.seclume.tck.Recorded.during(() -> factory.newConnection().close(),
+                "space.seclume.SecretUse");
+        assertEquals(1, events.size(), events.toString());
+        assertEquals("rabbitmq", events.get(0).getString("kind"));
+        assertEquals("plain", events.get(0).getString("mechanism"));
+    }
+
     @Test
     void publishAndReceiveThroughTheOfficialClient() throws Exception {
         ConnectionFactory factory = SeclumeRabbit.connectionFactory(url(PASSWORD));
