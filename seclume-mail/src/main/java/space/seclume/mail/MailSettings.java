@@ -15,21 +15,25 @@ import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretProviders;
 
 /**
- * Where to submit mail and how to log in - read from one URL, the way a
- * seclume JDBC URL names its database:
+ * Which mail server, over which protocol, and how to log in - read from one
+ * URL, the way a seclume JDBC URL names its database:
  *
  * <pre>
  * smtp://mail.example.com:587?user=reports&amp;provider=file&amp;path=/run/secrets/smtp
- * smtps://smtp.office365.com:465?user=reports@example.com&amp;auth=xoauth2
+ * imaps://outlook.office365.com?user=inbox@example.com&amp;auth=xoauth2
  *         &amp;provider=azure-managed-identity&amp;resource=https://outlook.office365.com
+ * pop3s://pop.example.com?user=bounces&amp;provider=vault&amp;...
  * smtp://relay.internal:25?tls=none                      (a relay without login)
  * </pre>
  *
  * <ul>
- *   <li>{@code smtp://} upgrades with STARTTLS and refuses a server that does
- *       not offer it; {@code tls=none} sends in the clear, and then there is
- *       no login at all - a credential is never sent unencrypted;
- *   <li>{@code smtps://} is TLS from the first byte (port 465);
+ *   <li>The scheme is the protocol: {@code smtp}, {@code imap} and
+ *       {@code pop3} upgrade with STARTTLS (STLS for POP3) and refuse a
+ *       server that does not offer it; {@code smtps}, {@code imaps} and
+ *       {@code pop3s} are TLS from the first byte. {@code tls=none} sends in
+ *       the clear, and then there is no login at all - a credential is never
+ *       sent unencrypted. A mailbox cannot be read without a login, so for
+ *       IMAP and POP3 that leaves nothing to do;
  *   <li>{@code user} is the login name, {@code auth} one of {@code plain},
  *       {@code login} or {@code xoauth2} - left out, it is PLAIN where the
  *       server offers it and LOGIN otherwise; XOAUTH2 is only ever chosen by
@@ -41,11 +45,30 @@ import space.seclume.secret.SecretProviders;
  *       password in the URL is refused.
  * </ul>
  */
-final class SmtpSettings {
+final class MailSettings {
 
-    /** Which login, if any. */
+    /** Which login, if any. LOGIN is the protocol's own password login. */
     enum Auth { NONE, PLAIN, LOGIN, XOAUTH2, BEST }
 
+    /** The three protocols and their ports - with STARTTLS, and with TLS from the start. */
+    enum Protocol {
+        SMTP(587, 465), IMAP(143, 993), POP3(110, 995);
+
+        final int plainPort;
+        final int tlsPort;
+
+        Protocol(int plainPort, int tlsPort) {
+            this.plainPort = plainPort;
+            this.tlsPort = tlsPort;
+        }
+
+        /** {@code smtp} or {@code smtps}, and so on - as the URL and Jakarta Mail name it. */
+        String scheme(boolean implicitTls) {
+            return name().toLowerCase(Locale.ROOT) + (implicitTls ? "s" : "");
+        }
+    }
+
+    final Protocol protocol;
     final String host;
     final int port;
     final boolean implicitTls;
@@ -58,9 +81,10 @@ final class SmtpSettings {
     final String ehloName;
     final SecretProvider secret;
 
-    private SmtpSettings(String host, int port, boolean implicitTls, boolean startTls, String user,
+    private MailSettings(Protocol protocol, String host, int port, boolean implicitTls, boolean startTls, String user,
                          Auth auth, TrustChoice.Choice trust, int connectTimeout, int timeout,
                          String ehloName, SecretProvider secret) {
+        this.protocol = protocol;
         this.host = host;
         this.port = port;
         this.implicitTls = implicitTls;
@@ -74,13 +98,18 @@ final class SmtpSettings {
         this.secret = secret;
     }
 
-    static SmtpSettings of(String url) {
+    static MailSettings of(String url) {
         URI uri = URI.create(url);
-        boolean implicitTls = switch (String.valueOf(uri.getScheme()).toLowerCase(Locale.ROOT)) {
-            case "smtp" -> false;
-            case "smtps" -> true;
-            default -> throw new IllegalArgumentException(
-                    "a mail URL begins with smtp:// or smtps://, not " + uri.getScheme() + "://");
+        String scheme = String.valueOf(uri.getScheme()).toLowerCase(Locale.ROOT);
+        boolean implicitTls = scheme.endsWith("s");
+        Protocol protocol = switch (implicitTls ? scheme.substring(0, scheme.length() - 1)
+                : scheme) {
+            case "smtp" -> Protocol.SMTP;
+            case "imap" -> Protocol.IMAP;
+            case "pop3" -> Protocol.POP3;
+            default -> throw new IllegalArgumentException("a mail URL begins with smtp://, "
+                    + "smtps://, imap://, imaps://, pop3:// or pop3s://, not "
+                    + uri.getScheme() + "://");
         };
         if (uri.getRawUserInfo() != null) {
             throw new IllegalArgumentException("a user or password in front of the host is not "
@@ -102,6 +131,12 @@ final class SmtpSettings {
             }
         }
         String user = options.remove("user");
+        if (user != null && (user.indexOf('\r') >= 0 || user.indexOf('\n') >= 0
+                || user.indexOf('\0') >= 0)) {
+            // It goes into command lines (USER, LOGIN, EHLO's neighbours) as it is;
+            // a line break in it would end the command and start another.
+            throw new IllegalArgumentException("the user name holds a line break or NUL");
+        }
         String authName = options.remove("auth");
         String tlsMode = options.remove("tls");
         String rootCert = options.remove(TrustChoice.ROOT_CERT);
@@ -115,13 +150,14 @@ final class SmtpSettings {
             switch (tlsMode.toLowerCase(Locale.ROOT)) {
                 case "starttls" -> {
                     if (implicitTls) {
-                        throw new IllegalArgumentException("smtps:// is TLS from the start; "
-                                + "tls=starttls belongs to smtp://");
+                        throw new IllegalArgumentException(scheme + ":// is TLS from the "
+                                + "start; tls=starttls belongs to " + protocol.scheme(false)
+                                + "://");
                     }
                 }
                 case "none" -> {
                     if (implicitTls) {
-                        throw new IllegalArgumentException("smtps:// cannot be tls=none");
+                        throw new IllegalArgumentException(scheme + ":// cannot be tls=none");
                     }
                     startTls = false;
                 }
@@ -147,9 +183,14 @@ final class SmtpSettings {
         if (auth != Auth.NONE && user == null) {
             throw new IllegalArgumentException("auth=" + authName + " needs user=");
         }
+        if (protocol != Protocol.SMTP && auth == Auth.NONE) {
+            throw new IllegalArgumentException("a mailbox is read with a login: " + scheme
+                    + ":// needs user= and a secret provider");
+        }
         if (auth != Auth.NONE && !encrypted) {
             throw new IllegalArgumentException("tls=none sends in the clear, and a credential "
-                    + "is never sent that way - use STARTTLS or smtps://, or no login");
+                    + "is never sent that way - use STARTTLS or " + protocol.scheme(true)
+                    + "://, or no login");
         }
 
         TrustChoice.Choice trust = null;
@@ -168,8 +209,9 @@ final class SmtpSettings {
             }
         }
         SecretProvider secret = auth == Auth.NONE ? null : SecretProviders.of(options);
-        int port = uri.getPort() >= 0 ? uri.getPort() : implicitTls ? 465 : 587;
-        return new SmtpSettings(uri.getHost(), port, implicitTls, startTls, user, auth, trust,
+        int port = uri.getPort() >= 0 ? uri.getPort()
+                : implicitTls ? protocol.tlsPort : protocol.plainPort;
+        return new MailSettings(protocol, uri.getHost(), port, implicitTls, startTls, user, auth, trust,
                 connectTimeout, timeout, ehlo != null ? ehlo : localName(), secret);
     }
 
@@ -189,6 +231,11 @@ final class SmtpSettings {
         }
     }
 
+    /** {@code imaps} and so on - the scheme this was read from. */
+    String scheme() {
+        return protocol.scheme(implicitTls);
+    }
+
     private static String remove(Map<String, String> options, String key, String otherwise) {
         String value = options.remove(key);
         return value == null ? otherwise : value;
@@ -200,7 +247,7 @@ final class SmtpSettings {
 
     @Override
     public String toString() {
-        return (implicitTls ? "smtps://" : "smtp://") + host + ":" + port
+        return scheme() + "://" + host + ":" + port
                 + (user == null ? "" : " as " + user);
     }
 }

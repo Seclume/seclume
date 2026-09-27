@@ -28,13 +28,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * seclume-smtp as Jakarta Mail sees it: found by its protocol name, used by
- * {@code Transport.send}, a multipart message with an attachment, a partial
+ * Sending as Jakarta Mail sees it: {@code smtp} in a session from
+ * {@link SeclumeMail#session} (and only there), used by {@code Transport.send}, a multipart message with an attachment, a partial
  * delivery as {@link SendFailedException} - and a password handed to Jakarta
  * Mail refused.
  */
 @Timeout(60)
-class SeclumeSmtpTransportTest {
+class SeclumeTransportTest {
 
     private static TestPki pki;
     private static Path passwordFile;
@@ -52,12 +52,9 @@ class SeclumeSmtpTransportTest {
     }
 
     private static Session session(FakeSmtpServer server) {
-        Properties props = new Properties();
-        props.put(SeclumeSmtpTransport.URL_PROPERTY, "smtp://localhost:" + server.port()
+        return SeclumeMail.session("smtp://localhost:" + server.port()
                 + "?tlsPin=" + pki.pin() + "&user=reports&provider=file&path="
                 + passwordFile.toString().replace('\\', '/'));
-        props.put("mail.transport.protocol.rfc822", SeclumeSmtpTransport.PROTOCOL);
-        return Session.getInstance(props);
     }
 
     private static MimeMessage message(Session session, String... to) throws Exception {
@@ -80,8 +77,10 @@ class SeclumeSmtpTransportTest {
     void transportSendFindsTheProtocolAndDelivers() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
             Session session = session(server);
-            assertTrue(session.getTransport(SeclumeSmtpTransport.PROTOCOL)
-                    instanceof SeclumeSmtpTransport);
+            assertTrue(session.getTransport("smtp") instanceof SeclumeTransport,
+                    "smtp in this session is seclume's");
+            assertTrue(Session.getInstance(new Properties()).getProvider("smtp").getClassName()
+                    .startsWith("org.eclipse.angus"), "and nowhere else");
             Transport.send(message(session, "team@example.com", "boss@example.com"));
 
             FakeSmtpServer.Received mail = server.received.get(0);
@@ -102,7 +101,7 @@ class SeclumeSmtpTransportTest {
             Session session = session(server);
             MimeMessage message = message(session, "team@example.com");
             message.saveChanges();
-            try (Transport transport = session.getTransport(SeclumeSmtpTransport.PROTOCOL)) {
+            try (Transport transport = session.getTransport("smtp")) {
                 transport.connect(null, -1, null, null);
                 transport.sendMessage(message, message.getAllRecipients());
                 transport.sendMessage(message, message.getAllRecipients());
@@ -115,7 +114,7 @@ class SeclumeSmtpTransportTest {
     @Test
     void aPasswordGivenToJakartaMailIsRefused() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            Transport transport = session(server).getTransport(SeclumeSmtpTransport.PROTOCOL);
+            Transport transport = session(server).getTransport("smtp");
             AuthenticationFailedException refused = assertThrows(
                     AuthenticationFailedException.class,
                     () -> transport.connect("localhost", server.port(), "reports", "hunter2"));

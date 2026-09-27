@@ -20,7 +20,7 @@ import org.springframework.mail.javamail.MimeMessageHelper;
 
 /**
  * Spring's own {@code JavaMailSenderImpl}, configured the way FEATURES.md says:
- * the protocol and one property, no host, no user name, no password.
+ * a session from {@link SeclumeMail#session}, no host, no user name, no password.
  */
 @Timeout(60)
 class SpringJavaMailSenderTest {
@@ -42,11 +42,9 @@ class SpringJavaMailSenderTest {
 
     private static JavaMailSenderImpl sender(FakeSmtpServer server) {
         JavaMailSenderImpl sender = new JavaMailSenderImpl();
-        sender.setProtocol(SeclumeSmtpTransport.PROTOCOL);
-        sender.getJavaMailProperties().put(SeclumeSmtpTransport.URL_PROPERTY,
-                "smtp://localhost:" + server.port() + "?tlsPin=" + pki.pin()
-                        + "&user=reports&provider=file&path="
-                        + passwordFile.toString().replace('\\', '/'));
+        sender.setSession(SeclumeMail.session("smtp://localhost:" + server.port() + "?tlsPin="
+                + pki.pin() + "&user=reports&provider=file&path="
+                + passwordFile.toString().replace('\\', '/')));
         return sender;
     }
 

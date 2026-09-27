@@ -17,23 +17,13 @@ import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
 
 /**
- * seclume's SMTP as a Jakarta Mail transport: protocol {@code seclume-smtp}.
+ * Sending, as Jakarta Mail sees it: the transport behind {@code smtp} and
+ * {@code smtps} in a session made by {@link SeclumeMail#session}.
  *
  * <pre>
- * Properties props = new Properties();
- * props.put("mail.seclume-smtp.url",
- *         "smtp://mail.example.com:587?user=reports&amp;provider=file&amp;path=/run/secrets/smtp");
- * props.put("mail.transport.protocol.rfc822", "seclume-smtp");   // for Transport.send(message)
- * Session session = Session.getInstance(props);
- * Transport.send(message);
- * </pre>
- *
- * <p>Spring, with {@code JavaMailSenderImpl}:
- *
- * <pre>
- * sender.setProtocol("seclume-smtp");
- * sender.getJavaMailProperties().put("mail.seclume-smtp.url", url);
- * // no setHost, no setUsername, and above all no setPassword
+ * Session session = SeclumeMail.session(
+ *         "smtps://mail.example.com?user=reports&amp;provider=file&amp;path=/run/secrets/smtp");
+ * Transport.send(message);                     // or Spring: sender.setSession(session)
  * </pre>
  *
  * <p><b>Jakarta Mail is given no password, and a password given to it is
@@ -41,52 +31,47 @@ import jakarta.mail.internet.MimeMessage;
  * its {@code Session}, its {@code PasswordAuthentication}, the {@code URLName}
  * of this very transport - so the only credential that never reaches the heap
  * is the one it never gets. The URL names a secret provider; the transport
- * logs in itself, the way {@link SmtpConnection} describes.
+ * logs in itself, the way {@link SmtpConnection} describes. The host and port
+ * Jakarta Mail would pass are the URL's, and are not asked for again.
  *
- * <p>The envelope sender is {@code mail.seclume-smtp.from} when set, the
- * message's first From address otherwise; the recipients are the addresses
- * Jakarta Mail hands over. A partial delivery - some recipients refused -
- * ends as the {@link SendFailedException} Jakarta Mail users expect, with the
- * refused ones among its invalid addresses, after the message went to the
- * rest.
+ * <p>The envelope sender is {@code mail.smtp.from} (or {@code mail.smtps.from})
+ * when set, the message's first From address otherwise; the recipients are the
+ * addresses Jakarta Mail hands over. A partial delivery - some recipients
+ * refused - ends as the {@link SendFailedException} Jakarta Mail users expect,
+ * with the refused ones among its invalid addresses, after the message went to
+ * the rest.
  */
-public final class SeclumeSmtpTransport extends Transport {
-
-    /** The protocol name, in {@code mail.transport.protocol} or {@code getTransport(...)}. */
-    public static final String PROTOCOL = "seclume-smtp";
-    /** The session property that holds the URL. */
-    public static final String URL_PROPERTY = "mail.seclume-smtp.url";
-    /** The session property that sets the envelope sender. */
-    public static final String FROM_PROPERTY = "mail.seclume-smtp.from";
+public final class SeclumeTransport extends Transport {
 
     private SmtpConnection connection;
 
-    public SeclumeSmtpTransport(Session session, URLName url) {
+    private final String protocol;
+
+    public SeclumeTransport(Session session, URLName url) {
         super(session, url);
+        this.protocol = url == null || url.getProtocol() == null ? "smtp" : url.getProtocol();
     }
 
     @Override
     protected boolean protocolConnect(String host, int port, String user, String password)
             throws MessagingException {
         if (password != null && !password.isEmpty()) {
-            throw new AuthenticationFailedException("seclume-smtp takes no password from Jakarta "
-                    + "Mail: it is a String in the Session for as long as the application runs. "
-                    + "Name the secret in " + URL_PROPERTY + " (provider=...)");
+            throw new AuthenticationFailedException("seclume-mail takes no password from "
+                    + "Jakarta Mail: it is a String in the Session for as long as the "
+                    + "application runs. Name the secret in the URL given to "
+                    + "SeclumeMail.session (provider=...)");
         }
-        String url = session.getProperty(URL_PROPERTY);
-        if (url == null) {
-            throw new MessagingException("seclume-smtp needs " + URL_PROPERTY);
-        }
+        MailSettings settings = SeclumeMail.settings(session, protocol);
         try {
-            connection = SeclumeSmtp.of(url).open();
+            connection = SmtpConnection.open(settings);
             return true;
-        } catch (SmtpException e) {
+        } catch (MailException e) {
             if (e.replyCode() == 535 || e.replyCode() == 534) {
                 throw new AuthenticationFailedException(e.getMessage());
             }
             throw new MessagingException(e.getMessage(), e);
         } catch (IOException | RuntimeException e) {
-            throw new MessagingException("could not connect with " + URL_PROPERTY + ": "
+            throw new MessagingException("could not connect to " + settings + ": "
                     + e.getMessage(), e);
         }
     }
@@ -94,12 +79,12 @@ public final class SeclumeSmtpTransport extends Transport {
     @Override
     public void sendMessage(Message message, Address[] addresses) throws MessagingException {
         if (!(message instanceof MimeMessage mime)) {
-            throw new MessagingException("seclume-smtp sends MimeMessages, not "
+            throw new MessagingException("seclume-mail sends MimeMessages, not "
                     + message.getClass().getName());
         }
         if (connection == null || !isConnected()) {
             throw new IllegalStateException(
-                    "the seclume-smtp transport is not connected - call connect() first");
+                    "the seclume-mail transport is not connected - call connect() first");
         }
         if (addresses == null || addresses.length == 0) {
             throw new SendFailedException("the message has no recipient to send to");
@@ -122,7 +107,7 @@ public final class SeclumeSmtpTransport extends Transport {
                     throw new IOException(e.getMessage(), e);
                 }
             });
-        } catch (SmtpException e) {
+        } catch (MailException e) {
             notifyTransportListeners(TransportEvent.MESSAGE_NOT_DELIVERED, new Address[0],
                     addresses, new Address[0], message);
             throw new SendFailedException(e.getMessage(), e, new Address[0], addresses,
@@ -163,7 +148,7 @@ public final class SeclumeSmtpTransport extends Transport {
     }
 
     private String envelopeSender(MimeMessage message) throws MessagingException {
-        String configured = session.getProperty(FROM_PROPERTY);
+        String configured = session.getProperty("mail." + protocol + ".from");
         if (configured != null) {
             return configured;
         }
@@ -173,8 +158,8 @@ public final class SeclumeSmtpTransport extends Transport {
         }
         InternetAddress local = InternetAddress.getLocalAddress(session);
         if (local == null) {
-            throw new SendFailedException("no sender: the message has no From and "
-                    + FROM_PROPERTY + " is not set");
+            throw new SendFailedException("no sender: the message has no From and mail."
+                    + protocol + ".from is not set");
         }
         return local.getAddress();
     }

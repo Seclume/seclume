@@ -17,19 +17,32 @@ rather than negative cannot become an `OutOfMemoryError` either. `TdsValuesMalfo
 `TtcDescribeMalformedTest` reproduce both findings byte for byte against the old code. The
 fuzz workflow now uploads findings from where Jazzer writes them; the first run uploaded none.
 
-### Mail: `seclume-mail`, SMTP with the password or OAuth token off the heap
+### Mail: `seclume-mail`, sending and reading with the password or OAuth token off the heap
 
-A new module. It submits mail over SMTP and logs in with `AUTH PLAIN`, `LOGIN` or `XOAUTH2`
-(Microsoft 365, Google) from native memory: the argument is built and base64-encoded off the
-heap and written to seclume's own TLS 1.3 stack, with STARTTLS (`smtp://`, a server without it
-is refused) or implicit TLS (`smtps://`). Bytes injected after the STARTTLS reply are refused.
-The secret providers are the JDBC drivers', including OAuth tokens from the machine's Azure or
-GCP identity. Usable on its own (`SeclumeSmtp`), as the Jakarta Mail transport `seclume-smtp`
-and so from Spring's `JavaMailSenderImpl`; a password handed to Jakarta Mail or Spring is
-refused. The message itself is the application's data and stays a normal heap object; reading
-mail (IMAP) is not covered yet. `NoCredentialOnTheHeapTest` proves it with the server in a JVM
-of its own: neither password nor token nor their base64 wire forms are in the heap dump, and a
-control that puts one there is found.
+A new module, for all three mail protocols: sending over SMTP and reading over IMAP and POP3.
+It logs in itself, from native memory: SMTP `AUTH PLAIN`, `LOGIN` or `XOAUTH2`; IMAP
+`AUTHENTICATE PLAIN` or `XOAUTH2` (with or without SASL-IR) or `LOGIN` with the password as a
+literal; POP3 `AUTH PLAIN` or `XOAUTH2` or `USER`/`PASS`. The argument is built and
+base64-encoded off the heap and written to seclume's own TLS 1.3 stack, with STARTTLS
+(`smtp://`, `imap://`, `pop3://`; a server without it is refused) or implicit TLS (`smtps://`,
+`imaps://`, `pop3s://`). Bytes injected after the STARTTLS reply are refused. The secret
+providers are the JDBC drivers', including OAuth tokens from the machine's Azure or GCP
+identity (Microsoft 365, Google).
+
+`SeclumeMail.session(urls...)` makes a Jakarta Mail session in which `smtp`, `imap` and `pop3`
+(and their `s` variants) are served by seclume under their usual names; nothing is registered
+globally, and other sessions are unchanged. It goes to Spring's `JavaMailSenderImpl`, Spring
+Integration's mail adapters or Camel as it is. For reading, Angus Mail's own IMAP and POP3
+stores run on a socket seclume has already logged in: IMAP is told so with `PREAUTH`, and
+POP3's `USER`/`PASS` are answered by the socket and never reach the server. A password handed
+to Jakarta Mail or Spring is refused. `SeclumeMail.of(url)` sends without Jakarta Mail, or
+opens a store.
+
+The mail itself is the application's data and stays a normal heap object.
+`NoCredentialOnTheHeapTest` proves the claim with the servers in a JVM of their own: after
+logging in with every mechanism of all three protocols, alone and through Jakarta Mail,
+neither password nor token nor their base64 wire forms are in the heap dump, and a control
+that puts one there is found.
 
 The README and the project description now say what seclume has become: clients whose
 credentials never reach the heap - databases, Kafka, Redis and mail - rather than JDBC drivers

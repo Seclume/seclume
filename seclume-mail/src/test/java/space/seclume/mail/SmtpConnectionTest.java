@@ -59,7 +59,7 @@ class SmtpConnectionTest {
     @Test
     void startTlsAndPlainByDefault() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            SmtpConnection.Sent sent = SeclumeSmtp.of(url("smtp", server, login(passwordFile)))
+            SmtpConnection.Sent sent = SeclumeMail.of(url("smtp", server, login(passwordFile)))
                     .send("reports@example.com", List.of("team@example.com"),
                             message("Subject: hello\r\n\r\nthe numbers\r\n"));
             assertEquals(List.of("team@example.com"), sent.accepted());
@@ -79,7 +79,7 @@ class SmtpConnectionTest {
     void loginWhenThatIsAllTheServerOffers() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
             server.mechanisms = List.of("LOGIN");
-            SeclumeSmtp.of(url("smtp", server, login(passwordFile)))
+            SeclumeMail.of(url("smtp", server, login(passwordFile)))
                     .send("a@example.com", List.of("b@example.com"), message("x\r\n"));
             assertEquals(List.of("LOGIN"), server.logins);
         }
@@ -88,7 +88,7 @@ class SmtpConnectionTest {
     @Test
     void loginAskedForByName() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            SeclumeSmtp.of(url("smtp", server, login(passwordFile) + "&auth=login"))
+            SeclumeMail.of(url("smtp", server, login(passwordFile) + "&auth=login"))
                     .send("a@example.com", List.of("b@example.com"), message("x\r\n"));
             assertEquals(List.of("LOGIN"), server.logins);
         }
@@ -97,7 +97,7 @@ class SmtpConnectionTest {
     @Test
     void xoauth2WithAToken() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            SeclumeSmtp.of(url("smtp", server, login(tokenFile) + "&auth=xoauth2"))
+            SeclumeMail.of(url("smtp", server, login(tokenFile) + "&auth=xoauth2"))
                     .send("a@example.com", List.of("b@example.com"), message("x\r\n"));
             assertEquals(List.of("XOAUTH2"), server.logins);
         }
@@ -106,7 +106,7 @@ class SmtpConnectionTest {
     @Test
     void xoauth2RefusedSaysWhy() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            SmtpException refused = assertThrows(SmtpException.class, () -> SeclumeSmtp.of(
+            MailException refused = assertThrows(MailException.class, () -> SeclumeMail.of(
                     url("smtp", server, login(passwordFile) + "&auth=xoauth2")).open());
             assertEquals(535, refused.replyCode());
             assertTrue(refused.getMessage().contains("\"status\":\"401\""), refused.getMessage());
@@ -116,7 +116,7 @@ class SmtpConnectionTest {
     @Test
     void implicitTls() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), true)) {
-            try (SmtpConnection session = SeclumeSmtp.of(url("smtps", server,
+            try (SmtpConnection session = SeclumeMail.of(url("smtps", server,
                     login(passwordFile))).open()) {
                 assertTrue(session.encrypted());
                 assertFalse(session.extensions().containsKey("STARTTLS"));
@@ -133,8 +133,8 @@ class SmtpConnectionTest {
         Path wrong = Files.createTempFile("smtp", ".wrong");
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
             Files.writeString(wrong, "not it");
-            SmtpException refused = assertThrows(SmtpException.class,
-                    () -> SeclumeSmtp.of(url("smtp", server, login(wrong))).open());
+            MailException refused = assertThrows(MailException.class,
+                    () -> SeclumeMail.of(url("smtp", server, login(wrong))).open());
             assertEquals(535, refused.replyCode());
             assertTrue(refused.getMessage().contains("credentials invalid"), refused.getMessage());
         } finally {
@@ -146,8 +146,8 @@ class SmtpConnectionTest {
     void noStartTlsOfferedMeansNothingIsSent() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
             server.offerStartTls = false;
-            SmtpException refused = assertThrows(SmtpException.class,
-                    () -> SeclumeSmtp.of(url("smtp", server, login(passwordFile))).open());
+            MailException refused = assertThrows(MailException.class,
+                    () -> SeclumeMail.of(url("smtp", server, login(passwordFile))).open());
             assertTrue(refused.getMessage().contains("does not offer STARTTLS"),
                     refused.getMessage());
             assertTrue(server.commands.stream().noneMatch(c -> c.startsWith("AUTH")),
@@ -159,8 +159,8 @@ class SmtpConnectionTest {
     void bytesInjectedAfterStartTlsAreRefused() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
             server.injectAfterStartTls = true;
-            SmtpException refused = assertThrows(SmtpException.class,
-                    () -> SeclumeSmtp.of(url("smtp", server, login(passwordFile))).open());
+            MailException refused = assertThrows(MailException.class,
+                    () -> SeclumeMail.of(url("smtp", server, login(passwordFile))).open());
             assertTrue(refused.getMessage().contains("injected"), refused.getMessage());
             assertTrue(server.logins.isEmpty());
         }
@@ -171,7 +171,7 @@ class SmtpConnectionTest {
         TestPki other = TestPki.generate();
         try (FakeSmtpServer server = new FakeSmtpServer(other.serverContext(), false)) {
             assertThrows(IOException.class,
-                    () -> SeclumeSmtp.of(url("smtp", server, login(passwordFile))).open());
+                    () -> SeclumeMail.of(url("smtp", server, login(passwordFile))).open());
             assertTrue(server.logins.isEmpty());
             assertTrue(server.commands.stream().noneMatch(c -> c.startsWith("AUTH")));
         }
@@ -181,7 +181,7 @@ class SmtpConnectionTest {
     void aRelayWithoutLoginInTheClear() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
             server.requireAuth = false;
-            try (SmtpConnection session = SeclumeSmtp.of(
+            try (SmtpConnection session = SeclumeMail.of(
                     "smtp://localhost:" + server.port() + "?tls=none").open()) {
                 assertFalse(session.encrypted());
                 session.send("a@example.com", List.of("b@example.com"), message("x\r\n"));
@@ -194,7 +194,7 @@ class SmtpConnectionTest {
     @Test
     void dotsAreStuffedAndBareLineEndsBecomeCrlf() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            SeclumeSmtp.of(url("smtp", server, login(passwordFile))).send("a@example.com",
+            SeclumeMail.of(url("smtp", server, login(passwordFile))).send("a@example.com",
                     List.of("b@example.com"),
                     message(".leading dot\n..two\nbare cr\rline\r\n.\nno end"));
             // The server takes the stuffing off again: what arrives is the message
@@ -207,7 +207,7 @@ class SmtpConnectionTest {
     @Test
     void someRecipientsRefusedTheRestGetIt() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            SmtpConnection.Sent sent = SeclumeSmtp.of(url("smtp", server, login(passwordFile)))
+            SmtpConnection.Sent sent = SeclumeMail.of(url("smtp", server, login(passwordFile)))
                     .send("a@example.com", List.of("b@example.com", "nobody@example.com"),
                             message("x\r\n"));
             assertEquals(List.of("b@example.com"), sent.accepted());
@@ -219,9 +219,9 @@ class SmtpConnectionTest {
     @Test
     void allRecipientsRefusedSendsNothing() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            try (SmtpConnection session = SeclumeSmtp.of(
+            try (SmtpConnection session = SeclumeMail.of(
                     url("smtp", server, login(passwordFile))).open()) {
-                assertThrows(SmtpException.class, () -> session.send("a@example.com",
+                assertThrows(MailException.class, () -> session.send("a@example.com",
                         List.of("nobody@example.com"), message("x\r\n")));
                 // the session is still usable after the RSET
                 session.send("a@example.com", List.of("b@example.com"), message("y\r\n"));
@@ -233,13 +233,13 @@ class SmtpConnectionTest {
     @Test
     void anUnicodeAddressNeedsSmtpUtf8() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
-            try (SmtpConnection session = SeclumeSmtp.of(
+            try (SmtpConnection session = SeclumeMail.of(
                     url("smtp", server, login(passwordFile))).open()) {
-                assertThrows(SmtpException.class, () -> session.send("a@example.com",
+                assertThrows(MailException.class, () -> session.send("a@example.com",
                         List.of("jürgen@example.com"), message("x\r\n")));
             }
             server.smtpUtf8 = true;
-            SeclumeSmtp.of(url("smtp", server, login(passwordFile))).send("a@example.com",
+            SeclumeMail.of(url("smtp", server, login(passwordFile))).send("a@example.com",
                     List.of("jürgen@example.com"), message("x\r\n"));
             assertTrue(server.received.get(0).mailCommand().endsWith(" SMTPUTF8"));
         }

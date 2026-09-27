@@ -13,11 +13,13 @@
   <artifactId>seclume-mail</artifactId>
   <name>seclume Mail</name>
   <description>
-    Mail submission with the password or OAuth token off the heap: an SMTP
-    client that logs in with AUTH PLAIN, LOGIN or XOAUTH2 written from native
-    memory, over seclume's own TLS 1.3 (STARTTLS or implicit). Usable on its
-    own, as the Jakarta Mail transport "seclume-smtp", and so from Spring's
-    JavaMailSenderImpl. Jakarta Mail never holds the credential.</description>
+    Mail with the password or OAuth token off the heap - sending (SMTP) and
+    receiving (IMAP, POP3). seclume connects, encrypts with its own TLS 1.3
+    and logs in with PLAIN, XOAUTH2 or the protocol's own login written from
+    native memory; Jakarta Mail gets the logged-in connection under the
+    standard protocol names of a session seclume sets up, and never holds the
+    credential. Works with Spring's JavaMailSender, Spring Integration and
+    Camel through that session.</description>
 
   <properties>
     <jakarta.mail.version>2.1.3</jakarta.mail.version>
@@ -50,11 +52,13 @@
       <version>${jakarta.mail.version}</version>
       <scope>provided</scope>
     </dependency>
+    <!-- The IMAP and POP3 stores are Angus Mail's, handed a connection seclume
+         has logged in; an application using Jakarta Mail has Angus anyway. -->
     <dependency>
       <groupId>org.eclipse.angus</groupId>
       <artifactId>angus-mail</artifactId>
       <version>${angus.mail.version}</version>
-      <scope>test</scope>
+      <scope>provided</scope>
     </dependency>
     <dependency>
       <groupId>org.springframework</groupId>

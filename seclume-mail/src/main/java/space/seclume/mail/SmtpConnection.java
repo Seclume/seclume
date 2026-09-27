@@ -46,47 +46,30 @@ import space.seclume.secret.SecretScope;
  */
 public final class SmtpConnection implements AutoCloseable {
 
-    private static final int MAX_LINE = 4096;
-    private static final byte[] CRLF = {'\r', '\n'};
-
-    private final SmtpSettings settings;
-    private final SocketTransport transport;
-    private TlsLayer tls;
-    private final ByteBuffer incoming = ByteBuffer.allocateDirect(8192).flip();
+    private final MailSettings settings;
+    private final MailWire wire;
     private Map<String, String> extensions = Map.of();
     private boolean open = true;
 
-    private SmtpConnection(SmtpSettings settings, SocketTransport transport) {
-        this.settings = settings;
-        this.transport = transport;
+    private SmtpConnection(MailWire wire) {
+        this.settings = wire.settings();
+        this.wire = wire;
     }
 
     /** Connects, says EHLO, encrypts and logs in as {@code settings} name it. */
-    static SmtpConnection open(SmtpSettings settings) throws IOException {
-        SocketTransport transport = SocketTransport.connect(settings.host, settings.port,
-                settings.connectTimeout);
-        SmtpConnection connection = new SmtpConnection(settings, transport);
+    static SmtpConnection open(MailSettings settings) throws IOException {
+        SmtpConnection connection = new SmtpConnection(MailWire.connect(settings));
         try {
-            transport.networkTimeout(settings.timeout);
-            if (settings.implicitTls) {
-                connection.startTls();
-            }
             expect(connection.reply(), 220, "the greeting");
             connection.ehlo();
             if (settings.startTls) {
                 if (!connection.extensions.containsKey("STARTTLS")) {
-                    throw new SmtpException(-1, settings.host + " does not offer STARTTLS. "
+                    throw new MailException(-1, settings.host + " does not offer STARTTLS. "
                             + "Nothing is sent to it in the clear; tls=none says that is "
                             + "wanted, and then there is no login");
                 }
                 expect(connection.command("STARTTLS"), 220, "STARTTLS");
-                if (connection.incoming.hasRemaining()) {
-                    throw new SmtpException(-1, "the server sent " + connection.incoming.remaining()
-                            + " bytes after its STARTTLS reply and before the handshake - "
-                            + "they could have been injected by anyone on the path, so the "
-                            + "connection is refused");
-                }
-                connection.startTls();
+                connection.wire.startTls();
                 connection.ehlo();
             }
             connection.login();
@@ -104,7 +87,7 @@ public final class SmtpConnection implements AutoCloseable {
 
     /** Whether the session is encrypted - always, unless {@code tls=none} was asked for. */
     public boolean encrypted() {
-        return tls != null;
+        return wire.encrypted();
     }
 
     /**
@@ -117,7 +100,7 @@ public final class SmtpConnection implements AutoCloseable {
      *                   the body - with CRLF or LF line ends
      * @return which recipients the server took and which it refused, with its
      *         reason; when it took none, nothing is sent and
-     *         {@link SmtpException} says why
+     *         {@link MailException} says why
      */
     public Sent send(String from, List<String> recipients, MessageWriter message)
             throws IOException {
@@ -129,7 +112,7 @@ public final class SmtpConnection implements AutoCloseable {
         }
         boolean utf8 = !isAscii(from) || recipients.stream().anyMatch(r -> !isAscii(r));
         if (utf8 && !extensions.containsKey("SMTPUTF8")) {
-            throw new SmtpException(-1, "an address is not ASCII, and " + settings.host
+            throw new MailException(-1, "an address is not ASCII, and " + settings.host
                     + " does not offer SMTPUTF8");
         }
         StringBuilder mail = new StringBuilder("MAIL FROM:<").append(from).append('>');
@@ -153,7 +136,7 @@ public final class SmtpConnection implements AutoCloseable {
         }
         if (accepted.isEmpty()) {
             command("RSET");
-            throw new SmtpException(-1, "the server took none of the recipients: " + refused);
+            throw new MailException(-1, "the server took none of the recipients: " + refused);
         }
         expect(command("DATA"), 354, "DATA");
         try (DotStuffing body = new DotStuffing()) {
@@ -199,40 +182,25 @@ public final class SmtpConnection implements AutoCloseable {
         extensions = Map.copyOf(offered);
     }
 
-    private void startTls() throws IOException {
-        try {
-            tls = TrustChoice.using(settings.trust, () -> {
-                try {
-                    return TlsLayers.start(TlsStack.SECLUME, transport, settings.host,
-                            settings.port, true);
-                } catch (IOException e) {
-                    throw new SQLException(e.getMessage(), "08001", e);
-                }
-            });
-        } catch (SQLException e) {
-            throw e.getCause() instanceof IOException io ? io : new IOException(e.getMessage(), e);
-        }
-    }
-
     private void login() throws IOException {
-        SmtpSettings.Auth auth = settings.auth;
-        if (auth == SmtpSettings.Auth.NONE) {
+        MailSettings.Auth auth = settings.auth;
+        if (auth == MailSettings.Auth.NONE) {
             return;
         }
         List<String> offered = List.of(extensions.getOrDefault("AUTH", "")
                 .toUpperCase(Locale.ROOT).split("\\s+"));
-        if (auth == SmtpSettings.Auth.BEST) {
+        if (auth == MailSettings.Auth.BEST) {
             if (offered.contains("PLAIN")) {
-                auth = SmtpSettings.Auth.PLAIN;
+                auth = MailSettings.Auth.PLAIN;
             } else if (offered.contains("LOGIN")) {
-                auth = SmtpSettings.Auth.LOGIN;
+                auth = MailSettings.Auth.LOGIN;
             } else {
-                throw new SmtpException(-1, settings.host + " offers no password login this "
+                throw new MailException(-1, settings.host + " offers no password login this "
                         + "client speaks (AUTH " + extensions.getOrDefault("AUTH", "-")
                         + "); auth=xoauth2 logs in with a token");
             }
         } else if (!offered.contains(auth.name())) {
-            throw new SmtpException(-1, settings.host + " does not offer AUTH " + auth.name()
+            throw new MailException(-1, settings.host + " does not offer AUTH " + auth.name()
                     + " (it offers: " + extensions.getOrDefault("AUTH", "nothing") + ")");
         }
         switch (auth) {
@@ -243,21 +211,9 @@ public final class SmtpConnection implements AutoCloseable {
         }
     }
 
-    /** RFC 4616: {@code \0user\0password}, base64, in one line. */
+    /** RFC 4616: {@code \0user\0password}, base64, in one line - see {@link Sasl}. */
     private void plain() throws IOException {
-        // seclume-allow: the user name, which is public
-        byte[] user = settings.user.getBytes(StandardCharsets.UTF_8);
-        try (SecretScope password = SecretScope.fromProvider(settings.secret)) {
-            int length = 1 + user.length + 1 + password.length();
-            try (SecretScope raw = SecretScope.allocate(length)) {
-                MemorySegment at = raw.segment();
-                at.set(ValueLayout.JAVA_BYTE, 0, (byte) 0);
-                MemorySegment.copy(user, 0, at, ValueLayout.JAVA_BYTE, 1, user.length);
-                at.set(ValueLayout.JAVA_BYTE, 1 + user.length, (byte) 0);
-                MemorySegment.copy(password.segment(), 0, at, 2 + user.length, password.length());
-                sendBase64Line("AUTH PLAIN ", raw.segment(), length);
-            }
-        }
+        Sasl.plain(wire, "AUTH PLAIN ");
         expectLogin(reply(), "AUTH PLAIN");
     }
 
@@ -268,71 +224,29 @@ public final class SmtpConnection implements AutoCloseable {
         byte[] name = settings.user.getBytes(StandardCharsets.UTF_8);
         // seclume-allow: the same user name, base64 as LOGIN wants it
         expect(command(Base64.getEncoder().encodeToString(name)), 334, "the user name");
-        try (SecretScope password = SecretScope.fromProvider(settings.secret)) {
-            sendBase64Line("", password.segment(), password.length());
-        }
+        Sasl.passwordBase64(wire);
         expectLogin(reply(), "AUTH LOGIN");
     }
 
     /**
-     * Google's and Microsoft's OAuth 2.0 login: {@code user=...^Aauth=Bearer
-     * token^A^A}, base64, in one line. A refusal comes as a 334 with a base64
-     * JSON reason, which is answered with an empty line.
+     * Google's and Microsoft's OAuth 2.0 login. A refusal comes as a 334 with
+     * a base64 JSON reason, which is answered with an empty line.
      */
     private void xoauth2() throws IOException {
-        byte[] head = ("user=" + settings.user + "\u0001auth=Bearer ")
-                // seclume-allow: the XOAUTH2 head: 'user=' and the user name, no token in it
-                .getBytes(StandardCharsets.UTF_8);
-        try (SecretScope token = SecretScope.fromProvider(settings.secret)) {
-            int length = head.length + token.length() + 2;
-            try (SecretScope raw = SecretScope.allocate(length)) {
-                MemorySegment at = raw.segment();
-                MemorySegment.copy(head, 0, at, ValueLayout.JAVA_BYTE, 0, head.length);
-                MemorySegment.copy(token.segment(), 0, at, head.length, token.length());
-                at.set(ValueLayout.JAVA_BYTE, head.length + token.length(), (byte) 1);
-                at.set(ValueLayout.JAVA_BYTE, head.length + token.length() + 1, (byte) 1);
-                sendBase64Line("AUTH XOAUTH2 ", raw.segment(), length);
-            }
-        }
+        Sasl.xoauth2(wire, "AUTH XOAUTH2 ");
         Reply reply = reply();
         if (reply.code == 334) {
-            String reason;
-            try {
-                // seclume-allow: the server's refusal reason, a JSON it sent us - no secret in it
-                reason = new String(Base64.getDecoder().decode(reply.text().trim()),
-                        StandardCharsets.UTF_8);
-            } catch (IllegalArgumentException notBase64) {
-                reason = reply.text();
-            }
+            String reason = MailReplies.oauthReason(reply.text());
             reply = command("");
-            throw new SmtpException(reply.code, "the server refused the token of "
+            throw new MailException(reply.code, "the server refused the token of "
                     + settings.user + ": " + reason);
         }
         expectLogin(reply, "AUTH XOAUTH2");
     }
 
-    /**
-     * {@code prefix}, then {@code length} bytes of {@code secret} in base64,
-     * then CRLF - built in native memory and written from there.
-     */
-    private void sendBase64Line(String prefix, MemorySegment secret, int length)
-            throws IOException {
-        // seclume-allow: the command prefix, e.g. 'AUTH PLAIN ' - the secret goes in after it, off-heap
-        byte[] head = prefix.getBytes(StandardCharsets.US_ASCII);
-        int encoded = Base64Off.encodedLength(length);
-        try (SecretScope line = SecretScope.allocate(head.length + encoded + 2)) {
-            MemorySegment out = line.segment();
-            MemorySegment.copy(head, 0, out, ValueLayout.JAVA_BYTE, 0, head.length);
-            int written = Base64Off.encode(secret, 0, length, out, head.length);
-            out.set(ValueLayout.JAVA_BYTE, head.length + written, (byte) '\r');
-            out.set(ValueLayout.JAVA_BYTE, head.length + written + 1, (byte) '\n');
-            write(out.asSlice(0, head.length + written + 2).asByteBuffer());
-        }
-    }
-
-    private void expectLogin(Reply reply, String step) throws SmtpException {
+    private void expectLogin(Reply reply, String step) throws MailException {
         if (reply.code != 235) {
-            throw new SmtpException(reply.code, "the server refused the login of "
+            throw new MailException(reply.code, "the server refused the login of "
                     + settings.user + " (" + step + "): " + reply.text());
         }
     }
@@ -347,15 +261,13 @@ public final class SmtpConnection implements AutoCloseable {
     }
 
     private Reply command(String line) throws IOException {
-        // seclume-allow: a command line; every credential is written by sendBase64Line instead
-        byte[] bytes = (line + "\r\n").getBytes(StandardCharsets.UTF_8);
-        write(ByteBuffer.wrap(bytes));
+        wire.writeLine(line);
         return reply();
     }
 
-    private static void expect(Reply reply, int code, String step) throws SmtpException {
+    private static void expect(Reply reply, int code, String step) throws MailException {
         if (reply.code != code) {
-            throw new SmtpException(reply.code, step + " was answered with " + reply.code + " "
+            throw new MailException(reply.code, step + " was answered with " + reply.code + " "
                     + reply.text());
         }
     }
@@ -364,11 +276,11 @@ public final class SmtpConnection implements AutoCloseable {
     private Reply reply() throws IOException {
         List<String> lines = new ArrayList<>();
         while (true) {
-            String line = readLine();
+            String line = wire.readLine();
             if (line.length() < 3 || !isDigit(line.charAt(0)) || !isDigit(line.charAt(1))
                     || !isDigit(line.charAt(2))
                     || (line.length() > 3 && line.charAt(3) != ' ' && line.charAt(3) != '-')) {
-                throw new SmtpException(-1, "not an SMTP reply: " + line);
+                throw new MailException(-1, "not an SMTP reply: " + line);
             }
             int code = (line.charAt(0) - '0') * 100 + (line.charAt(1) - '0') * 10
                     + (line.charAt(2) - '0');
@@ -379,53 +291,9 @@ public final class SmtpConnection implements AutoCloseable {
         }
     }
 
-    private String readLine() throws IOException {
-        StringBuilder line = new StringBuilder();
-        while (true) {
-            while (incoming.hasRemaining()) {
-                byte b = incoming.get();
-                if (b == '\n') {
-                    int end = line.length();
-                    if (end > 0 && line.charAt(end - 1) == '\r') {
-                        line.setLength(end - 1);
-                    }
-                    return line.toString();
-                }
-                if (line.length() >= MAX_LINE) {
-                    throw new SmtpException(-1, "a reply line longer than " + MAX_LINE
-                            + " bytes");
-                }
-                line.append((char) (b & 0xff));
-            }
-            incoming.clear();
-            int n = tls != null ? tls.read(incoming) : transport.read(incoming);
-            incoming.flip();
-            if (n < 0) {
-                throw new SmtpException(-1, settings.host + " closed the connection");
-            }
-        }
-    }
-
-    private void write(ByteBuffer bytes) throws IOException {
-        if (tls != null) {
-            tls.write(bytes);
-        } else {
-            while (bytes.hasRemaining()) {
-                transport.write(bytes);
-            }
-        }
-    }
-
     private void abandon() {
         open = false;
-        if (tls != null) {
-            try {
-                tls.close();
-            } catch (Exception ignored) {
-                // closing anyway
-            }
-        }
-        transport.close();
+        wire.close();
     }
 
     /** An ASCII digit - not Character.isDigit, which takes every script's digits. */
@@ -512,7 +380,7 @@ public final class SmtpConnection implements AutoCloseable {
         @Override
         public void flush() throws IOException {
             if (used > 0) {
-                SmtpConnection.this.write(ByteBuffer.wrap(buffer, 0, used));
+                wire.write(ByteBuffer.wrap(buffer, 0, used));
                 used = 0;
             }
         }
