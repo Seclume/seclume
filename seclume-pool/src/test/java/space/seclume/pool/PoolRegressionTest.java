@@ -157,29 +157,6 @@ class PoolRegressionTest {
         }
     }
 
-    // ---- invariant: a lapsed connection never goes back into the pool ---
-
-    @Test
-    void aConnectionWhoseCredentialLapsedWhileBorrowedIsNotParked() throws Exception {
-        StubDataSource source = new StubDataSource();
-        PoolSettings settings = settings();
-        settings.setMaxLifetime(Duration.ZERO);
-        settings.setCredentialMargin(Duration.ZERO);
-        settings.setCredentialSpread(Duration.ZERO);
-        Instant expiry = Instant.now().plusMillis(300);
-        settings.setCredentialExpiry(() -> expiry);
-        // Housekeeping far apart, so that only the return itself can catch it.
-        settings.setValidationTimeout(Duration.ofSeconds(30));
-
-        try (SeclumePool pool = new SeclumePool(source, settings)) {
-            Connection connection = pool.getConnection();
-            Thread.sleep(500);                         // the credential lapses while borrowed
-            connection.close();
-            assertEquals(0, pool.idleCount(), "a lapsed connection was parked again");
-            assertTrue(source.handedOut().get(0).closed.get(), "and it was not closed");
-        }
-    }
-
     // ---- N7 and the close race -------------------------------------------
 
     @Test

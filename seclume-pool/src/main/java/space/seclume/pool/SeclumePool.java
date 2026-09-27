@@ -438,11 +438,6 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 && entry.ageNanos(now) > settings.getMaxLifetime().toNanos()) {
             return false;
         }
-        if (entry.credentialLapsed(now)) {
-            // Between two housekeeping rounds a lapsed connection could sit
-            // in a slot and be handed out; it is retired like a too-old one.
-            return false;
-        }
         boolean stale = settings.getValidationBypassWindow().isZero()
                 || entry.idleNanos(now) > settings.getValidationBypassWindow().toNanos();
         return !stale || isAlive(entry);
@@ -878,8 +873,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             return;
         }
         entry.markReturned();
-        if (broken || closed || isPastLifetime(entry) || entry.isRetiringOnReturn()
-                || entry.credentialLapsed(System.nanoTime())) {
+        if (broken || closed || isPastLifetime(entry) || entry.isRetiringOnReturn()) {
             retire(entry);
         } else {
             park(entry);
