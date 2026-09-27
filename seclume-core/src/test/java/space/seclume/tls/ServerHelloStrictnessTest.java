@@ -75,8 +75,9 @@ class ServerHelloStrictnessTest {
             while (all.length - at >= 5) {
                 int type = all[at] & 0xff;
                 int length = ((all[at + 3] & 0xff) << 8) | (all[at + 4] & 0xff);
-                if (type == 21 && length >= 2 && at + 5 + length <= all.length) {
-                    alert = all[at + 6] & 0xff;
+                int description = at + 6;          // level at at + 5, description after it
+                if (type == 21 && length >= 2 && description < all.length) {
+                    alert = all[description] & 0xff;
                 }
                 at += 5 + length;
             }

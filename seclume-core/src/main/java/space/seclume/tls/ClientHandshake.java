@@ -200,7 +200,9 @@ public final class ClientHandshake {
             MemorySegment serverShare = serverHello.asSlice(facts.keyShareAt(), facts.keyShareLength());
             MemorySegment secret;
             try {
-                if (facts.group() == ClientHello.X25519MLKEM768) {
+                // readServerHello takes the hybrid only when it was offered;
+                // the null check says so here as well.
+                if (facts.group() == ClientHello.X25519MLKEM768 && hybrid != null) {
                     hybrid.derive(serverShare, shared.segment());
                     secret = shared.segment().asSlice(0, space.seclume.crypto.HybridMlKem.SECRET);
                 } else {

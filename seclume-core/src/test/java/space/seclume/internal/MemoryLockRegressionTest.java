@@ -130,7 +130,11 @@ class MemoryLockRegressionTest {
                             start.await();
                             for (int i = 0; i < 2_000; i++) {
                                 MemoryLock.lock(mine);
-                                MemoryLock.unlock(mine);
+                                try {
+                                    Thread.onSpinWait();
+                                } finally {
+                                    MemoryLock.unlock(mine);
+                                }
                             }
                         } catch (Throwable e) {
                             failure.compareAndSet(null, e);
