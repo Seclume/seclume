@@ -116,9 +116,9 @@ final class RecordStream implements AutoCloseable {
             readFully(RecordProtection.HEADER, 0);
             int type = byteAt(incoming, 0);
             int length = (byteAt(incoming, 3) << 8) | byteAt(incoming, 4);
-            if (length > MAX_CIPHERTEXT) {
-                throw new IOException("a record announced " + length + " bytes, more than TLS "
-                        + "allows (" + MAX_CIPHERTEXT + ") - this is not a TLS 1.3 server");
+            if (length > (reading == null ? MAX_PLAINTEXT : MAX_CIPHERTEXT)) {
+                throw new TlsProtocolException(TlsAlertException.RECORD_OVERFLOW,
+                        "a record announced " + length + " bytes, more than TLS allows");
             }
             readFully(length, RecordProtection.HEADER);
 
@@ -138,20 +138,39 @@ final class RecordStream implements AutoCloseable {
                 if (type == 21) {
                     throw alert(incoming, RecordProtection.HEADER, length);
                 }
+                if (length == 0) {
+                    // RFC 8446 section 5.1: no zero-length fragments of a
+                    // handshake message (found by TLS-Anvil, 27.09.2026).
+                    throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                            "an empty record of type " + type);
+                }
                 return new Incoming(type, incoming, RecordProtection.HEADER, length);
             }
             if (type != 23) {
                 throw new IOException("a record of type " + type + " arrived after encryption "
                         + "started, where only application_data may appear");
             }
+            if (length - 16 > MAX_PLAINTEXT + 1) {
+                // RFC 8446 section 5.4: TLSInnerPlaintext - content, type and
+                // padding - is at most 2^14 + 1 bytes. The ciphertext limit
+                // alone lets 255 more through.
+                throw new TlsProtocolException(TlsAlertException.RECORD_OVERFLOW,
+                        "an encrypted record holds " + (length - 16) + " bytes of content and "
+                                + "padding, more than 2^14 + 1");
+            }
             RecordProtection.Opened result =
                     reading.open(incoming, 0, RecordProtection.HEADER + length, opened, 0);
             if (result == null) {
-                throw new IOException("a record did not authenticate - the key, the sequence "
-                        + "number or the bytes themselves are wrong");
+                throw new TlsProtocolException(TlsAlertException.BAD_RECORD_MAC,
+                        "a record did not authenticate - the key, the sequence number or the "
+                                + "bytes themselves are wrong");
             }
             if (result.contentType() == 21) {
                 throw alert(opened, 0, result.length());
+            }
+            if (result.length() == 0 && result.contentType() != RecordProtection.APPLICATION_DATA) {
+                throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                        "an empty record of type " + result.contentType());
             }
             return new Incoming(result.contentType(), opened, 0, result.length());
         }

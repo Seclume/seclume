@@ -46,8 +46,8 @@ public final class AnvilClient {
         int anvilPort = Integer.parseInt(args[2]);
 
         ExecutorService connections = Executors.newVirtualThreadPerTaskExecutor();
-        try (ServerSocket trigger = new ServerSocket(triggerPort, 50,
-                InetAddress.getLoopbackAddress())) {
+        // Plain TCP on loopback on purpose: the trigger carries no data at all.
+        try (ServerSocket trigger = new ServerSocket(triggerPort, 50, InetAddress.getLoopbackAddress())) { // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
             System.out.println("waiting for TLS-Anvil's trigger on " + trigger.getLocalPort());
             while (true) {
                 Socket asked = trigger.accept();

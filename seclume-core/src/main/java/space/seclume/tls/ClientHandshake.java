@@ -374,78 +374,87 @@ public final class ClientHandshake {
         long body = Handshake.HEADER;
         if (serverHello.asSlice(Handshake.randomOffset(body), 32)
                 .mismatch(MemorySegment.ofArray(HELLO_RETRY_REQUEST)) == -1) {
-            throw new IOException("the server asked for a different key share "
-                    + "(HelloRetryRequest); this client offers one group and does not retry");
+            throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
+                    "the server asked for a different key share (HelloRetryRequest); this "
+                            + "client offers its groups up front and does not retry");
         }
         int sessionLength = Handshake.sessionIdLength(serverHello, body);
         if (sessionLength != sentSessionId.byteSize()
                 || serverHello.asSlice(Handshake.sessionIdOffset(body), sessionLength)
                         .mismatch(sentSessionId) != -1) {
-            throw new IOException("the server echoed a different session id than the one sent - "
-                    + "something between us is not passing the handshake through unchanged");
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the server echoed a different session id than the one sent - "
+                            + "something between us is not passing the handshake through unchanged");
         }
 
         int suite = Handshake.cipherSuite(serverHello, body);
         HashAlgorithm hash = switch (suite) {
             case ClientHello.AES_128_GCM_SHA256 -> HashAlgorithm.SHA_256;
             case ClientHello.AES_256_GCM_SHA384 -> HashAlgorithm.SHA_384;
-            default -> throw new IOException("the server chose cipher suite 0x"
-                    + Integer.toHexString(suite) + ", which was not offered");
+            default -> throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the server chose cipher suite 0x" + Integer.toHexString(suite)
+                            + ", which was not offered");
         };
         int keyLength = suite == ClientHello.AES_256_GCM_SHA384 ? 32 : 16;
 
-        int[] extensionsLength = new int[1];
-        long extensionsAt = Handshake.serverHelloExtensions(serverHello, body, extensionsLength);
+        if (Handshake.u16(serverHello, body) != Handshake.LEGACY_VERSION) {
+            throw new TlsProtocolException(TlsAlertException.PROTOCOL_VERSION,
+                    "the ServerHello's legacy_version is not 0x0303");
+        }
+        long compression = Handshake.sessionIdOffset(body) + sessionLength + 2;
+        if (serverHello.get(ValueLayout.JAVA_BYTE, compression) != 0) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the ServerHello names a compression method; TLS 1.3 has none");
+        }
+        long extensionsField = compression + 1;
         long[] share = {0, 0, 0};
         boolean[] seen = {false, false};
-        // How often each of the two extensions this reads appeared, and
-        // whether one was shaped wrong. RFC 8446 section 4.2: an extension
-        // appears at most once, and its content fills it exactly - a key
-        // share whose announced length reached past its extension used to be
-        // read from whatever followed it.
-        int[] count = {0, 0};
-        boolean[] malformed = {false};
-        Handshake.extensions(serverHello, extensionsAt, extensionsLength[0], (type, at, length) -> {
-            if (type == Handshake.EXTENSION_KEY_SHARE) {
-                count[0]++;
-                if (length < 4) {
-                    malformed[0] = true;
-                    return;
-                }
-                long[] out = new long[2];
-                int group = Handshake.serverKeyShare(serverHello, at, out);
-                if (4 + out[1] != length) {
-                    malformed[0] = true;
-                    return;
-                }
-                if (group == ClientHello.SECP256R1 && out[1] == 65
-                        || offeredHybrid && group == ClientHello.X25519MLKEM768
-                                && out[1] == space.seclume.crypto.HybridMlKem.SERVER_SHARE) {
-                    share[0] = out[0];
-                    share[1] = out[1];
-                    share[2] = group;
-                    seen[0] = true;
-                }
-            } else if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS) {
-                count[1]++;
-                if (length != 2) {
-                    malformed[0] = true;
-                } else if (Handshake.selectedVersion(serverHello, at) == 0x0304) {
-                    seen[1] = true;
-                }
-            }
-        });
-        if (malformed[0] || count[0] > 1 || count[1] > 1) {
-            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
-                    "the ServerHello repeats an extension or carries one of the wrong length");
-        }
+        // RFC 8446 section 4.2: the extensions fill the rest of the message
+        // exactly, each appears once and fills itself exactly, and the
+        // server answers only what was offered - key_share and
+        // supported_versions, nothing else (no PSK is ever offered).
+        StrictExtensions.list(serverHello, extensionsField,
+                (int) (serverHello.byteSize() - extensionsField), "the ServerHello",
+                (type, at, length) -> {
+                    if (type == Handshake.EXTENSION_KEY_SHARE) {
+                        if (length < 4) {
+                            throw StrictExtensions.decodeError("a key_share of " + length
+                                    + " bytes");
+                        }
+                        long[] out = new long[2];
+                        int group = Handshake.serverKeyShare(serverHello, at, out);
+                        if (4 + out[1] != length) {
+                            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                                    "the key share does not fill its extension");
+                        }
+                        if (group == ClientHello.SECP256R1 && out[1] == 65
+                                || offeredHybrid && group == ClientHello.X25519MLKEM768
+                                        && out[1] == space.seclume.crypto.HybridMlKem.SERVER_SHARE) {
+                            share[0] = out[0];
+                            share[1] = out[1];
+                            share[2] = group;
+                            seen[0] = true;
+                        }
+                    } else if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS) {
+                        if (length != 2) {
+                            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                                    "a supported_versions of " + length + " bytes in the "
+                                            + "ServerHello; it is one version");
+                        }
+                        seen[1] = Handshake.selectedVersion(serverHello, at) == 0x0304;
+                    } else {
+                        throw StrictExtensions.unsolicited("the ServerHello", type);
+                    }
+                });
         if (!seen[1]) {
-            throw new IOException("the server did not select TLS 1.3 - the header version means "
-                    + "nothing, and supported_versions did not say 0x0304");
+            throw new TlsProtocolException(TlsAlertException.PROTOCOL_VERSION,
+                    "the server did not select TLS 1.3 - the header version means "
+                            + "nothing, and supported_versions did not say 0x0304");
         }
         if (!seen[0]) {
-            throw new IOException("the server sent no usable key share for a group that was "
-                    + "offered (" + (offeredHybrid ? "X25519MLKEM768 or P-256" : "P-256") + ")");
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the server sent no usable key share for a group that was offered ("
+                            + (offeredHybrid ? "X25519MLKEM768 or P-256" : "P-256") + ")");
         }
         String name = suite == ClientHello.AES_256_GCM_SHA384
                 ? "TLS_AES_256_GCM_SHA384" : "TLS_AES_128_GCM_SHA256";
@@ -536,7 +545,8 @@ public final class ClientHandshake {
                         switch (type) {
                             case Handshake.ENCRYPTED_EXTENSIONS -> {
                                 due(now == Expect.ENCRYPTED_EXTENSIONS, type, now);
-                                checkSelectedProtocol(message, at, length, alpn);
+                                readEncryptedExtensions(message, at, length, alpn,
+                                        serverNameFor(host) != null);
                                 transcript.update(message, start, total);
                                 expect[0] = Expect.CERTIFICATE_OR_REQUEST;
                             }
@@ -553,6 +563,7 @@ public final class ClientHandshake {
                             case Handshake.CERTIFICATE -> {
                                 due(now == Expect.CERTIFICATE_OR_REQUEST
                                         || now == Expect.CERTIFICATE, type, now);
+                                CertificateMessage.checkServerCertificate(message, at, length);
                                 readCertificates(message, at, length, chain);
                                 authenticate(chain, host, trust);
                                 transcript.update(message, start, total);
@@ -564,6 +575,7 @@ public final class ClientHandshake {
                                 // so the hash is taken before this message is added.
                                 // Checked with or without a trust store: the signature
                                 // is what proves the server holds the key it presented.
+                                CertificateVerifyMessage.checkShape(message, at, length);
                                 transcript.current(digest.segment(), 0);
                                 verifySignature(chain, message, at,
                                         digest.segment().asSlice(0, hash.digestLength()));
@@ -717,42 +729,73 @@ public final class ClientHandshake {
     }
 
     /**
-     * Did the server agree to the protocol we offered.
-     *
-     * <p>Only asked when one was offered. A server that selects nothing has
-     * either ignored ALPN or does not support what was asked for, and in both
-     * cases carrying on would mean speaking a protocol the other end never
-     * agreed to - which for TDS 8.0 shows up as a connection that hangs
-     * rather than as an error, because the server is waiting for something
-     * else entirely.
+     * Extensions that exist in TLS 1.3 but never in EncryptedExtensions
+     * (RFC 8446 section 4.2, the table): one of these there is an
+     * {@code illegal_parameter}, anything else not asked for an
+     * {@code unsupported_extension}.
      */
-    private static void checkSelectedProtocol(MemorySegment message, long body, int length,
-            String alpn) throws IOException {
+    private static final java.util.Set<Integer> NEVER_IN_ENCRYPTED_EXTENSIONS = java.util.Set.of(
+            13, 21, 41, 43, 44, 45, 47, 48, 49, 50, 51);
+
+    /**
+     * EncryptedExtensions, read strictly - and whether the server agreed to
+     * the protocol we offered.
+     *
+     * <p>Strictly, because TLS-Anvil (27.09.2026) showed this client taking
+     * an EncryptedExtensions whose lengths did not add up, or that carried a
+     * padding, supported_versions or GREASE extension, and carrying on. The
+     * message is covered by the Finished, so a man in the middle could not
+     * have used that; RFC 8446 still says to abort, and does not say why it
+     * would be safe not to.
+     *
+     * <p>What the server may answer: server_name (empty, if one was sent),
+     * supported_groups (its preferences, for next time) and ALPN if it was
+     * offered. A server that selects no protocol when one was offered has
+     * either ignored ALPN or does not support it, and carrying on would mean
+     * speaking a protocol it never agreed to - for TDS 8.0 a connection that
+     * hangs rather than an error.
+     */
+    private static void readEncryptedExtensions(MemorySegment message, long body, int length,
+            String alpn, boolean sentServerName) throws IOException {
+        String[] selected = {null};
+        StrictExtensions.list(message, body, length, "the EncryptedExtensions",
+                (type, at, size) -> {
+                    if (type == Handshake.EXTENSION_SERVER_NAME && sentServerName) {
+                        if (size != 0) {
+                            throw StrictExtensions.decodeError(
+                                    "a server_name answer that is not empty");
+                        }
+                    } else if (type == Handshake.EXTENSION_SUPPORTED_GROUPS) {
+                        if (size < 2 || Handshake.u16(message, at) != size - 2
+                                || (size - 2) % 2 != 0) {
+                            throw StrictExtensions.decodeError("a malformed supported_groups");
+                        }
+                    } else if (type == ClientHello.EXTENSION_ALPN && alpn != null) {
+                        // ProtocolNameList with exactly one name, since one was offered.
+                        if (size < 3 || Handshake.u16(message, at) != size - 2) {
+                            throw StrictExtensions.decodeError("a malformed ALPN answer");
+                        }
+                        int nameLength = message.get(ValueLayout.JAVA_BYTE, at + 2) & 0xff;
+                        if (nameLength == 0 || nameLength != size - 3) {
+                            throw StrictExtensions.decodeError(
+                                    "an ALPN answer that is not exactly one protocol name");
+                        }
+                        StringBuilder name = new StringBuilder(nameLength);
+                        for (int i = 0; i < nameLength; i++) {
+                            name.append((char) (message.get(ValueLayout.JAVA_BYTE, at + 3 + i)
+                                    & 0xff));
+                        }
+                        selected[0] = name.toString();
+                    } else if (NEVER_IN_ENCRYPTED_EXTENSIONS.contains(type)) {
+                        throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                                "extension " + type + " has no place in EncryptedExtensions");
+                    } else {
+                        throw StrictExtensions.unsolicited("the EncryptedExtensions", type);
+                    }
+                });
         if (alpn == null) {
             return;
         }
-        if (length < 2) {
-            throw new IOException("the server sent no extensions, so it did not select \""
-                    + alpn + "\"");
-        }
-        int extensionsLength = Handshake.u16(message, body);
-        String[] selected = {null};
-        Handshake.extensions(message, body + 2, extensionsLength, (type, at, size) -> {
-            if (type != ClientHello.EXTENSION_ALPN || size < 3) {
-                return;
-            }
-            // ProtocolNameList: two bytes of list length, then one length-
-            // prefixed name. Exactly one, because exactly one was offered.
-            int nameLength = message.get(ValueLayout.JAVA_BYTE, at + 2) & 0xff;
-            if (nameLength > size - 3) {
-                return;
-            }
-            StringBuilder name = new StringBuilder(nameLength);
-            for (int i = 0; i < nameLength; i++) {
-                name.append((char) (message.get(ValueLayout.JAVA_BYTE, at + 3 + i) & 0xff));
-            }
-            selected[0] = name.toString();
-        });
         if (!alpn.equals(selected[0])) {
             throw new IOException("this client offered the application protocol \"" + alpn
                     + "\" and the server answered with "

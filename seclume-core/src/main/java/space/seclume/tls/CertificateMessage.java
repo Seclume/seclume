@@ -76,6 +76,55 @@ public final class CertificateMessage {
      * @param chain DER certificates, leaf first; may be empty
      * @return how many bytes of {@code out} were written
      */
+    /**
+     * The server's Certificate message, checked field by field before it is
+     * read: an empty request context (TLS 1.3 servers answer none), a list
+     * that fills the message exactly, entries that fill the list exactly,
+     * and no per-certificate extensions, since this client asks for none.
+     * {@link #certificates} walks what fits and stops; TLS-Anvil
+     * (27.09.2026) showed that is too kind to a length that lies.
+     */
+    static void checkServerCertificate(MemorySegment body, long offset, int length)
+            throws TlsProtocolException {
+        if (length < 4) {
+            throw StrictExtensions.decodeError("a Certificate message of " + length + " bytes");
+        }
+        int contextLength = u8(body, offset);
+        if (contextLength != 0) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the server's Certificate has a request context");
+        }
+        int listLength = u24(body, offset + 1);
+        if (listLength != length - 4) {
+            throw StrictExtensions.decodeError("the certificate list says " + listLength
+                    + " bytes and the message has " + (length - 4));
+        }
+        long at = offset + 4;
+        long end = at + listLength;
+        while (at < end) {
+            if (end - at < 5) {
+                throw StrictExtensions.decodeError("a truncated certificate entry");
+            }
+            int certLength = u24(body, at);
+            if (certLength == 0 || at + 3 + certLength + 2 > end) {
+                throw StrictExtensions.decodeError("a certificate longer than its list");
+            }
+            at += 3 + certLength;
+            int extensionsLength = u16(body, at);
+            at += 2;
+            if (at + extensionsLength > end) {
+                throw StrictExtensions.decodeError("certificate extensions longer than the list");
+            }
+            if (extensionsLength > 0) {
+                StrictExtensions.entries(body, at, extensionsLength, "a certificate entry",
+                        (type, extAt, extLength) -> {
+                            throw StrictExtensions.unsolicited("a certificate entry", type);
+                        });
+            }
+            at += extensionsLength;
+        }
+    }
+
     public static int write(MemorySegment out, byte[] context, java.util.List<byte[]> chain) {
         long at = Handshake.HEADER;
         out.set(ValueLayout.JAVA_BYTE, at++, (byte) context.length);

@@ -27,6 +27,16 @@ public final class CertificateVerifyMessage {
         return offset + 4;
     }
 
+    /** The message is a scheme, a length, and exactly that many signature bytes. */
+    static void checkShape(MemorySegment body, long offset, int length)
+            throws TlsProtocolException {
+        if (length < 4 || signatureLength(body, offset) == 0
+                || signatureLength(body, offset) != length - 4) {
+            throw new TlsProtocolException(TlsAlertException.DECODE_ERROR,
+                    "a CertificateVerify whose signature does not fill it exactly");
+        }
+    }
+
     /**
      * Writes the client's own {@code CertificateVerify}, header and all.
      *

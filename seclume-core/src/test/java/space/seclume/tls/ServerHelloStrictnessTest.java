@@ -199,6 +199,80 @@ class ServerHelloStrictnessTest {
         assertEquals(TlsAlertException.ILLEGAL_PARAMETER, peer.alertSent());
     }
 
+    // ---- found by TLS-Anvil, 27.09.2026 -----------------------------------
+
+    /** Byte {@code at} of the record changed to {@code value}. */
+    private static byte[] with(byte[] record, int at, int value) {
+        byte[] changed = record.clone();
+        changed[at] = (byte) value;
+        return changed;
+    }
+
+    /** record header 5, handshake header 4, version 2, random 32, id 1 + 32, suite 2. */
+    private static final int COMPRESSION = 5 + 4 + 2 + 32 + 1 + 32 + 2;
+
+    @Test
+    void aCompressionMethodIsRefused() {
+        Peer peer = new Peer(id -> with(serverHello(id,
+                concat(supportedVersions(), p256Share()), false), COMPRESSION, 1));
+        assertEquals(TlsAlertException.ILLEGAL_PARAMETER, refused(peer).alert());
+    }
+
+    @Test
+    void aWrongLegacyVersionIsRefused() {
+        Peer peer = new Peer(id -> with(serverHello(id,
+                concat(supportedVersions(), p256Share()), false), 5 + 4 + 1, 4));
+        assertEquals(TlsAlertException.PROTOCOL_VERSION, refused(peer).alert());
+    }
+
+    @Test
+    void anExtensionThatWasNotOfferedIsRefused() {
+        byte[] heartbeat = extension(15, new byte[] {1});
+        Peer peer = new Peer(id -> serverHello(id,
+                concat(supportedVersions(), p256Share(), heartbeat), false));
+        assertEquals(TlsAlertException.UNSUPPORTED_EXTENSION, refused(peer).alert());
+    }
+
+    @Test
+    void aGreaseExtensionFromTheServerIsRefused() {
+        Peer peer = new Peer(id -> serverHello(id,
+                concat(supportedVersions(), p256Share(), extension(0x0a0a, new byte[0])), false));
+        assertEquals(TlsAlertException.UNSUPPORTED_EXTENSION, refused(peer).alert());
+    }
+
+    @Test
+    void extensionsThatDoNotFillTheirLengthAreADecodeError() {
+        byte[] extensions = concat(supportedVersions(), p256Share());
+        Peer peer = new Peer(id -> {
+            byte[] record = serverHello(id, extensions, false);
+            // the extensions' length field, one too large
+            int at = COMPRESSION + 1;
+            int length = ((record[at] & 0xff) << 8 | (record[at + 1] & 0xff)) + 1;
+            return with(with(record, at, length >>> 8), at + 1, length);
+        });
+        assertEquals(TlsAlertException.DECODE_ERROR, refused(peer).alert());
+    }
+
+    @Test
+    void anEmptyHandshakeRecordIsRefused() throws IOException {
+        Peer peer = new Peer(id -> new byte[] {22, 3, 3, 0, 0});
+        peer.write(ByteBuffer.wrap(new byte[64]));
+        try (RecordStream records = new RecordStream(peer)) {
+            TlsProtocolException refused = assertThrows(TlsProtocolException.class, records::next);
+            assertEquals(TlsAlertException.UNEXPECTED_MESSAGE, refused.alert());
+        }
+    }
+
+    @Test
+    void aPlaintextRecordOver2pow14IsARecordOverflow() throws IOException {
+        Peer peer = new Peer(id -> new byte[] {22, 3, 3, 0x40, 1});
+        peer.write(ByteBuffer.wrap(new byte[64]));
+        try (RecordStream records = new RecordStream(peer)) {
+            TlsProtocolException refused = assertThrows(TlsProtocolException.class, records::next);
+            assertEquals(TlsAlertException.RECORD_OVERFLOW, refused.alert());
+        }
+    }
+
     @Test
     void aChangeCipherSpecAfterTheHandshakeIsRefused() throws IOException {
         byte[] ccs = {20, 3, 3, 0, 1, 1};
