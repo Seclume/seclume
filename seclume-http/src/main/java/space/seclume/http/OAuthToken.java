@@ -35,7 +35,7 @@ import space.seclume.secret.SecretScope;
  * <p>What is on the heap is public: the client id, the scope, the token
  * endpoint's status line and headers, and an error's description.
  */
-final class OAuthToken implements AutoCloseable {
+final class OAuthToken implements BearerSource {
 
     private static final int MAX_ANSWER = 64 * 1024;
     private static final int MAX_TOKEN = 16 * 1024;
@@ -61,7 +61,8 @@ final class OAuthToken implements AutoCloseable {
     }
 
     /** The header line, CRLF included - with a token renewed first if it is due. */
-    void writeHeader(HttpWire wire) throws IOException {
+    @Override
+    public void writeHeader(HttpWire wire) throws IOException {
         try (SecretScope line = headerLine()) {
             wire.write(line.segment().asSlice(0, line.length()).asByteBuffer());
         }
@@ -86,7 +87,8 @@ final class OAuthToken implements AutoCloseable {
     }
 
     /** The API refused the token: the next request fetches a new one. */
-    synchronized void invalidate() {
+    @Override
+    public synchronized void invalidate() {
         if (token != null) {
             token.close();
             token = null;

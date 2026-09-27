@@ -60,13 +60,15 @@ public final class SeclumeHttp implements AutoCloseable {
             "proxy-authorization", "proxy-connection");
 
     private final HttpSettings settings;
-    private final OAuthToken token;
+    private final BearerSource token;
     private final ArrayDeque<HttpWire> idle = new ArrayDeque<>();
     private boolean closed;
 
     private SeclumeHttp(HttpSettings settings) {
         this.settings = settings;
-        this.token = settings.oauth == null ? null : new OAuthToken(settings.oauth, settings.secret);
+        this.token = settings.oauth != null ? new OAuthToken(settings.oauth, settings.secret)
+                : settings.jwt != null ? new SelfSignedJwt(settings.jwt, settings.secret)
+                : null;
     }
 
     /** One API: {@code https://host[:port][/base]?provider=...} - see {@link HttpSettings}. */

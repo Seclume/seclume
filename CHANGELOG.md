@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### HTTP: `auth=jwt`, a JWT the client signs itself
+
+For APIs that take a signed JWT instead of a secret, such as GitHub Apps, Google service
+accounts, Apple and Zoom. `seclume-http` signs the token with the key held by OpenSSL (or an
+HMAC key read per use), reuses it until shortly before it expires, and signs it afresh after
+a 401. The options are `jwt-iss`, `jwt-sub`, `jwt-aud`, `jwt-ttl`, `jwt-alg` and `jwt-kid`.
+OAuth and self-signed tokens now share one bearer mechanism.
+
 ### JWT and webhooks: `seclume-jwt`, signing keys off the heap
 
 A new module. `SeclumeJwt` signs tokens with HS256/384/512, computed in native memory with
