@@ -87,7 +87,10 @@ public final class NoSecretInHeap implements AfterEachCallback {
      * </pre>
      *
      * @param secretFile the file holding the secret - never the secret itself,
-     *                   see the class comment for why
+     *                   see the class comment for why. A file ending in
+     *                   {@code .bin} or {@code .der} holds bytes - a key rather
+     *                   than a password - and is searched for as bytes and in
+     *                   base64; any other is text.
      * @throws AssertionError when the secret is on the heap, saying where
      */
     public static void assertAbsent(Path secretFile) throws IOException, InterruptedException {

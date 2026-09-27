@@ -10,38 +10,20 @@
     <version>0.11.0-SNAPSHOT</version>
   </parent>
 
-  <artifactId>seclume-http</artifactId>
-  <name>seclume HTTP</name>
+  <artifactId>seclume-jwt</artifactId>
+  <name>seclume JWT</name>
   <description>
-    An HTTPS client for REST APIs whose API key, bearer token or password stays
-    off the heap: the credential header is written from native memory into
-    seclume's own TLS 1.3, request by request, and only ever to the one origin
-    it belongs to. On its own, or as Spring's ClientHttpRequestFactory for
-    RestClient and RestTemplate.</description>
-
-  <properties>
-    <spring.version>7.0.9</spring.version>
-  </properties>
+    Signing keys off the heap: JWTs signed and checked with an HMAC key
+    (HS256/384/512), signed with an RSA or EC private key (RS, PS, ES) held by
+    OpenSSL, and webhook signatures (GitHub, Stripe, any HMAC) checked - the
+    key read from a secret provider into native memory and never a byte[] or
+    a Key object on the heap.</description>
 
   <dependencies>
     <dependency>
       <groupId>space.seclume</groupId>
       <artifactId>seclume-core</artifactId>
       <version>${project.version}</version>
-    </dependency>
-    <!-- private_key_jwt: the client assertion, signed with a key off the heap -->
-    <dependency>
-      <groupId>space.seclume</groupId>
-      <artifactId>seclume-jwt</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <!-- Spring's RestClient and RestTemplate: optional, only the request
-         factory needs it. -->
-    <dependency>
-      <groupId>org.springframework</groupId>
-      <artifactId>spring-web</artifactId>
-      <version>${spring.version}</version>
-      <optional>true</optional>
     </dependency>
 
     <dependency>

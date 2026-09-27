@@ -163,6 +163,61 @@ class OAuthClientCredentialsTest {
     }
 
     @Test
+    void privateKeyJwtWithoutAnySecret() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                space.seclume.crypto.OpenSslSigningKey.available(), "no OpenSSL 3 here");
+        java.security.KeyStore store = java.security.KeyStore.getInstance("PKCS12");
+        try (java.io.InputStream in = Files.newInputStream(pki.keystore)) {
+            store.load(in, TestPki.STORE_PASSWORD.toCharArray());
+        }
+        java.security.Key key = store.getKey("server", TestPki.STORE_PASSWORD.toCharArray());
+        Path keyFile = Files.createTempFile("oauth", ".pem");
+        Path certFile = Files.createTempFile("oauth", ".crt");
+        try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
+             FakeHttpsServer api = api(tokens)) {
+            java.util.Base64.Encoder mime = java.util.Base64.getMimeEncoder(64, new byte[] {'\n'});
+            Files.writeString(keyFile, "-----BEGIN PRIVATE KEY-----\n"
+                    + mime.encodeToString(key.getEncoded()) + "\n-----END PRIVATE KEY-----\n");
+            Files.writeString(certFile, "-----BEGIN CERTIFICATE-----\n"
+                    + mime.encodeToString(pki.certificate.getEncoded())
+                    + "\n-----END CERTIFICATE-----\n");
+            String tokenUrl = "https://localhost:" + tokens.port() + "/tenant/oauth2/v2.0/token";
+            tokens.assertionKey = pki.certificate.getPublicKey();
+            tokens.audience = tokenUrl;
+            try (SeclumeHttp http = SeclumeHttp.of("https://localhost:" + api.port()
+                    + "/v1?auth=oauth2&tlsPin=" + pki.pin() + "&token-url=" + tokenUrl
+                    + "&token-tlsPin=" + pki.pin() + "&client-id=app-1"
+                    + "&client-auth=private_key_jwt&assertion-kid=k1&assertion-certificate="
+                    + certFile.toString().replace('\\', '/')
+                    + "&provider=file&path=" + keyFile.toString().replace('\\', '/'))) {
+                assertEquals("GET /v1/me", text(http.send("GET", "/me", Map.of(), null)));
+            }
+            assertEquals(List.of("private_key_jwt"), tokens.clientAuths);
+            String header = tokens.assertionHeaders.get(0);
+            assertTrue(header.contains("\"alg\":\"RS256\"") && header.contains("\"kid\":\"k1\"")
+                    && header.contains("\"x5t\":\"") && header.contains("\"x5t#S256\":\""),
+                    header);
+            assertTrue(api.received.stream().allMatch(FakeHttpsServer.Received::authorized));
+
+            // a key the endpoint does not know is refused, with its reason
+            tokens.assertionKey = java.security.KeyPairGenerator.getInstance("RSA")
+                    .generateKeyPair().getPublic();
+            try (SeclumeHttp http = SeclumeHttp.of("https://localhost:" + api.port()
+                    + "/v1?auth=oauth2&tlsPin=" + pki.pin() + "&token-url=" + tokenUrl
+                    + "&token-tlsPin=" + pki.pin() + "&client-id=app-1"
+                    + "&client-auth=private_key_jwt"
+                    + "&provider=file&path=" + keyFile.toString().replace('\\', '/'))) {
+                IOException refused = assertThrows(IOException.class,
+                        () -> http.send("GET", "/me", Map.of(), null));
+                assertTrue(refused.getMessage().contains("invalid_client"), refused.getMessage());
+            }
+        } finally {
+            Files.deleteIfExists(keyFile);
+            Files.deleteIfExists(certFile);
+        }
+    }
+
+    @Test
     void settingsRefusals() {
         String base = "https://api.example?auth=oauth2&provider=file&path=/x";
         assertThrows(IllegalArgumentException.class, () -> HttpSettings.of(base
@@ -174,5 +229,7 @@ class OAuthClientCredentialsTest {
         assertTrue(clear.getMessage().contains("https://"), clear.getMessage());
         assertThrows(IllegalArgumentException.class, () -> HttpSettings.of(base
                 + "&client-id=a&token-url=https://login.example/t&client-auth=jwt"));
+        assertThrows(IllegalArgumentException.class, () -> HttpSettings.of(base
+                + "&client-id=a&token-url=https://login.example/t&assertion-kid=k"));
     }
 }

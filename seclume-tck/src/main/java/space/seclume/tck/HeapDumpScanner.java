@@ -48,6 +48,26 @@ public final class HeapDumpScanner {
     private HeapDumpScanner() {
     }
 
+    /**
+     * Both searches for a secret that is bytes rather than text - a DER key, a
+     * raw key - as it is and in base64; an empty list means it is not in the dump.
+     */
+    public static List<Finding> scanBytes(Path dump, byte[] secret) throws IOException {
+        Map<String, byte[]> needles = new LinkedHashMap<>();
+        needles.put("bytes", secret);
+        needles.put("Base64", Base64.getEncoder().encode(secret)); // seclume-allow: the searcher builds the pattern it hunts for
+        List<Finding> findings = new ArrayList<>(raw(dump, needles));
+        HprofParser.forEachPrimitiveArray(dump, (objectId, type, data) -> {
+            if (findings.size() <= 50 && type == HprofParser.PrimitiveType.BYTE) {
+                for (Map.Entry<String, byte[]> needle : needles.entrySet()) {
+                    check(findings, data, needle.getValue(), "byte[] " + objectId,
+                            needle.getKey(), objectId);
+                }
+            }
+        });
+        return findings;
+    }
+
     /** Both searches; an empty list means the secret is not in the dump. */
     public static List<Finding> scan(Path dump, String secret) throws IOException {
         List<Finding> findings = new ArrayList<>();
@@ -58,10 +78,14 @@ public final class HeapDumpScanner {
 
     /** The raw scan over the whole file. */
     public static List<Finding> scanRaw(Path dump, String secret) throws IOException {
+        return raw(dump, needles(secret));
+    }
+
+    private static List<Finding> raw(Path dump, Map<String, byte[]> needles) throws IOException {
         List<Finding> findings = new ArrayList<>();
         try (FileChannel channel = FileChannel.open(dump, StandardOpenOption.READ)) {
             ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
-            for (Map.Entry<String, byte[]> needle : needles(secret).entrySet()) {
+            for (Map.Entry<String, byte[]> needle : needles.entrySet()) {
                 long position = indexOf(buffer, needle.getValue(), 0);
                 while (position >= 0) {
                     findings.add(new Finding("raw file", needle.getKey(), position,

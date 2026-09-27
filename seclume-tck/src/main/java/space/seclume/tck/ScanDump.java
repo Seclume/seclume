@@ -37,7 +37,24 @@ public final class ScanDump {
         Path secretFile = Path.of(arguments[1]);
         try {
             // The searcher holds the pattern it hunts for - and this process is
-            // not the one under examination.
+            // not the one under examination. A .bin or .der file is a secret of
+            // bytes, a key rather than a password, and is searched as bytes.
+            String name = secretFile.getFileName().toString();
+            if (name.endsWith(".bin") || name.endsWith(".der")) {
+                byte[] bytes = Files.readAllBytes(secretFile); // seclume-allow: the searcher needs its pattern
+                if (bytes.length < 8) {
+                    System.err.println(secretFile + " is too short to be searched for "
+                            + "meaningfully");
+                    System.exit(2);
+                    return;
+                }
+                List<HeapDumpScanner.Finding> findings = HeapDumpScanner.scanBytes(dump, bytes);
+                for (HeapDumpScanner.Finding finding : findings) {
+                    System.out.println(finding);
+                }
+                System.exit(findings.isEmpty() ? 0 : 1);
+                return;
+            }
             String secret = Files.readString(secretFile, StandardCharsets.UTF_8).strip(); // seclume-allow: the searcher needs its pattern
             if (secret.isEmpty()) {
                 System.err.println(secretFile + " is empty - a search for nothing always "

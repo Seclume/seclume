@@ -518,6 +518,14 @@ Entra ID sends), and at once when the API answers 401; the request is then sent 
 server than the API. A refusal from the token endpoint comes back with its `error` and
 `error_description`, for example `invalid_client: AADSTS7000215 ...`.
 
+**Without any client secret: `client-auth=private_key_jwt`** (RFC 7523). The application
+signs a short JWT with its private key instead: five minutes, for this token endpoint only,
+never twice (`jti`). The key is decoded and held by OpenSSL, never by the JVM (see
+[Signing keys](#signing-keys-jwt-and-webhooks)). `assertion-alg=` (RS256 by default; PS256,
+ES256 ...), `assertion-kid=`, and `assertion-certificate=` for the certificate whose
+thumbprints Entra ID wants in the header (`x5t`, `x5t#S256`). With it, the Entra ID app
+registration needs no client secret at all, so there is none to steal.
+
 **The credential stays with its origin.** It goes to the scheme, host and port of the URL and
 nowhere else. A request for another origin is refused rather than sent without it, redirects
 are not followed (a 3xx comes back as it is), and a request that sets the credential's header
@@ -540,6 +548,45 @@ all of them, for the access token that was issued, and for both Basic base64 for
 found, and the control (the token read into a `String` on purpose) is. The protocol (every
 way a body ends, connection reuse, the retry, the origin rule, a wrong certificate) is covered
 by `SeclumeHttpTest`, `SpringRestClientTest` and `OAuthClientCredentialsTest`.
+
+## Signing keys: JWT and webhooks
+
+`seclume-jwt` signs with a key that stays off the heap. A heap dump holding the key that
+signs the application's tokens lets anyone make a token for any user. A webhook secret lets
+them fake "payment succeeded".
+
+```java
+SeclumeJwt jwt = SeclumeJwt.of("HS256?kid=2026-09&provider=vault&...");
+String token = jwt.sign(Map.of("sub", "user-42", "exp", now + 900));
+String claims = jwt.verify(token);        // or InvalidTokenException, saying why
+
+SeclumeJwt rsa = SeclumeJwt.of("RS256?kid=app-1&provider=file&path=/run/secrets/key.pem");
+
+SeclumeHmac webhooks = SeclumeHmac.of("SHA256?provider=file&path=/run/secrets/whsec");
+webhooks.verifyGitHub(request.getHeader("X-Hub-Signature-256"), body);
+webhooks.verifyStripe(request.getHeader("Stripe-Signature"), body, Duration.ofMinutes(5));
+```
+
+- **HMAC** (HS256/384/512, and webhook signatures): the key is read from its provider for
+  each use, the HMAC is computed in native memory, and the key is wiped. A key shorter than
+  the hash is refused (RFC 7518 3.2).
+- **RSA and EC** (RS256/384/512, PS256/384/512, ES256/384/512): the PEM or DER key (PKCS#8,
+  PKCS#1 or SEC 1) is read into native memory and decoded there by OpenSSL's own decoder. From
+  then on it is an `EVP_PKEY` in OpenSSL's memory, and the JVM only ever sees signatures.
+  This needs OpenSSL 3 on 64-bit Linux; HMAC works everywhere.
+- **Verifying** tokens signed with this HMAC key takes the algorithm from the key, never from
+  the token (`alg: none` and a swapped algorithm are refused). It compares in constant time
+  and checks `exp` and `nbf` with a leeway (`leeway=`, 60 seconds by default). Tokens signed
+  with a private key are checked with the public key, which is no secret, so any JWT library
+  can do that.
+
+What is on the heap is public: the claims, the token, the signature. Shown by
+`NoKeyOnTheHeapTest`: the keys are made in a JVM of their own. This JVM signs and verifies
+HS256 tokens, signs RS256, PS256 and ES256 tokens, and checks a GitHub webhook. Then it
+searches its heap dump for the HMAC key, the webhook secret, both PEMs, both DER encodings
+and the RSA private exponent: none is found. The controls, the HMAC key as a `String` and
+the EC key's DER as a `byte[]` put on the heap on purpose, are found. `SeclumeJwtTest` and
+`SeclumeHmacTest` check every signature against the JDK's own `Mac` and `Signature`.
 
 ## GraalVM native image
 

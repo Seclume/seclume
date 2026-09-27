@@ -38,6 +38,11 @@ final class FakeTokenServer implements AutoCloseable {
     boolean chunked;
     String tokenType = "Bearer";
 
+    /** For private_key_jwt: the key that checks the client assertion, and the audience. */
+    java.security.PublicKey assertionKey;
+    String audience;
+    final List<String> assertionHeaders = new CopyOnWriteArrayList<>();
+
     // what it did
     final Set<String> valid = ConcurrentHashMap.newKeySet();
     final List<Map<String, String>> grants = new CopyOnWriteArrayList<>();
@@ -106,6 +111,11 @@ final class FakeTokenServer implements AutoCloseable {
                 id = URLDecoder.decode(decoded.substring(0, colon), StandardCharsets.UTF_8);
                 secret = URLDecoder.decode(decoded.substring(colon + 1), StandardCharsets.UTF_8);
                 clientAuths.add("basic");
+            } else if (form.containsKey("client_assertion")) {
+                id = assertion(form.remove("client_assertion"),
+                        form.get("client_assertion_type"));
+                secret = id == null ? null : clientSecret;
+                clientAuths.add("private_key_jwt");
             } else {
                 id = form.get("client_id");
                 secret = form.remove("client_secret");
@@ -129,6 +139,37 @@ final class FakeTokenServer implements AutoCloseable {
                     + ",\"ext_expires_in\":3600,\"access_token\":\"" + token + "\"}");
         } catch (IOException | RuntimeException ignored) {
             // the test asserts on what was recorded
+        }
+    }
+
+    /** The client id the assertion is for, when it checks out; null otherwise. */
+    private String assertion(String jwt, String type) {
+        try {
+            if (!"urn:ietf:params:oauth:client-assertion-type:jwt-bearer".equals(type)) {
+                return null;
+            }
+            String[] parts = jwt.split("\\.");
+            java.security.Signature check = java.security.Signature.getInstance("SHA256withRSA");
+            check.initVerify(assertionKey);
+            check.update((parts[0] + "." + parts[1]).getBytes(StandardCharsets.US_ASCII));
+            if (!check.verify(Base64.getUrlDecoder().decode(parts[2]))) {
+                return null;
+            }
+            assertionHeaders.add(new String(Base64.getUrlDecoder().decode(parts[0]),
+                    StandardCharsets.UTF_8));
+            String claims = new String(Base64.getUrlDecoder().decode(parts[1]),
+                    StandardCharsets.UTF_8);
+            long now = System.currentTimeMillis() / 1000;
+            java.util.regex.Matcher exp = java.util.regex.Pattern.compile("\"exp\":(\\d+)")
+                    .matcher(claims);
+            boolean ok = claims.contains("\"iss\":\"" + clientId + "\"")
+                    && claims.contains("\"sub\":\"" + clientId + "\"")
+                    && claims.contains("\"aud\":\"" + audience + "\"")
+                    && claims.contains("\"jti\":\"")
+                    && exp.find() && Long.parseLong(exp.group(1)) > now;
+            return ok ? clientId : null;
+        } catch (java.security.GeneralSecurityException | RuntimeException e) {
+            return null;
         }
     }
 
