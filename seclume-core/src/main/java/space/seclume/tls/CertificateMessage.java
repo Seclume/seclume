@@ -59,24 +59,6 @@ public final class CertificateMessage {
     }
 
     /**
-     * Writes the client's own {@code Certificate} message, header and all.
-     *
-     * <p>Sent whenever the server asked, <b>including when there is nothing
-     * to send</b>: RFC 8446 requires a Certificate message in answer to a
-     * CertificateRequest, and an empty certificate list is how a client says
-     * "I have none". Staying silent instead would hang the handshake, and
-     * failing instead would take the decision away from the server, which may
-     * well be configured to accept an anonymous client.
-     *
-     * <p>The request context is echoed back exactly as it arrived. It is empty
-     * for a certificate requested during the handshake and non-empty only for
-     * post-handshake authentication, which this client does not do - but
-     * echoing whatever came is both cheaper and more correct than assuming.
-     *
-     * @param chain DER certificates, leaf first; may be empty
-     * @return how many bytes of {@code out} were written
-     */
-    /**
      * The server's Certificate message, checked field by field before it is
      * read: an empty request context (TLS 1.3 servers answer none), a list
      * that fills the message exactly, entries that fill the list exactly,
@@ -125,6 +107,24 @@ public final class CertificateMessage {
         }
     }
 
+    /**
+     * Writes the client's own {@code Certificate} message, header and all.
+     *
+     * <p>Sent whenever the server asked, <b>including when there is nothing
+     * to send</b>: RFC 8446 requires a Certificate message in answer to a
+     * CertificateRequest, and an empty certificate list is how a client says
+     * "I have none". Staying silent instead would hang the handshake, and
+     * failing instead would take the decision away from the server, which may
+     * well be configured to accept an anonymous client.
+     *
+     * <p>The request context is echoed back exactly as it arrived. It is empty
+     * for a certificate requested during the handshake and non-empty only for
+     * post-handshake authentication, which this client does not do - but
+     * echoing whatever came is both cheaper and more correct than assuming.
+     *
+     * @param chain DER certificates, leaf first; may be empty
+     * @return how many bytes of {@code out} were written
+     */
     public static int write(MemorySegment out, byte[] context, java.util.List<byte[]> chain) {
         long at = Handshake.HEADER;
         out.set(ValueLayout.JAVA_BYTE, at++, (byte) context.length);
