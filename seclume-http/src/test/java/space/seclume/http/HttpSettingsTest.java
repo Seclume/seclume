@@ -40,7 +40,7 @@ class HttpSettingsTest {
                 "https://api.example.com?auth=basic&user=a:b" + SECRET));
         assertMessage("control", () -> HttpSettings.of(
                 "https://api.example.com?auth=header&header=X-Key&prefix=a%0D%0Ab" + SECRET));
-        assertMessage("bearer, basic, header or oauth2",
+        assertMessage("bearer, basic, header, oauth2 or jwt",
                 () -> HttpSettings.of("https://api.example.com?auth=digest" + SECRET));
         assertMessage("timeout",
                 () -> HttpSettings.of("https://api.example.com?timeout=-1" + SECRET));

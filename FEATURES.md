@@ -526,6 +526,21 @@ ES256 ...), `assertion-kid=`, and `assertion-certificate=` for the certificate w
 SHA-256 thumbprint goes into the header as `x5t#S256` (the SHA-1 `x5t` is not sent). With it, the Entra ID app
 registration needs no client secret at all, so there is none to steal.
 
+**A JWT the client signs itself: `auth=jwt`.** GitHub Apps, Google service accounts, Apple,
+Zoom and many service meshes take no secret at all. They take a short JWT signed with the
+caller's private key:
+
+```properties
+seclume.http.clients.github.url=https://api.github.com?auth=jwt&jwt-alg=RS256\
+  &jwt-iss=<app id>&jwt-ttl=540&provider=file&path=/run/secrets/github-app.pem
+```
+
+The client signs it with the key OpenSSL holds (or with an HMAC key read per use, for HS256)
+and sends it as the bearer token. It reuses the token until shortly before it expires, and
+signs it afresh after a 401. `jwt-sub=`, `jwt-aud=` and `jwt-kid=` are added when given, and
+`iat` is set a minute back for clocks that disagree. The token is a credential while it lasts
+and is on the heap as the string it is sent as. The key that makes it is not.
+
 **The credential stays with its origin.** It goes to the scheme, host and port of the URL and
 nowhere else. A request for another origin is refused rather than sent without it, redirects
 are not followed (a 3xx comes back as it is), and a request that sets the credential's header

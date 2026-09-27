@@ -43,7 +43,7 @@ import space.seclume.secret.SecretProviders;
 final class HttpSettings {
 
     /** How the secret goes into the request. */
-    enum Auth { BEARER, BASIC, HEADER, OAUTH2 }
+    enum Auth { BEARER, BASIC, HEADER, OAUTH2, JWT }
 
     /** A server to connect to: where, whose certificate, and how long to wait. */
     record Endpoint(String host, int port, TrustChoice.Choice trust, int connectTimeout,
@@ -64,11 +64,12 @@ final class HttpSettings {
     final long idleTimeoutMillis;
     final SecretProvider secret;
     final OAuthSettings oauth;
+    final JwtSettings jwt;
 
     private HttpSettings(String host, int port, String basePath, Auth auth, String user,
                          String headerName, String prefix, TrustChoice.Choice trust,
                          int connectTimeout, int timeout, int maxIdle, long idleTimeoutMillis,
-                         SecretProvider secret, OAuthSettings oauth) {
+                         SecretProvider secret, OAuthSettings oauth, JwtSettings jwt) {
         this.host = host;
         this.port = port;
         this.basePath = basePath;
@@ -83,6 +84,7 @@ final class HttpSettings {
         this.idleTimeoutMillis = idleTimeoutMillis;
         this.secret = secret;
         this.oauth = oauth;
+        this.jwt = jwt;
     }
 
     /** The API's server. */
@@ -132,8 +134,9 @@ final class HttpSettings {
             case "basic" -> Auth.BASIC;
             case "header" -> Auth.HEADER;
             case "oauth2" -> Auth.OAUTH2;
+            case "jwt" -> Auth.JWT;
             default -> throw new IllegalArgumentException(
-                    "auth is bearer, basic, header or oauth2, not '" + authName + "'");
+                    "auth is bearer, basic, header, oauth2 or jwt, not '" + authName + "'");
         };
         switch (auth) {
             case BASIC -> {
@@ -147,7 +150,7 @@ final class HttpSettings {
                 headerName = "Authorization";
                 prefix = "Basic ";
             }
-            case BEARER, OAUTH2 -> {
+            case BEARER, OAUTH2, JWT -> {
                 if (headerName != null) {
                     throw new IllegalArgumentException("header= belongs to auth=header; "
                             + "bearer is always Authorization");
@@ -193,6 +196,7 @@ final class HttpSettings {
         }
         OAuthSettings oauth = auth == Auth.OAUTH2
                 ? OAuthSettings.take(options, connectTimeout, timeout) : null;
+        JwtSettings jwt = auth == Auth.JWT ? JwtSettings.take(options) : null;
         SecretProvider secret = SecretProviders.of(options);
 
         String path = uri.getRawPath() == null ? "" : uri.getRawPath();
@@ -201,7 +205,7 @@ final class HttpSettings {
         }
         return new HttpSettings(uri.getHost(), uri.getPort() >= 0 ? uri.getPort() : 443, path,
                 auth, user, headerName, prefix, trust, connectTimeout, timeout, maxIdle,
-                idleTimeout, secret, oauth);
+                idleTimeout, secret, oauth, jwt);
     }
 
     /** {@code host} or {@code host:port} - what goes into the Host header. */
