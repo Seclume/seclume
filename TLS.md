@@ -60,12 +60,14 @@ jdbc:seclume:postgresql://db:5432/app?tls=require&tlsStack=seclume
 
 Every mode above works on either stack, so this is a capability setting, not a security one.
 The own stack gives up resumption, TLS 1.2 and every key exchange group but two. It offers P-256
-and, where OpenSSL 3.5 or later is there (64-bit Linux), the post-quantum hybrid
-**X25519MLKEM768** beside it, against traffic recorded now and decrypted later. A server without
-the hybrid picks P-256 at once, and `-Dseclume.tls.postQuantum=false` switches the hybrid off.
-A CI job proves the hybrid end to end against OpenSSL 3.5's `s_server` (`HybridHandshakeTest`).
-Only the key exchange is post-quantum; certificates and signatures are classical, as everywhere
-in TLS today. In return
+and, where the operating system has ML-KEM, the post-quantum hybrid
+**X25519MLKEM768** beside it: OpenSSL 3.5 or later on 64-bit Linux, CNG on Windows 11 with
+the post-quantum update (tested on build 26200.9457), against traffic recorded now and decrypted
+later. A server without the hybrid picks P-256 at once, and `-Dseclume.tls.postQuantum=false`
+switches the hybrid off. A CI job proves the hybrid end to end against OpenSSL 3.5's `s_server`
+(`HybridHandshakeTest`); the CNG path is checked against the JDK's own ML-KEM and X25519
+(`HybridMlKemTest`). Only the key exchange is post-quantum; certificates and signatures are
+classical, as everywhere in TLS today. In return
 it gains two things JSSE cannot offer at any price: **the traffic secrets never become Java
 objects**, and the encryption state can be frozen and taken up elsewhere, which is what a
 connection that survives moving host needs. The safe, boring one stays the default.

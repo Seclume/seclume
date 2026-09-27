@@ -21,11 +21,12 @@ import space.seclume.internal.Platform;
  * hold as long as either of the two does - against "harvest now, decrypt
  * later", where recorded traffic waits for a quantum computer.
  *
- * <p>Through OpenSSL 3.5 or later, like P-256: the private keys belong to
- * OpenSSL and never become Java objects, and the shared secret is written into
- * the caller's native memory. Where OpenSSL 3.5 is not there - Windows, an
- * older Linux - {@link #available()} says so, and the client offers P-256
- * alone as before.
+ * <p>Through the operating system, like P-256: OpenSSL 3.5 or later on Linux,
+ * CNG on Windows 11 with the post-quantum update ({@link CngMlKem}). The
+ * private keys belong to the library and never become Java objects, and the
+ * shared secret is written into the caller's native memory. Where neither is
+ * there - an older Windows or Linux - {@link #available()} says so, and the
+ * client offers P-256 alone as before.
  *
  * <p>The layout follows the IETF definition: the client's share is the ML-KEM
  * encapsulation key (1184 bytes) followed by the X25519 public key (32); the
@@ -40,41 +41,51 @@ public final class HybridMlKem implements AutoCloseable {
     public static final int SERVER_SHARE = 1088 + 32;
     public static final int SECRET = 64;
 
-    private static final int ML_KEM_KEY = 1184;
-    private static final int ML_KEM_CIPHERTEXT = 1088;
+    static final int ML_KEM_KEY = 1184;
+    static final int ML_KEM_CIPHERTEXT = 1088;
     private static final int X25519 = 32;
 
-    private MemorySegment mlKem;
-    private MemorySegment x25519;
+    /** Both private keys, held by one native library. */
+    interface Keys extends AutoCloseable {
+        /** {@link #CLIENT_SHARE} bytes. */
+        void publicShare(MemorySegment out);
 
-    private HybridMlKem(MemorySegment mlKem, MemorySegment x25519) {
-        this.mlKem = mlKem;
-        this.x25519 = x25519;
+        /** {@link #SECRET} bytes from a share already checked for its length. */
+        void derive(MemorySegment serverShare, MemorySegment out);
+
+        @Override
+        void close();
     }
 
-    /** Whether this platform has what it takes: 64-bit Linux with OpenSSL 3.5 or later. */
+    private final Keys keys;
+
+    private HybridMlKem(Keys keys) {
+        this.keys = keys;
+    }
+
+    /**
+     * Whether this platform has what it takes: 64-bit Linux with OpenSSL 3.5
+     * or later, or Windows with ML-KEM in CNG.
+     */
     public static boolean available() {
-        return Native.AVAILABLE;
+        return Native.AVAILABLE || CngMlKem.AVAILABLE;
     }
 
     /** A fresh pair of both keys. */
     public static HybridMlKem generate() {
-        if (!available()) {
-            throw new IllegalStateException("X25519MLKEM768 needs OpenSSL 3.5 on 64-bit Linux");
+        if (Native.AVAILABLE) {
+            return new HybridMlKem(OpenSslKeys.generate());
         }
-        MemorySegment kem = Native.generate("ML-KEM-768");
-        try {
-            return new HybridMlKem(kem, Native.generate("X25519"));
-        } catch (RuntimeException | Error e) {
-            Native.free(kem);
-            throw e;
+        if (CngMlKem.AVAILABLE) {
+            return new HybridMlKem(new CngMlKem());
         }
+        throw new IllegalStateException("X25519MLKEM768 needs OpenSSL 3.5 on 64-bit Linux "
+                + "or ML-KEM in Windows CNG");
     }
 
     /** The client's key share, {@link #CLIENT_SHARE} bytes. */
     public void publicShare(MemorySegment out) {
-        Native.rawPublic(mlKem, out.asSlice(0, ML_KEM_KEY), ML_KEM_KEY);
-        Native.rawPublic(x25519, out.asSlice(ML_KEM_KEY, X25519), X25519);
+        keys.publicShare(out);
     }
 
     /**
@@ -86,18 +97,55 @@ public final class HybridMlKem implements AutoCloseable {
             throw new IllegalArgumentException("an X25519MLKEM768 server share is "
                     + SERVER_SHARE + " bytes, not " + serverShare.byteSize());
         }
-        Native.decapsulate(mlKem, serverShare.asSlice(0, ML_KEM_CIPHERTEXT), out.asSlice(0, 32));
-        Native.x25519(x25519, serverShare.asSlice(ML_KEM_CIPHERTEXT, X25519), out.asSlice(32, 32));
+        keys.derive(serverShare, out);
     }
 
     @Override
     public void close() {
-        MemorySegment kem = mlKem;
-        MemorySegment ecdh = x25519;
-        mlKem = NULL;
-        x25519 = NULL;
-        Native.free(kem);
-        Native.free(ecdh);
+        keys.close();
+    }
+
+    /** The two keys as OpenSSL EVP_PKEYs. */
+    private static final class OpenSslKeys implements Keys {
+        private MemorySegment mlKem;
+        private MemorySegment x25519;
+
+        private OpenSslKeys(MemorySegment mlKem, MemorySegment x25519) {
+            this.mlKem = mlKem;
+            this.x25519 = x25519;
+        }
+
+        static OpenSslKeys generate() {
+            MemorySegment kem = Native.generate("ML-KEM-768");
+            try {
+                return new OpenSslKeys(kem, Native.generate("X25519"));
+            } catch (RuntimeException | Error e) {
+                Native.free(kem);
+                throw e;
+            }
+        }
+
+        @Override
+        public void publicShare(MemorySegment out) {
+            Native.rawPublic(mlKem, out.asSlice(0, ML_KEM_KEY), ML_KEM_KEY);
+            Native.rawPublic(x25519, out.asSlice(ML_KEM_KEY, X25519), X25519);
+        }
+
+        @Override
+        public void derive(MemorySegment serverShare, MemorySegment out) {
+            Native.decapsulate(mlKem, serverShare.asSlice(0, ML_KEM_CIPHERTEXT), out.asSlice(0, 32));
+            Native.x25519(x25519, serverShare.asSlice(ML_KEM_CIPHERTEXT, X25519), out.asSlice(32, 32));
+        }
+
+        @Override
+        public void close() {
+            MemorySegment kem = mlKem;
+            MemorySegment ecdh = x25519;
+            mlKem = NULL;
+            x25519 = NULL;
+            Native.free(kem);
+            Native.free(ecdh);
+        }
     }
 
     /** OpenSSL 3.5 downcalls, loaded only where they can be. */
