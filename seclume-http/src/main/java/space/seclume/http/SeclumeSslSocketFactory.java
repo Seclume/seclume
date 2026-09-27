@@ -153,7 +153,8 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
 
     @Override
     public Socket createSocket(String host, int port) throws IOException {
-        Socket plain = new Socket();
+        // TCP only: seclume's TLS runs over it before a byte is written - see over().
+        Socket plain = new Socket(); // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         plain.connect(new InetSocketAddress(host, port), connectTimeout);
         return CredentialSocket.over(plain, host, port, trust, http2);
     }
