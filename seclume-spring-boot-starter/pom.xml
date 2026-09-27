@@ -77,6 +77,14 @@
       <version>${spring.boot.version}</version>
       <optional>true</optional>
     </dependency>
+    <!-- Boot 4.1.1 brings Tomcat 11.0.24, which has known critical
+         vulnerabilities (CVE-2026-65182, -65905, -68525); 11.0.26 fixes them. -->
+    <dependency>
+      <groupId>org.apache.tomcat.embed</groupId>
+      <artifactId>tomcat-embed-core</artifactId>
+      <version>11.0.26</version>
+      <optional>true</optional>
+    </dependency>
 
     <!-- AWS, optional: seclume.aws.* turns into customizers that Spring Cloud
          AWS applies to every client it makes. -->

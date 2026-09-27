@@ -52,7 +52,7 @@ public final class SeclumeTomcat {
         X509ExtendedKeyManager manager = SeclumeKeys.keyManager(chain, keySpec);
         javax.net.ssl.SSLContext context;
         try {
-            context = javax.net.ssl.SSLContext.getInstance("TLS");
+            context = javax.net.ssl.SSLContext.getInstance("TLSv1.3");
             context.init(new KeyManager[] {manager}, null, null);
         } catch (java.security.GeneralSecurityException e) {
             throw new IllegalStateException("the TLS context could not be made", e);

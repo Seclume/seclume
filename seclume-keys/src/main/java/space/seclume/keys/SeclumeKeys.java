@@ -106,7 +106,7 @@ public final class SeclumeKeys {
      */
     public static SSLContext sslContext(Path chain, String keySpec) {
         try {
-            SSLContext context = SSLContext.getInstance("TLS");
+            SSLContext context = SSLContext.getInstance("TLSv1.3");
             context.init(new KeyManager[] {keyManager(chain, keySpec)}, null, null);
             return context;
         } catch (GeneralSecurityException e) {

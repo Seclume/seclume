@@ -50,7 +50,7 @@ class TomcatTest {
                     response.getWriter().write("secure=" + request.isSecure());
                 }
             });
-            context.addServletMappingDecoded("/", "hello");
+            context.addServletMapping("/", "hello");
             tomcat.start();
             try {
                 SSLContext trust = SSLContext.getInstance("TLS");

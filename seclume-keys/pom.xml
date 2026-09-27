@@ -19,7 +19,7 @@
     Netty, any SSLContext), a client certificate, and SSH.</description>
 
   <properties>
-    <tomcat.version>11.0.24</tomcat.version>
+    <tomcat.version>11.0.26</tomcat.version>
   </properties>
 
   <dependencies>
