@@ -55,7 +55,7 @@ final class LdapServer implements AutoCloseable {
                 "LDIF");
         Path file = directory.resolve("prepare.sh");
         java.nio.file.Files.writeString(file, script + "\n");
-        Process prepare = new ProcessBuilder("sh", file.toString()).redirectErrorStream(true)
+        Process prepare = new ProcessBuilder("/bin/sh", file.toString()).redirectErrorStream(true)
                 .start();
         String output = new String(prepare.getInputStream().readAllBytes());
         if (!prepare.waitFor(60, TimeUnit.SECONDS) || prepare.exitValue() != 0) {

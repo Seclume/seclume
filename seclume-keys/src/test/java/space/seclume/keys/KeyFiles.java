@@ -37,7 +37,7 @@ record KeyFiles(Path directory, Path key, Path certificate, Path der, Path secre
                 "test -s secret.bin");
         Path file = directory.resolve("make-key.sh");
         Files.writeString(file, script);
-        Process process = new ProcessBuilder("sh", file.toString()).redirectErrorStream(true)
+        Process process = new ProcessBuilder("/bin/sh", file.toString()).redirectErrorStream(true)
                 .start();
         String output = new String(process.getInputStream().readAllBytes());
         if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) {

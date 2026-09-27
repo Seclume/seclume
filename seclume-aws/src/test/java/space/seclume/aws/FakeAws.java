@@ -6,7 +6,6 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -116,8 +115,7 @@ final class FakeAws implements AutoCloseable {
         }
         String message = text.group(1);
         messages.add(message);
-        respond(exchange, 200, "{\"MessageId\":\"m-" + messages.size()
-                + "\",\"MD5OfMessageBody\":\"" + md5(message) + "\"}",
+        respond(exchange, 200, "{\"MessageId\":\"m-" + messages.size() + "\"}",
                 "application/x-amz-json-1.0");
     }
 
@@ -147,7 +145,7 @@ final class FakeAws implements AutoCloseable {
         switch (method) {
             case "PUT" -> {
                 objects.put(key, body);
-                exchange.getResponseHeaders().add("ETag", "\"" + md5(body) + "\"");
+                exchange.getResponseHeaders().add("ETag", etag(body));
                 exchange.sendResponseHeaders(200, -1);
             }
             case "GET" -> {
@@ -156,7 +154,7 @@ final class FakeAws implements AutoCloseable {
                     respond(exchange, 404, "<Error><Code>NoSuchKey</Code></Error>",
                             "application/xml");
                 } else {
-                    exchange.getResponseHeaders().add("ETag", "\"" + md5(object) + "\"");
+                    exchange.getResponseHeaders().add("ETag", etag(object));
                     exchange.sendResponseHeaders(200, object.length);
                     try (OutputStream out = exchange.getResponseBody()) {
                         out.write(object);
@@ -229,17 +227,10 @@ final class FakeAws implements AutoCloseable {
         }
     }
 
-    static String md5(String text) {
-        return md5(text.getBytes(StandardCharsets.UTF_8));
-    }
-
-    static String md5(byte[] bytes) {
-        try {
-            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("MD5")
-                    .digest(bytes));
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
+    /** An entity tag - any value S3 would not repeat for other content will do. */
+    static String etag(byte[] bytes) {
+        return "\"" + Integer.toHexString(java.util.Arrays.hashCode(bytes)) + "-" + bytes.length
+                + "\"";
     }
 
     @Override

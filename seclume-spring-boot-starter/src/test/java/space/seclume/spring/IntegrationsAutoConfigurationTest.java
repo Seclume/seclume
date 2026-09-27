@@ -117,7 +117,7 @@ class IntegrationsAutoConfigurationTest {
         Path script = directory.resolve("key.sh");
         Files.writeString(script, "cd '" + directory + "' && openssl genpkey -algorithm EC "
                 + "-pkeyopt ec_paramgen_curve:P-256 -out id_ecdsa 2>/dev/null\n");
-        Process process = new ProcessBuilder("sh", script.toString()).start();
+        Process process = new ProcessBuilder("/bin/sh", script.toString()).start();
         assertTrue(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0);
         try (AnnotationConfigApplicationContext context = context(
                 SeclumeSshAutoConfiguration.class,

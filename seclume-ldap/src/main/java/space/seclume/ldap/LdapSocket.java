@@ -171,12 +171,13 @@ final class LdapSocket extends Socket {
         if (count == 0 || count > 4) {
             throw new IOException("an LDAP message with a BER length JNDI does not write");
         }
-        if (b.length - at < 2 + count) {
-            return null;
-        }
         long length = 0;
         for (int i = 0; i < count; i++) {
-            length = (length << 8) | (b[at + 2 + i] & 0xff);
+            int index = at + 2 + i;
+            if (index >= b.length) {
+                return null;                           // the length is not all here yet
+            }
+            length = (length << 8) | (b[index] & 0xff);
         }
         return new long[] {2 + count, length};
     }

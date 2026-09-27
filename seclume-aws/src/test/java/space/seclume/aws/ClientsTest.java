@@ -66,7 +66,9 @@ class ClientsTest {
                              .tlsTrustManagersProvider(tls::trustManagers).build())
                      .build()) {
             byte[] large = new byte[3 * 1024 * 1024 + 17];
-            new java.util.Random(7).nextBytes(large);
+            for (int i = 0; i < large.length; i++) {
+                large[i] = (byte) (i * 31 + (i >>> 7));
+            }
             s3.putObject(b -> b.bucket("b").key("large.bin"), RequestBody.fromBytes(large));
             s3.putObject(b -> b.bucket("b").key("small.txt"), RequestBody.fromString("small"));
             assertTrue(java.util.Arrays.equals(large, s3.getObjectAsBytes(
@@ -86,7 +88,7 @@ class ClientsTest {
                     + "rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2 -subj /CN=localhost"
                     + " -addext subjectAltName=DNS:localhost 2>/dev/null && openssl pkcs12 "
                     + "-export -in cert.pem -inkey key.pem -out store.p12 -passout pass:store\n");
-            Process process = new ProcessBuilder("sh", script.toString()).start();
+            Process process = new ProcessBuilder("/bin/sh", script.toString()).start();
             assertEquals(0, process.waitFor());
             java.security.KeyStore store = java.security.KeyStore.getInstance("PKCS12");
             try (var in = Files.newInputStream(directory.resolve("store.p12"))) {
@@ -110,7 +112,7 @@ class ClientsTest {
         try (FakeAws aws = new FakeAws(() -> read(key));
              SqsClient sqs = SeclumeAws.configure(SqsClient.builder(),
                      SecretKeyFile.spec("AKIAEXAMPLE", key))
-                     .endpointOverride(aws.endpoint()).build()) {
+                     .endpointOverride(aws.endpoint()).checksumValidationEnabled(false).build()) {
             String id = sqs.sendMessage(b -> b.queueUrl(aws.endpoint() + "/123/orders")
                     .messageBody("order 42")).messageId();
             assertEquals("m-1", id);
@@ -126,7 +128,7 @@ class ClientsTest {
              software.amazon.awssdk.services.sqs.SqsAsyncClient sqs = SeclumeAws.configure(
                      software.amazon.awssdk.services.sqs.SqsAsyncClient.builder(),
                      SecretKeyFile.spec("AKIAEXAMPLE", key))
-                     .endpointOverride(aws.endpoint()).build()) {
+                     .endpointOverride(aws.endpoint()).checksumValidationEnabled(false).build()) {
             sqs.sendMessage(b -> b.queueUrl(aws.endpoint() + "/123/orders")
                     .messageBody("async order")).get();
             assertEquals(List.of("async order"), aws.messages);
