@@ -29,5 +29,11 @@ Services at https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem,
 so that tlsRootCert=aws-rds can verify RDS servers. The certificates are public
 trust anchors and are redistributed unchanged.
 
+Test data: seclume-core/src/test/resources/wycheproof carries test vectors from
+Project Wycheproof (https://github.com/C2SP/wycheproof), Copyright Google LLC
+and the Wycheproof authors, licensed under the Apache License, Version 2.0.
+They are used by the tests only, redistributed unchanged, and not part of any
+published artifact.
+
 Test and build tooling (JUnit, Spring Boot, Flyway, Maven plugins) is declared
 in the POMs and carries its own licences; none of it is redistributed here.

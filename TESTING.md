@@ -18,6 +18,14 @@ The cryptography against the published vectors, the wire protocols against known
 pool mechanics, the heap-dump proof with its negative control, and the rule that no forbidden
 API call slips into production code. That is most of the suite.
 
+The published vectors come from two directions. The RFC vectors and the comparisons with the
+JDK show that each primitive computes what it should. Project Wycheproof's cases
+(`space.seclume.crypto.WycheproofTest`, about 1,800 of them) show that it refuses what it should: a
+tag altered by one bit, an HKDF output one byte past its limit, a P-256 peer point that is not
+on the curve. They were written by people collecting the bugs other libraries had, which is a
+list no one writes about their own code. The files and the commit they come from are in
+`seclume-core/src/test/resources/wycheproof`.
+
 ## The wipe, and the paths where it gets lost
 
 The heap-dump proof covers a login that works. Wipes are not usually lost there - they are

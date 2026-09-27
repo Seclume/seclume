@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Tests: Project Wycheproof
+
+The cryptography seclume implements itself now also runs against Project Wycheproof's test
+vectors: AES-GCM (in Java and through OpenSSL or CNG), HMAC, HKDF and PBKDF2 with SHA-1/256/384/512,
+and P-256 key agreement with invalid, twisted and malformed peer points. About 1,800 cases,
+counted so a skip cannot grow unnoticed. See [TESTING.md](TESTING.md).
+
 ### Private keys off the heap: `seclume-keys`, `seclume-ssh`
 
 RSA and EC private keys are decoded by OpenSSL from native memory and kept there. A JCA
