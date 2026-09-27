@@ -232,4 +232,25 @@ class OAuthClientCredentialsTest {
         assertThrows(IllegalArgumentException.class, () -> HttpSettings.of(base
                 + "&client-id=a&token-url=https://login.example/t&assertion-kid=k"));
     }
+
+    /**
+     * A chunk size near 2^31: {@code at + size} wrapped in int and slipped
+     * past the size check (audit, 27.09.2026). It has to be refused as too large.
+     */
+    @Test
+    void aChunkSizeThatWouldOverflowIsRefused() throws Exception {
+        try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
+             FakeHttpsServer api = api(tokens);
+             SeclumeHttp http = SeclumeHttp.of(url(api, tokens, ""))) {
+            tokens.rawChunkedBody = "1\r\n{\r\n7fffffff\r\n\r\n0\r\n\r\n";
+            Exception refused = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                    () -> http.send("GET", "/", Map.of(), null));
+            StringBuilder chain = new StringBuilder();
+            for (Throwable t = refused; t != null; t = t.getCause()) {
+                chain.append(t.getMessage()).append(" / ");
+            }
+            org.junit.jupiter.api.Assertions.assertTrue(chain.toString().contains("larger than"),
+                    chain.toString());
+        }
+    }
 }

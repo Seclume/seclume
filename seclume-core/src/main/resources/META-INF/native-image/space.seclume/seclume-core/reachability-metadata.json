@@ -343,6 +343,10 @@
       {
         "returnType": "void*",
         "parameterTypes": []
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": []
       }
     ]
   },

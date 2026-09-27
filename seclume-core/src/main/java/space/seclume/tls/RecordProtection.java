@@ -266,9 +266,31 @@ public final class RecordProtection implements AutoCloseable {
         return content;
     }
 
+    /**
+     * Destroys the key and wipes the traffic secret, the IV and the content
+     * buffer before their memory goes back to the allocator.
+     *
+     * <p>Releasing native memory does not erase it. Without the wipe the
+     * traffic secret of every connection that was ever closed - and of every
+     * key replaced by a KeyUpdate - stayed readable in freed memory until the
+     * allocator happened to reuse it: enough to decrypt a recording of that
+     * session, from a core file or a checkpoint image.
+     */
     @Override
     public void close() {
-        key.close();
-        arena.close();
+        if (!arena.scope().isAlive()) {
+            return;
+        }
+        try {
+            key.close();
+        } finally {
+            secret.fill((byte) 0);
+            iv.fill((byte) 0);
+            nonce.fill((byte) 0);
+            if (content != null) {
+                content.fill((byte) 0);
+            }
+            arena.close();
+        }
     }
 }

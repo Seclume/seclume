@@ -79,6 +79,9 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     private final int maxLength;
     private final Clock clock;
 
+    /** Ten years. See {@link #refresh}. */
+    static final long MAX_LEASE_SECONDS = 10L * 366 * 24 * 3600;
+
     /** The credential in hand, or {@code null} before the first fetch. */
     private SecretScope cached;
     private Instant fetchedAt;
@@ -123,6 +126,20 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
         this.token = token;
         this.maxLength = maxLength;
         this.clock = clock;
+        space.seclume.internal.Checkpoint.register(this, VaultSecretProvider::forgetCached);
+    }
+
+    /**
+     * Wipes the cached credential; the next read fetches it again. Called
+     * before a checkpoint, so that the image does not carry it.
+     */
+    private synchronized void forgetCached() {
+        if (cached != null) {
+            SecretScope wiped = cached;
+            cached = null;
+            validUntil = null;
+            wiped.close();
+        }
     }
 
     @Override
@@ -183,7 +200,13 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
             }
             answer.length(response.bodyLength());
 
-            SecretScope fresh = SecretScope.allocate(maxLength);
+            // Shared, not confined: the credential is fetched on whichever
+            // thread happens to log in first - often the pool's housekeeper -
+            // and read and closed by others. In a confined arena every read
+            // from another thread threw WrongThreadException, and so did the
+            // wipe in close(): the credential stayed in native memory, unwiped,
+            // until the process ended.
+            SecretScope fresh = SecretScope.allocateShared(maxLength);
             try {
                 int length = extract(answer, fresh.segment());
                 fresh.length(length);
@@ -191,6 +214,11 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 long lease = JsonOff.has(answer.segment(), answer.length(), "lease_duration")
                         ? JsonOff.number(answer.segment(), answer.length(), "lease_duration")
                         : 0;
+                // A lease longer than this is not one Vault hands out (its
+                // max_ttl defaults to 32 days); taken at face value, it made
+                // the refresh arithmetic overflow on every later read. Shorter
+                // is the safe direction: the credential is only fetched sooner.
+                lease = Math.min(lease, MAX_LEASE_SECONDS);
 
                 SecretScope previous = cached;
                 cached = fresh;
@@ -199,7 +227,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 if (previous != null) {
                     previous.close();           // the old credential is wiped, not dropped
                 }
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
                 fresh.close();
                 throw e;
             }

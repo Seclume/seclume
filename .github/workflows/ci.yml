@@ -56,7 +56,23 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-crac -am test
+      # A red run names its failing tests as annotations, so that they can be
+      # read on the pull request without opening the log.
+      - if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          found = 0
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+                      found += 1
+          print('failing tests:', found)
+          PY
 
   # The post-quantum key exchange, end to end. The own TLS stack offers
   # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,

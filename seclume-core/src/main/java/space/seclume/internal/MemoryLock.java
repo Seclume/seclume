@@ -24,8 +24,17 @@ import java.lang.System.Logger.Level;
  *
  * <p>All of it is operating system service, not guarantee: a capacity limit
  * ({@code RLIMIT_MEMLOCK}, the working set on Windows, Windows' 512 excluded
- * blocks per process) is an ordinary condition, so a failure is a warning,
- * once, and not an error.
+ * blocks per process) is an ordinary condition, so by default a failure is a
+ * warning, once, and not an error. Where it must be an error,
+ * {@code -Dseclume.mlock.required=true} makes it one: a secret segment whose
+ * pages cannot be both pinned and kept out of dumps is then refused, before
+ * anything is written into it.
+ *
+ * <p>The page size is the operating system's, not an assumed 4 KiB. On a
+ * kernel with 16 or 64 KiB pages (common on aarch64) a 4 KiB-aligned
+ * {@code madvise} fails with {@code EINVAL} - the exclusion silently did not
+ * happen - and a 4 KiB {@code munlock} unlocks the whole real page, including
+ * the part another live secret sits on.
  */
 public final class MemoryLock {
 
@@ -35,23 +44,36 @@ public final class MemoryLock {
     private static final boolean ENABLED =
             Boolean.parseBoolean(System.getProperty("seclume.mlock", "true"));
 
+    /**
+     * Fail closed: a page that cannot be pinned and excluded from dumps is an
+     * error. Off by default, so that the default behaviour stays what it was.
+     */
+    private static volatile boolean required =
+            Boolean.parseBoolean(System.getProperty("seclume.mlock.required", "false"));
+
     private static final MethodHandle LOCK;
     private static final MethodHandle UNLOCK;
     /** madvise on Linux, WerRegisterExcludedMemoryBlock on Windows - or null. */
     private static final MethodHandle EXCLUDE;
     /** The way back: MADV_DODUMP, WerUnregisterExcludedMemoryBlock. */
     private static final MethodHandle INCLUDE;
-    private static final long PAGE = 4096;
+    private static final long PAGE;
     private static final int MADV_DONTDUMP = 16;
     private static final int MADV_DODUMP = 17;
     /** Warn only once; otherwise a pool of 20 connections floods the log. */
     private static volatile boolean warned;
+    private static volatile boolean warnedDump;
+
+    /** Tests only: behave as if the operating system had refused. */
+    static volatile boolean failLockForTests;
+    static volatile boolean failExcludeForTests;
 
     static {
         MethodHandle lock = null;
         MethodHandle unlock = null;
         MethodHandle exclude = null;
         MethodHandle include = null;
+        long page = 4096;
         try {
             Linker linker = Linker.nativeLinker();
             if (Platform.isWindows()) {
@@ -71,6 +93,16 @@ public final class MemoryLock {
                                 ValueLayout.ADDRESS))).orElse(null);
             } else {
                 SymbolLookup libc = linker.defaultLookup();
+                // int getpagesize(void);
+                page = libc.find("getpagesize").map(symbol -> {
+                    try {
+                        int size = (int) linker.downcallHandle(symbol,
+                                FunctionDescriptor.of(ValueLayout.JAVA_INT)).invokeExact();
+                        return size > 0 && Integer.bitCount(size) == 1 ? (long) size : 4096L;
+                    } catch (Throwable t) {
+                        return 4096L;
+                    }
+                }).orElse(4096L);
                 // int mlock(const void *addr, size_t len);
                 FunctionDescriptor descriptor = FunctionDescriptor.of(
                         ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG);
@@ -93,6 +125,7 @@ public final class MemoryLock {
         UNLOCK = unlock;
         EXCLUDE = exclude;
         INCLUDE = include;
+        PAGE = page;
     }
 
     private MemoryLock() {
@@ -103,43 +136,76 @@ public final class MemoryLock {
      * and madvise work on whole pages and count nothing: without this,
      * releasing one secret unlocked - and put back into core dumps - a page
      * another live secret still sits on. Found in review, 25.09.2026.
+     *
+     * <p>Every native call on these pages happens under this monitor too, not
+     * only the counting. Counting inside and releasing outside left a window:
+     * one thread found a page free and let go of the monitor, a second put a
+     * new secret on that page and excluded it, and then the first thread's
+     * {@code MADV_DODUMP} and {@code munlock} landed on the second secret.
      */
     private static final java.util.Map<Long, Integer> PAGES = new java.util.HashMap<>();
 
-    /** @return true if the pages are pinned now. */
+    /**
+     * Counts the segment's pages, excludes them from dumps and pins them.
+     *
+     * @return true if the pages are pinned now
+     * @throws IllegalStateException with {@code -Dseclume.mlock.required=true},
+     *         if the pages could not be both pinned and excluded from dumps;
+     *         nothing is then left counted, pinned or excluded
+     */
     public static boolean lock(MemorySegment segment) {
-        if (segment.byteSize() > 0) {
-            synchronized (PAGES) {
-                for (long page = firstPage(segment); page < endPage(segment); page += PAGE) {
-                    PAGES.merge(page, 1, Integer::sum);
-                }
-            }
-        }
-        excludeFromDumps(segment);
-        if (!ENABLED || LOCK == null) {
+        if (segment.byteSize() == 0) {
             return false;
         }
-        try {
-            int result = (int) LOCK.invokeExact(segment, segment.byteSize());
-            boolean ok = Platform.isWindows() ? result != 0 : result == 0;
-            if (!ok && !warned) {
+        synchronized (PAGES) {
+            for (long page = firstPage(segment); page < endPage(segment); page += PAGE) {
+                PAGES.merge(page, 1, Integer::sum);
+            }
+            boolean excluded = excludeFromDumpsLocked(segment);
+            boolean pinned = pinLocked(segment);
+            if (required && !(excluded && pinned)) {
+                releaseLocked(segment);
+                throw new IllegalStateException("seclume.mlock.required is set, and the secret's "
+                        + "memory could not be "
+                        + (!pinned && !excluded ? "locked into RAM or kept out of crash dumps"
+                                : !pinned ? "locked into RAM" : "kept out of crash dumps")
+                        + (ENABLED ? "" : " (seclume.mlock=false switches both off)"));
+            }
+            if (!pinned && ENABLED && LOCK != null && !warned) {
                 warned = true;
                 LOG.log(Level.WARNING,
                         "seclume could not lock the secret page into RAM; "
-                        + "the secret may reach swap or a core dump. "
-                        + "Raise the memlock limit or set -Dseclume.mlock=false to silence this.");
+                        + "the secret may reach swap. Raise the memlock limit, or set "
+                        + "-Dseclume.mlock=false to silence this, or "
+                        + "-Dseclume.mlock.required=true to refuse instead.");
             }
-            return ok;
-        } catch (Throwable t) {
-            return false;
+            if (!excluded && ENABLED && EXCLUDE != null && !warnedDump) {
+                warnedDump = true;
+                LOG.log(Level.WARNING,
+                        "seclume could not keep the secret page out of crash dumps; "
+                        + "a core file may contain the secret. "
+                        + "-Dseclume.mlock.required=true refuses instead.");
+            }
+            return pinned;
         }
     }
 
-    /** The counterpart to {@link #lock}; failures here have no consequences. */
+    /**
+     * The counterpart to {@link #lock}, to be called once per {@code lock} of
+     * the same segment, whatever {@code lock} returned. Failures here have no
+     * consequences beyond a debug message.
+     */
     public static void unlock(MemorySegment segment) {
         if (segment.byteSize() == 0) {
             return;
         }
+        synchronized (PAGES) {
+            releaseLocked(segment);
+        }
+    }
+
+    /** Gives back one count per page, and the pages that end up free. Holds PAGES. */
+    private static void releaseLocked(MemorySegment segment) {
         if (Platform.isWindows() && INCLUDE != null && ENABLED) {
             try {
                 int ignored = (int) INCLUDE.invokeExact(segment);   // exact, per block
@@ -149,26 +215,20 @@ public final class MemoryLock {
         }
         // Only the pages nobody else still needs: the last secret on a page
         // releases it, runs of such pages in one call each.
-        java.util.List<long[]> runs = new java.util.ArrayList<>();
-        synchronized (PAGES) {
-            long runStart = -1;
-            for (long page = firstPage(segment); page < endPage(segment); page += PAGE) {
-                Integer left = PAGES.computeIfPresent(page, (key, count) -> count > 1 ? count - 1
-                        : null);
-                boolean free = left == null;
-                if (free && runStart < 0) {
-                    runStart = page;
-                } else if (!free && runStart >= 0) {
-                    runs.add(new long[] {runStart, page});
-                    runStart = -1;
-                }
-            }
-            if (runStart >= 0) {
-                runs.add(new long[] {runStart, endPage(segment)});
+        long runStart = -1;
+        for (long page = firstPage(segment); page < endPage(segment); page += PAGE) {
+            Integer left = PAGES.computeIfPresent(page, (key, count) -> count > 1 ? count - 1
+                    : null);
+            boolean free = left == null;
+            if (free && runStart < 0) {
+                runStart = page;
+            } else if (!free && runStart >= 0) {
+                releasePages(runStart, page - runStart);
+                runStart = -1;
             }
         }
-        for (long[] run : runs) {
-            releasePages(run[0], run[1] - run[0]);
+        if (runStart >= 0) {
+            releasePages(runStart, endPage(segment) - runStart);
         }
     }
 
@@ -191,7 +251,7 @@ public final class MemoryLock {
                 LOG.log(Level.DEBUG, "including the pages in dumps again failed", t);
             }
         }
-        if (UNLOCK == null) {
+        if (UNLOCK == null || !ENABLED) {
             return;
         }
         try {
@@ -201,11 +261,33 @@ public final class MemoryLock {
         }
     }
 
+    private static boolean pinLocked(MemorySegment segment) {
+        if (!ENABLED || LOCK == null || failLockForTests) {
+            return false;
+        }
+        try {
+            int result = (int) LOCK.invokeExact(segment, segment.byteSize());
+            return Platform.isWindows() ? result != 0 : result == 0;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /** Pages of live secrets, for the test that holds this to its word. */
     static int pagesInUse() {
         synchronized (PAGES) {
             return PAGES.size();
         }
+    }
+
+    /** The page size everything here is aligned to. */
+    static long pageSize() {
+        return PAGE;
+    }
+
+    /** Tests only: switch the fail-closed mode without restarting the JVM. */
+    static void requireForTests(boolean value) {
+        required = value;
     }
 
     /** Whether the platform offers keeping pages out of dumps at all. */
@@ -222,7 +304,13 @@ public final class MemoryLock {
      * @return whether it took
      */
     public static boolean excludeFromDumps(MemorySegment segment) {
-        if (!ENABLED || EXCLUDE == null || segment.byteSize() == 0) {
+        synchronized (PAGES) {
+            return excludeFromDumpsLocked(segment);
+        }
+    }
+
+    private static boolean excludeFromDumpsLocked(MemorySegment segment) {
+        if (!ENABLED || EXCLUDE == null || segment.byteSize() == 0 || failExcludeForTests) {
             return false;
         }
         try {
@@ -231,8 +319,8 @@ public final class MemoryLock {
                 result = (int) EXCLUDE.invokeExact(segment, (int) segment.byteSize());
                 return result == 0;                      // S_OK
             }
-            long start = segment.address() & -PAGE;
-            long end = (segment.address() + segment.byteSize() + PAGE - 1) & -PAGE;
+            long start = firstPage(segment);
+            long end = endPage(segment);
             result = (int) EXCLUDE.invokeExact(MemorySegment.ofAddress(start), end - start,
                     MADV_DONTDUMP);
             return result == 0;

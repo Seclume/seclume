@@ -433,4 +433,95 @@ class VaultSecretProviderTest {
         }
     }
 
+
+    // ---- the audit of 27.09.2026 ---------------------------------------------
+
+    /**
+     * The credential is fetched by whichever thread logs in first - often the
+     * pool's housekeeper - and read by the others. In a confined arena every
+     * read from another thread threw WrongThreadException.
+     */
+    @Test
+    void aCredentialFetchedOnOneThreadIsReadOnAnother() throws Exception {
+        String answer = "{\"lease_duration\":3600,\"data\":{\"password\":\"shared\"}}";
+        try (FakeVault vault = new FakeVault(200, answer);
+                VaultSecretProvider provider = provider(vault, "database/creds/app",
+                        Clock.systemUTC())) {
+            String[] first = new String[1];
+            Thread fetcher = Thread.ofPlatform().start(() -> first[0] = read(provider));
+            fetcher.join();
+            assertEquals("shared", first[0]);
+            assertEquals("shared", read(provider), "read from a second thread");
+            assertEquals(1, vault.served(), "fetched once, read twice");
+        }
+    }
+
+    /**
+     * And closed by yet another - the application's shutdown. The close used
+     * to throw WrongThreadException before the wipe, leaving the credential
+     * in native memory.
+     */
+    @Test
+    void theCachedCredentialIsWipedWhenAnotherThreadCloses() throws Exception {
+        String answer = "{\"lease_duration\":3600,\"data\":{\"password\":\"closing\"}}";
+        long open = SecretScope.open();
+        try (FakeVault vault = new FakeVault(200, answer)) {
+            VaultSecretProvider provider = provider(vault, "database/creds/app",
+                    Clock.systemUTC());
+            Thread fetcher = Thread.ofPlatform().start(() -> read(provider));
+            fetcher.join();
+            assertEquals(open + 1, SecretScope.open(), "the credential is cached");
+            provider.close();
+            assertEquals(open, SecretScope.open(), "the cached credential was not wiped");
+        }
+    }
+
+    /**
+     * A lease too long to reason about (N4): read, clamped, and every later
+     * read still works instead of overflowing in the refresh arithmetic.
+     */
+    @Test
+    void anAbsurdLeaseDoesNotBreakLaterReads() throws Exception {
+        String answer = "{\"lease_duration\":9223372036854775807,"
+                + "\"data\":{\"password\":\"long\"}}";
+        try (FakeVault vault = new FakeVault(200, answer);
+                VaultSecretProvider provider = provider(vault, "database/creds/app",
+                        Clock.systemUTC())) {
+            assertEquals("long", read(provider));
+            assertEquals("long", read(provider));
+            assertTrue(provider.credentialsValidUntil().isBefore(Instant.now()
+                    .plusSeconds(VaultSecretProvider.MAX_LEASE_SECONDS + 60)));
+        }
+    }
+
+    /** A lease that does not fit a long is refused, not wrapped around (N4). */
+    @Test
+    void aLeaseThatOverflowsIsRefused() throws Exception {
+        String answer = "{\"lease_duration\":18446744073709551617,"
+                + "\"data\":{\"password\":\"wrap\"}}";
+        long open = SecretScope.open();
+        try (FakeVault vault = new FakeVault(200, answer);
+                VaultSecretProvider provider = provider(vault, "database/creds/app",
+                        Clock.systemUTC())) {
+            assertThrows(RuntimeException.class, () -> read(provider));
+        }
+        assertEquals(open, SecretScope.open());
+    }
+
+    /** Before a checkpoint the cached credential is wiped; the next read fetches again. */
+    @Test
+    void aCheckpointWipesTheCachedCredential() throws Exception {
+        String answer = "{\"lease_duration\":3600,\"data\":{\"password\":\"cached\"}}";
+        try (FakeVault vault = new FakeVault(200, answer);
+                VaultSecretProvider provider = provider(vault, "database/creds/app",
+                        Clock.systemUTC())) {
+            read(provider);
+            long open = SecretScope.open();
+            space.seclume.internal.Checkpoint.wipeAll();
+            // At least this provider's cache; other live caches in this JVM go too.
+            assertTrue(SecretScope.open() <= open - 1, "the cached credential survived");
+            assertEquals("cached", read(provider));
+            assertEquals(2, vault.served(), "fetched again after the checkpoint");
+        }
+    }
 }
