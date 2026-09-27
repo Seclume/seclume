@@ -173,6 +173,10 @@ final class OAuthSettings {
             byte[] der = certificate.getEncoded();
             java.util.Base64.Encoder encoder = java.util.Base64.getUrlEncoder().withoutPadding(); // seclume-allow: the certificate thumbprint - public
             return new String[] {
+                // x5t is defined as the SHA-1 thumbprint (RFC 7515 4.1.7): an identifier
+                // that picks which registered certificate to check against, not a
+                // signature - the signature is RS256/PS256/ES256. Entra ID looks it up.
+                // nosemgrep: java.lang.security.audit.crypto.use-of-sha1.use-of-sha1
                 encoder.encodeToString(java.security.MessageDigest.getInstance("SHA-1") // seclume-allow: hashing the public certificate
                         .digest(der)),
                 encoder.encodeToString(java.security.MessageDigest.getInstance("SHA-256") // seclume-allow: hashing the public certificate
