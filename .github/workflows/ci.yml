@@ -58,6 +58,51 @@ jobs:
       # own for the heap proof), so it needs nothing started beside it.
       - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail -am test
 
+  # The post-quantum key exchange, end to end. The own TLS stack offers
+  # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,
+  # so every other job runs with the hybrid off and would not notice it
+  # breaking. Here OpenSSL 3.5 is built (once, then cached; the tarball checked
+  # against its published SHA-256) and the handshake is made against its
+  # s_server with the hybrid as the only group. SECLUME_OPENSSL35 makes the
+  # test mandatory: a libcrypto without ML-KEM fails it rather than skips it.
+  post-quantum:
+    runs-on: ubuntu-latest
+    env:
+      OPENSSL_VERSION: '3.5.4'
+      OPENSSL_SHA256: '967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - id: openssl-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/openssl35
+          key: openssl-${{ env.OPENSSL_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Build OpenSSL ${{ env.OPENSSL_VERSION }}
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL -o openssl.tar.gz "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
+          echo "${OPENSSL_SHA256}  openssl.tar.gz" | sha256sum -c -
+          tar xzf openssl.tar.gz
+          cd "openssl-${OPENSSL_VERSION}"
+          ./Configure --prefix="$HOME/openssl35" --libdir=lib no-docs no-tests shared
+          make -j"$(nproc)" >/dev/null
+          make install_sw >/dev/null
+      - name: Handshake with X25519MLKEM768
+        run: |
+          export SECLUME_OPENSSL35="$HOME/openssl35/bin/openssl"
+          export LD_LIBRARY_PATH="$HOME/openssl35/lib"
+          "$SECLUME_OPENSSL35" version
+          ./mvnw -B -pl seclume-core -am test -Dtest=HybridHandshakeTest -Dsurefire.failIfNoSpecifiedTests=false
+
   postgresql:
     runs-on: ubuntu-latest
     services:

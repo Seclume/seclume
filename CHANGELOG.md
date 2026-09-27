@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### TLS: the post-quantum key exchange is tested end to end in CI
+
+The own stack has offered the hybrid X25519MLKEM768 wherever OpenSSL 3.5 is there, but only
+the ClientHello was under test: the CI machines have OpenSSL 3.0, so every handshake there ran
+with the hybrid off. A new CI job builds OpenSSL 3.5 (cached, the tarball checked against its
+published SHA-256) and `HybridHandshakeTest` connects to its `s_server`. When the server accepts
+only the hybrid, the handshake completes and the server itself reports X25519MLKEM768 as the
+shared group. With the hybrid switched off, the same server refuses the client. A P-256-only
+server still gets a connection. Where `SECLUME_OPENSSL35` is set, a libcrypto without ML-KEM
+fails the test instead of skipping it, so the job cannot quietly stop testing anything.
+
 ### SQL Server and Oracle: two lengths off the wire reached an array allocation unchecked
 
 The first nightly coverage-guided fuzz run found both on 27.09.2026. A `sql_variant` whose
