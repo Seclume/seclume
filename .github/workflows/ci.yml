@@ -56,7 +56,7 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq -am test
 
   # The post-quantum key exchange, end to end. The own TLS stack offers
   # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,
@@ -102,6 +102,48 @@ jobs:
           export LD_LIBRARY_PATH="$HOME/openssl35/lib"
           "$SECLUME_OPENSSL35" version
           ./mvnw -B -pl seclume-core -am test -Dtest=HybridHandshakeTest -Dsurefire.failIfNoSpecifiedTests=false
+
+  # RabbitMQ with a TLS 1.3 listener: the official client and Spring AMQP log in
+  # through seclume, a dropped connection recovers, and the password is not on
+  # the heap. The broker is Ubuntu's own package, configured here.
+  rabbitmq:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: RabbitMQ with TLS 1.3
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q rabbitmq-server
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2 \
+            -subj /CN=localhost -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          sudo cp cert.pem key.pem /etc/rabbitmq/
+          sudo chown rabbitmq:rabbitmq /etc/rabbitmq/cert.pem /etc/rabbitmq/key.pem
+          printf '%s\n' 'listeners.ssl.default = 5671' \
+            'ssl_options.cacertfile = /etc/rabbitmq/cert.pem' \
+            'ssl_options.certfile = /etc/rabbitmq/cert.pem' \
+            'ssl_options.keyfile = /etc/rabbitmq/key.pem' \
+            'ssl_options.versions.1 = tlsv1.3' | sudo tee /etc/rabbitmq/rabbitmq.conf
+          sudo systemctl restart rabbitmq-server
+          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/5671) 2>/dev/null && break; sleep 2; done
+          head -c 18 /dev/urandom | base64 | tr -d '/+=' > "$RUNNER_TEMP/rabbit-password"
+          sudo rabbitmqctl add_user seclume "$(cat "$RUNNER_TEMP/rabbit-password")"
+          sudo rabbitmqctl set_permissions -p / seclume '.*' '.*' '.*'
+          cp cert.pem "$RUNNER_TEMP/rabbit-cert.pem"
+      - run: ./mvnw -B -pl seclume-rabbitmq -am test
+        env:
+          SECLUME_RABBITMQ_PORT: '5671'
+          SECLUME_RABBITMQ_CERT: ${{ runner.temp }}/rabbit-cert.pem
+          SECLUME_RABBITMQ_PASSWORD_FILE: ${{ runner.temp }}/rabbit-password
+          SECLUME_RABBITMQCTL: sudo rabbitmqctl close_all_connections recovery-test
 
   postgresql:
     runs-on: ubuntu-latest
