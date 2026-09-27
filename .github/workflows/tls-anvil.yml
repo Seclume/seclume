@@ -1,0 +1,122 @@
+name: TLS-Anvil
+
+# seclume's own TLS 1.3 client against TLS-Anvil (Ruhr University Bochum,
+# Paderborn University, Hackmanit; Apache-2.0): a test suite that plays the
+# server and checks, test by test, what RFC 8446 requires of a client -
+# malformed and reordered messages, wrong extensions, bad signatures, alerts.
+# It is somebody else's reading of the RFC, written to find the bugs other
+# TLS libraries had, which is what makes the result worth something.
+#
+# Slow (the better part of an hour), so not on every push: weekly, by hand,
+# and on pull requests that touch the TLS stack or the cryptography under it.
+# The first run reports only. Once tls-anvil/expected-results.json exists, a
+# test that passed there and fails now - or a new test that fails - turns the
+# run red.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+  pull_request:
+    paths:
+      - 'seclume-core/src/main/java/space/seclume/tls/**'
+      - 'seclume-core/src/main/java/space/seclume/crypto/**'
+      - 'seclume-tls-anvil/**'
+      - 'tls-anvil/**'
+      - '.github/workflows/tls-anvil.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tls-anvil-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      pull-requests: write          # the summary as a comment on the pull request
+    env:
+      # TLS-Anvil 1.5.3, built from its source at this commit rather than
+      # pulled as :latest, so that a result can be compared with the next.
+      ANVIL_COMMIT: e9e9ac7160789d66736d36f3bc62430f6a49d497
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+
+      - name: Build TLS-Anvil
+        run: |
+          git clone --quiet https://github.com/tls-attacker/TLS-Anvil "$RUNNER_TEMP/tls-anvil"
+          git -C "$RUNNER_TEMP/tls-anvil" checkout --quiet "$ANVIL_COMMIT"
+          docker build --quiet -t seclume-tls-anvil:pinned "$RUNNER_TEMP/tls-anvil"
+
+      - name: Build the client
+        # -T 1: every module writes the class path file; the last one - the
+        # client module - has to be the one that stays.
+        run: >
+          ./mvnw -B -T 1 -pl seclume-tls-anvil -am -DskipTests package
+          dependency:build-classpath -Dmdep.outputFile="$PWD/anvil-classpath.txt"
+
+      - name: Start the client
+        run: |
+          nohup java --enable-native-access=ALL-UNNAMED \
+            -cp "seclume-tls-anvil/target/classes:$(cat anvil-classpath.txt)" \
+            space.seclume.anvil.AnvilClient 8090 127.0.0.1 8443 > anvil-client.log 2>&1 &
+          for i in $(seq 1 30); do
+            grep -q "waiting for TLS-Anvil" anvil-client.log && break
+            sleep 1
+          done
+          cat anvil-client.log
+
+      - name: Run TLS-Anvil against it
+        run: |
+          mkdir -p anvil-out
+          docker run --rm --network host \
+            -v "$PWD/anvil-out:/output" -v "$PWD/tls-anvil:/seclume:ro" \
+            seclume-tls-anvil:pinned \
+            -disableTcpDump -strength 1 -parallelHandshakes 2 -identifier seclume-client \
+            client -port 8443 -triggerScript /seclume/trigger.sh
+
+      - name: Results
+        if: always()
+        run: |
+          set +e
+          python3 tls-anvil/summarize.py anvil-out \
+            --baseline tls-anvil/expected-results.json \
+            --write-expected anvil-out/actual-results.json > anvil-summary.md
+          status=$?
+          cat anvil-summary.md >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$status" >> "$GITHUB_ENV"
+          tail -5 anvil-client.log
+
+      - name: Comment on the pull request
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -s anvil-summary.md ] && gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" --body-file anvil-summary.md || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: tls-anvil-results
+          path: |
+            anvil-out
+            anvil-client.log
+          retention-days: 30
+
+      - name: Verdict
+        if: always()
+        run: exit "${status:-1}"

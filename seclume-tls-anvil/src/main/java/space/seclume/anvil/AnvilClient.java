@@ -1,0 +1,88 @@
+package space.seclume.anvil;
+
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
+
+import space.seclume.internal.SocketTransport;
+import space.seclume.tls.ClientHandshake;
+import space.seclume.tls.TlsConnection;
+
+/**
+ * seclume's TLS client, on call for TLS-Anvil.
+ *
+ * <p>TLS-Anvil tests a client by playing its server, hundreds of times over,
+ * each time with a different deviation from RFC 8446, and judges how the
+ * client reacts. Before every handshake it runs a trigger script; ours opens
+ * a TCP connection to this process, and each one that arrives here starts
+ * one TLS connection to TLS-Anvil with seclume's own stack.
+ *
+ * <p>What a connection does is what the drivers do: a handshake, a little
+ * application data, whatever the server answers, and a close_notify. It runs
+ * <b>without</b> checking the certificate chain against a trust store,
+ * because TLS-Anvil makes its certificates up per test; the CertificateVerify
+ * is still checked, as it always is. So the results say how the protocol is
+ * handled, not how trust is decided - that part is the JDK's PKIX and has
+ * tests of its own.
+ *
+ * <p>Arguments: {@code triggerPort anvilHost anvilPort}.
+ */
+public final class AnvilClient {
+
+    private static final AtomicLong HANDSHAKES = new AtomicLong();
+    private static final AtomicLong CONNECTED = new AtomicLong();
+
+    private AnvilClient() {
+    }
+
+    public static void main(String[] args) throws IOException {
+        int triggerPort = Integer.parseInt(args[0]);
+        String anvilHost = args[1];
+        int anvilPort = Integer.parseInt(args[2]);
+
+        ExecutorService connections = Executors.newVirtualThreadPerTaskExecutor();
+        try (ServerSocket trigger = new ServerSocket(triggerPort, 50,
+                InetAddress.getLoopbackAddress())) {
+            System.out.println("waiting for TLS-Anvil's trigger on " + trigger.getLocalPort());
+            while (true) {
+                Socket asked = trigger.accept();
+                // The trigger's connection itself carries nothing: that it
+                // arrived is the request.
+                asked.close();
+                connections.submit(() -> connectOnce(anvilHost, anvilPort));
+            }
+        }
+    }
+
+    private static void connectOnce(String host, int port) {
+        long number = HANDSHAKES.incrementAndGet();
+        String outcome;
+        try (SocketTransport socket = SocketTransport.connect(host, port, 5_000)) {
+            // A test that makes the server go quiet must not hang the client:
+            // no read or write waits longer than this.
+            socket.networkTimeout(10_000);
+            try (TlsConnection tls = ClientHandshake.connectWithoutAuthenticating(socket,
+                    "localhost")) {
+                CONNECTED.incrementAndGet();
+                ByteBuffer ping = ByteBuffer.allocateDirect(5).put(new byte[] {'p', 'i', 'n', 'g', '\n'});
+                tls.write(ping.flip());
+                ByteBuffer answer = ByteBuffer.allocateDirect(4096);
+                int read;
+                long total = 0;
+                while ((read = tls.read(answer.clear())) >= 0) {
+                    total += read;
+                }
+                outcome = "connected, " + total + " bytes, closed by the server";
+            }
+        } catch (IOException | RuntimeException e) {
+            outcome = "refused: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+        }
+        System.out.println("#" + number + " " + outcome + " (" + CONNECTED.get() + " of "
+                + HANDSHAKES.get() + " connected)");
+    }
+}

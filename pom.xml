@@ -89,6 +89,7 @@
     <module>seclume-heapcheck</module>
     <module>seclume-diff</module>
     <module>seclume-jasperreports-proof</module>
+    <module>seclume-tls-anvil</module>
   </modules>
 
   <properties>
