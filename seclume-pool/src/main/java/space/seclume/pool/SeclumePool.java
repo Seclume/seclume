@@ -210,7 +210,11 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             PoolEntry entry;
             try {
                 entry = newEntry();
-            } catch (SQLException e) {
+            } catch (SQLException | RuntimeException e) {
+                // RuntimeException too: a secret provider that cannot deliver
+                // (SecretUnavailableException) or a malformed handshake reaches
+                // here unchecked, and a permit not given back is a connection
+                // the pool can never open again.
                 permits.release();
                 throw e;
             }
@@ -432,6 +436,11 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     private boolean usable(PoolEntry entry, long now) {
         if (!settings.getMaxLifetime().isZero()
                 && entry.ageNanos(now) > settings.getMaxLifetime().toNanos()) {
+            return false;
+        }
+        if (entry.credentialLapsed(now)) {
+            // Between two housekeeping rounds a lapsed connection could sit
+            // in a slot and be handed out; it is retired like a too-old one.
             return false;
         }
         boolean stale = settings.getValidationBypassWindow().isZero()
@@ -683,22 +692,49 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     private PoolEntry newEntry() throws SQLException {
         // This is where the call to the secret source happens - every time anew.
         Connection connection = source.getConnection();
-        if (!capacityChecked) {
-            capacityChecked = true;
-            warnAboutCapacity(connection);
-            adoptIdleLimit(connection);
+        PoolEntry entry;
+        try {
+            if (!capacityChecked) {
+                capacityChecked = true;
+                warnAboutCapacity(connection);
+                adoptIdleLimit(connection);
+            }
+            if (!settings.getLeakDetectionThreshold().isZero()) {
+                traceStatements(connection);
+            }
+            if (closed) {
+                // Opened while the pool was closing: nobody would ever close it.
+                throw new SQLException("this pool is closed", "08003");
+            }
+            entry = new PoolEntry(connection);
+            entry.credentialDeadline(credentialDeadline());
+        } catch (Throwable failure) {
+            // Anything between the login and the entry - the capacity probe,
+            // the deadline - failing left an open, authenticated session that
+            // nothing referenced any more.
+            try {
+                connection.close();
+            } catch (Throwable suppressed) {
+                failure.addSuppressed(suppressed);
+            }
+            throw failure;
         }
-        if (!settings.getLeakDetectionThreshold().isZero()) {
-            traceStatements(connection);
-        }
+        entries.add(entry);
         if (closed) {
-            // Opened while the pool was closing: nobody would ever close it.
-            connection.close();
+            // close() may have run between the check above and the add, and
+            // then its sweep of entries missed this one: an open session,
+            // with its keys, that nobody would ever close. Added first and
+            // checked after, one of the two always sees the other.
+            entries.remove(entry);
+            entry.set(PoolEntry.State.CLOSED);
+            entry.closeStatements();
+            try {
+                connection.close();
+            } catch (SQLException ignored) {
+                // It is being thrown away either way.
+            }
             throw new SQLException("this pool is closed", "08003");
         }
-        PoolEntry entry = new PoolEntry(connection);
-        entry.credentialDeadline(credentialDeadline());
-        entries.add(entry);
         created.increment();
         return entry;
     }
@@ -733,26 +769,65 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         if (expiry == null) {
             return Long.MAX_VALUE;
         }
+        long now = System.nanoTime();
         Instant validUntil;
         try {
             validUntil = expiry.get();
         } catch (RuntimeException e) {
-            // A source that cannot say is treated as one that does not expire:
-            // the pool behaves as it did before, rather than churning.
-            return Long.MAX_VALUE;
+            // A source that cannot say when its credential ends is NOT one
+            // whose credential never ends: that answer used to keep a
+            // connection on a dynamic credential forever when maxLifetime was
+            // switched off. With a maxLifetime the connection is bounded by
+            // it already, and a secret manager's blip must not empty the pool
+            // - so only without one is the connection given a short life, one
+            // margin, after which its replacement's login asks again.
+            warnExpiryUnknown(e);
+            return settings.getMaxLifetime().isZero() ? now + unknownExpiryNanos()
+                    : Long.MAX_VALUE;
         }
         if (validUntil == null) {
             return Long.MAX_VALUE;
         }
-        Duration left = Duration.between(Instant.now(), validUntil)
-                .minus(settings.getCredentialMargin());
+        long leftNanos;
+        try {
+            leftNanos = Duration.between(Instant.now(), validUntil)
+                    .minus(settings.getCredentialMargin()).toNanos();
+        } catch (ArithmeticException beyondLong) {
+            // More than 292 years away, either way: in the past it has lapsed,
+            // in the future it does not matter.
+            return validUntil.isBefore(Instant.now()) ? now : Long.MAX_VALUE;
+        }
         // And a random step further back, so a cohort opened in one burst does
         // not reach its deadline in one housekeeping round - see
         // PoolSettings.credentialSpread. Only ever earlier than the margin.
         long spread = settings.getCredentialSpread().toNanos();
         long jitter = spread <= 0 ? 0
                 : java.util.concurrent.ThreadLocalRandom.current().nextLong(spread);
-        return System.nanoTime() + Math.max(0, left.toNanos() - jitter);
+        long wait = Math.max(0, leftNanos - jitter);
+        if (wait >= Long.MAX_VALUE / 4) {
+            return Long.MAX_VALUE;              // decades; also keeps the sum below from overflowing
+        }
+        return now + wait;
+    }
+
+    /** How long a connection lives when its credential's expiry could not be read. */
+    private long unknownExpiryNanos() {
+        long margin = settings.getCredentialMargin().toNanos();
+        return Math.max(Duration.ofSeconds(1).toNanos(), margin);
+    }
+
+    private final java.util.concurrent.atomic.AtomicBoolean expiryWarned =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    private void warnExpiryUnknown(RuntimeException e) {
+        if (expiryWarned.compareAndSet(false, true)) {
+            CAPACITY_LOG.log(System.Logger.Level.WARNING, settings.getName()
+                    + ": the credential's expiry could not be read (" + e.getClass().getName()
+                    + "); connections are bounded by "
+                    + (settings.getMaxLifetime().isZero()
+                            ? settings.getCredentialMargin() + " until it can be read again"
+                            : "maxLifetime (" + settings.getMaxLifetime() + ")"));
+        }
     }
 
     /**
@@ -770,8 +845,20 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      */
     void renew(PoolEntry entry) throws SQLException {
         Connection fresh = source.getConnection();
+        long deadline;
+        try {
+            deadline = credentialDeadline();
+        } catch (RuntimeException | Error e) {
+            // Nothing owns the fresh connection yet; it must not be dropped.
+            try {
+                fresh.close();
+            } catch (SQLException suppressed) {
+                e.addSuppressed(suppressed);
+            }
+            throw e;
+        }
         Connection old = entry.replaceConnection(fresh);
-        entry.credentialDeadline(credentialDeadline());
+        entry.credentialDeadline(deadline);
         renewed.increment();
         try {
             old.close();
@@ -791,7 +878,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             return;
         }
         entry.markReturned();
-        if (broken || closed || isPastLifetime(entry) || entry.isRetiringOnReturn()) {
+        if (broken || closed || isPastLifetime(entry) || entry.isRetiringOnReturn()
+                || entry.credentialLapsed(System.nanoTime())) {
             retire(entry);
         } else {
             park(entry);
@@ -1006,7 +1094,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             try {
                 park(newEntry());
                 prewarmed.increment();
-            } catch (SQLException cannot) {
+            } catch (SQLException | RuntimeException cannot) {
                 // Stock keeping, not an order. Whoever actually needs a
                 // connection gets the failure in getConnection().
                 permits.release();
@@ -1112,7 +1200,10 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 // The permit stays with the connection - it counts what is
                 // alive, not what is borrowed. Giving it back here would let
                 // the pool grow past its maximum.
-            } catch (SQLException e) {
+            } catch (SQLException | RuntimeException e) {
+                // RuntimeException too: with the secret manager down, every
+                // round of this used to keep one permit per missing connection,
+                // and once it was back the pool had none left to open with.
                 permits.release();
                 return;
             }

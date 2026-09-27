@@ -306,4 +306,23 @@ class RecordProtectionTest {
         RANDOM.nextBytes(bytes);
         return bytes;
     }
+
+    /**
+     * Closing wipes the traffic secret and may happen more than once - a
+     * KeyUpdate closes the old generation, and the stream closes whatever is
+     * current. That the bytes are zero cannot be read back after the memory
+     * is released; the wipe itself is in close(), before arena.close().
+     */
+    @Test
+    void closingIsSafeTwiceAndAfterAKeyUpdate() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment secret = of(arena, random(32));
+            RecordProtection first = RecordProtection.fromSecret(HashAlgorithm.SHA_256, secret, 16);
+            RecordProtection second = first.next();
+            first.close();
+            first.close();
+            second.close();
+            second.close();
+        }
+    }
 }

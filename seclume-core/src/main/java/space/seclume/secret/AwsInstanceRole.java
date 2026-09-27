@@ -55,6 +55,9 @@ public final class AwsInstanceRole {
         this.host = host;
         this.port = port;
         this.timeoutMillis = timeoutMillis;
+        // The role's keys are cached until they near their expiry; a
+        // checkpoint image must not carry them.
+        space.seclume.internal.Checkpoint.register(this, AwsInstanceRole::close);
     }
 
     /** The role of the instance this process runs on. */
@@ -141,7 +144,13 @@ public final class AwsInstanceRole {
             }
             int length = credentials.bodyLength();
             SecretScope key = SecretScope.allocateShared(128);
-            SecretScope token = SecretScope.allocateShared(TOKEN_ROOM);
+            SecretScope token;
+            try {
+                token = SecretScope.allocateShared(TOKEN_ROOM);
+            } catch (Throwable e) {
+                key.close();
+                throw e;
+            }
             try {
                 key.length(JsonOff.string(answer.segment(), length, key.segment(),
                         "SecretAccessKey"));

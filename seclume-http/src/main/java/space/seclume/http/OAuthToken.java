@@ -58,6 +58,9 @@ final class OAuthToken implements BearerSource {
                 ? space.seclume.jwt.SeclumeJwt.of(oauth.assertionAlg, oauth.assertionKid,
                         clientSecret)
                 : null;
+        // The access token is cached until it is due; a checkpoint image
+        // must not carry it.
+        space.seclume.internal.Checkpoint.register(this, OAuthToken::invalidate);
     }
 
     /** The header line, CRLF included - with a token renewed first if it is due. */

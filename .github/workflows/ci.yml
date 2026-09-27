@@ -56,7 +56,7 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-crac -am test
 
   # The post-quantum key exchange, end to end. The own TLS stack offers
   # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,

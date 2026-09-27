@@ -29,6 +29,9 @@ public final class JsonOff {
     private JsonOff() {
     }
 
+    /** Deeper than any secret manager's answer, shallow enough to cost nothing. */
+    static final int MAX_DEPTH = 512;
+
     /** Thrown when the document is malformed or the path is not in it. */
     public static final class NotFound extends RuntimeException {
 
@@ -68,25 +71,51 @@ public final class JsonOff {
         Cursor cursor = new Cursor(json, length);
         cursor.walk(path);
         cursor.skipWhitespace();
-        long value = 0;
         boolean negative = cursor.peek() == '-';
         if (negative) {
             cursor.next();
         }
+        // Accumulated as a negative number, which reaches Long.MIN_VALUE, and
+        // checked at every step: a lease_duration of twenty digits used to
+        // wrap around into a small or negative lease instead of being refused.
+        long value = 0;
         int digits = 0;
+        boolean leadingZero = cursor.hasMore() && cursor.peek() == '0';
         while (cursor.hasMore() && cursor.peek() >= '0' && cursor.peek() <= '9') {
-            value = value * 10 + (cursor.next() - '0');
+            int digit = cursor.next() - '0';
+            if (value < (Long.MIN_VALUE + digit) / 10) {
+                throw new NotFound("the value at " + String.join(".", path)
+                        + " does not fit into a long");
+            }
+            value = value * 10 - digit;
             digits++;
         }
         if (digits == 0) {
             throw new NotFound("the value at " + String.join(".", path) + " is not a number");
+        }
+        if (leadingZero && digits > 1) {
+            throw new NotFound("the value at " + String.join(".", path)
+                    + " has a leading zero, which JSON does not allow");
         }
         if (cursor.hasMore() && (cursor.peek() == '.' || cursor.peek() == 'e'
                 || cursor.peek() == 'E')) {
             throw new NotFound("the value at " + String.join(".", path)
                     + " is not a whole number");
         }
-        return negative ? -value : value;
+        cursor.skipWhitespace();
+        if (cursor.hasMore() && cursor.peek() != ',' && cursor.peek() != '}'
+                && cursor.peek() != ']') {
+            throw new NotFound("the value at " + String.join(".", path)
+                    + " is not a number");
+        }
+        if (negative) {
+            return value;
+        }
+        if (value == Long.MIN_VALUE) {
+            throw new NotFound("the value at " + String.join(".", path)
+                    + " does not fit into a long");
+        }
+        return -value;
     }
 
     /** Whether the path exists at all - for an optional field. */
@@ -176,6 +205,7 @@ public final class JsonOff {
                 if (b == '"') {
                     return match && i == expected.length();
                 }
+                rejectControl(b);
                 if (b == '\\') {
                     next();
                     match = false;
@@ -199,6 +229,7 @@ public final class JsonOff {
                 if (b == '"') {
                     return written;
                 }
+                rejectControl(b);
                 if (b != '\\') {
                     written = put(out, written, b);
                     continue;
@@ -254,6 +285,17 @@ public final class JsonOff {
             return put(out, written, (byte) (0x80 | (code & 0x3f)));
         }
 
+        /**
+         * RFC 8259 section 7: U+0000 to U+001F must be escaped inside a
+         * string. A raw one means the document is not JSON, and a reader that
+         * takes it anyway reads something other parsers would refuse.
+         */
+        private static void rejectControl(byte b) {
+            if (b >= 0 && b < 0x20) {
+                throw new NotFound("a control character inside a JSON string");
+            }
+        }
+
         private static int put(MemorySegment out, int written, byte value) {
             if (written >= out.byteSize()) {
                 throw new NotFound("the value is longer than the space provided for it");
@@ -271,8 +313,10 @@ public final class JsonOff {
                 return;
             }
             if (b == '{' || b == '[') {
-                byte open = b;
-                byte close = b == '{' ? (byte) '}' : (byte) ']';
+                // Both kinds of bracket, on one stack: counting only the kind
+                // that opened the value let "{"a":[}" pass for a closed
+                // object, and a document other parsers refuse was read.
+                byte[] open = new byte[MAX_DEPTH];
                 int depth = 0;
                 while (hasMore()) {
                     byte c = peek();
@@ -281,10 +325,20 @@ public final class JsonOff {
                         continue;
                     }
                     next();
-                    if (c == open) {
-                        depth++;
-                    } else if (c == close && --depth == 0) {
-                        return;
+                    if (c == '{' || c == '[') {
+                        if (depth == MAX_DEPTH) {
+                            throw new NotFound("the answer is nested more than " + MAX_DEPTH
+                                    + " levels deep");
+                        }
+                        open[depth++] = c;
+                    } else if (c == '}' || c == ']') {
+                        byte expected = c == '}' ? (byte) '{' : (byte) '[';
+                        if (depth == 0 || open[--depth] != expected) {
+                            throw new NotFound("brackets in the answer do not match");
+                        }
+                        if (depth == 0) {
+                            return;
+                        }
                     }
                 }
                 throw new NotFound("a nested value never ended");

@@ -199,12 +199,23 @@ public final class ClientHandshake {
             // ---- the handshake keys -----------------------------------------
             MemorySegment serverShare = serverHello.asSlice(facts.keyShareAt(), facts.keyShareLength());
             MemorySegment secret;
-            if (facts.group() == ClientHello.X25519MLKEM768) {
-                hybrid.derive(serverShare, shared.segment());
-                secret = shared.segment().asSlice(0, space.seclume.crypto.HybridMlKem.SECRET);
-            } else {
-                secret = shared.segment().asSlice(0, 32);
-                keyExchange.derive(serverShare, secret);
+            try {
+                if (facts.group() == ClientHello.X25519MLKEM768) {
+                    hybrid.derive(serverShare, shared.segment());
+                    secret = shared.segment().asSlice(0, space.seclume.crypto.HybridMlKem.SECRET);
+                } else {
+                    secret = shared.segment().asSlice(0, 32);
+                    keyExchange.derive(serverShare, secret);
+                }
+            } catch (IllegalArgumentException | IllegalStateException badShare) {
+                // A point off the curve, an ML-KEM ciphertext that does not
+                // decapsulate: the peer's share is refused as TLS refuses it,
+                // not as an unchecked exception out of the login path.
+                TlsProtocolException refused = new TlsProtocolException(
+                        TlsAlertException.ILLEGAL_PARAMETER,
+                        "the server's key share was refused: " + badShare.getMessage());
+                refused.initCause(badShare);
+                throw refused;
             }
 
             HashAlgorithm hash = facts.hash();
@@ -285,6 +296,7 @@ public final class ClientHandshake {
                 records.writeWith(RecordProtection.fromSecret(
                         hash, schedule.clientApplicationTrafficSecret(), keyLength));
             }
+            records.established();
             TlsConnection connection = new TlsConnection(transport, records);
             // Kept for channel binding, which asks for the certificate long
             // after the handshake that checked it - and for the preflight
@@ -302,6 +314,16 @@ public final class ClientHandshake {
         } catch (TlsProtocolException refused) {
             // Say why before hanging up; the server otherwise sees a reset.
             records.abort(refused.alert());
+            throw refused;
+        } catch (IndexOutOfBoundsException truncated) {
+            // A length field that points past the message it is in. The
+            // segment's bounds check stopped the read; what is left is to
+            // say so as TLS does, rather than let an unchecked exception from
+            // an unauthenticated peer escape into the caller's login path.
+            records.abort(TlsAlertException.DECODE_ERROR);
+            TlsProtocolException refused = new TlsProtocolException(TlsAlertException.DECODE_ERROR,
+                    "a handshake message is shorter than its own length fields say");
+            refused.initCause(truncated);
             throw refused;
         } finally {
             if (!done) {
@@ -374,10 +396,26 @@ public final class ClientHandshake {
         long extensionsAt = Handshake.serverHelloExtensions(serverHello, body, extensionsLength);
         long[] share = {0, 0, 0};
         boolean[] seen = {false, false};
+        // How often each of the two extensions this reads appeared, and
+        // whether one was shaped wrong. RFC 8446 section 4.2: an extension
+        // appears at most once, and its content fills it exactly - a key
+        // share whose announced length reached past its extension used to be
+        // read from whatever followed it.
+        int[] count = {0, 0};
+        boolean[] malformed = {false};
         Handshake.extensions(serverHello, extensionsAt, extensionsLength[0], (type, at, length) -> {
             if (type == Handshake.EXTENSION_KEY_SHARE) {
+                count[0]++;
+                if (length < 4) {
+                    malformed[0] = true;
+                    return;
+                }
                 long[] out = new long[2];
                 int group = Handshake.serverKeyShare(serverHello, at, out);
+                if (4 + out[1] != length) {
+                    malformed[0] = true;
+                    return;
+                }
                 if (group == ClientHello.SECP256R1 && out[1] == 65
                         || offeredHybrid && group == ClientHello.X25519MLKEM768
                                 && out[1] == space.seclume.crypto.HybridMlKem.SERVER_SHARE) {
@@ -386,11 +424,19 @@ public final class ClientHandshake {
                     share[2] = group;
                     seen[0] = true;
                 }
-            } else if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS
-                    && Handshake.selectedVersion(serverHello, at) == 0x0304) {
-                seen[1] = true;
+            } else if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS) {
+                count[1]++;
+                if (length != 2) {
+                    malformed[0] = true;
+                } else if (Handshake.selectedVersion(serverHello, at) == 0x0304) {
+                    seen[1] = true;
+                }
             }
         });
+        if (malformed[0] || count[0] > 1 || count[1] > 1) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the ServerHello repeats an extension or carries one of the wrong length");
+        }
         if (!seen[1]) {
             throw new IOException("the server did not select TLS 1.3 - the header version means "
                     + "nothing, and supported_versions did not say 0x0304");

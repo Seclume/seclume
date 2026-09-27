@@ -61,6 +61,8 @@ final class RecordStream implements AutoCloseable {
     private RecordProtection reading;
     private RecordProtection writing;
     private boolean firstRecord = true;
+    private boolean established;
+    private int changeCipherSpecs;
 
     RecordStream(Transport transport) {
         this.transport = transport;
@@ -85,6 +87,11 @@ final class RecordStream implements AutoCloseable {
     }
 
     /** Puts a different transport underneath, keeping both keys as they are. */
+    /** The handshake is over: from now on a ChangeCipherSpec is a protocol error. */
+    void established() {
+        established = true;
+    }
+
     void replaceTransport(Transport replacement) {
         this.transport = replacement;
     }
@@ -116,7 +123,16 @@ final class RecordStream implements AutoCloseable {
             readFully(length, RecordProtection.HEADER);
 
             if (type == 20) {
-                continue;                     // ChangeCipherSpec: legacy noise, never in the transcript
+                // ChangeCipherSpec: legacy noise, never in the transcript - but
+                // RFC 8446 section 5 allows exactly the one-byte 0x01 during the
+                // handshake and nothing else. Skipped without a limit, a peer
+                // could keep a reader looping on them for as long as it liked.
+                if (established || length != 1 || byteAt(incoming, RecordProtection.HEADER) != 1
+                        || ++changeCipherSpecs > 1) {
+                    throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                            "a ChangeCipherSpec record where TLS 1.3 allows none");
+                }
+                continue;
             }
             if (reading == null) {
                 if (type == 21) {
