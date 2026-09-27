@@ -61,8 +61,24 @@ public final class TlsConnection implements Transport {
     private MemorySegment pending;
     private long pendingOffset;
     private int pendingLength;
-    private boolean closed;
+    private volatile boolean closed;
     private boolean frozen;
+
+    /**
+     * Held for the length of a read and of a write. Reading and writing may
+     * happen on two threads at once - a client library's reader thread and the
+     * threads that send - and closing on a third. The cipher state lives in
+     * native memory, and freeing it while a record is being decrypted or
+     * encrypted is not an exception but a crash: OpenSSL touching freed memory
+     * (found 27.09.2026 by RabbitMQ's recovery test, a SIGSEGV in
+     * EVP_DecryptUpdate). {@link #close()} therefore closes the socket first,
+     * which ends a read waiting on it, then takes both locks - so that no read
+     * or write is inside the cipher - and only then frees it.
+     */
+    private final java.util.concurrent.locks.ReentrantLock reading =
+            new java.util.concurrent.locks.ReentrantLock();
+    private final java.util.concurrent.locks.ReentrantLock writing =
+            new java.util.concurrent.locks.ReentrantLock();
     /**
      * A snapshot has been taken and may still be taken up elsewhere. Until
      * the caller says it cannot, this connection writes nothing: a record
@@ -141,6 +157,15 @@ public final class TlsConnection implements Transport {
 
     @Override
     public int read(ByteBuffer into) throws IOException {
+        reading.lock();
+        try {
+            return readLocked(into);
+        } finally {
+            reading.unlock();
+        }
+    }
+
+    private int readLocked(ByteBuffer into) throws IOException {
         checkUsable();
         if (!into.hasRemaining()) {
             return 0;
@@ -161,6 +186,15 @@ public final class TlsConnection implements Transport {
 
     @Override
     public int write(ByteBuffer from) throws IOException {
+        writing.lock();
+        try {
+            return writeLocked(from);
+        } finally {
+            writing.unlock();
+        }
+    }
+
+    private int writeLocked(ByteBuffer from) throws IOException {
         checkUsable();
         checkNoCopyOutstanding();
         int total = from.remaining();
@@ -316,6 +350,18 @@ public final class TlsConnection implements Transport {
         if (!requested) {
             return;
         }
+        // Written from the reading thread: under the write lock, so that it
+        // neither interleaves with a record another thread is sending nor
+        // changes the write key under it. Taken after the read lock, as close does.
+        writing.lock();
+        try {
+            answerKeyUpdate();
+        } finally {
+            writing.unlock();
+        }
+    }
+
+    private void answerKeyUpdate() throws IOException {
         MemorySegment message = scratch.asSlice(0, Handshake.HEADER + 1);
         message.set(ValueLayout.JAVA_BYTE, 0, (byte) KEY_UPDATE);
         message.set(ValueLayout.JAVA_BYTE, 1, (byte) 0);
@@ -485,9 +531,7 @@ public final class TlsConnection implements Transport {
             return;
         }
         closed = true;
-        postHandshake.close();
-        records.close();
-        arena.close();
+        releaseWhenIdle();
     }
 
     @Override
@@ -500,31 +544,53 @@ public final class TlsConnection implements Transport {
             // Released, not ended: the socket and the peer's session belong to
             // whoever continues them. A close_notify here would tear down the
             // very connection that was just handed on.
-            postHandshake.close();
-            records.close();
-            arena.close();
+            releaseWhenIdle();
             return;
         }
         if (copyOutstanding) {
             // Not even a goodbye: a close_notify is a record under a nonce the
             // copy may still use.
-            postHandshake.close();
-            records.close();
-            arena.close();
             underlying.close();
+            releaseWhenIdle();
             return;
         }
-        try {
-            MemorySegment goodbye = scratch.asSlice(0, 2);
-            goodbye.set(ValueLayout.JAVA_BYTE, 0, (byte) TlsAlertException.WARNING);
-            goodbye.set(ValueLayout.JAVA_BYTE, 1, (byte) TlsAlertException.CLOSE_NOTIFY);
-            records.write((byte) 21, goodbye, 0, 2);
-        } catch (IOException | RuntimeException ignored) {
-            // Saying goodbye is a courtesy; a peer that has already gone cannot be told.
+        // The goodbye goes out only if no other thread is in the middle of a
+        // record - otherwise it would interleave with one, and a close does not
+        // wait on a peer that has stopped reading.
+        if (writing.tryLock()) {
+            try {
+                MemorySegment goodbye = scratch.asSlice(0, 2);
+                goodbye.set(ValueLayout.JAVA_BYTE, 0, (byte) TlsAlertException.WARNING);
+                goodbye.set(ValueLayout.JAVA_BYTE, 1, (byte) TlsAlertException.CLOSE_NOTIFY);
+                records.write((byte) 21, goodbye, 0, 2);
+            } catch (IOException | RuntimeException ignored) {
+                // Saying goodbye is a courtesy; a peer that has already gone cannot be told.
+            } finally {
+                writing.unlock();
+            }
         }
-        postHandshake.close();
-        records.close();
-        arena.close();
         underlying.close();
+        releaseWhenIdle();
+    }
+
+    /**
+     * Frees the cipher state once no read and no write is using it. The socket
+     * is closed before this where it is this connection's to close, so a read
+     * blocked on it returns instead of holding the lock.
+     */
+    private void releaseWhenIdle() {
+        reading.lock();
+        try {
+            writing.lock();
+            try {
+                postHandshake.close();
+                records.close();
+                arena.close();
+            } finally {
+                writing.unlock();
+            }
+        } finally {
+            reading.unlock();
+        }
     }
 }

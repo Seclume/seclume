@@ -603,6 +603,26 @@ and the RSA private exponent: none is found. The controls, the HMAC key as a `St
 the EC key's DER as a `byte[]` put on the heap on purpose, are found. `SeclumeJwtTest` and
 `SeclumeHmacTest` check every signature against the JDK's own `Mac` and `Signature`.
 
+## RabbitMQ
+
+`seclume-rabbitmq` gives the official Java client, and with it Spring AMQP, a
+`ConnectionFactory` whose login stays off the heap:
+
+```java
+ConnectionFactory factory = SeclumeRabbit.connectionFactory(
+        "amqps://mq.example.com/orders?user=app&provider=file&path=/run/secrets/rabbit");
+CachingConnectionFactory spring = new CachingConnectionFactory(factory);   // RabbitTemplate, @RabbitListener
+```
+
+The client holds a placeholder instead of the password. Its sockets encrypt with seclume's
+TLS 1.3 and rewrite one frame, `Connection.Start-Ok`: the SASL PLAIN response, and the lengths
+that follow from it, are written from native memory. Everything after the login is the
+client's own, so channels, confirms, consumers and automatic recovery work as usual, and every
+recovery is logged in the same way. A password set on the client is refused before it is
+sent. `amqps://` only. The token of RabbitMQ's OAuth 2 plugin goes in the same place.
+`RabbitBrokerTest` runs against a real broker in CI: publish and receive, Spring AMQP, a wrong
+password, recovery after the broker drops the connection, and the heap proof with its control.
+
 ## GraalVM native image
 
 The library builds as a native image and connects from one to all four databases, with the

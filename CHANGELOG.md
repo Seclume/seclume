@@ -5,6 +5,21 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### RabbitMQ: `seclume-rabbitmq`
+
+A `ConnectionFactory` for the official client and Spring AMQP. The login is written from native
+memory into `Connection.Start-Ok` over seclume's TLS 1.3, and the client only ever holds a
+placeholder. Automatic recovery logs in the same way. A CI job runs it against a real broker.
+
+### TLS: closing while another thread reads no longer crashes the JVM
+
+`close()` freed the native cipher state while a reader thread could still be decrypting with
+it. That caused a SIGSEGV in `EVP_DecryptUpdate`, found by RabbitMQ's recovery test, and
+anything else that closes from another thread could hit it too (`Connection.abort`, pool
+eviction). Reads and writes now hold locks. `close()` closes the socket first, then waits for
+them before freeing. A KeyUpdate answer from the read path takes the write lock.
+`ConcurrentCloseTest` closes mid-stream 200 times.
+
 ### HTTP: `auth=jwt`, a JWT the client signs itself
 
 For APIs that take a signed JWT instead of a secret, such as GitHub Apps, Google service

@@ -239,7 +239,8 @@ class CredentialExpiryTest {
             }
             waitUntil(() -> pool.statistics().prewarmed() > 0,
                     "no replacement was opened ahead of the retirement");
-            assertTrue(pool.statistics().retired() > 0,
+            // the replacement is counted first and the retirement follows it
+            waitUntil(() -> pool.statistics().retired() > 0,
                     "the lapsed connection was never retired");
         }
     }

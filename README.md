@@ -10,7 +10,7 @@ turns Vault's answer into a `String` and keeps it, it is on the heap, and the he
 gets dumped.
 
 seclume is a set of clients built so that this does not happen: JDBC drivers for PostgreSQL,
-MySQL/MariaDB, SQL Server and Oracle, and clients for Kafka, Redis, mail (SMTP, IMAP,
+MySQL/MariaDB, SQL Server and Oracle, and clients for Kafka, RabbitMQ, Redis, mail (SMTP, IMAP,
 POP3) and HTTPS APIs. Each logs
 in from native memory, and the credential never becomes a heap object:
 
@@ -210,6 +210,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **Mail** | Sending (SMTP) and reading (IMAP, POP3), logged in with PLAIN, LOGIN or XOAUTH2 from native memory over STARTTLS or implicit TLS 1.3; a Jakarta Mail session for Spring's `JavaMailSender`, Spring Integration and Camel: `seclume-mail` | [FEATURES.md](FEATURES.md#mail) |
 | **HTTPS APIs** | API keys, bearer tokens and Basic passwords written from native memory, per request and only to their own origin; standalone or as the request factory for Spring's `RestClient` and `RestTemplate`: `seclume-http` | [FEATURES.md](FEATURES.md#https-apis) |
 | **Signing keys** | JWTs signed and checked with HMAC keys, signed with RSA or EC keys held by OpenSSL; GitHub and Stripe webhook signatures checked: `seclume-jwt` | [FEATURES.md](FEATURES.md#signing-keys-jwt-and-webhooks) |
+| **RabbitMQ** | A `ConnectionFactory` for the official client and Spring AMQP; the PLAIN login written from native memory into the handshake over TLS 1.3, also on recovery: `seclume-rabbitmq` | [FEATURES.md](FEATURES.md#rabbitmq) |
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
 | | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build | [FEATURES.md](FEATURES.md#quarkus) |
 | | CRaC / Lambda SnapStart with `seclume-crac`: the checkpoint image holds no password | [FEATURES.md](FEATURES.md#the-pool) |
