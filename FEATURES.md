@@ -300,6 +300,28 @@ This is proven by a running Spring Boot application against all four servers, wi
 single test runs. Hibernate, Flyway, Liquibase, jOOQ, MyBatis and Spring Data JDBC are listed
 in [FRAMEWORKS.md](FRAMEWORKS.md).
 
+## Reports: JasperReports, embedded
+
+JasperReports needs nothing of its own: it fills a report from a `java.sql.Connection`, and a
+seclume connection is one. Hand it over directly:
+
+```java
+try (Connection connection = pool.getConnection()) {       // a SeclumePool, or any seclume DataSource
+    JasperPrint print = JasperFillManager.fillReport(report, parameters, connection);
+}
+```
+
+**Not through JasperReports' JDBC data adapters** (`.jrdax`, `JdbcDataAdapter`). They keep
+the password as a `String` and pass it as the connection property `password` - the heap copy
+seclume exists to avoid, and a property seclume refuses. A `DataSource` in your application,
+a connection per fill, and the adapter left out: that is the whole integration.
+
+`seclume-jasperreports-proof` fills three reports over a pooled seclume connection, keeps the
+pool open, dumps the heap and searches it for the password - with a negative control that
+puts the password into a report parameter and must be found. JasperReports is LGPL-3.0; it is
+a test dependency of that module only, which is neither installed nor published, and no
+seclume artifact depends on it.
+
 ## Quarkus
 
 `seclume-quarkus` makes the four drivers Quarkus datasource kinds for Agroal:

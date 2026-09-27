@@ -37,3 +37,5 @@ published artifact.
 
 Test and build tooling (JUnit, Spring Boot, Flyway, Maven plugins) is declared
 in the POMs and carries its own licences; none of it is redistributed here.
+JasperReports (LGPL-3.0) is a test dependency of seclume-jasperreports-proof
+only, a module that is neither installed nor published.
