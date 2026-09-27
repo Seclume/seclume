@@ -7,6 +7,7 @@ import org.crac.Context;
 import org.crac.Core;
 import org.crac.Resource;
 
+import space.seclume.crypto.OpenSslRandom;
 import space.seclume.internal.Checkpoint;
 import space.seclume.pool.SeclumePool;
 import space.seclume.secret.SecretScope;
@@ -54,6 +55,16 @@ public final class SeclumeCrac {
     static final long QUIESCE_MILLIS = Long.getLong("seclume.crac.quiesceMillis", 10_000);
 
     /**
+     * Whether new secrets wait from the barrier until the restore
+     * ({@code seclume.crac.holdSecrets}, on by default). Without it a login
+     * that starts after the barrier and before the image is written ends up
+     * in the image; with it, that login waits for the restore - at most
+     * {@code seclume.crac.holdMillis}.
+     */
+    static final boolean HOLD_SECRETS = !"false".equalsIgnoreCase(
+            System.getProperty("seclume.crac.holdSecrets"));
+
+    /**
      * Suspends {@code pool} and then <b>waits</b> until nothing secret is
      * left: no connection lent out, no login running, no cached credential.
      * Suspending alone returned at once, with borrowed connections - their
@@ -78,7 +89,18 @@ public final class SeclumeCrac {
             int borrowed = pool.activeCount();
             long secrets = SecretScope.open();
             if (borrowed == 0 && secrets == 0) {
-                return;
+                if (!HOLD_SECRETS) {
+                    return;
+                }
+                // Quiet - now keep it so until the restore: no new secret is
+                // made from here on. Checked once more under the hold, since
+                // a login may have started between the count and the hold.
+                Checkpoint.hold();
+                if (SecretScope.open() == 0 && pool.activeCount() == 0) {
+                    return;
+                }
+                Checkpoint.release();
+                continue;
             }
             if (System.nanoTime() - deadline >= 0) {
                 pool.resume();
@@ -92,6 +114,25 @@ public final class SeclumeCrac {
         }
     }
 
+    /**
+     * After the restore - or a refused checkpoint: OpenSSL's random generator
+     * gets fresh entropy <b>before</b> new secrets are let through, so the first
+     * handshake of a restored instance does not draw from a generator state it
+     * shares with every other instance started from the same image. Then the
+     * pool fills again.
+     *
+     * @throws IllegalStateException if OpenSSL refused the reseed; logins are
+     *         let through regardless, and the restore reports the failure
+     */
+    static void restored(SeclumePool pool) {
+        try {
+            OpenSslRandom.reseed();
+        } finally {
+            Checkpoint.release();
+            pool.resume();
+        }
+    }
+
     private record PoolResource(SeclumePool pool) implements Resource {
 
         /** See {@link SeclumeCrac#quiesce}; an exception here aborts the checkpoint. */
@@ -102,7 +143,7 @@ public final class SeclumeCrac {
 
         @Override
         public void afterRestore(Context<? extends Resource> context) {
-            pool.resume();
+            restored(pool);
         }
     }
 }

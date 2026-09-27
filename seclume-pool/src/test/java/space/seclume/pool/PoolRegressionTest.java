@@ -157,6 +157,61 @@ class PoolRegressionTest {
         }
     }
 
+    // ---- P1: a connection whose credential has expired never goes back ---
+
+    @Test
+    void aConnectionWhoseCredentialExpiredWhileBorrowedIsNotParked() throws Exception {
+        StubDataSource source = new StubDataSource();
+        PoolSettings settings = settings();
+        settings.setMaxLifetime(Duration.ZERO);
+        settings.setCredentialMargin(Duration.ZERO);
+        settings.setCredentialSpread(Duration.ZERO);
+        Instant expiry = Instant.now().plusMillis(300);
+        settings.setCredentialExpiry(() -> expiry);
+        // Housekeeping far apart, so that only the return itself can catch it.
+        settings.setValidationTimeout(Duration.ofSeconds(30));
+
+        try (SeclumePool pool = new SeclumePool(source, settings)) {
+            Connection connection = pool.getConnection();
+            Thread.sleep(500);                         // expires while borrowed
+            connection.close();
+            assertEquals(0, pool.idleCount(), "an expired connection was parked again");
+            assertTrue(source.handedOut().get(0).closed.get(), "and it was not closed");
+        }
+    }
+
+    @Test
+    void aConnectionMerelyInsideItsMarginIsParkedForThePlannedReplacement() throws Exception {
+        StubDataSource source = new StubDataSource();
+        PoolSettings settings = settings();
+        settings.setMaxLifetime(Duration.ZERO);
+        settings.setCredentialMargin(Duration.ofMinutes(1));
+        settings.setCredentialSpread(Duration.ZERO);
+        settings.setCredentialExpiry(() -> Instant.now().plusSeconds(30));
+        settings.setValidationTimeout(Duration.ofSeconds(30));
+
+        try (SeclumePool pool = new SeclumePool(source, settings)) {
+            pool.getConnection().close();
+            assertEquals(1, pool.idleCount(),
+                    "retired at once although its credential is still valid for 30 s");
+        }
+    }
+
+    @Test
+    void theEndIsTheCredentialsAndTheDeadlineAMarginBefore() throws Exception {
+        StubDataSource source = new StubDataSource();
+        PoolSettings settings = settings();
+        settings.setCredentialMargin(Duration.ofMinutes(1));
+        settings.setCredentialSpread(Duration.ZERO);
+        settings.setCredentialExpiry(() -> Instant.now().plusSeconds(3600));
+        try (SeclumePool pool = new SeclumePool(source, settings)) {
+            SeclumePool.CredentialTimes times = pool.credentialTimes();
+            long gap = times.expires() - times.deadline();
+            assertTrue(Math.abs(gap - Duration.ofMinutes(1).toNanos())
+                    < Duration.ofSeconds(1).toNanos(), "gap " + Duration.ofNanos(gap));
+        }
+    }
+
     // ---- N7 and the close race -------------------------------------------
 
     @Test

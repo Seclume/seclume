@@ -152,9 +152,19 @@ A `SecretScope` is native memory that is:
 
 - **locked**, so it is never swapped out;
 - **excluded from crash dumps** (`MADV_DONTDUMP` on Linux, `WerRegisterExcludedMemoryBlock`
-  on Windows), so a core file, a crash report or a checkpoint image does not carry the secret
-  to a disk;
+  on Windows), so a core file or a crash report does not carry the secret to a disk;
 - **wiped** when it closes.
+
+Locking and dump exclusion are operating system service, and a limit (`RLIMIT_MEMLOCK`,
+Windows' 512 excluded blocks) makes them fail. By default that is a warning, once. With
+`-Dseclume.mlock.required=true` it is an error instead: a secret whose memory cannot be both
+locked and excluded is refused before anything is written into it. `-Dseclume.mlock=false`
+switches both off.
+
+**A checkpoint image is not a crash dump.** CRaC and SnapStart write the process's memory by
+their own means, and dump exclusion is not something to rely on there. What keeps secrets
+out of a checkpoint image is `seclume-crac` (see [the pool](#the-pool)): nothing secret is
+left in the process when the image is written.
 
 ## The pool
 
@@ -206,8 +216,20 @@ message names the oldest holders. Beyond that, what matters is what a connection
 
 **Checkpoint and restore (CRaC, Lambda SnapStart).** `seclume-crac` registers a pool so that it
 gives up every connection before a checkpoint and logs in afresh after the restore. Without it
-CRaC refuses the checkpoint over the pool's open sockets. With it the image was searched and
-holds no password.
+CRaC refuses the checkpoint over the pool's open sockets. Before the checkpoint it also:
+
+- **waits** until no connection is borrowed and no secret is open, and refuses the checkpoint
+  if that does not happen within `seclume.crac.quiesceMillis` (10 s);
+- **wipes the cached credentials** - Vault's leased credential, the instance role's AWS keys,
+  OAuth access tokens - which are fetched again after the restore;
+- **holds new secrets back** from that moment until the restore, so a login that starts in
+  between waits instead of landing in the image (`seclume.crac.holdSecrets=false` switches
+  this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits).
+
+After the restore, OpenSSL's random generator is reseeded from the operating system before
+any new secret is made: otherwise every instance started from one image would begin with the
+same generator state, and draw the same ephemeral key shares. With it the image was searched
+and holds no password; `seclume-crac/proof` repeats that search on a CRaC JDK.
 
 ## Several servers, and which one to take
 
@@ -277,6 +299,28 @@ This is proven by a running Spring Boot application against all four servers, wi
 `ddl-auto=validate`, so the schema is compared against the driver's own metadata before a
 single test runs. Hibernate, Flyway, Liquibase, jOOQ, MyBatis and Spring Data JDBC are listed
 in [FRAMEWORKS.md](FRAMEWORKS.md).
+
+## Reports: JasperReports, embedded
+
+JasperReports needs nothing of its own: it fills a report from a `java.sql.Connection`, and a
+seclume connection is one. Hand it over directly:
+
+```java
+try (Connection connection = pool.getConnection()) {       // a SeclumePool, or any seclume DataSource
+    JasperPrint print = JasperFillManager.fillReport(report, parameters, connection);
+}
+```
+
+**Not through JasperReports' JDBC data adapters** (`.jrdax`, `JdbcDataAdapter`). They keep
+the password as a `String` and pass it as the connection property `password` - the heap copy
+seclume exists to avoid, and a property seclume refuses. A `DataSource` in your application,
+a connection per fill, and the adapter left out: that is the whole integration.
+
+`seclume-jasperreports-proof` fills three reports over a pooled seclume connection, keeps the
+pool open, dumps the heap and searches it for the password - with a negative control that
+puts the password into a report parameter and must be found. JasperReports is LGPL-3.0; it is
+a test dependency of that module only, which is neither installed nor published, and no
+seclume artifact depends on it.
 
 ## Quarkus
 

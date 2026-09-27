@@ -39,6 +39,21 @@ Two additions to the core:
 
 A caller's own `Accept` header now replaces the default one.
 
+### Security audit 27.09.2026
+
+Fixes for the known findings K1–K6 and N1–N8 and for twelve new ones; the report is on
+pull request #38. Of note for users:
+
+- **`-Dseclume.mlock.required=true`**: fail closed when a secret's memory cannot be locked and
+  kept out of crash dumps. The default is unchanged, but a failed dump exclusion now warns.
+- **`seclume-crac`** waits for borrowed connections and open secrets before a checkpoint,
+  wipes cached credentials, holds new secrets back until the restore and reseeds OpenSSL's
+  random generator after it (`seclume.crac.quiesceMillis`, `seclume.crac.holdSecrets`,
+  `seclume.crac.holdMillis`).
+- **The pool** never parks or hands out a connection whose credential has actually expired;
+  the planned replacement a margin before stays as it was.
+- Vault's cached credential is now usable - and wiped - from any thread.
+
 ### Tests: Project Wycheproof
 
 The cryptography seclume implements itself now also runs against Project Wycheproof's test

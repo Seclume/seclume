@@ -438,6 +438,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 && entry.ageNanos(now) > settings.getMaxLifetime().toNanos()) {
             return false;
         }
+        if (entry.credentialExpired(now)) {
+            return false;                        // see release: never out on a dead credential
+        }
         boolean stale = settings.getValidationBypassWindow().isZero()
                 || entry.idleNanos(now) > settings.getValidationBypassWindow().toNanos();
         return !stale || isAlive(entry);
@@ -702,7 +705,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 throw new SQLException("this pool is closed", "08003");
             }
             entry = new PoolEntry(connection);
-            entry.credentialDeadline(credentialDeadline());
+            entry.credential(credentialTimes());
         } catch (Throwable failure) {
             // Anything between the login and the entry - the capacity probe,
             // the deadline - failing left an open, authenticated session that
@@ -760,9 +763,29 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      * slow and answers a question about timing rather than about the rule.
      */
     long credentialDeadline() {
+        return credentialTimes().deadline();
+    }
+
+    /**
+     * When to act on a connection opened now, and when its credential
+     * actually ends - both as {@code System.nanoTime()} values,
+     * {@link Long#MAX_VALUE} for never.
+     *
+     * <p>Two moments, because they are used for two different things. The
+     * deadline sits a margin (and a random spread) before the end and drives
+     * the planned replacement: prewarm opens the successor, the sweep and the
+     * return-mark retire the old one. The end is the hard line: a connection
+     * whose credential has actually expired is never parked again or handed
+     * out, whatever housekeeping has or has not got round to.
+     */
+    record CredentialTimes(long deadline, long expires) {
+        static final CredentialTimes NEVER = new CredentialTimes(Long.MAX_VALUE, Long.MAX_VALUE);
+    }
+
+    CredentialTimes credentialTimes() {
         Supplier<Instant> expiry = settings.getCredentialExpiry();
         if (expiry == null) {
-            return Long.MAX_VALUE;
+            return CredentialTimes.NEVER;
         }
         long now = System.nanoTime();
         Instant validUntil;
@@ -777,20 +800,26 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             // - so only without one is the connection given a short life, one
             // margin, after which its replacement's login asks again.
             warnExpiryUnknown(e);
-            return settings.getMaxLifetime().isZero() ? now + unknownExpiryNanos()
-                    : Long.MAX_VALUE;
+            if (!settings.getMaxLifetime().isZero()) {
+                return CredentialTimes.NEVER;
+            }
+            long shortLife = now + unknownExpiryNanos();
+            return new CredentialTimes(shortLife, shortLife);
         }
         if (validUntil == null) {
-            return Long.MAX_VALUE;
+            return CredentialTimes.NEVER;
         }
+        Instant clock = Instant.now();
+        long expires = nanoTimeOf(now, clock, validUntil, Duration.ZERO);
         long leftNanos;
         try {
-            leftNanos = Duration.between(Instant.now(), validUntil)
+            leftNanos = Duration.between(clock, validUntil)
                     .minus(settings.getCredentialMargin()).toNanos();
         } catch (ArithmeticException beyondLong) {
             // More than 292 years away, either way: in the past it has lapsed,
             // in the future it does not matter.
-            return validUntil.isBefore(Instant.now()) ? now : Long.MAX_VALUE;
+            return validUntil.isBefore(clock) ? new CredentialTimes(now, now)
+                    : CredentialTimes.NEVER;
         }
         // And a random step further back, so a cohort opened in one burst does
         // not reach its deadline in one housekeeping round - see
@@ -800,9 +829,22 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 : java.util.concurrent.ThreadLocalRandom.current().nextLong(spread);
         long wait = Math.max(0, leftNanos - jitter);
         if (wait >= Long.MAX_VALUE / 4) {
-            return Long.MAX_VALUE;              // decades; also keeps the sum below from overflowing
+            // decades; also keeps the sum below from overflowing
+            return new CredentialTimes(Long.MAX_VALUE, expires);
         }
-        return now + wait;
+        return new CredentialTimes(now + wait, expires);
+    }
+
+    /** {@code until} on the {@code System.nanoTime()} scale, clamped; MAX_VALUE for decades away. */
+    private static long nanoTimeOf(long now, Instant clock, Instant until, Duration before) {
+        long left;
+        try {
+            left = Duration.between(clock, until).minus(before).toNanos();
+        } catch (ArithmeticException beyondLong) {
+            return until.isBefore(clock) ? now : Long.MAX_VALUE;
+        }
+        left = Math.max(0, left);
+        return left >= Long.MAX_VALUE / 4 ? Long.MAX_VALUE : now + left;
     }
 
     /** How long a connection lives when its credential's expiry could not be read. */
@@ -840,9 +882,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      */
     void renew(PoolEntry entry) throws SQLException {
         Connection fresh = source.getConnection();
-        long deadline;
+        CredentialTimes times;
         try {
-            deadline = credentialDeadline();
+            times = credentialTimes();
         } catch (RuntimeException | Error e) {
             // Nothing owns the fresh connection yet; it must not be dropped.
             try {
@@ -853,7 +895,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             throw e;
         }
         Connection old = entry.replaceConnection(fresh);
-        entry.credentialDeadline(deadline);
+        entry.credential(times);
         renewed.increment();
         try {
             old.close();
@@ -873,7 +915,12 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             return;
         }
         entry.markReturned();
-        if (broken || closed || isPastLifetime(entry) || entry.isRetiringOnReturn()) {
+        // The deadline (a margin before the end) is left to prewarm and the
+        // return-mark, so that the replacement is opened first. The end itself
+        // is not: a connection whose credential has actually expired does not
+        // go back into the pool, whatever housekeeping has got round to.
+        if (broken || closed || isPastLifetime(entry) || entry.isRetiringOnReturn()
+                || entry.credentialExpired(System.nanoTime())) {
             retire(entry);
         } else {
             park(entry);
@@ -975,7 +1022,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 ? new PoolEntry(connection, true, false, connection.getTransactionIsolation())
                 : new PoolEntry(connection, template.initialAutoCommit(),
                         template.initialReadOnly(), template.initialIsolation());
-        entry.credentialDeadline(credentialDeadline());
+        entry.credential(credentialTimes());
         entries.add(entry);
         adopted.increment();
         entry.set(PoolEntry.State.IN_USE);

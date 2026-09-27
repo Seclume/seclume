@@ -60,7 +60,8 @@ collector does not zero memory it frees in any case.
   not a guarantee". seclume's own test suite repeats the search after logins, failed logins,
   reconnects, pool refills and credential rotation, with a negative control that must fail.
 - The native memory seclume uses is not part of a heap dump. It is also kept out of crash dumps
-  (`MADV_DONTDUMP` on Linux, `WerRegisterExcludedMemoryBlock` on Windows), locked against
+  (`MADV_DONTDUMP` on Linux, `WerRegisterExcludedMemoryBlock` on Windows - not checkpoint
+  images, which `seclume-crac` takes care of), locked against
   swapping where the limits allow it, and wiped after use. See
   [SECRETS-API.md](../../SECRETS-API.md).
 - The Vault token is found on the pgjdbc side because the application read it into a `String`,

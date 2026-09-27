@@ -201,7 +201,33 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
-      - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter -am test
+      - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
+      - if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          found = 0
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+                      found += 1
+          print('failing tests:', found)
+          PY
+      # A skipped proof is green too; this says on the pull request whether
+      # the JasperReports heap proof actually ran.
+      - if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('seclume-jasperreports-proof/target/surefire-reports/TEST-*.xml'):
+              root = ET.parse(path).getroot()
+              print(f"::notice title={root.get('name')}::tests={root.get('tests')} "
+                    f"skipped={root.get('skipped')} failures={root.get('failures')} "
+                    f"errors={root.get('errors')}")
+          PY
       - if: always()
         run: rm -f .local-pg-password
 

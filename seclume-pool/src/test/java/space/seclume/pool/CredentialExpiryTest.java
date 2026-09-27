@@ -229,8 +229,11 @@ class CredentialExpiryTest {
         PoolSettings settings = settings();
         settings.setMinimumIdle(0);
         settings.setMaximumPoolSize(4);
-        settings.setCredentialExpiry(() -> Instant.now().minusSeconds(1));
-        settings.setCredentialMargin(Duration.ZERO);
+        // Inside the margin but not yet expired: the planned replacement. A
+        // credential that has actually expired is retired on return at once,
+        // with nothing to prewarm for (see the last test in this class).
+        settings.setCredentialExpiry(() -> Instant.now().plusSeconds(30));
+        settings.setCredentialMargin(Duration.ofMinutes(1));
         settings.setCredentialSpread(Duration.ZERO);
 
         try (SeclumePool pool = new SeclumePool(source, settings)) {

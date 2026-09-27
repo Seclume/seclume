@@ -173,9 +173,26 @@ final class PoolEntry {
         return now - createdAt;
     }
 
+    /**
+     * When the credential behind this connection actually ends, on the
+     * {@code System.nanoTime()} scale - the deadline is a margin before it.
+     */
+    private volatile long credentialExpires = Long.MAX_VALUE;
+
     /** @see #credentialDeadline */
     void credentialDeadline(long nanoTimeDeadline) {
         this.credentialDeadline = nanoTimeDeadline;
+    }
+
+    /** Both moments of the credential this connection was opened with. */
+    void credential(SeclumePool.CredentialTimes times) {
+        this.credentialDeadline = times.deadline();
+        this.credentialExpires = times.expires();
+    }
+
+    /** Whether the credential has actually expired, not merely reached its deadline. */
+    boolean credentialExpired(long now) {
+        return credentialExpires != Long.MAX_VALUE && now - credentialExpires >= 0;
     }
 
     /** @see #credentialDeadline */
