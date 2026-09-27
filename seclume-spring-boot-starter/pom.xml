@@ -46,6 +46,22 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- HTTPS APIs, optional: seclume.http.clients.<name>.url turns into a
+         RestClient (and an @HttpExchange client) per name - only when
+         seclume-http and Spring's web client are there. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-http</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-web</artifactId>
+      <version>7.0.9</version>
+      <optional>true</optional>
+    </dependency>
+
     <!-- Mail, optional: seclume.mail.send / seclume.mail.read turn into a
          Jakarta Mail Session and a JavaMailSender - only when seclume-mail
          and Spring's mail support are there. -->

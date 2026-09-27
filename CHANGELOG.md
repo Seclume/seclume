@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Starter: HTTPS APIs from `application.properties`
+
+`seclume.http.clients.<name>.url` in `seclume-spring-boot-starter` makes a `RestClient` bean for
+each name, with its own server and its own secret sent off the heap. With
+`seclume.http.clients.<name>.interface`, an `@HttpExchange` interface is made on the client as
+well. Each client starts from Boot's `RestClient.Builder` where one is present, and no builder
+bean is added, so Boot's own is left alone. seclume-http and spring-web are optional
+dependencies of the starter.
+
 ### HTTP: `seclume-http`, REST APIs with the API key or token off the heap
 
 A new module: an HTTPS client whose credential (a bearer token, an API key in a header of the

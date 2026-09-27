@@ -466,6 +466,25 @@ Order order = rest.get().uri("/orders/{id}", 42).retrieve().body(Order.class);
 "https://api.example.com?auth=header&header=X-Api-Key&provider=..."
 ```
 
+With Spring Boot and `seclume-spring-boot-starter`, `application.properties` is enough, for as
+many APIs as needed. Each has its own server and its own secret:
+
+```properties
+seclume.http.clients.payments.url=https://api.payments.example/v2?provider=file&path=/run/secrets/payments
+seclume.http.clients.search.url=https://search.internal:9200?auth=header&header=Authorization&prefix=ApiKey%20&provider=vault&...
+seclume.http.clients.search.interface=com.example.SearchApi      # optional: an @HttpExchange interface
+```
+
+```java
+Checkout(@Qualifier("payments") RestClient payments, SearchApi search) { ... }
+```
+
+Every name becomes a `RestClient` bean of that name, with the URL's origin and path as its base
+URL. With `interface=`, it also becomes an `@HttpExchange` client that can be injected by its
+type. Where Boot's `RestClient.Builder` is present, each client starts from it, so message
+converters, customizers and observation apply as usual. A client never sends its secret to
+another client's server.
+
 The usual way, a token set with `setBearerAuth`, a default header or an interceptor, is a
 `String` for as long as the client lives, and JSSE encrypts it from heap buffers again with
 every request. Here the application never sets it. For each request the client reads the
