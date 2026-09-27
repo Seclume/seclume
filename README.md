@@ -181,7 +181,7 @@ Everything below works on all four databases unless the row says otherwise.
 | | Dynamic credentials: the pool rotates connections before the lease ends, without emptying | [PROVIDERS.md](PROVIDERS.md#what-expires-buys) |
 | | Secret columns read and bound off the heap (`Sensitive`, `SensitiveParameters`) | [FEATURES.md](FEATURES.md#secrets-in-columns-not-only-in-the-login) |
 | **TLS** | `verify-full`, a per-connection CA file (`tlsRootCert`) or a key pin (`tlsPin`) | [TLS.md](TLS.md) |
-| | Own TLS 1.3 stack: traffic secrets never become Java objects; post-quantum X25519MLKEM768 with OpenSSL 3.5 | [TLS.md](TLS.md#which-tls-carries-it-a-separate-question) |
+| | Own TLS 1.3 stack: traffic secrets never become Java objects; post-quantum X25519MLKEM768 with OpenSSL 3.5 or Windows CNG | [TLS.md](TLS.md#which-tls-carries-it-a-separate-question) |
 | | Client certificates with the key off the heap, in the Windows store or in a TPM | [TLS.md](TLS.md#mutual-tls-with-the-client-key-off-the-heap-too) |
 | | SQL Server strict encryption (TDS 8.0), PostgreSQL 17 direct TLS | [TLS.md](TLS.md) |
 | **JDBC** | The full surface: callable statements, named parameters, generated keys, batches, LOBs, scrollable results, XA | [FEATURES.md](FEATURES.md#the-jdbc-surface-on-all-four) |

@@ -5,6 +5,35 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Post-quantum key exchange on Windows
+
+X25519MLKEM768 now runs on Windows too, through CNG, where Windows 11 has
+ML-KEM since its post-quantum update (`BCryptDecapsulate`, the `ML-KEM`
+provider with parameter set `768`). The X25519 half is CNG's ECDH on
+`curve25519`. As on Linux, both private keys stay native handles and the
+64-byte secret goes into native memory (`CngMlKem`). A Windows without the
+update is found by generating one real key pair at start-up; there the
+ClientHello stays P-256 alone, as before.
+- **Byte order:** CNG's curve25519 public blob is the RFC 7748
+  little-endian u as it is; only the raw secret comes reversed, as it does
+  for P-256. Found against the JDK's own ML-KEM and X25519, which play the
+  server in `HybridMlKemTest` - twenty rounds, the same 64 bytes on both sides.
+- **Low-order points:** OpenSSL refuses an all-zero X25519 result itself;
+  for CNG it is checked here (RFC 8446, 7.4.2).
+- `BCryptDecapsulate` is registered for a native image.
+
+Shown on Windows 11 (build 26200.9457) against cloudflare.com and
+www.google.com: `TLS_AES_256_GCM_SHA384 with X25519MLKEM768`, through the
+verified Finished; the control with `-Dseclume.tls.postQuantum=false`
+negotiates P-256 against the same servers. `proof/PqProof.java` takes
+`host port` for this.
+
+And against OpenSSL 3.5.8 `s_server` in containers, from the same Windows
+machine, the three runs of `proof/pq.sh`: a hybrid-only server negotiates
+X25519MLKEM768, a P-256-only server gets P-256 at once, and the control - the
+hybrid-only server with the hybrid switched off - refuses with
+`handshake_failure`, so the first run really used ML-KEM from CNG.
+
 ### RabbitMQ: `seclume-rabbitmq`
 
 A `ConnectionFactory` for the official client and Spring AMQP. The login is written from native
