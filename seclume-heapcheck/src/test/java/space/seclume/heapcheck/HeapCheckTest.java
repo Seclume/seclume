@@ -41,6 +41,94 @@ class HeapCheckTest {
     }
 
     /**
+     * The audit run: a dump that exists, several secrets - one held, one not,
+     * one binary - and both reports, which say which is which and hold none of
+     * them.
+     */
+    @Test
+    void anAuditOfAnExistingDumpWithSeveralSecrets(@TempDir Path directory) throws Exception {
+        Path dump = directory.resolve("app.hprof");
+        Path secrets = Files.createDirectory(directory.resolve("secrets"));
+        Path held = secrets.resolve("db-password");
+        Files.writeString(held, SECRET, StandardCharsets.UTF_8);
+        Path other = secrets.resolve("api-key");
+        String otherSecret = "never-in-that-heap-" + System.nanoTime();
+        Files.writeString(other, otherSecret, StandardCharsets.UTF_8);
+        Path binary = secrets.resolve("key.der");
+        byte[] key = new byte[48];
+        new java.security.SecureRandom().nextBytes(key);
+        key[0] = (byte) 0xff;                     // not UTF-8: looked for as bytes
+        Files.write(binary, key);
+
+        // the dump, taken and kept by the tool itself - then checked as a file
+        withProbe(held, Holder.class, pid ->
+                assertEquals(1, HeapCheck.run(pid, held, dump)));
+        assertTrue(Files.exists(dump), "--keep-dump did not keep the dump");
+
+        Path markdown = directory.resolve("report.md");
+        Path json = directory.resolve("report.json");
+        int exit = HeapCheck.run(new HeapCheck.Options(null, dump,
+                List.of(other, held, binary), List.of(markdown, json), null));
+        assertEquals(1, exit, "one of the three secrets was in the heap");
+        assertTrue(Files.exists(dump), "a dump that was given must not be deleted");
+
+        String md = Files.readString(markdown);
+        String js = Files.readString(json);
+        assertTrue(md.contains("SECRET FOUND") && md.contains("1 of 3 secret(s)"), md);
+        assertTrue(md.contains("| `" + held + "` | text | **FOUND**"), md);
+        assertTrue(md.contains("| `" + other + "` | text | not found"), md);
+        assertTrue(md.contains("| `" + binary + "` | binary | not found"), md);
+        assertTrue(js.contains("\"verdict\": \"FOUND\""), js);
+        assertTrue(js.contains("\"source\": " + AuditReport.quote(held.toString())
+                + ",\n      \"kind\": \"text\",\n      \"result\": \"FOUND\""), js);
+        for (String report : List.of(md, js)) {
+            assertTrue(!report.contains(SECRET) && !report.contains(otherSecret),
+                    "a report holds a secret");
+        }
+    }
+
+    @Test
+    void aCleanProcessGivesACleanReport(@TempDir Path directory) throws Exception {
+        Path secretFile = directory.resolve("secret");
+        Files.writeString(secretFile, SECRET, StandardCharsets.UTF_8);
+        Path json = directory.resolve("clean.json");
+        withProbe(secretFile, Empty.class, pid -> assertEquals(0, HeapCheck.run(
+                new HeapCheck.Options(pid, null, List.of(secretFile), List.of(json), null))));
+        String report = Files.readString(json);
+        assertTrue(report.contains("\"verdict\": \"NOT_FOUND\"")
+                && report.contains("\"pid\"") && report.contains("\"main\": "
+                + AuditReport.quote(Empty.class.getName())), report);
+    }
+
+    interface Check {
+        void with(String pid) throws Exception;
+    }
+
+    private static void withProbe(Path secretFile, Class<?> probe, Check check)
+            throws Exception {
+        Process process = new ProcessBuilder(List.of(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-cp", System.getProperty("java.class.path"),
+                probe.getName(), secretFile.toString()))
+                .redirectErrorStream(true)
+                .start();
+        try (BufferedReader output = new BufferedReader(
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line = output.readLine();
+            while (line != null && line.startsWith("Picked up ")) {
+                line = output.readLine();         // the JVM announcing JAVA_TOOL_OPTIONS
+            }
+            assertTrue("ready".equals(line), "the probe said: " + line);
+            check.with(String.valueOf(process.pid()));
+        } finally {
+            process.getOutputStream().close();
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
+    /**
      * Starts the probe, checks it, and stops it again.
      *
      * <p>The secret goes to the probe as a <b>file path</b>, never as an
@@ -66,6 +154,9 @@ class HeapCheckTest {
             // The probe says when it is ready; without that the dump might be
             // taken before the secret is even there.
             String line = output.readLine();
+            while (line != null && line.startsWith("Picked up ")) {
+                line = output.readLine();         // the JVM announcing JAVA_TOOL_OPTIONS
+            }
             assertTrue("ready".equals(line), "the probe said: " + line);
             return HeapCheck.run(String.valueOf(process.pid()), secretFile, null);
         } finally {
