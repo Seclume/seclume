@@ -155,7 +155,8 @@ class MutualTlsTest {
                     readExactly(tls, 1);
                 }
             });
-            assertNotNull(server.failure(), "the server should have rejected the connection");
+            assertNotNull(server.failureWhenDone(),
+                    "the server should have rejected the connection");
         }
     }
 
