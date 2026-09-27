@@ -27,6 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
 class HeapCheckTest {
 
     private static final String SECRET = "hunter2-seclume-heapcheck-probe";
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
 
     @Test
     void itFindsASecretThatIsHeldInAString(@TempDir Path directory) throws Exception {
@@ -56,7 +57,7 @@ class HeapCheckTest {
         Files.writeString(other, otherSecret, StandardCharsets.UTF_8);
         Path binary = secrets.resolve("key.der");
         byte[] key = new byte[48];
-        new java.security.SecureRandom().nextBytes(key);
+        RANDOM.nextBytes(key);
         key[0] = (byte) 0xff;                     // not UTF-8: looked for as bytes
         Files.write(binary, key);
 

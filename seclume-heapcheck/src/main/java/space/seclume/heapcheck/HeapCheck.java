@@ -128,11 +128,13 @@ public final class HeapCheck {
         }
 
         boolean takesDump = options.dumpFile() == null;
-        Path dump = takesDump ? options.keep() : options.dumpFile();
+        Path dump = null;
         try {
             AuditReport.Target target;
             if (takesDump) {
-                if (dump == null) {
+                if (options.keep() != null) {
+                    dump = options.keep();
+                } else {
                     dump = Files.createTempFile("seclume-heapcheck-", ".hprof");
                     Files.delete(dump);           // the JVM insists on writing it itself
                 }
@@ -140,6 +142,7 @@ public final class HeapCheck {
                 ProcessHeap.Jvm jvm = ProcessHeap.dump(options.pid(), dump);
                 target = new AuditReport.Target(options.pid(), jvm, null);
             } else {
+                dump = options.dumpFile();
                 if (!Files.isRegularFile(dump)) {
                     System.err.println("no heap dump at " + dump);
                     return 2;
@@ -166,7 +169,7 @@ public final class HeapCheck {
             return report.clean() ? 0 : 1;
         } catch (IOException | RuntimeException e) {
             System.err.println("could not check " + (takesDump ? "process " + options.pid()
-                    : dump) + " - " + e.getMessage());
+                    : options.dumpFile()) + " - " + e.getMessage());
             return 2;
         } finally {
             if (takesDump && options.keep() == null && dump != null) {

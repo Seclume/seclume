@@ -157,7 +157,9 @@ final class ReloadingKeyManager extends X509ExtendedKeyManager implements AutoCl
 
     /** For tests: look now. */
     boolean checkNow() {
-        return keyWatch.checkNow() | chainWatch.checkNow();
+        boolean key = keyWatch.checkNow();             // both look, whatever the first found
+        boolean chain = chainWatch.checkNow();
+        return key || chain;
     }
 
     /** Stops watching; the keys in use stay until the manager is gone. */
