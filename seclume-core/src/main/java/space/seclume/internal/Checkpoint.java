@@ -28,7 +28,79 @@ public final class Checkpoint {
 
     private static final Map<Object, Consumer<Object>> HOLDERS = new WeakHashMap<>();
 
+    /**
+     * Guards {@link #holding}. While a checkpoint holds, no new secret may be
+     * made: {@code SecretScope} waits here before it allocates anything.
+     */
+    private static final Object GATE = new Object();
+    private static volatile boolean holding;
+    private static long heldSince;
+
+    /**
+     * The longest a secret waits for a checkpoint, in milliseconds
+     * ({@code seclume.crac.holdMillis}): if the restore - or the abort -
+     * never comes round to {@link #release()}, logins carry on rather than
+     * hang forever.
+     */
+    static final long HOLD_MILLIS = Long.getLong("seclume.crac.holdMillis", 60_000);
+
     private Checkpoint() {
+    }
+
+    /**
+     * From now on no new secret is made until {@link #release()}: the window
+     * between a checkpoint's barrier and the image being written stays empty.
+     */
+    public static void hold() {
+        synchronized (GATE) {
+            holding = true;
+            heldSince = System.nanoTime();
+        }
+    }
+
+    /** Lets new secrets be made again - after the restore, or when the checkpoint was refused. */
+    public static void release() {
+        synchronized (GATE) {
+            holding = false;
+            GATE.notifyAll();
+        }
+    }
+
+    /** Whether a checkpoint holds new secrets back right now. */
+    public static boolean holding() {
+        return holding;
+    }
+
+    /**
+     * Waits while a checkpoint holds new secrets back; returns at once
+     * otherwise. Called by {@code SecretScope} before every allocation.
+     *
+     * @throws IllegalStateException if the thread is interrupted while waiting;
+     *         the interrupt flag is kept
+     */
+    public static void awaitOpen() {
+        if (!holding) {
+            return;
+        }
+        synchronized (GATE) {
+            while (holding) {
+                long left = HOLD_MILLIS - (System.nanoTime() - heldSince) / 1_000_000L;
+                if (left <= 0) {
+                    // The restore or abort never released it: carry on rather
+                    // than hang every login of the process.
+                    holding = false;
+                    GATE.notifyAll();
+                    return;
+                }
+                try {
+                    GATE.wait(left);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted while a checkpoint holds new "
+                            + "secrets back", e);
+                }
+            }
+        }
     }
 
     /**
