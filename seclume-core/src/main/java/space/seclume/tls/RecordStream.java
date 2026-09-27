@@ -86,12 +86,12 @@ final class RecordStream implements AutoCloseable {
         writing = protection;
     }
 
-    /** Puts a different transport underneath, keeping both keys as they are. */
     /** The handshake is over: from now on a ChangeCipherSpec is a protocol error. */
     void established() {
         established = true;
     }
 
+    /** Puts a different transport underneath, keeping both keys as they are. */
     void replaceTransport(Transport replacement) {
         this.transport = replacement;
     }

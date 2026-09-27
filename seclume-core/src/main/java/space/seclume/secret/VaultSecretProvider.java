@@ -79,10 +79,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     private final int maxLength;
     private final Clock clock;
 
-    /** The credential in hand, or {@code null} before the first fetch. */
     /** Ten years. See {@link #refresh}. */
     static final long MAX_LEASE_SECONDS = 10L * 366 * 24 * 3600;
 
+    /** The credential in hand, or {@code null} before the first fetch. */
     private SecretScope cached;
     private Instant fetchedAt;
     private Instant validUntil;

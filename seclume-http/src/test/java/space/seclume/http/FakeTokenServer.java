@@ -36,6 +36,8 @@ final class FakeTokenServer implements AutoCloseable {
     /** {@code expires_in} as a JSON value - a number, or a string as older Entra ID sends. */
     String expiresIn = "3600";
     boolean chunked;
+    /** When set, the whole chunked body as written - for answers that lie about their sizes. */
+    String rawChunkedBody;
     String tokenType = "Bearer";
 
     /** For private_key_jwt: the key that checks the client assertion, and the audience. */
@@ -177,7 +179,10 @@ final class FakeTokenServer implements AutoCloseable {
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         String head = "HTTP/1.1 " + status + (status == 200 ? " OK" : " Unauthorized")
                 + "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n";
-        if (chunked) {
+        if (rawChunkedBody != null) {
+            out.write((head + "Transfer-Encoding: chunked\r\n\r\n" + rawChunkedBody)
+                    .getBytes(StandardCharsets.US_ASCII));
+        } else if (chunked) {
             int half = bytes.length / 2;
             out.write((head + "Transfer-Encoding: chunked\r\n\r\n"
                     + Integer.toHexString(half) + "\r\n").getBytes(StandardCharsets.US_ASCII));

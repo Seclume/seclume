@@ -163,6 +163,7 @@ class QuiesceTest {
     @Test
     void anOpenSecretRefusesTheCheckpoint() throws Exception {
         try (SeclumePool pool = pool(); SecretScope held = SecretScope.allocate(16)) {
+            assertEquals(16, held.segment().byteSize());
             IllegalStateException refused = assertThrows(IllegalStateException.class,
                     () -> SeclumeCrac.quiesce(pool, 300));
             assertTrue(refused.getMessage().contains("secret"), refused.getMessage());

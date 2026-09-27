@@ -313,7 +313,9 @@ final class OAuthToken implements BearerSource {
             if (size == 0) {
                 return at;
             }
-            if (size < 0 || at + size > MAX_ANSWER) {
+            // In long: at + size in int wrapped for a size near 2^31 and slipped
+            // past the check as a negative number.
+            if (size < 0 || (long) at + size > MAX_ANSWER) {
                 throw new IOException("the token endpoint's answer is larger than "
                         + MAX_ANSWER + " bytes");
             }
