@@ -77,6 +77,7 @@
     <module>seclume-http</module>
     <module>seclume-jwt</module>
     <module>seclume-rabbitmq</module>
+    <module>seclume-keys</module>
     <module>seclume-quarkus</module>
     <module>seclume-spring-boot-starter</module>
     <module>seclume-bench</module>

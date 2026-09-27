@@ -62,6 +62,22 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- Private keys off the heap, optional: seclume.ssl.bundles.<name>
+         turn into Spring SSL bundles whose key is in OpenSSL, and
+         seclume.server.ssl.bundle gives Tomcat HTTPS with one of them. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-keys</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-tomcat</artifactId>
+      <version>${spring.boot.version}</version>
+      <optional>true</optional>
+    </dependency>
+
     <!-- Mail, optional: seclume.mail.send / seclume.mail.read turn into a
          Jakarta Mail Session and a JavaMailSender - only when seclume-mail
          and Spring's mail support are there. -->

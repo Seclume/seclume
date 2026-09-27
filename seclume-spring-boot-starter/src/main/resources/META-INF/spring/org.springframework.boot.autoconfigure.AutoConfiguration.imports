@@ -2,3 +2,4 @@ space.seclume.spring.SeclumeAutoConfiguration
 space.seclume.spring.SeclumeConnectionDetailsAutoConfiguration
 space.seclume.spring.SeclumeMailAutoConfiguration
 space.seclume.spring.SeclumeHttpClientsAutoConfiguration
+space.seclume.spring.SeclumeSslAutoConfiguration
