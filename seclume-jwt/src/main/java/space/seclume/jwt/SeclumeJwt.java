@@ -59,8 +59,15 @@ public final class SeclumeJwt implements AutoCloseable {
     public static SeclumeJwt of(String spec) {
         SigningKey key = SigningKey.of(spec, "leeway");
         String leeway = key.options.get("leeway");
-        return new SeclumeJwt(key, Duration.ofSeconds(leeway == null ? 60
-                : Long.parseLong(leeway)));
+        long seconds;
+        try {
+            seconds = leeway == null ? 60 : Long.parseLong(leeway);
+        } catch (NumberFormatException e) {
+            key.close();
+            throw new IllegalArgumentException("leeway is a number of seconds, not '" + leeway
+                    + "'", e);
+        }
+        return new SeclumeJwt(key, Duration.ofSeconds(seconds));
     }
 
     /**

@@ -195,7 +195,7 @@ class OAuthClientCredentialsTest {
             assertEquals(List.of("private_key_jwt"), tokens.clientAuths);
             String header = tokens.assertionHeaders.get(0);
             assertTrue(header.contains("\"alg\":\"RS256\"") && header.contains("\"kid\":\"k1\"")
-                    && header.contains("\"x5t\":\"") && header.contains("\"x5t#S256\":\""),
+                    && header.contains("\"x5t#S256\":\"") && !header.contains("\"x5t\":"),
                     header);
             assertTrue(api.received.stream().allMatch(FakeHttpsServer.Received::authorized));
 

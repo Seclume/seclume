@@ -30,8 +30,8 @@ import space.seclume.internal.TrustChoice;
  *       (RFC 7523): no secret at all, but a JWT signed with the application's
  *       private key - {@code assertion-alg} (RS256 by default; PS256, ES256 ...),
  *       {@code assertion-kid}, and {@code assertion-certificate}, the path of
- *       its certificate, whose thumbprints go into the header as {@code x5t}
- *       and {@code x5t#S256} (Entra ID wants them);
+ *       its certificate, whose SHA-256 thumbprint goes into the header as
+ *       {@code x5t#S256} (Entra ID looks the certificate up by it);
  *   <li>{@code token-tlsRootCert} or {@code token-tlsPin} for a token endpoint
  *       whose CA the JVM does not know - the API's own {@code tlsPin} is for
  *       the API, which is usually another server.
@@ -54,13 +54,12 @@ final class OAuthSettings {
     final String tokenUrl;
     final String assertionAlg;
     final String assertionKid;
-    final String x5t;
     final String x5tS256;
 
     private OAuthSettings(HttpSettings.Endpoint endpoint, String authority, String path,
                           String clientId, String scope, String resource, String audience,
                           ClientAuth clientAuth, String tokenUrl, String assertionAlg,
-                          String assertionKid, String x5t, String x5tS256) {
+                          String assertionKid, String x5tS256) {
         this.endpoint = endpoint;
         this.authority = authority;
         this.path = path;
@@ -72,7 +71,6 @@ final class OAuthSettings {
         this.tokenUrl = tokenUrl;
         this.assertionAlg = assertionAlg;
         this.assertionKid = assertionKid;
-        this.x5t = x5t;
         this.x5tS256 = x5tS256;
     }
 
@@ -120,16 +118,13 @@ final class OAuthSettings {
             default -> throw new IllegalArgumentException("client-auth is basic, post or "
                     + "private_key_jwt, not '" + clientAuthName + "'");
         };
-        String x5t = null;
         String x5tS256 = null;
         if (clientAuth == ClientAuth.PRIVATE_KEY_JWT) {
             if (!options.containsKey("max-length") && !options.containsKey("maxLength")) {
                 options.put("max-length", "16384");             // a PEM private key
             }
             if (assertionCertificate != null) {
-                String[] thumbprints = thumbprints(assertionCertificate);
-                x5t = thumbprints[0];
-                x5tS256 = thumbprints[1];
+                x5tS256 = thumbprint(assertionCertificate);
             }
         } else if (assertionAlg != null || assertionKid != null || assertionCertificate != null) {
             throw new IllegalArgumentException("assertion-alg, assertion-kid and "
@@ -161,24 +156,21 @@ final class OAuthSettings {
         return new OAuthSettings(new HttpSettings.Endpoint(host, port, trust, connectTimeout,
                 timeout), port == 443 ? name : name + ":" + port, path, clientId, scope,
                 resource, audience, clientAuth, tokenUrl,
-                assertionAlg == null ? "RS256" : assertionAlg, assertionKid, x5t, x5tS256);
+                assertionAlg == null ? "RS256" : assertionAlg, assertionKid, x5tS256);
     }
 
-    /** SHA-1 and SHA-256 thumbprints of a certificate, base64url - public, like it. */
-    private static String[] thumbprints(String path) {
+    /** The SHA-256 thumbprint of a certificate, base64url - public, like it. */
+    private static String thumbprint(String path) {
         try (java.io.InputStream in = java.nio.file.Files.newInputStream(
                 java.nio.file.Path.of(path))) {
             java.security.cert.Certificate certificate = java.security.cert.CertificateFactory
                     .getInstance("X.509").generateCertificate(in);
             byte[] der = certificate.getEncoded();
             java.util.Base64.Encoder encoder = java.util.Base64.getUrlEncoder().withoutPadding(); // seclume-allow: the certificate thumbprint - public
-            // x5t is defined as the SHA-1 thumbprint (RFC 7515 4.1.7): an identifier that
-            // picks which registered certificate to check against, not a signature - the
-            // signature is RS256/PS256/ES256. Entra ID looks it up; x5t#S256 goes beside it.
-            // nosemgrep: java.lang.security.audit.crypto.use-of-sha1.use-of-sha1
-            byte[] sha1 = java.security.MessageDigest.getInstance("SHA-1").digest(der); // seclume-allow: hashing the public certificate. nosemgrep: java.lang.security.audit.crypto.use-of-sha1.use-of-sha1
-            byte[] sha256 = java.security.MessageDigest.getInstance("SHA-256").digest(der); // seclume-allow: hashing the public certificate
-            return new String[] {encoder.encodeToString(sha1), encoder.encodeToString(sha256)};
+            // x5t#S256 (RFC 7515 4.1.8) - the SHA-256 thumbprint. The older x5t is
+            // SHA-1 and is not sent.
+            return encoder.encodeToString(java.security.MessageDigest.getInstance("SHA-256") // seclume-allow: hashing the public certificate
+                    .digest(der));
         } catch (java.io.IOException | java.security.GeneralSecurityException e) {
             throw new IllegalArgumentException("assertion-certificate: " + path
                     + " is not a readable X.509 certificate", e);

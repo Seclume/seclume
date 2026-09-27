@@ -20,7 +20,7 @@ JDK's own crypto.
 ### HTTP: OAuth 2.0 without a client secret (`client-auth=private_key_jwt`)
 
 The token request carries a JWT assertion signed with the application's private key (RFC
-7523), with `x5t` and `x5t#S256` from `assertion-certificate=` for Entra ID. No client secret
+7523), with the `x5t#S256` thumbprint from `assertion-certificate=` for Entra ID. No client secret
 is needed at all.
 
 ### TCK: secrets of bytes

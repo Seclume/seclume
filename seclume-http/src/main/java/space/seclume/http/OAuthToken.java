@@ -152,8 +152,7 @@ final class OAuthToken implements AutoCloseable {
     private String assertion() {
         long now = java.time.Instant.now().getEpochSecond();
         java.util.Map<String, Object> header = new java.util.LinkedHashMap<>();
-        if (oauth.x5t != null) {
-            header.put("x5t", oauth.x5t);
+        if (oauth.x5tS256 != null) {
             header.put("x5t#S256", oauth.x5tS256);
         }
         java.util.Map<String, Object> claims = new java.util.LinkedHashMap<>();

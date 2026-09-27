@@ -523,7 +523,7 @@ signs a short JWT with its private key instead: five minutes, for this token end
 never twice (`jti`). The key is decoded and held by OpenSSL, never by the JVM (see
 [Signing keys](#signing-keys-jwt-and-webhooks)). `assertion-alg=` (RS256 by default; PS256,
 ES256 ...), `assertion-kid=`, and `assertion-certificate=` for the certificate whose
-thumbprints Entra ID wants in the header (`x5t`, `x5t#S256`). With it, the Entra ID app
+SHA-256 thumbprint goes into the header as `x5t#S256` (the SHA-1 `x5t` is not sent). With it, the Entra ID app
 registration needs no client secret at all, so there is none to steal.
 
 **The credential stays with its origin.** It goes to the scheme, host and port of the URL and
