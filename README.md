@@ -3,15 +3,15 @@
 **Java heap dumps without secrets.**
 
 Every heap dump of a Java application contains the credentials it logs in with: the database
-password, the mail password or OAuth token, the Kafka and Redis logins. `jmap`,
+password, the mail password or OAuth token, the API keys, the Kafka and Redis logins. `jmap`,
 `-XX:+HeapDumpOnOutOfMemoryError`, the Actuator's `/heapdump`, the file attached to a support
 ticket. It does not matter that the password came from Vault. The moment the client library
 turns Vault's answer into a `String` and keeps it, it is on the heap, and the heap is what
 gets dumped.
 
 seclume is a set of clients built so that this does not happen: JDBC drivers for PostgreSQL,
-MySQL/MariaDB, SQL Server and Oracle, and clients for Kafka, Redis and mail (SMTP, IMAP,
-POP3). Each logs
+MySQL/MariaDB, SQL Server and Oracle, and clients for Kafka, Redis, mail (SMTP, IMAP,
+POP3) and HTTPS APIs. Each logs
 in from native memory, and the credential never becomes a heap object:
 
 ```
@@ -69,9 +69,10 @@ line.
 
 A password or token never becomes a `String`, a `char[]` or a `byte[]`. It goes from its
 source (a file, Vault, a cloud secret manager, a managed identity) into native memory, is used
-there for the login, and is wiped. All four database wire protocols and the SMTP, IMAP and POP3 logins are
-written from scratch for this; no vendor driver is used, wrapped or delegated to. Redis and
-mail always encrypt with seclume's own TLS 1.3, the databases with `tlsStack=seclume`, and
+there for the login, and is wiped. All four database wire protocols, the SMTP, IMAP and POP3
+logins and the HTTP client are
+written from scratch for this; no vendor driver is used, wrapped or delegated to. Redis, mail
+and HTTP always encrypt with seclume's own TLS 1.3, the databases with `tlsStack=seclume`, and
 then the session keys stay off the heap as well. The test suite holds the same line by taking
 real heap dumps and searching them, with a negative control that must fail.
 
@@ -207,6 +208,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **Kafka** | SASL/SCRAM (SHA-256, SHA-512) with the password off the heap: `seclume-kafka` | [FEATURES.md](FEATURES.md#kafka) |
 | **Redis** | Jedis logged in from native memory, over TLS 1.3 with keys off the heap: `seclume-redis` | [FEATURES.md](FEATURES.md#redis) |
 | **Mail** | Sending (SMTP) and reading (IMAP, POP3), logged in with PLAIN, LOGIN or XOAUTH2 from native memory over STARTTLS or implicit TLS 1.3; a Jakarta Mail session for Spring's `JavaMailSender`, Spring Integration and Camel: `seclume-mail` | [FEATURES.md](FEATURES.md#mail) |
+| **HTTPS APIs** | API keys, bearer tokens and Basic passwords written from native memory, per request and only to their own origin; standalone or as the request factory for Spring's `RestClient` and `RestTemplate`: `seclume-http` | [FEATURES.md](FEATURES.md#https-apis) |
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
 | | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build | [FEATURES.md](FEATURES.md#quarkus) |
 | | CRaC / Lambda SnapStart with `seclume-crac`: the checkpoint image holds no password | [FEATURES.md](FEATURES.md#the-pool) |

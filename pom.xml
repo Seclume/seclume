@@ -74,6 +74,7 @@
     <module>seclume-kafka</module>
     <module>seclume-redis</module>
     <module>seclume-mail</module>
+    <module>seclume-http</module>
     <module>seclume-quarkus</module>
     <module>seclume-spring-boot-starter</module>
     <module>seclume-bench</module>

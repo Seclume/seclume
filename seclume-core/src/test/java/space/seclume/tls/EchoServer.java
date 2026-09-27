@@ -78,6 +78,17 @@ final class EchoServer implements AutoCloseable {
         return failure.get();
     }
 
+    /**
+     * The same, once the server has finished with its connection. The client
+     * can see the server's refusal - an alert - before the server's thread has
+     * recorded it, so a test asserting that the server refused waits for that
+     * thread first.
+     */
+    Exception failureWhenDone() throws InterruptedException {
+        thread.join(java.time.Duration.ofSeconds(30));
+        return failure.get();
+    }
+
     private void serve() {
         try (SSLSocket accepted = (SSLSocket) socket.accept()) {
             accepted.setSoTimeout(60_000);

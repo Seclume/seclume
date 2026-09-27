@@ -5,6 +5,25 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### HTTP: `seclume-http`, REST APIs with the API key or token off the heap
+
+A new module: an HTTPS client whose credential (a bearer token, an API key in a header of the
+API's own, or a Basic password) is read from the secret provider for each request, written
+as a header line from native memory into seclume's own TLS 1.3, and wiped. It goes only to the
+URL's origin: requests elsewhere are refused, redirects are not followed, and a request that
+sets the header itself is refused. HTTP/1.1 with kept connections, and fixed-length, chunked
+and close-delimited bodies. It works on its own or as `SeclumeHttpRequestFactory` below
+Spring's `RestClient` and `RestTemplate`. `NoCredentialOnTheHeapTest` proves it with the
+servers in a JVM of their own, including a control.
+
+### TLS: a server's `user_canceled` before its `close_notify` ends the stream, not the read
+
+The JDK's TLS server sends the warning alert `user_canceled` ahead of its `close_notify` when
+it closes right after answering, which RFC 8446 6.1 allows. The own stack threw it as an
+error. An HTTP server with `Connection: close` hit it first, but any JDK-based server could.
+It is now read as the announcement of the close that follows. `UserCanceledCloseTest`
+reproduces it against the old code.
+
 ### TLS: the post-quantum key exchange is tested end to end in CI
 
 The own stack has offered the hybrid X25519MLKEM768 wherever OpenSSL 3.5 is there, but only

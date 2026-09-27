@@ -442,6 +442,61 @@ mailbox through Jakarta Mail, Spring's `JavaMailSenderImpl`) are covered by
 `SmtpConnectionTest`, `MailboxLoginTest`, `SeclumeTransportTest`, `SeclumeStoreTest` and
 `SpringJavaMailSenderTest`.
 
+## HTTPS APIs
+
+`seclume-http` calls REST APIs with the API key, bearer token or Basic password off the heap:
+Elasticsearch and OpenSearch, payment providers, AI APIs, an internal service. On its own, or
+below Spring's `RestClient` and `RestTemplate` as their request factory:
+
+```java
+SeclumeHttp api = SeclumeHttp.of(
+        "https://api.example.com/v1?provider=file&path=/run/secrets/api-token");   // Bearer
+
+RestClient rest = RestClient.builder()
+        .requestFactory(new SeclumeHttpRequestFactory(api))
+        .baseUrl("https://api.example.com/v1")
+        .build();
+Order order = rest.get().uri("/orders/{id}", 42).retrieve().body(Order.class);
+
+// Elasticsearch with an API key, from Vault
+"https://search.internal:9200?auth=header&header=Authorization&prefix=ApiKey%20&provider=vault&..."
+// Basic
+"https://registry.internal?auth=basic&user=deploy&provider=file&path=/run/secrets/registry"
+// a header of the API's own
+"https://api.example.com?auth=header&header=X-Api-Key&provider=..."
+```
+
+The usual way, a token set with `setBearerAuth`, a default header or an interceptor, is a
+`String` for as long as the client lives, and JSSE encrypts it from heap buffers again with
+every request. Here the application never sets it. For each request the client reads the
+secret from the provider, builds the header line in native memory (for Basic, the base64 of
+`user:password` as well) and writes it into seclume's own TLS 1.3. After that it is wiped. A
+rotated key takes effect with the next request. Providers that fetch over the network (Vault,
+the cloud secret managers, a managed identity) keep their own native cache, so they are not
+asked on every request.
+
+**The credential stays with its origin.** It goes to the scheme, host and port of the URL and
+nowhere else. A request for another origin is refused rather than sent without it, redirects
+are not followed (a 3xx comes back as it is), and a request that sets the credential's header
+itself is refused: its value would be a `String` already. A secret with a line break in it is
+not sent, since the break would end the header early. Only `https://`.
+
+HTTP/1.1 with kept connections (`maxIdle`, `idleTimeout`). Responses may be of fixed length,
+chunked or delimited by the close. A GET, PUT or DELETE that finds a kept connection closed by
+the server is sent again on a new one; a POST is not. `tlsPin=` or `tlsRootCert=` for a CA
+the JVM does not know, `connectTimeout=` and `timeout=` in milliseconds.
+
+**What is not off the heap: requests and responses.** Paths, headers and bodies are the
+application's data. It is the same line as for the databases and mail.
+
+Shown by `NoCredentialOnTheHeapTest`: three HTTPS servers run in a JVM of their own and make up
+a token, a password and an API key. This JVM calls them with a bearer token on its own, with
+Basic through `RestClient` and with a key header through `RestTemplate`, over kept
+connections. Then it searches its heap dump for all three and for the Basic base64: none is
+found, and the control (the token read into a `String` on purpose) is. The protocol (every
+way a body ends, connection reuse, the retry, the origin rule, a wrong certificate) is covered
+by `SeclumeHttpTest` and `SpringRestClientTest`.
+
 ## GraalVM native image
 
 The library builds as a native image and connects from one to all four databases, with the
