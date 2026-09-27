@@ -840,6 +840,74 @@ GoogleCredentials credentials = SeclumeGcp.credentials(
   `String`. The key itself, valid until it is deleted, stays in OpenSSL.
 - **Test:** a token endpoint checks every assertion against the account's public key.
 
+## Kubernetes, Git and gRPC
+
+`SeclumeSslSocketFactory` (in `seclume-http`) is an `SSLSocketFactory` for HTTP clients that
+were not written for seclume. The client gets a placeholder instead of the secret, and builds
+its requests with it. The factory's sockets are seclume's TLS 1.3: they check the server's
+certificate themselves (the JVM's trust, `tlsRootCert` or `tlsPin`) and write the secret
+from native memory where the placeholder stands.
+
+```java
+SeclumeSslSocketFactory tls = SeclumeSslSocketFactory.of("tlsRootCert=/etc/ca.pem");
+String token = SeclumeSslSocketFactory.placeholder("provider=file&path=/run/secrets/token");
+OkHttpClient client = new OkHttpClient.Builder()
+        .sslSocketFactory(tls, tls.trustManager()).hostnameVerifier(tls.hostnameVerifier()).build();
+// request.header("Authorization", "Bearer " + token)
+```
+
+- **HTTP/1.1:** the sockets follow the framing (heads, bodies, chunks) and rewrite heads
+  only. A placeholder anywhere in a head becomes the secret; `Basic base64(user:placeholder)`
+  is decoded and encoded again in native memory. Bodies go through untouched.
+- **HTTP/2** (`tls.http2()`): the sockets offer and require `h2`. They decode each header
+  block and encode it again for the server. Every field is a literal without indexing, so
+  the server's dynamic table stays empty; a field with a secret is *never indexed*. DATA
+  frames go through untouched.
+- **Rotation:** the secret is read for each request, so a rotated token file is picked up
+  at once.
+- **Safety:** placeholders carry a random per-process nonce, and an unknown one fails the
+  request instead of being sent.
+
+### Kubernetes: `seclume-kubernetes`
+
+```java
+ApiClient client = SeclumeKubernetes.inCluster();          // the pod's CA and token
+ApiClient client = SeclumeKubernetes.client("https://api.cluster:6443"
+        + "?tlsRootCert=/etc/kube/ca.crt&provider=file&path=/etc/kube/token");
+```
+
+`ClientBuilder.cluster()` puts the service account token into a `String`, and a new copy
+into every request. Here the client holds a placeholder. The token is read from its
+projected file for each request, so kubelet's rotations need no restart.
+
+### Git: `seclume-jgit`
+
+```java
+HttpTransport.setConnectionFactory(SeclumeGit.connections("tlsRootCert=/etc/git-ca.pem"));
+Git.cloneRepository().setURI("https://git.example.com/app.git")
+        .setCredentialsProvider(SeclumeGit.credentials("deploy", "provider=file&path=/run/secrets/git-token"))
+        .call();
+```
+
+The password or access token goes into JGit's Basic login as a placeholder. It is written in
+native memory when the request leaves.
+
+### gRPC: `seclume-grpc`
+
+```java
+ManagedChannel channel = SeclumeGrpc.channel("api.example.com", 443, "").build();
+CallCredentials token = SeclumeGrpc.bearer("provider=file&path=/run/secrets/token");
+stub.withCallCredentials(token).call(request);
+```
+
+- **Transport:** the channel is gRPC's OkHttp transport over the HTTP/2 sockets above.
+  `SeclumeGrpc.header("x-api-key", spec)` covers API keys.
+- **Limits:** the transport must not Huffman-code header strings; gRPC's OkHttp transport
+  does not, and a block that does is refused rather than sent. The Netty transport is not
+  covered: it does its own TLS.
+- **Tests:** a gRPC server in another process checks every call; the tests cover rotation,
+  header blocks larger than one frame, and the heap.
+
 ## LDAP and Active Directory
 
 `seclume-ldap` gives JNDI, and with it Spring LDAP and Spring Security's LDAP support, a

@@ -216,6 +216,10 @@ Everything below works on all four databases unless the row says otherwise.
 | **AWS** | A SigV4 signer for the AWS SDK (S3, SQS, DynamoDB, MinIO ...) with the secret access key in native memory; temporary credentials (EC2, ECS/EKS, IRSA) with the session token off the heap too; presigned S3 URLs: `seclume-aws` | [FEATURES.md](FEATURES.md#aws) |
 | **Azure Storage** | Shared Key signing for Blob, Queue, File and Data Lake with the account key in native memory: `seclume-azure` | [FEATURES.md](FEATURES.md#azure-storage) |
 | **Google Cloud** | Service account credentials whose private key stays in OpenSSL, for every Google Cloud library: `seclume-gcp` | [FEATURES.md](FEATURES.md#google-cloud) |
+| **Kubernetes** | The official Java client with the service account token off the heap, rotation included: `seclume-kubernetes` | [FEATURES.md](FEATURES.md#kubernetes-git-and-grpc) |
+| **Git** | JGit over HTTPS with the password or token off the heap: `seclume-jgit` | [FEATURES.md](FEATURES.md#kubernetes-git-and-grpc) |
+| **gRPC** | Bearer tokens and API keys written into HTTP/2 header blocks from native memory: `seclume-grpc` | [FEATURES.md](FEATURES.md#kubernetes-git-and-grpc) |
+| | Any HTTP client that takes an `SSLSocketFactory` (OkHttp, `HttpsURLConnection`): `SeclumeSslSocketFactory` in `seclume-http` | [FEATURES.md](FEATURES.md#kubernetes-git-and-grpc) |
 | **LDAP / Active Directory** | JNDI, Spring LDAP and Spring Security binds with the password written from native memory over TLS 1.3: `seclume-ldap` | [FEATURES.md](FEATURES.md#ldap-and-active-directory) |
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
 | | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build | [FEATURES.md](FEATURES.md#quarkus) |
