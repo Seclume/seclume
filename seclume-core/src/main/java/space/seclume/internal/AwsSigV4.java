@@ -174,21 +174,13 @@ public final class AwsSigV4 {
 
     private static final String HEX_UPPER = "0123456789ABCDEF";
 
-    /** What AWS expects: RFC 3986, and a slash is not safe. */
+    /**
+     * What AWS expects: RFC 3986 over the text's UTF-8 bytes, and a slash is
+     * not safe. (Encoding each {@code char} on its own gave {@code %FC} for
+     * {@code ü} where AWS signs {@code %C3%BC}.)
+     */
     public static String urlEncode(String text) {
-        StringBuilder out = new StringBuilder(text.length() + 8); // seclume-allow: a user name, a key id or a secret's name - never the secret
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            boolean safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
-                    || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
-            if (safe) {
-                out.append(c);
-            } else {
-                out.append('%')
-                        .append(Character.toUpperCase(Character.forDigit((c >> 4) & 0xf, 16)))
-                        .append(Character.toUpperCase(Character.forDigit(c & 0xf, 16)));
-            }
-        }
-        return out.toString();
+        return java.net.URLEncoder.encode(text, java.nio.charset.StandardCharsets.UTF_8)
+                .replace("+", "%20").replace("*", "%2A").replace("%7E", "~");
     }
 }

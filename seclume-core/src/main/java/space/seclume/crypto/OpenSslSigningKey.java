@@ -104,6 +104,29 @@ public final class OpenSslSigningKey implements AutoCloseable {
     }
 
     /**
+     * The public half, as a DER {@code SubjectPublicKeyInfo} - what a
+     * certificate carries and {@code X509EncodedKeySpec} reads. Public, and so
+     * a {@code byte[]}.
+     */
+    public byte[] publicKey() {
+        checkOpen();
+        int length = (int) Native.invoke(Native.PUBLIC_KEY, key, NULL);
+        if (length <= 0) {
+            throw new IllegalStateException("OpenSSL could not encode the public key");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(length);
+            MemorySegment cursor = arena.allocate(ADDRESS);
+            cursor.set(ADDRESS, 0, out);
+            if ((int) Native.invoke(Native.PUBLIC_KEY, key, cursor) != length) {
+                throw new IllegalStateException("OpenSSL encoded the public key twice "
+                        + "differently");
+            }
+            return out.toArray(ValueLayout.JAVA_BYTE);
+        }
+    }
+
+    /**
      * Signs {@code length} bytes of {@code message}, hashing them with
      * {@code digest} ({@code SHA256}, {@code SHA384}, {@code SHA512}); with
      * {@code pss}, RSA-PSS with a salt as long as the digest.
@@ -216,6 +239,7 @@ public final class OpenSslSigningKey implements AutoCloseable {
         static final MethodHandle SIGN = bind("EVP_DigestSign",
                 JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG);
         static final MethodHandle KEY_FREE = bind("EVP_PKEY_free", null, ADDRESS);
+        static final MethodHandle PUBLIC_KEY = bind("i2d_PUBKEY", JAVA_INT, ADDRESS, ADDRESS);
 
         private static MethodHandle bind(String name, ValueLayout result,
                                          ValueLayout... arguments) {

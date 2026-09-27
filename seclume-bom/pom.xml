@@ -90,6 +90,26 @@
       </dependency>
       <dependency>
         <groupId>space.seclume</groupId>
+        <artifactId>seclume-keys</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-ssh</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-aws</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-ldap</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
         <artifactId>seclume-quarkus</artifactId>
         <version>${project.version}</version>
       </dependency>

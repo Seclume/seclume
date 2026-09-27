@@ -5,6 +5,47 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Private keys off the heap: `seclume-keys`, `seclume-ssh`
+
+RSA and EC private keys are decoded by OpenSSL from native memory and kept there. A JCA
+provider signs with them. Uses:
+
+- TLS servers: an `SSLContext`, a `KeyManagerFactory`, or `SeclumeTomcat` for embedded Tomcat.
+- Spring SSL bundles, via `seclume.ssl.bundles.<name>` and `seclume.server.ssl.bundle`.
+- SSH/SFTP logins with Apache MINA SSHD.
+
+### AWS: `seclume-aws`
+
+A SigV4 signer for the AWS SDK for Java 2. The secret access key is read into native memory
+for each signature and wiped afterwards. It works for S3, SQS and every other client, and for
+S3-compatible stores. Its signatures are compared byte for byte with the SDK's own signer.
+Async clients are supported too: their body is collected before it is signed.
+
+### Spring Boot: AWS, LDAP and SSH from `application.properties`
+
+| Properties | What you get |
+| --- | --- |
+| `seclume.aws.*` | A customizer for every client Spring Cloud AWS makes |
+| `seclume.ldap.url` | The `LdapContextSource` for `LdapTemplate` and Spring Security |
+| `seclume.ssh.*` | An `SshClient` |
+| `seclume.sftp.*` | Spring Integration's `DefaultSftpSessionFactory` |
+
+### LDAP: `seclume-ldap`
+
+A JNDI socket factory for LDAP, Active Directory and Spring LDAP. It writes the service
+account's password into the simple bind from native memory, over seclume's TLS 1.3.
+
+### AWS signatures: non-ASCII text is encoded as UTF-8
+
+`AwsSigV4.urlEncode` encoded each non-ASCII character by its UTF-16 value (`%FC` for `ü`) where
+AWS signs its UTF-8 bytes (`%C3%BC`). Secrets Manager names and RDS user names with such
+characters could not be signed correctly.
+
+### Tests: `CredentialExpiryTest` waits for the retirement
+
+The pool counts the replacement connection before it retires the old one. The test read the
+retirement count too early and could fail depending on timing.
+
 ### Post-quantum key exchange on Windows
 
 X25519MLKEM768 now runs on Windows too, through CNG, where Windows 11 has
