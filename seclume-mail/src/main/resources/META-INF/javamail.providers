@@ -1,0 +1,2 @@
+# Jakarta Mail finds the seclume-smtp transport here - see SeclumeSmtpTransport.
+protocol=seclume-smtp; type=transport; class=space.seclume.mail.SeclumeSmtpTransport; vendor=seclume;

@@ -5,6 +5,24 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Mail: `seclume-mail`, SMTP with the password or OAuth token off the heap
+
+A new module. It submits mail over SMTP and logs in with `AUTH PLAIN`, `LOGIN` or `XOAUTH2`
+(Microsoft 365, Google) from native memory: the argument is built and base64-encoded off the
+heap and written to seclume's own TLS 1.3 stack, with STARTTLS (`smtp://`, a server without it
+is refused) or implicit TLS (`smtps://`). Bytes injected after the STARTTLS reply are refused.
+The secret providers are the JDBC drivers', including OAuth tokens from the machine's Azure or
+GCP identity. Usable on its own (`SeclumeSmtp`), as the Jakarta Mail transport `seclume-smtp`
+and so from Spring's `JavaMailSenderImpl`; a password handed to Jakarta Mail or Spring is
+refused. The message itself is the application's data and stays a normal heap object; reading
+mail (IMAP) is not covered yet. `NoCredentialOnTheHeapTest` proves it with the server in a JVM
+of its own: neither password nor token nor their base64 wire forms are in the heap dump, and a
+control that puts one there is found.
+
+The README and the project description now say what seclume has become: clients whose
+credentials never reach the heap - databases, Kafka, Redis and mail - rather than JDBC drivers
+alone.
+
 ### TLS: the record layer of `tlsStack=seclume` is up to 3 times faster, its Java AES-GCM 4 times
 
 `RecordBenchmark` (new, no database needed) measures one record sealed and opened. With OpenSSL a

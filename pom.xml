@@ -11,8 +11,9 @@
 
   <name>seclume</name>
   <description>
-    JDBC drivers and a connection pool for PostgreSQL, MySQL, SQL Server and
-    Oracle, whose secrets never appear as a String or char[] on the Java heap.
+    Java clients whose credentials never appear as a String or char[] on the
+    heap: JDBC drivers and a pool for PostgreSQL, MySQL, SQL Server and Oracle,
+    and clients for Kafka, Redis and SMTP mail.
   </description>
   <url>https://seclume.space/</url>
   <inceptionYear>2026</inceptionYear>
@@ -72,6 +73,7 @@
     <module>seclume-crac</module>
     <module>seclume-kafka</module>
     <module>seclume-redis</module>
+    <module>seclume-mail</module>
     <module>seclume-quarkus</module>
     <module>seclume-spring-boot-starter</module>
     <module>seclume-bench</module>

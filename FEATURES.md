@@ -364,6 +364,53 @@ the test JVM holds no copy of the password. Jedis configured the ordinary way le
 and the same check finds it. Lettuce is not covered: it takes the password as a `char[]` and
 encodes it into Netty's buffers.
 
+## Mail
+
+`seclume-mail` submits mail over SMTP with the password or the OAuth token off the heap -
+on its own, as the Jakarta Mail transport `seclume-smtp`, and so from Spring's
+`JavaMailSenderImpl`:
+
+```java
+SeclumeSmtp smtp = SeclumeSmtp.of(
+        "smtp://mail.example.com:587?user=reports&provider=file&path=/run/secrets/smtp");
+smtp.send("reports@example.com", List.of("team@example.com"), out -> message.writeTo(out));
+
+// Spring: no setHost, no setUsername, no setPassword
+sender.setProtocol("seclume-smtp");
+sender.getJavaMailProperties().put("mail.seclume-smtp.url", url);
+
+// Microsoft 365 with the machine's identity - no stored credential at all
+"smtps://smtp.office365.com:465?user=reports@example.com&auth=xoauth2"
+        + "&provider=azure-managed-identity&resource=https://outlook.office365.com"
+```
+
+Jakarta Mail given a password keeps it as a `String` in its `Session` and builds the base64
+`AUTH` argument as another one, and JSSE encrypts it from heap buffers. Here Jakarta Mail
+gets no password, and a password handed to it is refused. The transport logs in itself:
+`AUTH PLAIN`, `LOGIN` or `XOAUTH2`, the argument built and base64-encoded in native memory
+and written to seclume's own TLS 1.3 stack. `smtp://` upgrades with STARTTLS and refuses a
+server that does not offer it; `smtps://` is TLS from the first byte. Bytes a server sends
+after its STARTTLS reply and before the handshake are refused, not read: they could have
+been injected by anyone on the path. `tls=none` exists for a relay without login, and a
+login is then refused, since a credential is never sent in the clear. The secret providers
+are the JDBC drivers': a file, Vault, a cloud secret manager, or an OAuth token from the
+machine's Azure or GCP identity.
+
+**What is not off the heap: the message.** Subject, recipients and body are the
+application's data, made by the application, usually from a template, long before they
+reach a mail library. This is the same line the JDBC drivers draw: the password is not a
+`String`, the rows are. It also means seclume-mail is a transport, not a mail framework:
+MIME is Jakarta Mail's, and reading mail (IMAP) is not covered yet.
+
+Shown by `NoCredentialOnTheHeapTest`: an SMTP server in a JVM of its own makes up a password
+and a token and writes them, and the base64 forms they take on the wire, to files. This JVM
+logs in with PLAIN and LOGIN over STARTTLS, with XOAUTH2 over implicit TLS and through
+Jakarta Mail's `Transport.send`, then dumps its heap and searches it for all five: none is
+found. As a control, the PLAIN argument read into a `String` on purpose is found. The protocol
+itself - every login, dot-stuffing, partial deliveries, a wrong certificate, the STARTTLS
+injection, Spring's `JavaMailSenderImpl` - is covered by `SmtpConnectionTest`,
+`SeclumeSmtpTransportTest` and `SpringJavaMailSenderTest`.
+
 ## GraalVM native image
 
 The library builds as a native image and connects from one to all four databases, with the
