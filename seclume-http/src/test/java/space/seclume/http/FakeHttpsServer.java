@@ -80,8 +80,7 @@ final class FakeHttpsServer implements AutoCloseable {
     }
 
     private void serve(Socket socket) {
-        try (socket) {
-            InputStream in = new BufferedInputStream(socket.getInputStream());
+        try (socket; InputStream in = new BufferedInputStream(socket.getInputStream())) {
             OutputStream out = socket.getOutputStream();
             while (true) {
                 String requestLine = readLine(in);
