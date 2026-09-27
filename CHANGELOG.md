@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### SQL Server and Oracle: two lengths off the wire reached an array allocation unchecked
+
+The first nightly coverage-guided fuzz run found both on 27.09.2026. A `sql_variant` whose
+property count exceeded its length (SQL Server) and a chunked column name whose chunk length
+turned negative when cast to an int (Oracle) ended as `NegativeArraySizeException` - no
+`SQLException`, and nothing a caller or a pool can act on. Both are now refused as a malformed
+answer, which reaches the application as a connection failure. On the same paths the length is
+checked against the buffer before an array of that size is made, so a length that is large
+rather than negative cannot become an `OutOfMemoryError` either. `TdsValuesMalformedTest` and
+`TtcDescribeMalformedTest` reproduce both findings byte for byte against the old code. The
+fuzz workflow now uploads findings from where Jazzer writes them; the first run uploaded none.
+
 ### Mail: `seclume-mail`, SMTP with the password or OAuth token off the heap
 
 A new module. It submits mail over SMTP and logs in with `AUTH PLAIN`, `LOGIN` or `XOAUTH2`

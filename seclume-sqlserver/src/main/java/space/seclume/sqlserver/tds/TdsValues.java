@@ -160,10 +160,14 @@ public final class TdsValues {
 
     /** The raw bytes of the value - for {@code binary}, {@code varbinary}, {@code image}. */
     public static byte[] asBytes(WireBuffer in, int at, int length) {
+        // The slice first: it checks the length against what the buffer holds,
+        // so a length off a hostile wire ends as WireBuffer.Truncated before an
+        // array of that size is asked for - not as NegativeArraySizeException,
+        // and not as an OutOfMemoryError that takes every connection with it.
+        java.lang.foreign.MemorySegment source = in.slice(at, length);
         byte[] value = new byte[length]; // seclume-allow: payload the caller asked for, not a secret
-        for (int i = 0; i < length; i++) {
-            value[i] = in.getByte(at + i);
-        }
+        java.lang.foreign.MemorySegment.copy(source, java.lang.foreign.ValueLayout.JAVA_BYTE, 0,
+                value, 0, length);
         return value;
     }
 
@@ -203,8 +207,20 @@ public final class TdsValues {
      * needed at a fixed place within their properties.
      */
     private static Variant unwrap(WireBuffer in, int at, int length) {
+        if (length < 2) {
+            throw WireBuffer.malformed("a sql_variant of " + length + " bytes has no room "
+                    + "for its type and property count");
+        }
         int base = in.getByte(at) & 0xff;
         int properties = in.getByte(at + 1) & 0xff;
+        // The property count is the server's, up to 255, and what is left for
+        // the value is the length minus it: a count larger than the value made
+        // the value's length negative, and that went to an array allocation as
+        // NegativeArraySizeException. Found by the nightly fuzz run, 27.09.2026.
+        if (properties > length - 2) {
+            throw WireBuffer.malformed("a sql_variant of " + length + " bytes announces "
+                    + properties + " property bytes");
+        }
         int scale = switch (base) {
             case TdsTypes.DECIMAL, TdsTypes.DECIMALN, TdsTypes.NUMERIC, TdsTypes.NUMERICN ->
                     in.getByte(at + 3) & 0xff;                 // precision first, then scale
@@ -493,11 +509,13 @@ public final class TdsValues {
         // One bulk copy and the JDK's decoder, which compacts to Latin-1 where
         // it can - rather than a char at a time into an array that the String
         // constructor then copies and compresses once more.
+        // Through slice, which checks the bounds as getByte does, and before
+        // the allocation: a length off a hostile wire ends as
+        // WireBuffer.Truncated, not as an IndexOutOfBoundsException from the
+        // copy nor as a NegativeArraySizeException from the array.
+        java.lang.foreign.MemorySegment source = in.slice(at, chars * 2);
         byte[] bytes = new byte[chars * 2]; // seclume-allow: payload the caller asked for, not a secret
-        // Through slice, which checks the bounds as getByte does: a length off
-        // a hostile wire ends as WireBuffer.Truncated, not as an
-        // IndexOutOfBoundsException from the copy.
-        java.lang.foreign.MemorySegment.copy(in.slice(at, bytes.length),
+        java.lang.foreign.MemorySegment.copy(source,
                 java.lang.foreign.ValueLayout.JAVA_BYTE, 0, bytes, 0, bytes.length);
         return new String(bytes, java.nio.charset.StandardCharsets.UTF_16LE); // seclume-allow: payload the caller asked for, not a secret
     }
@@ -512,8 +530,10 @@ public final class TdsValues {
      */
     private static String ascii(WireBuffer in, int at, int length,
             java.nio.charset.Charset charset) {
+        // The slice before the array, as in utf16.
+        java.lang.foreign.MemorySegment source = in.slice(at, length);
         byte[] bytes = new byte[length]; // seclume-allow: payload the caller asked for, not a secret
-        java.lang.foreign.MemorySegment.copy(in.slice(at, length),
+        java.lang.foreign.MemorySegment.copy(source,
                 java.lang.foreign.ValueLayout.JAVA_BYTE, 0, bytes, 0, length);
         return new String(bytes, charset); // seclume-allow: payload the caller asked for, not a secret
     }

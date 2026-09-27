@@ -209,12 +209,20 @@ public final class TtcDescribe {
             }
             int total = 0;
             while (true) {
-                int chunk = (int) number();
+                long chunk = number();
                 if (chunk == 0) {
                     return total;
                 }
-                at += chunk;
-                total += chunk;
+                // A chunk length is up to eight bytes off the wire. Cast to an
+                // int it could turn negative, and a negative total went to the
+                // char array of text() as NegativeArraySizeException - found by
+                // the nightly fuzz run, 27.09.2026.
+                if (chunk < 0 || chunk > Integer.MAX_VALUE - total) {
+                    throw space.seclume.internal.WireBuffer.malformed("a chunk of " + chunk
+                            + " bytes after " + total + " in a block of the describe");
+                }
+                at += (int) chunk;
+                total += (int) chunk;
             }
         }
 
@@ -228,6 +236,10 @@ public final class TtcDescribe {
         String text() {
             int start = at;
             int length = block();
+            // What the block claims has to be in the buffer before an array of
+            // its size is made: a name of two gigabytes would otherwise end the
+            // process, not the connection.
+            in.slice(start + 1, length);
             char[] letters = new char[length]; // seclume-allow: a column name, protocol text and never a secret
             for (int i = 0; i < length; i++) {
                 letters[i] = (char) (in.getByte(start + 1 + i) & 0xff);

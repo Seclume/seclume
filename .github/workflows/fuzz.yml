@@ -83,4 +83,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: finding-${{ matrix.target.test }}
-          path: ${{ matrix.target.module }}/src/test/resources/**/crash-*
+          # Jazzer keeps a finding in src/test/resources only where that
+          # directory exists, and none of the four modules has one - so it
+          # writes crash-* into the module's working directory. The first
+          # nightly run (27.09.2026) found two crashes and uploaded neither:
+          # this path looked only under src/test/resources.
+          path: ${{ matrix.target.module }}/**/crash-*
