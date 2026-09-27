@@ -214,6 +214,18 @@ jobs:
                       found += 1
           print('failing tests:', found)
           PY
+      # A skipped proof is green too; this says on the pull request whether
+      # the JasperReports heap proof actually ran.
+      - if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('seclume-jasperreports-proof/target/surefire-reports/TEST-*.xml'):
+              root = ET.parse(path).getroot()
+              print(f"::notice title={root.get('name')}::tests={root.get('tests')} "
+                    f"skipped={root.get('skipped')} failures={root.get('failures')} "
+                    f"errors={root.get('errors')}")
+          PY
       - if: always()
         run: rm -f .local-pg-password
 
