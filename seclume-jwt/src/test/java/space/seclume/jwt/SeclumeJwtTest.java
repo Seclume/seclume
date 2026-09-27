@@ -50,6 +50,26 @@ class SeclumeJwtTest {
         return alg + "?provider=file&path=" + key.toString().replace('\\', '/') + extra;
     }
 
+    /** Signing and checking are Signature events - a failed check says so. */
+    @Test
+    void signaturesAreRecorded(@TempDir Path dir) throws Exception {
+        Path key = file(dir, "hs", KEY);
+        try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
+            var events = space.seclume.tck.Recorded.during(() -> {
+                String token = jwt.sign(Map.of("sub", "x"));
+                jwt.verify(token);
+                assertThrows(InvalidTokenException.class, () -> jwt.verify(
+                        token.substring(0, token.lastIndexOf('.') + 1) + "AAAA"));
+            }, "space.seclume.Signature");
+            assertEquals(3, events.size(), events.toString());
+            assertEquals("sign", events.get(0).getString("operation"));
+            assertEquals("HS256", events.get(0).getString("algorithm"));
+            assertTrue(events.get(1).getBoolean("succeeded"));
+            assertEquals("verify", events.get(2).getString("operation"));
+            assertTrue(!events.get(2).getBoolean("succeeded"));
+        }
+    }
+
     @Test
     void hs256IsTheJdksHmacAndRoundTrips(@TempDir Path dir) throws Exception {
         Path key = file(dir, "hs", KEY);

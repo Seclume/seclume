@@ -56,6 +56,22 @@ class SmtpConnectionTest {
         return out -> out.write(text.getBytes(StandardCharsets.UTF_8));
     }
 
+    /** The login is recorded: protocol, server, mechanism - nothing about the user. */
+    @Test
+    void theLoginIsAnAuthenticationEvent() throws Exception {
+        try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
+            var events = space.seclume.tck.Recorded.during(() -> SeclumeMail.of(url("smtp",
+                    server, login(passwordFile))).send("a@example.com", List.of("b@example.com"),
+                    message("x\r\n")), "space.seclume.Authentication");
+            assertEquals(1, events.size(), events.toString());
+            assertEquals("smtp", events.get(0).getString("kind"));
+            assertEquals("localhost:" + server.port(), events.get(0).getString("server"));
+            assertEquals("best", events.get(0).getString("method"));
+            assertTrue(events.get(0).getBoolean("succeeded"));
+            assertTrue(!events.toString().contains("reports"), "the user is in the event");
+        }
+    }
+
     @Test
     void startTlsAndPlainByDefault() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {

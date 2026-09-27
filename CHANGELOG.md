@@ -5,6 +5,19 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Events and metrics for every module
+
+- New JFR events: `space.seclume.SecretUse` for every secret seclume writes into a request
+  (HTTP, Kubernetes, JGit, gRPC, AWS, Azure Storage, LDAP, RabbitMQ), and `space.seclume.Signature` for every
+  signature made or checked with a key held off the heap (TLS server keys, SSH, Google, JWT,
+  webhooks).
+- Mail logins (SMTP, IMAP, POP3) are `space.seclume.Authentication` events, like database
+  logins. The event's `kind` field is now labelled "Kind".
+- The Spring starter's metrics bridge adds `seclume.authentications`, `seclume.secret.uses`,
+  `seclume.signatures`, `seclume.secret.reads` and `seclume.tls.handshakes`.
+  `seclume.metrics.events=true` turns the bridge on without a database.
+- `seclume-tck`: `Recorded.during(...)` returns the events a piece of code emitted.
+
 ### Rotation without a restart
 
 - `SecretWatch` in the core notices a secret that changed at its source. It compares keyed

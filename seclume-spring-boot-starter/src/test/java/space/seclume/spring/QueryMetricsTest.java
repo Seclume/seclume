@@ -90,6 +90,36 @@ class QueryMetricsTest {
         }
     }
 
+    /** Logins, secret uses, signatures and secret reads - from every extension. */
+    @Test
+    void theExtensionsEventsBecomeMeters() throws Exception {
+        MeterRegistry registry = new SimpleMeterRegistry();
+        try (SeclumeQueryMetrics metrics = new SeclumeQueryMetrics(Duration.ZERO, 100)) {
+            metrics.bindTo(registry);
+
+            Observed.endLogin(Observed.beginLogin(), "smtp", "mail:587", "plain", true);
+            Observed.secretUse("aws", "bucket.s3.amazonaws.com:443", "sigv4");
+            Observed.endSignature(Observed.beginSignature(), "HS256", "verify", false);
+
+            until(() -> registry.find("seclume.authentications").timer() != null
+                    && registry.find("seclume.secret.uses").counter() != null
+                    && registry.find("seclume.signatures").timer() != null,
+                    "the events to reach the registry");
+            var login = registry.find("seclume.authentications").timer();
+            assertEquals("smtp", login.getId().getTag("kind"));
+            assertEquals("plain", login.getId().getTag("method"));
+            assertEquals("ok", login.getId().getTag("outcome"));
+            var use = registry.find("seclume.secret.uses").counter();
+            assertEquals("aws", use.getId().getTag("kind"));
+            assertEquals("sigv4", use.getId().getTag("mechanism"));
+            assertEquals(null, use.getId().getTag("target"), "a tag per bucket");
+            var signature = registry.find("seclume.signatures").timer();
+            assertEquals("HS256", signature.getId().getTag("algorithm"));
+            assertEquals("verify", signature.getId().getTag("operation"));
+            assertEquals("failed", signature.getId().getTag("outcome"));
+        }
+    }
+
     /** A cache lookup arrives with its answer, not with its statement. */
     @Test
     void aCacheLookupBecomesACounter() throws Exception {

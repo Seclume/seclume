@@ -202,6 +202,8 @@ final class AmqpSocket extends Socket {
         int restFrom = at + 4 + responseLength;
         int restLength = payload + size - restFrom;
         byte[] user = settings.user.getBytes(StandardCharsets.UTF_8); // seclume-allow: the user name, which is public
+        space.seclume.jfr.Observed.secretUse("rabbitmq", settings.host + ":" + settings.port,
+                "plain");
         try (SecretScope password = SecretScope.fromProvider(settings.secret)) {
             MemorySegment secret = password.segment();
             for (int i = 0; i < password.length(); i++) {

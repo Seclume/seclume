@@ -41,7 +41,8 @@ final class ImapLogin {
     static MailWire open(MailSettings settings) throws IOException {
         MailWire wire = MailWire.connect(settings);
         try {
-            new ImapLogin(wire).login();
+            ImapLogin login = new ImapLogin(wire);
+            MailEvents.login("imap", settings, login::login);
             return wire;
         } catch (IOException | RuntimeException e) {
             wire.close();

@@ -100,8 +100,8 @@ public class SeclumeAutoConfiguration {
          */
         @Bean(destroyMethod = "close")
         @ConditionalOnMissingBean(SeclumeQueryMetrics.class)
-        @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
-                name = "seclume.metrics.queries", havingValue = "true")
+        @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression(
+                "${seclume.metrics.queries:false} or ${seclume.metrics.events:false}")
         SeclumeQueryMetrics seclumeQueryMetrics(Environment environment) {
             java.time.Duration threshold = environment.getProperty(
                     "seclume.metrics.query-threshold", java.time.Duration.class,

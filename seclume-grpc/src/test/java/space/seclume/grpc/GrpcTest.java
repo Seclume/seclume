@@ -88,6 +88,17 @@ class GrpcTest {
         assertEquals("ok " + note, call(bearer, note));
     }
 
+    /** Each call's header block with the token is a SecretUse event: h2, header. */
+    @Test
+    void eachCallIsRecorded() throws Exception {
+        var events = space.seclume.tck.Recorded.during(() -> {
+            call(bearer, "one");
+            call(bearer, "two");
+        }, "space.seclume.SecretUse");
+        assertEquals(2, events.size(), events.toString());
+        assertEquals("h2", events.get(0).getString("kind"));
+    }
+
     @Test
     void apiKeyHeader() {
         CallCredentials apiKey = SeclumeGrpc.header("x-api-key", "provider=file&path="

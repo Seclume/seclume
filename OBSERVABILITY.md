@@ -19,12 +19,15 @@ java -XX:StartFlightRecording=filename=app.jfr,settings=profile ...
 |---|---|
 | `space.seclume.ConnectionOpen` | how long a physical connect, TLS and login really take |
 | `space.seclume.TlsHandshake` | whether the slow part is the handshake and which stack ran it |
-| `space.seclume.Authentication` | the login on its own, and by what method the server asked for it |
+| `space.seclume.Authentication` | the login on its own, and by what method the server asked for it — databases and mail (SMTP, IMAP, POP3) |
 | `space.seclume.Query` | which statements are slow — over 10 ms by default, lower it in the recording settings |
 | `space.seclume.PoolWait` | the one an operator wants when the app is slow and the database is idle |
 | `space.seclume.Failover` | which server was passed over, why, and **how long it took to not answer** |
 | `space.seclume.CredentialRotation` | that a secret was fetched, how long it took, and when it expires |
 | `space.seclume.StatementCache` | whether server-side plans are actually being reused |
+| `space.seclume.SecretUse` | which credential seclume wrote into which request: HTTP (bearer, basic, API key, OAuth2, JWT), any client on `SeclumeSslSocketFactory` - Kubernetes, JGit, gRPC over HTTP/2 - AWS (SigV4, presign, session token), Azure Storage (Shared Key), LDAP bind, RabbitMQ login |
+| `space.seclume.Signature` | a signature made or checked with a key held off the heap: TLS server keys, SSH, Google service accounts, JWTs, webhook HMACs — and whether a check matched |
+| `space.seclume.SecretRotation` | a secret that changed at its source and was taken up without a restart, or refused |
 
 **An open is three phases, and one number hides which of them is slow.** The connect is the
 network. The handshake is certificates and whatever the JVM looks up to trust one. The login
@@ -64,11 +67,23 @@ the fingerprint gives up the identifier rather than risk the value.
 JFR makes the better recording, but almost nobody reads it: reading it takes somebody noticing
 a problem, dumping a file and opening a tool. So the Spring Boot starter can turn those events
 into Micrometer meters as they happen: `seclume.query.slow`, `seclume.statement.cache`,
-`seclume.connection.open` and `seclume.failover`. The drivers need no second instrumentation,
-and a meter carries nothing the events do not already carry.
+`seclume.connection.open` and `seclume.failover` for the databases, and for every module:
+
+| Meter | Tags |
+|---|---|
+| `seclume.authentications` (timer) | `kind` (postgresql, smtp …), `method`, `outcome` |
+| `seclume.secret.uses` (counter) | `kind` (http, aws, azure-storage, ldap, rabbitmq …), `mechanism` |
+| `seclume.signatures` (timer) | `algorithm`, `operation` (sign, verify), `outcome` |
+| `seclume.secret.reads` (timer) | `provider` (file, vault …), `outcome` |
+| `seclume.secret.rotations` (counter) | `watch`, `outcome` |
+| `seclume.tls.handshakes` (timer) | `stack` |
+
+No meter is tagged by a user, a target host or anything else that grows with traffic. The
+drivers and modules need no second instrumentation, and a meter carries nothing the events do
+not already carry.
 
 ```properties
-seclume.metrics.queries=true
+seclume.metrics.queries=true              # or seclume.metrics.events=true without a database
 seclume.metrics.query-threshold=10ms      # what counts as slow
 seclume.metrics.query-fingerprints=100    # how many shapes get a tag of their own
 ```

@@ -35,7 +35,8 @@ final class Pop3Login {
     static MailWire open(MailSettings settings) throws IOException {
         MailWire wire = MailWire.connect(settings);
         try {
-            new Pop3Login(wire).login();
+            Pop3Login login = new Pop3Login(wire);
+            MailEvents.login("pop3", settings, login::login);
             return wire;
         } catch (IOException | RuntimeException e) {
             wire.close();

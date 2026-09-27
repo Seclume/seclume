@@ -192,6 +192,7 @@ final class SessionTokenSocket extends SSLSocket {
             tls.write(ByteBuffer.wrap(bytes));
             return;
         }
+        space.seclume.jfr.Observed.secretUse("aws", host + ":" + port, "session-token");
         int placeholderEnd = found;
         while (placeholderEnd < bytes.length && bytes[placeholderEnd] != '\r') {
             placeholderEnd++;

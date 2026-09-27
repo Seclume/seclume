@@ -64,6 +64,9 @@ final class SeclumeSharedKeyPolicy extends HttpPipelineSyncPolicy {
         }
         request.setHeader(HttpHeaderName.AUTHORIZATION, authorization(request.getUrl(),
                 request.getHttpMethod().name(), request.getHeaders(), contentLength));
+        URL url = request.getUrl();
+        space.seclume.jfr.Observed.secretUse("azure-storage", url.getHost() + ":"
+                + (url.getPort() < 0 ? url.getDefaultPort() : url.getPort()), "shared-key");
     }
 
     /** {@code SharedKey account:signature} for this request. */

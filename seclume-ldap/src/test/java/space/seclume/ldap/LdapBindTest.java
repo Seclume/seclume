@@ -56,6 +56,19 @@ class LdapBindTest {
         return (String) found.next().getAttributes().get("mail").get();
     }
 
+    /** The bind is a SecretUse event - ldap, simple-bind, the server - and no password. */
+    @Test
+    void theBindIsRecorded() throws Exception {
+        SeclumeLdap ldap = SeclumeLdap.of(server.url());
+        var events = space.seclume.tck.Recorded.during(() -> {
+            DirContext context = new InitialDirContext(ldap.environment());
+            context.close();
+        }, "space.seclume.SecretUse");
+        assertEquals(1, events.size(), events.toString());
+        assertEquals("ldap", events.get(0).getString("kind"));
+        assertEquals("simple-bind", events.get(0).getString("mechanism"));
+    }
+
     @Test
     void jndiBindsAndSearches() throws Exception {
         SeclumeLdap ldap = SeclumeLdap.of(server.url());

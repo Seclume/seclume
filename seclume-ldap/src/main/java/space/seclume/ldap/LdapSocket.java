@@ -224,6 +224,9 @@ final class LdapSocket extends Socket {
         int bindAfter = opEnd - authEnd;                          // nothing, usually
         int opStart = (int) header(message, 0)[0];                // the message id starts here
         int messageAfter = message.length - opEnd;                // controls
+        LdapSettings target = settings;
+        space.seclume.jfr.Observed.secretUse("ldap", target == null ? ""
+                : target.host + ":" + target.port, "simple-bind");
         try (SecretScope password = SecretScope.fromProvider(registered.secret)) {
             int secret = password.length();
             int authContent = secret;

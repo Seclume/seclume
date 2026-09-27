@@ -53,6 +53,23 @@ class SeclumeHttpTest {
         }
     }
 
+    /** Each request that carries the token is a SecretUse event - without the token. */
+    @Test
+    void eachRequestWithTheTokenIsRecorded() throws Exception {
+        try (FakeHttpsServer server = new FakeHttpsServer(pki.serverContext());
+             SeclumeHttp http = SeclumeHttp.of(url(server, "", ""))) {
+            var events = space.seclume.tck.Recorded.during(() -> {
+                text(http.send("GET", "/a", Map.of(), null));
+                text(http.send("GET", "/b", Map.of(), null));
+            }, "space.seclume.SecretUse");
+            assertEquals(2, events.size(), events.toString());
+            assertEquals("http", events.get(0).getString("kind"));
+            assertEquals("bearer", events.get(0).getString("mechanism"));
+            assertEquals("localhost:" + server.port(), events.get(0).getString("target"));
+            assertTrue(!events.toString().contains("ya29"), "the token is in the event");
+        }
+    }
+
     @Test
     void bearerByDefaultAndPathsResolvedAgainstTheBase() throws Exception {
         try (FakeHttpsServer server = new FakeHttpsServer(pki.serverContext());

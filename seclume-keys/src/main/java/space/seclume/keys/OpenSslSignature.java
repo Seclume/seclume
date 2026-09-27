@@ -83,10 +83,19 @@ final class OpenSslSignature extends SignatureSpi {
         }
         byte[] message = data.toByteArray();
         data.reset();
+        space.seclume.jfr.SeclumeEvents.Signature event =
+                space.seclume.jfr.Observed.beginSignature();
+        boolean signed = false;
         try {
-            return key.sign(digest, pss, message, message.length);
+            byte[] signature = key.sign(digest, pss, message, message.length);
+            signed = true;
+            return signature;
         } catch (RuntimeException e) {
             throw new SignatureException(e.getMessage(), e);
+        } finally {
+            space.seclume.jfr.Observed.endSignature(event, digest == null
+                    ? (pss ? "RSASSA-PSS" : keyType) : digest.replace("-", "") + "with" + keyType,
+                    "sign", signed);
         }
     }
 
