@@ -180,7 +180,7 @@ final class FakeImapServer extends FakeLineServer {
         }
         String name = m.group(1).replace("\\\"", "\"").replace("\\\\", "\\");
         c.line("+ go ahead");
-        byte[] given = c.readBytes(Integer.parseInt(m.group(2)));
+        byte[] given = c.readBytes(number(m.group(2)));
         c.readLine();
         return verdict(c, tag, "LOGIN", name.equals(user) && Arrays.equals(given, password));
     }
@@ -259,10 +259,10 @@ final class FakeImapServer extends FakeLineServer {
             }
             StringBuilder line = new StringBuilder("* " + number + " FETCH (" + String.join(" ", parts));
             if (body.find(0)) {
-                int start = body.group(1) == null ? 0 : Math.min(Integer.parseInt(body.group(1)),
+                int start = body.group(1) == null ? 0 : Math.min(number(body.group(1)),
                         message.length);
                 int end = body.group(2) == null ? message.length
-                        : Math.min(message.length, start + Integer.parseInt(body.group(2)));
+                        : Math.min(message.length, start + number(body.group(2)));
                 line.append(parts.isEmpty() ? "" : " ").append("BODY[]")
                         .append(body.group(1) == null ? "" : "<" + start + ">")
                         .append(" {").append(end - start).append("}\r\n");
@@ -275,13 +275,13 @@ final class FakeImapServer extends FakeLineServer {
         }
     }
 
-    private List<Integer> sequence(String set) {
+    private List<Integer> sequence(String set) throws IOException {
         List<Integer> numbers = new ArrayList<>();
         for (String range : set.split(",")) {
             String[] ends = range.split(":");
-            int from = ends[0].equals("*") ? messages.size() : Integer.parseInt(ends[0]);
+            int from = ends[0].equals("*") ? messages.size() : number(ends[0]);
             int to = ends.length == 1 ? from
-                    : ends[1].equals("*") ? messages.size() : Integer.parseInt(ends[1]);
+                    : ends[1].equals("*") ? messages.size() : number(ends[1]);
             for (int n = Math.min(from, to); n <= Math.max(from, to) && n <= messages.size(); n++) {
                 numbers.add(n);
             }

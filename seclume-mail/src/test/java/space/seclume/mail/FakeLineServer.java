@@ -25,6 +25,7 @@ abstract class FakeLineServer implements AutoCloseable {
     private final SSLContext tls;
     final boolean implicitTls;
     private final ServerSocket listener;
+    private final Thread acceptor;
 
     FakeLineServer(SSLContext tls, boolean implicitTls, String name) throws IOException {
         this.tls = tls;
@@ -37,12 +38,19 @@ abstract class FakeLineServer implements AutoCloseable {
         } else {
             this.listener = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
         }
-        Thread acceptor = new Thread(this::accept, name);
-        acceptor.setDaemon(true);
-        acceptor.start();
+        this.acceptor = new Thread(this::accept, name);
+        this.acceptor.setDaemon(true);
     }
 
-    int port() {
+    /**
+     * The port - and the start of serving it. Not in the constructor: a
+     * connection served before a subclass has set its fields would see none
+     * of them. Until then, connections wait in the backlog.
+     */
+    synchronized int port() {
+        if (acceptor.getState() == Thread.State.NEW) {
+            acceptor.start();
+        }
         return listener.getLocalPort();
     }
 
@@ -140,6 +148,15 @@ abstract class FakeLineServer implements AutoCloseable {
         @Override
         public void close() throws IOException {
             socket.close();
+        }
+    }
+
+    /** A number the client sent, or the connection ends - as a real server would refuse it. */
+    static int number(String text) throws IOException {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            throw new IOException("not a number: " + text, e);
         }
     }
 

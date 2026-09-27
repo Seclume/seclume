@@ -166,7 +166,7 @@ final class FakePop3Server extends FakeLineServer {
             }
             case "LIST", "UIDL" -> {
                 if (words.length > 1) {
-                    int n = Integer.parseInt(words[1]);
+                    int n = number(words[1]);
                     c.line("+OK " + n + " " + (verb.equals("LIST")
                             ? bytes(messages.get(n - 1)).length : "uid-" + n));
                     return;
@@ -179,7 +179,7 @@ final class FakePop3Server extends FakeLineServer {
                 c.line(".");
             }
             case "RETR", "TOP" -> {
-                int n = Integer.parseInt(words[1]);
+                int n = number(words[1]);
                 String message = messages.get(n - 1);
                 if (verb.equals("TOP")) {
                     message = message.substring(0, message.indexOf("\r\n\r\n") + 4);

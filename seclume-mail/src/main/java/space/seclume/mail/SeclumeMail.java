@@ -166,6 +166,9 @@ public final class SeclumeMail {
             props.put(prefix + ".socketFactory", MailSocket.factory(settings));
             props.setProperty(prefix + ".socketFactory.fallback", "false");
             props.setProperty(prefix + ".ssl.enable", "false");
+            // Never used while TLS is seclume's - but should anything turn
+            // Angus's own TLS on, it checks the host name, not nothing.
+            props.setProperty(prefix + ".ssl.checkserveridentity", "true");
             props.setProperty(prefix + ".starttls.enable", "false");
             props.setProperty(prefix + ".starttls.required", "false");
             props.setProperty(prefix + ".sasl.enable", "false");
