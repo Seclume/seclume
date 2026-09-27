@@ -151,7 +151,7 @@ final class CredentialSources {
             this.sessionName = sessionName;
             int colon = endpoint.lastIndexOf(':');
             this.host = colon > 0 ? endpoint.substring(0, colon) : endpoint;
-            this.port = colon > 0 ? Integer.parseInt(endpoint.substring(colon + 1)) : 443;
+            this.port = colon > 0 ? port(endpoint.substring(colon + 1)) : 443;
             this.trust = trust;
         }
 
@@ -195,6 +195,15 @@ final class CredentialSources {
         @Override
         String name() {
             return "web-identity";
+        }
+
+        private static int port(String text) {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("sts-endpoint is host or host:port, and '"
+                        + text + "' is not a port", e);
+            }
         }
     }
 

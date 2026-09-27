@@ -147,7 +147,7 @@ final class SessionTokenSocket extends SSLSocket {
                             }
                         } else {
                             int semicolon = text.indexOf(';');
-                            long size = Long.parseLong(semicolon < 0 ? text
+                            long size = number(semicolon < 0 ? text
                                     : text.substring(0, semicolon).trim(), 16);
                             if (size == 0) {
                                 state = State.TRAILER;
@@ -223,13 +223,23 @@ final class SessionTokenSocket extends SSLSocket {
         }
     }
 
-    private static long header(String head, String name) {
+    private static long header(String head, String name) throws IOException {
         int at = head.indexOf("\r\n" + name + ":");
         if (at < 0) {
             return -1;
         }
         int end = head.indexOf("\r\n", at + 2);
-        return Long.parseLong(head.substring(at + name.length() + 3, end).trim());
+        return number(head.substring(at + name.length() + 3, end).trim(), 10);
+    }
+
+    /** A length the client wrote - not one, and the framing cannot be followed. */
+    private static long number(String text, int radix) throws IOException {
+        try {
+            return Long.parseLong(text, radix);
+        } catch (NumberFormatException e) {
+            throw new IOException("the HTTP client wrote a length that is not a number: '"
+                    + text + "'", e);
+        }
     }
 
     private static int indexOf(byte[] data, byte[] pattern, int from) {

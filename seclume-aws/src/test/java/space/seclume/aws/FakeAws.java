@@ -261,14 +261,21 @@ final class FakeAws implements AutoCloseable {
                 .putProperty(AwsV4FamilyHttpSigner.PAYLOAD_SIGNING_ENABLED, false)
                 .putProperty(AwsV4FamilyHttpSigner.AUTH_LOCATION,
                         AwsV4FamilyHttpSigner.AuthLocation.QUERY_STRING)
-                .putProperty(AwsV4FamilyHttpSigner.EXPIRATION_DURATION, java.time.Duration
-                        .ofSeconds(Long.parseLong(parameters.get("X-Amz-Expires"))))
+                .putProperty(AwsV4FamilyHttpSigner.EXPIRATION_DURATION, expires(parameters))
                 .putProperty(HttpSigner.SIGNING_CLOCK, clock).build();
         String expected = AwsV4HttpSigner.create().sign(sign).request().rawQueryParameters()
                 .get("X-Amz-Signature").get(0);
         return expected.equals(parameters.get("X-Amz-Signature")) ? null
                 : exchange.getRequestMethod() + " " + uri + ": the presigned signature does not "
                 + "match";
+    }
+
+    private static java.time.Duration expires(Map<String, String> parameters) {
+        try {
+            return java.time.Duration.ofSeconds(Long.parseLong(parameters.get("X-Amz-Expires")));
+        } catch (NumberFormatException e) {
+            return java.time.Duration.ZERO;              // and the signature will not match
+        }
     }
 
     private static void respond(HttpExchange exchange, int status, String text, String type)
