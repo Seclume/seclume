@@ -5,6 +5,40 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### AWS: temporary credentials and presigned URLs
+
+- `credentials=instance`, `container` and `web-identity` cover EC2, ECS and EKS Pod Identity,
+  and EKS IRSA.
+- The secret key and the session token stay in native memory. The token is signed there and
+  written into each request by seclume's TLS, as the SDK's Apache 5 client's socket.
+- `SeclumeS3Presigner` presigns S3 URLs with the key off the heap.
+- Spring: `seclume.aws.credentials`.
+
+### Azure Storage: `seclume-azure`
+
+Shared Key signing for Blob, Queue, File and Data Lake. The account key is decoded and used
+in native memory. Tested against the SDK's own credential and against Azurite.
+
+### Google Cloud: `seclume-gcp`
+
+Service account credentials: the key file is read into native memory, and its private key
+is decoded by OpenSSL. The auth library signs through seclume's JCA provider.
+
+### Keys: Ed25519, OpenSSH key files, JSch
+
+- `seclume-keys` reads Ed25519 keys and OpenSSH's own key format. The conversion runs in
+  native memory, including RSA's CRT values.
+- `seclume-ssh` adds `SeclumeJschIdentity`, which covers Ed25519, ECDSA and RSA for JSch.
+
+### Core: `SecretFetch.sendSecretBody`, `AwsInstanceRole.validUntil`
+
+Two additions to the core:
+
+- `SecretFetch.sendSecretBody` sends a request whose body comes from native memory.
+- `AwsInstanceRole.validUntil` says when the instance role's credentials expire.
+
+A caller's own `Accept` header now replaces the default one.
+
 ### Private keys off the heap: `seclume-keys`, `seclume-ssh`
 
 RSA and EC private keys are decoded by OpenSSL from native memory and kept there. A JCA

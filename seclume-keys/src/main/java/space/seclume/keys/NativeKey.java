@@ -9,6 +9,7 @@ import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import space.seclume.crypto.OpenSshPrivateKey;
 import space.seclume.crypto.OpenSslSigningKey;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
@@ -23,7 +24,7 @@ import space.seclume.secret.SecretScope;
  */
 final class NativeKey {
 
-    /** {@code RSA} or {@code EC}: what the key is, in JCA's words. */
+    /** {@code RSA}, {@code EC} or {@code Ed25519}: what the key is, in JCA's words. */
     final String type;
     final PublicKey publicKey;
     private final OpenSslSigningKey key;
@@ -44,7 +45,16 @@ final class NativeKey {
         }
         OpenSslSigningKey decoded;
         try (SecretScope encoded = SecretScope.fromProvider(secret)) {
-            decoded = OpenSslSigningKey.decode(encoded.segment(), encoded.length());
+            if (OpenSshPrivateKey.is(encoded.segment(), encoded.length())) {
+                try (SecretScope der = SecretScope.allocate(
+                        OpenSshPrivateKey.maxDerLength(encoded.length()))) {
+                    der.length(OpenSshPrivateKey.toDer(encoded.segment(), encoded.length(),
+                            der.segment()));
+                    decoded = OpenSslSigningKey.decode(der.segment(), der.length());
+                }
+            } else {
+                decoded = OpenSslSigningKey.decode(encoded.segment(), encoded.length());
+            }
         }
         try {
             String type;
@@ -52,9 +62,11 @@ final class NativeKey {
                 type = "RSA";
             } else if (decoded.is("EC")) {
                 type = "EC";
+            } else if (decoded.is("ED25519")) {
+                type = "Ed25519";
             } else {
-                throw new IllegalArgumentException("the private key is neither RSA nor EC - "
-                        + "those are the two a certificate or an SSH key is made with here");
+                throw new IllegalArgumentException("the private key is neither RSA, EC nor "
+                        + "Ed25519");
             }
             PublicKey publicKey = KeyFactory.getInstance(type)
                     .generatePublic(new X509EncodedKeySpec(decoded.publicKey()));

@@ -36,6 +36,8 @@ public final class SeclumeKeyProvider extends Provider {
             putService(new Signing(this, digest + "withECDSA", "EC", digest, attributes));
         }
         putService(new Signing(this, "RSASSA-PSS", "RSA", null, attributes));
+        putService(new Signing(this, "Ed25519", "Ed25519", null, attributes));
+        putService(new Signing(this, "EdDSA", "Ed25519", null, attributes));
     }
 
     /** Adds the provider, last, once; later calls do nothing. */

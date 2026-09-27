@@ -56,7 +56,9 @@ import space.seclume.secret.SecretProvider;
  * canonical form follows the SDK's signer, and a test compares the two
  * signatures request by request.
  *
- * <p>Not here: presigned URLs, SigV4a (multi-region access points) and the
+ * <p>Presigned URLs ({@code S3Presigner} on a client set up here) are signed
+ * in the query string the same way. Not here: SigV4a (multi-region access
+ * points) and the
  * chunked ({@code aws-chunked}) upload encoding - a body is signed in one
  * piece, or, where the SDK allows it over HTTPS, sent as
  * {@code UNSIGNED-PAYLOAD}; an S3 checksum goes into its header. An async
@@ -154,17 +156,27 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
     private SdkHttpRequest signed(BaseSignRequest<?, ? extends AwsCredentialsIdentity> request,
                                   ContentStreamProvider payload) {
         AwsCredentialsIdentity identity = request.identity();
-        if (identity instanceof AwsSessionCredentialsIdentity
-                || !SeclumeAws.PLACEHOLDER.equals(identity.secretAccessKey())) {
+        TemporaryCredentials.Generation generation = null;
+        if (identity instanceof AwsSessionCredentialsIdentity session
+                && SeclumeAws.PLACEHOLDER.equals(session.secretAccessKey())) {
+            generation = TemporaryCredentials.byPlaceholder(session.sessionToken());
+        }
+        boolean ours = generation != null || (!(identity instanceof AwsSessionCredentialsIdentity)
+                && SeclumeAws.PLACEHOLDER.equals(identity.secretAccessKey()) && secretKey != null);
+        if (!ours) {
             throw new IllegalStateException("the client has credentials of its own; seclume's "
                     + "signer takes the key from its secret provider and uses nothing else - "
                     + "leave credentialsProvider to SeclumeAws.configure");
         }
-        if (request.requireProperty(AwsV4FamilyHttpSigner.AUTH_LOCATION,
+        String keyId = generation != null ? generation.accessKeyId : accessKeyId;
+        SecretProvider key = generation != null ? generation.secretKeyProvider() : secretKey;
+        boolean presign = request.requireProperty(AwsV4FamilyHttpSigner.AUTH_LOCATION,
                 AwsV4FamilyHttpSigner.AuthLocation.HEADER)
-                != AwsV4FamilyHttpSigner.AuthLocation.HEADER) {
-            throw new UnsupportedOperationException("presigned URLs are not made by seclume's "
-                    + "signer yet");
+                == AwsV4FamilyHttpSigner.AuthLocation.QUERY_STRING;
+        if (presign && generation != null) {
+            throw new UnsupportedOperationException("a presigned URL made with temporary "
+                    + "credentials carries the session token in the URL itself - a String, "
+                    + "and handed out; presign with a long-term key");
         }
         String service = request.requireProperty(AwsV4FamilyHttpSigner.SERVICE_SIGNING_NAME);
         String region = request.requireProperty(AwsV4HttpSigner.REGION_NAME);
@@ -178,42 +190,98 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
 
         SdkHttpRequest.Builder builder = request.request().toBuilder();
         builder.putHeader("Host", host(request.request()));
-        builder.putHeader("X-Amz-Date", stamp);
-
-        ChecksumAlgorithm checksum = request.property(AwsV4FamilyHttpSigner.CHECKSUM_ALGORITHM);
-        if (checksum != null && payload != null) {
-            String header = "x-amz-checksum-" + checksum.algorithmId().toLowerCase(Locale.ROOT);
-            if (builder.firstMatchingHeader(header).isEmpty()) {
-                builder.putHeader(header, checksum(checksum, payload));
+        String scope = AwsSigV4.scope(day, region, service);
+        String payloadHash;
+        if (presign) {
+            java.time.Duration expires = request.requireProperty(
+                    AwsV4FamilyHttpSigner.EXPIRATION_DURATION, java.time.Duration.ofMinutes(15));
+            payloadHash = signsPayload(request) && payload != null ? sha256Hex(payload)
+                    : UNSIGNED_PAYLOAD;
+            TreeMap<String, String> signedNames = canonicalHeaders(builder.build().headers());
+            builder.putRawQueryParameter("X-Amz-Algorithm", AwsSigV4.ALGORITHM)
+                    .putRawQueryParameter("X-Amz-Credential", keyId + "/" + scope)
+                    .putRawQueryParameter("X-Amz-Date", stamp)
+                    .putRawQueryParameter("X-Amz-Expires", String.valueOf(expires.getSeconds()))
+                    .putRawQueryParameter("X-Amz-SignedHeaders",
+                            String.join(";", signedNames.keySet()));
+        } else {
+            builder.putHeader("X-Amz-Date", stamp);
+            if (generation != null) {
+                builder.putHeader("X-Amz-Security-Token", generation.placeholder);
             }
+            ChecksumAlgorithm checksum = request.property(
+                    AwsV4FamilyHttpSigner.CHECKSUM_ALGORITHM);
+            if (checksum != null && payload != null) {
+                String header = "x-amz-checksum-"
+                        + checksum.algorithmId().toLowerCase(Locale.ROOT);
+                if (builder.firstMatchingHeader(header).isEmpty()) {
+                    builder.putHeader(header, checksum(checksum, payload));
+                }
+            }
+            payloadHash = !signsPayload(request) ? UNSIGNED_PAYLOAD
+                    : payload == null ? AwsSigV4.EMPTY_PAYLOAD : sha256Hex(payload);
+            builder.putHeader("x-amz-content-sha256", payloadHash);
         }
-        String payloadHash = !signsPayload(request) ? UNSIGNED_PAYLOAD
-                : payload == null ? AwsSigV4.EMPTY_PAYLOAD : sha256Hex(payload);
-        builder.putHeader("x-amz-content-sha256", payloadHash);
 
         SdkHttpRequest unsigned = builder.build();
         TreeMap<String, String> headers = canonicalHeaders(unsigned.headers());
         String signedHeaders = String.join(";", headers.keySet());
-        StringBuilder canonical = new StringBuilder(512);
-        canonical.append(unsigned.method().name()).append('\n')
-                .append(canonicalUri(unsigned.encodedPath(), doubleEncode, normalize))
-                .append('\n')
-                .append(canonicalQuery(unsigned.rawQueryParameters())).append('\n');
-        headers.forEach((name, value) -> canonical.append(name).append(':').append(value)
-                .append('\n'));
-        canonical.append('\n').append(signedHeaders).append('\n').append(payloadHash);
-
-        String scope = AwsSigV4.scope(day, region, service);
-        String toSign = AwsSigV4.ALGORITHM + "\n" + stamp + "\n" + scope + "\n"
-                + AwsSigV4.sha256Hex(canonical.toString());
         String signature;
         try (Arena arena = Arena.ofConfined()) {
-            signature = AwsSigV4.hex(AwsSigV4.sign(arena, secretKey::writeSecret, toSign, day,
+            String canonicalHash = canonicalHash(arena, unsigned, headers, signedHeaders,
+                    payloadHash, doubleEncode, normalize, generation);
+            String toSign = AwsSigV4.ALGORITHM + "\n" + stamp + "\n" + scope + "\n"
+                    + canonicalHash;
+            signature = AwsSigV4.hex(AwsSigV4.sign(arena, key::writeSecret, toSign, day,
                     region, service));
         }
+        if (presign) {
+            return builder.putRawQueryParameter("X-Amz-Signature", signature).build();
+        }
         return builder.putHeader("Authorization", AwsSigV4.ALGORITHM + " Credential="
-                + accessKeyId + "/" + scope + ", SignedHeaders=" + signedHeaders
+                + keyId + "/" + scope + ", SignedHeaders=" + signedHeaders
                 + ", Signature=" + signature).build();
+    }
+
+    /**
+     * The canonical request's SHA-256. Without a session token it is plain
+     * text; with one, it is assembled in native memory and the token's bytes
+     * go in where its header's value is - the digest that comes out is public.
+     */
+    private static String canonicalHash(Arena arena, SdkHttpRequest request,
+                                        TreeMap<String, String> headers, String signedHeaders,
+                                        String payloadHash, boolean doubleEncode,
+                                        boolean normalize,
+                                        TemporaryCredentials.Generation generation) {
+        String start = request.method().name() + "\n"
+                + canonicalUri(request.encodedPath(), doubleEncode, normalize) + "\n"
+                + canonicalQuery(request.rawQueryParameters()) + "\n";
+        String end = "\n" + signedHeaders + "\n" + payloadHash;
+        if (generation == null) {
+            StringBuilder canonical = new StringBuilder(512).append(start);
+            headers.forEach((name, value) -> canonical.append(name).append(':').append(value)
+                    .append('\n'));
+            return AwsSigV4.sha256Hex(canonical.append(end).toString());
+        }
+        int capacity = 3 * (start.length() + end.length() + generation.token.length() + 64);
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            capacity += 3 * (header.getKey().length() + header.getValue().length() + 2);
+        }
+        try (space.seclume.internal.CanonicalRequest canonical =
+                     new space.seclume.internal.CanonicalRequest(arena, capacity)) {
+            canonical.text(start);
+            for (Map.Entry<String, String> header : headers.entrySet()) {
+                canonical.text(header.getKey() + ":");
+                if (header.getKey().equals("x-amz-security-token")) {
+                    canonical.secret(generation.token.segment(), generation.token.length());
+                } else {
+                    canonical.text(header.getValue());
+                }
+                canonical.text("\n");
+            }
+            canonical.text(end);
+            return canonical.sha256Hex();
+        }
     }
 
     static String host(SdkHttpRequest request) {

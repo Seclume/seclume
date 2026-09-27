@@ -110,6 +110,26 @@ class SftpLoginTest {
         assertEquals("report", upload(port, files.spec(), kind + ".txt"));
     }
 
+    /**
+     * Keys as ssh-keygen writes them, in OpenSSH's own format. (Ed25519 goes
+     * through JSch - SSHD signs Ed25519 only with net.i2p's or Bouncy Castle's
+     * own key classes.)
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"ecdsa", "rsa"})
+    void opensshKeyFiles(String type) throws Exception {
+        Path key = directory.resolve("openssh-" + type);
+        Path script = directory.resolve("keygen-" + type + ".sh");
+        Files.writeString(script, "command -v ssh-keygen >/dev/null || exit 3\n"
+                + "ssh-keygen -q -t " + type + " -N '' -f '" + key + "'\n");
+        int exit = new ProcessBuilder("/bin/sh", script.toString()).start().waitFor();
+        assumeTrue(exit != 3, "ssh-keygen is not installed");
+        assertEquals(0, exit);
+        String spec = "provider=file&path=" + key;
+        int port = serve(SeclumeSsh.keyPair(spec).getPublic());
+        assertEquals("report", upload(port, spec, type + "-openssh.txt"));
+    }
+
     @Test
     void anotherKeyIsNotLetIn() throws Exception {
         int port = serve(SeclumeSsh.keyPair(rsa.spec()).getPublic());

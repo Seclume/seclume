@@ -172,6 +172,26 @@ class SigV4EquivalenceTest {
         assertEquals("", failures.toString());
     }
 
+    @Test
+    void presignsAsTheSdkDoes() throws Exception {
+        Path file = SecretKeyFile.make(directory);
+        String secret = Files.readString(file);
+        HttpSigner<AwsCredentialsIdentity> ours =
+                SeclumeAws.signer(SecretKeyFile.spec("AKIAEXAMPLE", file));
+        Case get = new Case("presigned get", request(SdkHttpMethod.GET,
+                "https://bucket.s3.eu-central-1.amazonaws.com/report%202026.pdf?versionId=7")
+                .build(), null, s3(false).andThen(b -> b
+                .putProperty(AwsV4FamilyHttpSigner.AUTH_LOCATION,
+                        AwsV4FamilyHttpSigner.AuthLocation.QUERY_STRING)
+                .putProperty(AwsV4FamilyHttpSigner.EXPIRATION_DURATION,
+                        java.time.Duration.ofMinutes(10))));
+        SdkHttpRequest expected = sign(AwsV4HttpSigner.create(),
+                AwsCredentialsIdentity.create("AKIAEXAMPLE", secret), get).request();
+        SdkHttpRequest actual = sign(ours, AwsCredentialsIdentity.create("AKIAEXAMPLE",
+                SeclumeAws.PLACEHOLDER), get).request();
+        assertEquals(expected.rawQueryParameters(), actual.rawQueryParameters());
+    }
+
     /**
      * AWS's own test suite, {@code get-vanilla}: its string to sign, signed with
      * its published key through the derivation in native memory. (The signer as

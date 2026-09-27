@@ -72,13 +72,46 @@ public final class SecretFetch {
             String method, String path, Map<String, String> headers,
             List<SecretHeader> secretHeaders, String requestBody, MemorySegment body)
             throws IOException {
+        return send(host, port, verify, timeoutMillis, method, path, headers, secretHeaders,
+                requestBody, null, body);
+    }
+
+    /**
+     * The same with a request body that is a secret - a web identity token in
+     * a form, say - written from native memory. Its {@code Content-Type} is
+     * the caller's, among {@code headers}.
+     */
+    public static Response sendSecretBody(String host, int port, boolean verify, int timeoutMillis,
+            String method, String path, Map<String, String> headers,
+            List<SecretHeader> secretHeaders, SecretBody requestBody, MemorySegment body)
+            throws IOException {
+        return send(host, port, verify, timeoutMillis, method, path, headers, secretHeaders,
+                null, requestBody, body);
+    }
+
+    /** A request body from native memory, {@code length} bytes of {@code value}. */
+    public record SecretBody(MemorySegment value, int length) {
+    }
+
+    private static Response send(String host, int port, boolean verify, int timeoutMillis,
+            String method, String path, Map<String, String> headers,
+            List<SecretHeader> secretHeaders, String requestBody, SecretBody secretBody,
+            MemorySegment body) throws IOException {
 
         try (Transport socket = SocketTransport.connect(host, port, timeoutMillis);
              TlsChannel tls = TlsChannel.create(socket, host, port, verify)) {
             tls.handshake();
 
-            ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024);
+            ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024
+                    + (secretBody == null ? 0 : secretBody.length()));
             writeRequest(request, host, method, path, headers, secretHeaders, requestBody);
+            if (secretBody != null) {
+                request.position(request.position() - 2);           // the blank line, again below
+                ascii(request, "Content-Length: " + secretBody.length() + "\r\n\r\n");
+                for (int i = 0; i < secretBody.length(); i++) {
+                    request.put(secretBody.value().get(ValueLayout.JAVA_BYTE, i));
+                }
+            }
             request.flip();
             try {
                 while (request.hasRemaining()) {
@@ -153,7 +186,9 @@ public final class SecretFetch {
         ascii(request, method + " " + path + " HTTP/1.1\r\n");
         ascii(request, "Host: " + host + "\r\n");
         ascii(request, "Connection: close\r\n");
-        ascii(request, "Accept: application/json\r\n");
+        if (headers.keySet().stream().noneMatch(name -> name.equalsIgnoreCase("Accept"))) {
+            ascii(request, "Accept: application/json\r\n");
+        }
         for (Map.Entry<String, String> header : headers.entrySet()) {
             ascii(request, header.getKey() + ": " + header.getValue() + "\r\n");
         }

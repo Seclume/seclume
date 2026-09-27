@@ -129,7 +129,8 @@ public final class OpenSslSigningKey implements AutoCloseable {
     /**
      * Signs {@code length} bytes of {@code message}, hashing them with
      * {@code digest} ({@code SHA256}, {@code SHA384}, {@code SHA512}); with
-     * {@code pss}, RSA-PSS with a salt as long as the digest.
+     * {@code pss}, RSA-PSS with a salt as long as the digest. An Ed25519 key
+     * takes {@code null}: it hashes as part of the signature.
      *
      * @return how many bytes of {@code signature} were written
      */
@@ -149,8 +150,10 @@ public final class OpenSslSigningKey implements AutoCloseable {
                 utf8(arena, params, 0, "pad-mode", "pss");
                 utf8(arena, params, 1, "saltlen", "digest");
             }
-            Native.ok(Native.SIGN_INIT, context, NULL, arena.allocateFrom(digest), NULL, NULL,
-                    key, params);
+            // Ed25519 hashes inside the signature and takes no digest: NULL, and
+            // one-shot EVP_DigestSign below is the only way it signs
+            Native.ok(Native.SIGN_INIT, context, NULL,
+                    digest == null ? NULL : arena.allocateFrom(digest), NULL, NULL, key, params);
             MemorySegment written = arena.allocate(JAVA_LONG);
             written.set(JAVA_LONG, 0, signature.byteSize());
             Native.ok(Native.SIGN, context, signature, written, message, length);

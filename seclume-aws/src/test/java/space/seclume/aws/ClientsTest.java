@@ -106,6 +106,34 @@ class ClientsTest {
         }
     }
 
+    /** Presigned URLs, used the way a browser would: a plain PUT, then a plain GET. */
+    @Test
+    void presignedUrls() throws Exception {
+        Path key = SecretKeyFile.make(directory);
+        try (FakeAws aws = new FakeAws(() -> read(key));
+             java.net.http.HttpClient http = java.net.http.HttpClient.newHttpClient()) {
+            SeclumeS3Presigner presigner = SeclumeS3Presigner.of(
+                    SecretKeyFile.spec("AKIAEXAMPLE", key), aws.endpoint());
+            java.net.URL put = presigner.presignPut("shared", "hand out/ü.txt",
+                    java.time.Duration.ofMinutes(5));
+            java.net.http.HttpResponse<String> stored = http.send(java.net.http.HttpRequest
+                    .newBuilder(put.toURI()).PUT(java.net.http.HttpRequest.BodyPublishers
+                            .ofString("uploaded by a browser")).build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, stored.statusCode(), stored.body());
+            java.net.URL get = presigner.presignGet("shared", "hand out/ü.txt",
+                    java.time.Duration.ofMinutes(5));
+            assertTrue(get.getQuery().contains("X-Amz-Credential=AKIAEXAMPLE"), get.toString());
+            java.net.http.HttpResponse<String> fetched = http.send(java.net.http.HttpRequest
+                    .newBuilder(get.toURI()).build(),
+                    java.net.http.HttpResponse.BodyHandlers.ofString());
+            assertEquals("uploaded by a browser", fetched.body());
+            assertEquals(List.of(), aws.rejected);
+            assertThrows(IllegalArgumentException.class, () -> presigner.presignGet("b", "k",
+                    java.time.Duration.ofDays(8)));
+        }
+    }
+
     @Test
     void sqsSendMessage() throws Exception {
         Path key = SecretKeyFile.make(directory);

@@ -212,8 +212,10 @@ Everything below works on all four databases unless the row says otherwise.
 | **Signing keys** | JWTs signed and checked with HMAC keys, signed with RSA or EC keys held by OpenSSL; GitHub and Stripe webhook signatures checked: `seclume-jwt` | [FEATURES.md](FEATURES.md#signing-keys-jwt-and-webhooks) |
 | **RabbitMQ** | A `ConnectionFactory` for the official client and Spring AMQP; the PLAIN login written from native memory into the handshake over TLS 1.3, also on recovery: `seclume-rabbitmq` | [FEATURES.md](FEATURES.md#rabbitmq) |
 | **Private keys** | TLS server keys (Tomcat, Netty, any `SSLContext`), client certificates and Spring SSL bundles with the key held by OpenSSL: `seclume-keys` | [FEATURES.md](FEATURES.md#private-keys-tls-servers-client-certificates-ssh) |
-| **SSH / SFTP** | Public-key logins for Apache MINA SSHD and Spring Integration SFTP with that key: `seclume-ssh` | [FEATURES.md](FEATURES.md#private-keys-tls-servers-client-certificates-ssh) |
-| **AWS** | A SigV4 signer for the AWS SDK (S3, SQS, DynamoDB, MinIO ...) with the secret access key in native memory: `seclume-aws` | [FEATURES.md](FEATURES.md#aws) |
+| **SSH / SFTP** | Public-key logins for Apache MINA SSHD, Spring Integration SFTP and JSch with that key - Ed25519, ECDSA, RSA, also from OpenSSH key files: `seclume-ssh` | [FEATURES.md](FEATURES.md#private-keys-tls-servers-client-certificates-ssh) |
+| **AWS** | A SigV4 signer for the AWS SDK (S3, SQS, DynamoDB, MinIO ...) with the secret access key in native memory; temporary credentials (EC2, ECS/EKS, IRSA) with the session token off the heap too; presigned S3 URLs: `seclume-aws` | [FEATURES.md](FEATURES.md#aws) |
+| **Azure Storage** | Shared Key signing for Blob, Queue, File and Data Lake with the account key in native memory: `seclume-azure` | [FEATURES.md](FEATURES.md#azure-storage) |
+| **Google Cloud** | Service account credentials whose private key stays in OpenSSL, for every Google Cloud library: `seclume-gcp` | [FEATURES.md](FEATURES.md#google-cloud) |
 | **LDAP / Active Directory** | JNDI, Spring LDAP and Spring Security binds with the password written from native memory over TLS 1.3: `seclume-ldap` | [FEATURES.md](FEATURES.md#ldap-and-active-directory) |
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
 | | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build | [FEATURES.md](FEATURES.md#quarkus) |
