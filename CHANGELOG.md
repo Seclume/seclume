@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### HTTP: OAuth 2.0 client credentials with the client secret and the token off the heap
+
+`auth=oauth2` in `seclume-http` fetches an access token from the token endpoint (Entra ID,
+Keycloak, Okta, Auth0) and sends it as a bearer token. The client secret is form-encoded, and
+for `client-auth=basic` base64-encoded, in native memory. With `post`, the Content-Length is
+written there too. The access token is read from the TLS-decrypted answer, parsed in native
+memory and kept there. It is renewed before it expires and once more when the API answers
+401. `NoCredentialOnTheHeapTest` now checks the client secret, the issued token and the
+Basic form as well.
+
 ### Starter: HTTPS APIs from `application.properties`
 
 `seclume.http.clients.<name>.url` in `seclume-spring-boot-starter` makes a `RestClient` bean for

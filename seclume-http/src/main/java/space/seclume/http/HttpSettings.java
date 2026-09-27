@@ -43,7 +43,12 @@ import space.seclume.secret.SecretProviders;
 final class HttpSettings {
 
     /** How the secret goes into the request. */
-    enum Auth { BEARER, BASIC, HEADER }
+    enum Auth { BEARER, BASIC, HEADER, OAUTH2 }
+
+    /** A server to connect to: where, whose certificate, and how long to wait. */
+    record Endpoint(String host, int port, TrustChoice.Choice trust, int connectTimeout,
+                    int timeout) {
+    }
 
     final String host;
     final int port;
@@ -58,11 +63,12 @@ final class HttpSettings {
     final int maxIdle;
     final long idleTimeoutMillis;
     final SecretProvider secret;
+    final OAuthSettings oauth;
 
     private HttpSettings(String host, int port, String basePath, Auth auth, String user,
                          String headerName, String prefix, TrustChoice.Choice trust,
                          int connectTimeout, int timeout, int maxIdle, long idleTimeoutMillis,
-                         SecretProvider secret) {
+                         SecretProvider secret, OAuthSettings oauth) {
         this.host = host;
         this.port = port;
         this.basePath = basePath;
@@ -76,6 +82,12 @@ final class HttpSettings {
         this.maxIdle = maxIdle;
         this.idleTimeoutMillis = idleTimeoutMillis;
         this.secret = secret;
+        this.oauth = oauth;
+    }
+
+    /** The API's server. */
+    Endpoint endpoint() {
+        return new Endpoint(host, port, trust, connectTimeout, timeout);
     }
 
     static HttpSettings of(String url) {
@@ -119,8 +131,9 @@ final class HttpSettings {
             case "bearer" -> Auth.BEARER;
             case "basic" -> Auth.BASIC;
             case "header" -> Auth.HEADER;
+            case "oauth2" -> Auth.OAUTH2;
             default -> throw new IllegalArgumentException(
-                    "auth is bearer, basic or header, not '" + authName + "'");
+                    "auth is bearer, basic, header or oauth2, not '" + authName + "'");
         };
         switch (auth) {
             case BASIC -> {
@@ -134,7 +147,7 @@ final class HttpSettings {
                 headerName = "Authorization";
                 prefix = "Basic ";
             }
-            case BEARER -> {
+            case BEARER, OAUTH2 -> {
                 if (headerName != null) {
                     throw new IllegalArgumentException("header= belongs to auth=header; "
                             + "bearer is always Authorization");
@@ -178,6 +191,8 @@ final class HttpSettings {
                     + "options (provider=file&path=/run/secrets/api-token, provider=vault&..."
                     + ") - the same as in a seclume JDBC URL");
         }
+        OAuthSettings oauth = auth == Auth.OAUTH2
+                ? OAuthSettings.take(options, connectTimeout, timeout) : null;
         SecretProvider secret = SecretProviders.of(options);
 
         String path = uri.getRawPath() == null ? "" : uri.getRawPath();
@@ -186,7 +201,7 @@ final class HttpSettings {
         }
         return new HttpSettings(uri.getHost(), uri.getPort() >= 0 ? uri.getPort() : 443, path,
                 auth, user, headerName, prefix, trust, connectTimeout, timeout, maxIdle,
-                idleTimeout, secret);
+                idleTimeout, secret, oauth);
     }
 
     /** {@code host} or {@code host:port} - what goes into the Host header. */

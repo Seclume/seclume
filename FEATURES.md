@@ -494,6 +494,30 @@ rotated key takes effect with the next request. Providers that fetch over the ne
 the cloud secret managers, a managed identity) keep their own native cache, so they are not
 asked on every request.
 
+**OAuth 2.0 client credentials** (Entra ID, Keycloak, Okta, Auth0): with `auth=oauth2` the
+client fetches an access token from the token endpoint and sends it as a bearer token:
+
+```properties
+seclume.http.clients.graph.url=https://graph.microsoft.com/v1.0?auth=oauth2\
+  &token-url=https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token\
+  &client-id=<app id>&scope=https://graph.microsoft.com/.default\
+  &provider=vault&...
+```
+
+Usually both secrets stay on the heap: the client secret as a `String` in the client
+registration, and the access token in the cache of authorized clients. Here the client secret
+goes from its provider into the token request in native memory. It is form-encoded there, and
+base64-encoded for `client-auth=basic` (the default; `post` puts it in the form). Even the
+request's `Content-Length` is written there when the secret is in the body, since it would give
+away the secret's length. The token endpoint's answer is decrypted by seclume's TLS into native
+memory and parsed there. The access token is kept in a locked native segment and written into
+each request. It is renewed before it expires (`expires_in`, as a number or as the string older
+Entra ID sends), and at once when the API answers 401; the request is then sent again, once.
+`scope=`, `resource=` (Entra ID v1, AD FS) and `audience=` (Auth0) are sent when given.
+`token-tlsPin=` or `token-tlsRootCert=` apply to the token endpoint, which is usually another
+server than the API. A refusal from the token endpoint comes back with its `error` and
+`error_description`, for example `invalid_client: AADSTS7000215 ...`.
+
 **The credential stays with its origin.** It goes to the scheme, host and port of the URL and
 nowhere else. A request for another origin is refused rather than sent without it, redirects
 are not followed (a 3xx comes back as it is), and a request that sets the credential's header
@@ -508,13 +532,14 @@ the JVM does not know, `connectTimeout=` and `timeout=` in milliseconds.
 **What is not off the heap: requests and responses.** Paths, headers and bodies are the
 application's data. It is the same line as for the databases and mail.
 
-Shown by `NoCredentialOnTheHeapTest`: three HTTPS servers run in a JVM of their own and make up
-a token, a password and an API key. This JVM calls them with a bearer token on its own, with
-Basic through `RestClient` and with a key header through `RestTemplate`, over kept
-connections. Then it searches its heap dump for all three and for the Basic base64: none is
+Shown by `NoCredentialOnTheHeapTest`: three HTTPS servers and an OAuth token endpoint run in a
+JVM of their own and make up a token, a password, an API key and a client secret. This JVM calls them with a bearer token on its own, with
+Basic through `RestClient`, with a key header through `RestTemplate` and with OAuth client
+credentials through `RestClient`, over kept connections. Then it searches its heap dump for
+all of them, for the access token that was issued, and for both Basic base64 forms: none is
 found, and the control (the token read into a `String` on purpose) is. The protocol (every
 way a body ends, connection reuse, the retry, the origin rule, a wrong certificate) is covered
-by `SeclumeHttpTest` and `SpringRestClientTest`.
+by `SeclumeHttpTest`, `SpringRestClientTest` and `OAuthClientCredentialsTest`.
 
 ## GraalVM native image
 
