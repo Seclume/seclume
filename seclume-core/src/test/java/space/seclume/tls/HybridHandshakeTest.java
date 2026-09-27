@@ -165,10 +165,12 @@ class HybridHandshakeTest {
 
         final Process process;
         final int port;
+        private final BufferedReader output;
 
-        private Server(Process process, int port) {
+        private Server(Process process, int port, BufferedReader output) {
             this.process = process;
             this.port = port;
+            this.output = output;
         }
 
         static Server start(String groups) throws Exception {
@@ -179,24 +181,32 @@ class HybridHandshakeTest {
             BufferedReader out = new BufferedReader(new InputStreamReader(
                     process.getInputStream(), StandardCharsets.UTF_8));
             List<String> seen = new ArrayList<>();
-            for (String line; (line = out.readLine()) != null; ) {
-                seen.add(line);
-                if (line.startsWith("ACCEPT ")) {
-                    int port = Integer.parseInt(line.substring(line.lastIndexOf(':') + 1).trim());
-                    Thread drain = new Thread(() -> {
-                        try {
-                            while (out.readLine() != null) {
-                                // keep the pipe from filling
+            try {
+                for (String line; (line = out.readLine()) != null; ) {
+                    seen.add(line);
+                    if (line.startsWith("ACCEPT ")) {
+                        int port = Integer.parseInt(
+                                line.substring(line.lastIndexOf(':') + 1).trim());
+                        Thread drain = new Thread(() -> {
+                            try {
+                                while (out.readLine() != null) {
+                                    // keep the pipe from filling
+                                }
+                            } catch (IOException ignored) {
+                                // the server was stopped
                             }
-                        } catch (IOException ignored) {
-                            // the server was stopped
-                        }
-                    }, "s_server-output");
-                    drain.setDaemon(true);
-                    drain.start();
-                    return new Server(process, port);
+                        }, "s_server-output");
+                        drain.setDaemon(true);
+                        drain.start();
+                        return new Server(process, port, out);
+                    }
                 }
+            } catch (IOException | RuntimeException e) {
+                out.close();
+                process.destroyForcibly();
+                throw e;
             }
+            out.close();
             process.destroyForcibly();
             throw new IllegalStateException("s_server did not start: " + seen);
         }
@@ -211,6 +221,12 @@ class HybridHandshakeTest {
             } catch (InterruptedException e) {
                 process.destroyForcibly();
                 Thread.currentThread().interrupt();
+            } finally {
+                try {
+                    output.close();
+                } catch (IOException ignored) {
+                    // the process is gone either way
+                }
             }
         }
     }
