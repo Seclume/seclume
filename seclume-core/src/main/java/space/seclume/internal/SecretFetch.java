@@ -104,16 +104,19 @@ public final class SecretFetch {
 
             ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024
                     + (secretBody == null ? 0 : secretBody.length()));
-            writeRequest(request, host, method, path, headers, secretHeaders, requestBody);
-            if (secretBody != null) {
-                request.position(request.position() - 2);           // the blank line, again below
-                ascii(request, "Content-Length: " + secretBody.length() + "\r\n\r\n");
-                for (int i = 0; i < secretBody.length(); i++) {
-                    request.put(secretBody.value().get(ValueLayout.JAVA_BYTE, i));
-                }
-            }
-            request.flip();
             try {
+                // Inside the try: a request that outgrows the buffer fails
+                // with the secret header already copied in, and that copy
+                // needs the wipe as much as a sent one.
+                writeRequest(request, host, method, path, headers, secretHeaders, requestBody);
+                if (secretBody != null) {
+                    request.position(request.position() - 2);       // the blank line, again below
+                    ascii(request, "Content-Length: " + secretBody.length() + "\r\n\r\n");
+                    for (int i = 0; i < secretBody.length(); i++) {
+                        request.put(secretBody.value().get(ValueLayout.JAVA_BYTE, i));
+                    }
+                }
+                request.flip();
                 while (request.hasRemaining()) {
                     tls.write(request);
                 }
@@ -162,10 +165,16 @@ public final class SecretFetch {
         try (Transport socket = SocketTransport.connect(address.getHostAddress(), port,
                 timeoutMillis)) {
             ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024);
-            writeRequest(request, host, method, path, headers, secretHeaders, null);
-            request.flip();
-            while (request.hasRemaining()) {
-                socket.write(request);
+            try {
+                writeRequest(request, host, method, path, headers, secretHeaders, null);
+                request.flip();
+                while (request.hasRemaining()) {
+                    socket.write(request);
+                }
+            } finally {
+                // The metadata session token travels in here - wiped exactly
+                // as on the TLS path above.
+                wipe(request);
             }
             return readResponse(socket::read, body);
         }
@@ -293,7 +302,14 @@ public final class SecretFetch {
         int length = buffer.limit() - from;
         int declared = contentLength(buffer, from);
         if (declared >= 0) {
-            length = Math.min(length, declared);
+            if (length < declared) {
+                // The connection ended before the body did. A cut-off token
+                // or document is refused here, not handed on to fail later
+                // somewhere less clear.
+                throw new IOException("the response ended after " + length + " of "
+                        + declared + " bytes");
+            }
+            length = declared;
         }
         if (length > body.byteSize()) {
             throw new IOException("the response is " + length + " bytes and does not fit into "
@@ -315,14 +331,7 @@ public final class SecretFetch {
             if (lineEnd < 0) {
                 throw new IOException("a chunk header never ended");
             }
-            int size = 0;
-            for (int i = at; i < lineEnd; i++) {
-                int digit = Character.digit(buffer.get(i), 16);
-                if (digit < 0) {
-                    break;                      // chunk extension after the size
-                }
-                size = size * 16 + digit;
-            }
+            int size = chunkSize(buffer, at, lineEnd, body.byteSize());
             at = lineEnd + 2;
             if (size == 0) {
                 return written;
@@ -337,6 +346,38 @@ public final class SecretFetch {
             at += size + 2;                     // past the chunk and its CRLF
         }
         throw new IOException("a chunked response ended without its terminal chunk");
+    }
+
+    /**
+     * The hexadecimal size at the start of a chunk header.
+     *
+     * <p>At least one digit, and never more than fits: without the bound,
+     * {@code fffffff4} wrapped to -12, the body length went negative and the
+     * parser stepped backwards over the same header until the count wrapped
+     * again - a CPU loop driven by whoever writes the response.
+     */
+    private static int chunkSize(ByteBuffer buffer, int from, int lineEnd, long room)
+            throws IOException {
+        long size = 0;
+        int digits = 0;
+        for (int i = from; i < lineEnd; i++) {
+            int digit = Character.digit(buffer.get(i), 16);
+            if (digit < 0) {
+                byte b = buffer.get(i);
+                if (b != ';' && b != ' ' && b != '\t') {
+                    throw new IOException("a chunk size is not hexadecimal");
+                }
+                break;                          // chunk extension after the size
+            }
+            size = size * 16 + digit;
+            if (++digits > 8 || size > Math.min(room, MAX_RESPONSE)) {
+                throw new IOException("a chunk is larger than the response may be");
+            }
+        }
+        if (digits == 0) {
+            throw new IOException("a chunk header has no size");
+        }
+        return (int) size;
     }
 
     private static boolean endsWithTerminalChunk(ByteBuffer buffer) {

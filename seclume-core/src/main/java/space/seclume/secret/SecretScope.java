@@ -2,6 +2,7 @@ package space.seclume.secret;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import space.seclume.internal.MemoryLock;
@@ -48,16 +49,43 @@ public final class SecretScope implements AutoCloseable {
     private final MemorySegment segment;
     private final boolean locked;
     private int length;
-    private boolean closed;
+    /**
+     * Set once, by whichever close gets there first. A shared scope can be
+     * closed from two threads at once - a worker finishing and a timeout
+     * giving up on it - and a plain flag let both through: the page count in
+     * {@link MemoryLock} was then decremented twice, and a page another live
+     * secret still sits on went back into core dumps.
+     */
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private SecretScope(Arena arena, boolean ownsArena, int capacity) {
         if (capacity <= 0) {
+            if (ownsArena) {
+                arena.close();
+            }
             throw new IllegalArgumentException("capacity must be positive");
         }
         this.arena = arena;
         this.ownsArena = ownsArena;
-        this.segment = arena.allocate(capacity);
-        this.locked = MemoryLock.lock(segment);
+        MemorySegment allocated = null;
+        try {
+            allocated = arena.allocate(capacity);
+            // May throw: -Dseclume.mlock.required=true makes a page that cannot
+            // be pinned and kept out of dumps an error rather than a warning.
+            this.locked = MemoryLock.lock(allocated);
+        } catch (Throwable t) {
+            // Nothing secret is in it yet, but an arena of our own that is
+            // never closed is native memory nobody will ever release.
+            if (ownsArena) {
+                try {
+                    arena.close();
+                } catch (Throwable suppressed) {
+                    t.addSuppressed(suppressed);
+                }
+            }
+            throw t;
+        }
+        this.segment = allocated;
         this.length = 0;
         ALLOCATIONS.incrementAndGet();
     }
@@ -103,16 +131,62 @@ public final class SecretScope implements AutoCloseable {
         // expires. Never the secret, never its length, never a hash of it.
         // A length is a fact about a password that an attacker is glad to
         // have, and this class is the last place that should leak one.
-        space.seclume.jfr.SeclumeEvents.CredentialRotation event =
-                space.seclume.jfr.Observed.beginCredential();
-        boolean succeeded = false;
+        //
+        // The recording is best effort, and it comes second: the scope is
+        // handed back even when the recording fails, and when the fetch fails
+        // the recording cannot swallow that failure. It used to sit in a
+        // finally, where an exception out of the provider's expiry - its own
+        // code - replaced the return value, and the open scope with the
+        // secret in it was dropped on the floor, never wiped.
+        space.seclume.jfr.SeclumeEvents.CredentialRotation event = beginRecording();
+        SecretScope scope;
         try {
-            SecretScope scope = read(provider);
-            succeeded = true;
-            return scope;
-        } finally {
+            scope = read(provider);
+        } catch (Throwable failure) {
+            endRecording(event, provider, false, failure);
+            throw failure;
+        }
+        try {
+            endRecording(event, provider, true, null);
+        } catch (Throwable error) {
+            // Only an Error gets here - endRecording swallows exceptions.
+            // Whoever would have owned the scope never sees it, so it is
+            // closed here rather than lost.
+            closeQuietly(scope, error);
+            throw error;
+        }
+        return scope;
+    }
+
+    private static space.seclume.jfr.SeclumeEvents.CredentialRotation beginRecording() {
+        try {
+            return space.seclume.jfr.Observed.beginCredential();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Never throws an exception; an Error travels on, see {@link #fromProvider}. */
+    private static void endRecording(space.seclume.jfr.SeclumeEvents.CredentialRotation event,
+            SecretProvider provider, boolean succeeded, Throwable failure) {
+        if (event == null) {
+            // Nothing is recording: the provider's expiry is not even asked,
+            // so its code cannot break a login nobody is watching.
+            return;
+        }
+        try {
             space.seclume.jfr.Observed.endCredential(event,
                     provider.getClass().getSimpleName(), expiryOf(provider), succeeded);
+        } catch (RuntimeException e) {
+            if (failure != null) {
+                failure.addSuppressed(e);
+            }
+        } catch (Error e) {
+            if (failure != null) {
+                failure.addSuppressed(e);
+                return;
+            }
+            throw e;
         }
     }
 
@@ -136,9 +210,20 @@ public final class SecretScope implements AutoCloseable {
             }
             scope.length = written;
             return scope;
-        } catch (RuntimeException e) {
+        } catch (Throwable failure) {
+            // Throwable, not RuntimeException: an OutOfMemoryError or a
+            // StackOverflowError out of the provider arrives with half a
+            // secret already written, and needs the wipe as much as anything.
+            closeQuietly(scope, failure);
+            throw failure;
+        }
+    }
+
+    private static void closeQuietly(SecretScope scope, Throwable failure) {
+        try {
             scope.close();
-            throw e;
+        } catch (Throwable suppressed) {
+            failure.addSuppressed(suppressed);
         }
     }
 
@@ -208,29 +293,36 @@ public final class SecretScope implements AutoCloseable {
      */
     @Override
     public void close() {
-        if (closed) {
+        if (!closed.compareAndSet(false, true)) {
             return;
         }
-        closed = true;
-        segment.fill((byte) 0);
-        CLOSES.incrementAndGet();
-        if (locked) {
-            MemoryLock.unlock(segment);
-        }
-        if (ownsArena) {
-            arena.close();
+        try {
+            segment.fill((byte) 0);
+        } finally {
+            CLOSES.incrementAndGet();
+            // Always, not only when the page was pinned: MemoryLock counted
+            // this segment's pages whether or not mlock worked, and a count
+            // never given back keeps the page pinned for good once another
+            // secret there did get locked.
+            try {
+                MemoryLock.unlock(segment);
+            } finally {
+                if (ownsArena) {
+                    arena.close();
+                }
+            }
         }
     }
 
     /** No {@code toString} with content - it would end up in the log. */
     @Override
     public String toString() {
-        return "SecretScope[capacity=" + (closed ? "released" : segment.byteSize())
+        return "SecretScope[capacity=" + (closed.get() ? "released" : segment.byteSize())
                 + ", locked=" + locked + "]";
     }
 
     private void checkOpen() {
-        if (closed) {
+        if (closed.get()) {
             throw new IllegalStateException("secret scope is closed");
         }
     }

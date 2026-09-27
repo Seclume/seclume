@@ -171,6 +171,23 @@ final class StubDataSource implements DataSource {
 
     void succeedAgain() {
         this.failure = null;
+        this.uncheckedFailure = null;
+    }
+
+    private volatile RuntimeException uncheckedFailure;
+    private volatile Runnable beforeReturn;
+
+    /**
+     * From now on every connect fails unchecked - the way a secret provider
+     * that cannot deliver, or a malformed handshake, reaches the pool.
+     */
+    void failUncheckedWith(RuntimeException failure) {
+        this.uncheckedFailure = failure;
+    }
+
+    /** Runs {@code hook} after each login, just before the connection is handed back. */
+    void beforeReturn(Runnable hook) {
+        this.beforeReturn = hook;
     }
 
     void delayEachConnect(long millis) {
@@ -190,6 +207,9 @@ final class StubDataSource implements DataSource {
         if (failure != null) {
             throw failure;
         }
+        if (uncheckedFailure != null) {
+            throw uncheckedFailure;
+        }
         if (delayMillis > 0) {
             try {
                 Thread.sleep(delayMillis);
@@ -200,6 +220,10 @@ final class StubDataSource implements DataSource {
         opened.incrementAndGet();
         StubConnection connection = new StubConnection();
         handedOut.add(connection);
+        Runnable hook = beforeReturn;
+        if (hook != null) {
+            hook.run();
+        }
         return connection.proxy;
     }
 

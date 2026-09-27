@@ -494,6 +494,7 @@ public final class TlsConnection implements Transport {
         RecordStream records = new RecordStream(transport);
         records.readWith(state.reading());
         records.writeWith(state.writing());
+        records.established();
         return new TlsConnection(transport, records);
     }
 

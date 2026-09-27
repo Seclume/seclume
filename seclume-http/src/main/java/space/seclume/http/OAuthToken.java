@@ -58,6 +58,9 @@ final class OAuthToken implements BearerSource {
                 ? space.seclume.jwt.SeclumeJwt.of(oauth.assertionAlg, oauth.assertionKid,
                         clientSecret)
                 : null;
+        // The access token is cached until it is due; a checkpoint image
+        // must not carry it.
+        space.seclume.internal.Checkpoint.register(this, OAuthToken::invalidate);
     }
 
     /** The header line, CRLF included - with a token renewed first if it is due. */
@@ -310,7 +313,9 @@ final class OAuthToken implements BearerSource {
             if (size == 0) {
                 return at;
             }
-            if (size < 0 || at + size > MAX_ANSWER) {
+            // In long: at + size in int wrapped for a size near 2^31 and slipped
+            // past the check as a negative number.
+            if (size < 0 || (long) at + size > MAX_ANSWER) {
                 throw new IOException("the token endpoint's answer is larger than "
                         + MAX_ANSWER + " bytes");
             }

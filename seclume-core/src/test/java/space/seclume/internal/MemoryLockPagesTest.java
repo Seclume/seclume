@@ -17,7 +17,8 @@ class MemoryLockPagesTest {
     @Test
     void aPageIsReleasedOnlyWithTheLastSecretOnIt() {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment page = arena.allocate(4096, 4096);
+            long size = MemoryLock.pageSize();
+            MemorySegment page = arena.allocate(size, size);
             MemorySegment first = page.asSlice(0, 64);
             MemorySegment second = page.asSlice(1024, 64);
             int before = MemoryLock.pagesInUse();
@@ -38,9 +39,12 @@ class MemoryLockPagesTest {
     @Test
     void aSecretAcrossTwoPagesHoldsBoth() {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment pages = arena.allocate(8192, 4096);
-            MemorySegment straddling = pages.asSlice(4000, 200);
-            MemorySegment onTheSecond = pages.asSlice(6000, 16);
+            // The real page size: on a 16 or 64 KiB kernel, offsets written
+            // for 4 KiB pages would not straddle anything.
+            long size = MemoryLock.pageSize();
+            MemorySegment pages = arena.allocate(2 * size, size);
+            MemorySegment straddling = pages.asSlice(size - 96, 200);
+            MemorySegment onTheSecond = pages.asSlice(size + size / 2, 16);
             int before = MemoryLock.pagesInUse();
 
             MemoryLock.lock(straddling);

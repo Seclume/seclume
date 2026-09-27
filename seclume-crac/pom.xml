@@ -24,6 +24,12 @@
       <artifactId>seclume-pool</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- The cached secrets to wipe and the count of open ones to wait for. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
     <!-- The CRaC API: on a JDK without CRaC it does nothing, on one with it
          it forwards to jdk.crac. -->
     <dependency>

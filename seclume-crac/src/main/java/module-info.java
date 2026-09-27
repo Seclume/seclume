@@ -5,6 +5,7 @@ module seclume.crac {
 
     requires transitive seclume.pool;
     requires org.crac;
+    requires seclume.core;
 
     exports space.seclume.crac;
 }
