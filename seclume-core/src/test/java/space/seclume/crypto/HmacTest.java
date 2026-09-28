@@ -111,6 +111,47 @@ class HmacTest {
         }
     }
 
+    /**
+     * The padded key is hashed once and its hash state restored on every
+     * {@code doFinal} (28.09.2026, for PBKDF2's speed). That has to give the
+     * same MAC as hashing the pads each time: across keys shorter than, equal
+     * to and longer than the block, messages split at arbitrary points, and
+     * one object used for several messages in a row - the part the saved
+     * state exists for.
+     */
+    @ParameterizedTest
+    @EnumSource(HashAlgorithm.class)
+    void theSavedPadStateMatchesJcaOnEveryReuse(HashAlgorithm algorithm) throws Exception {
+        Random random = new Random(20260928L + algorithm.ordinal());
+        int block = algorithm.blockLength();
+        for (int keyLength : new int[] {1, block - 1, block, block + 1, 2 * block + 3}) {
+            byte[] key = new byte[keyLength];
+            random.nextBytes(key);
+            Mac jca = Mac.getInstance(jcaName(algorithm));
+            jca.init(new SecretKeySpec(key, jcaName(algorithm)));
+            try (Arena arena = Arena.ofConfined();
+                 Hmac hmac = new Hmac(algorithm, copy(arena, key))) {
+                for (int message = 0; message < 5; message++) {
+                    byte[] data = new byte[random.nextInt(3 * block)];
+                    random.nextBytes(data);
+                    int cut = data.length == 0 ? 0 : random.nextInt(data.length);
+                    hmac.update(copy(arena, java.util.Arrays.copyOfRange(data, 0, cut)));
+                    hmac.update(copy(arena, java.util.Arrays.copyOfRange(data, cut, data.length)));
+                    MemorySegment out = arena.allocate(algorithm.digestLength());
+                    hmac.doFinal(out, 0);
+                    assertEquals(HexFormat.of().formatHex(jca.doFinal(data)), Segments.toHex(out),
+                            algorithm + ", key of " + keyLength + " bytes, message " + message);
+                }
+            }
+        }
+    }
+
+    private static MemorySegment copy(Arena arena, byte[] bytes) {
+        MemorySegment segment = arena.allocate(Math.max(1, bytes.length)).asSlice(0, bytes.length);
+        MemorySegment.copy(MemorySegment.ofArray(bytes), 0, segment, 0, bytes.length);
+        return segment;
+    }
+
     private static String mac(HashAlgorithm algorithm, MemorySegment key, MemorySegment data) {
         try (Arena arena = Arena.ofConfined();
              Hmac hmac = new Hmac(algorithm, key)) {

@@ -125,6 +125,11 @@ sealed class Sha512Digest extends BlockDigest permits Sha384Digest {
     }
 
     @Override
+    int chainLength() {
+        return 64;
+    }
+
+    @Override
     void writeResult(MemorySegment out, long offset) {
         MemorySegment.copy(state, H_OFFSET, out, offset, digestLength());
     }

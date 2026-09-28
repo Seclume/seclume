@@ -32,7 +32,7 @@ abstract sealed class BlockDigest implements Digest
 
     /** The partial block; it holds plaintext and is therefore zeroed. */
     final MemorySegment block;
-    /** Chaining value and message schedule; the subclass fixes the size. */
+    /** The chaining value, and for SHA-1 and MD5 the message schedule; the subclass fixes the size. */
     final MemorySegment state;
 
     private int blockUsed;
@@ -55,6 +55,46 @@ abstract sealed class BlockDigest implements Digest
 
     /** Writes the chaining value out as the result. */
     abstract void writeResult(MemorySegment out, long offset);
+
+    /**
+     * How many bytes at the start of {@link #state} are the chaining value -
+     * the part {@link #saveChain} and {@link #restoreChain} carry. Not the
+     * digest length: SHA-384 keeps all eight words of SHA-512.
+     */
+    abstract int chainLength();
+
+    /**
+     * Copies the chaining value into {@code into}, which must hold
+     * {@link #chainLength()} bytes. Only at a block boundary, where nothing
+     * is buffered: a partial block would not travel with it.
+     *
+     * <p>For HMAC: the state after the padded key block is the same for every
+     * message under that key, so it is computed once and restored instead of
+     * hashing the pad again - two of the four compressions in each PBKDF2
+     * round.
+     *
+     * @return the byte count so far, to be handed back to {@link #restoreChain}
+     */
+    final long saveChain(MemorySegment into) {
+        checkOpen();
+        if (blockUsed != 0) {
+            throw new IllegalStateException("the chaining value can only be saved at a block "
+                    + "boundary");
+        }
+        MemorySegment.copy(state, 0, into, 0, chainLength());
+        return byteCount;
+    }
+
+    /** Takes up a chaining value saved by {@link #saveChain}, discarding what was fed in. */
+    final void restoreChain(MemorySegment from, long count) {
+        checkOpen();
+        if (blockUsed > 0) {
+            block.asSlice(0, blockUsed).fill((byte) 0);
+        }
+        MemorySegment.copy(from, 0, state, 0, chainLength());
+        blockUsed = 0;
+        byteCount = count;
+    }
 
     @Override
     public final int blockLength() {

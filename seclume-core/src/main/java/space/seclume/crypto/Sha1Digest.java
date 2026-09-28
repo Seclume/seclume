@@ -83,6 +83,11 @@ final class Sha1Digest extends BlockDigest {
     }
 
     @Override
+    int chainLength() {
+        return 20;
+    }
+
+    @Override
     void writeResult(MemorySegment out, long offset) {
         MemorySegment.copy(state, H_OFFSET, out, offset, 20);
     }
