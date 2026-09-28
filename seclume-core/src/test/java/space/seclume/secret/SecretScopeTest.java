@@ -93,4 +93,41 @@ class SecretScopeTest {
         }
         assertEquals(before + 2, SecretScope.allocations());
     }
+
+    /**
+     * A confined scope closed from the wrong thread used to mark itself closed
+     * and then fail in the wipe - the secret stayed, unwiped, and the owner's
+     * own close() did nothing any more. Now the wrong thread is refused and
+     * the scope is still open for its owner (external audit, 28.09.2026).
+     */
+    @Test
+    void closingFromAnotherThreadIsRefusedAndTheOwnerCanStillWipe() throws Exception {
+        try (Arena arena = Arena.ofConfined()) {
+            SecretScope scope = SecretScope.in(arena, 16);
+            scope.segment().fill((byte) 0x41);
+            scope.length(16);
+            long openBefore = SecretScope.open();
+
+            Throwable[] seen = new Throwable[1];
+            Thread other = new Thread(() -> {
+                try {
+                    scope.close();
+                } catch (Throwable t) {
+                    seen[0] = t;
+                }
+            });
+            other.start();
+            other.join();
+
+            assertTrue(seen[0] instanceof WrongThreadException, String.valueOf(seen[0]));
+            assertEquals(16, scope.length(), "the scope must still be open for its owner");
+            assertEquals(openBefore, SecretScope.open());
+
+            MemorySegment view = scope.segment();
+            scope.close();
+            for (long i = 0; i < view.byteSize(); i++) {
+                assertEquals(0, view.get(ValueLayout.JAVA_BYTE, i), "byte " + i + " is not zero");
+            }
+        }
+    }
 }

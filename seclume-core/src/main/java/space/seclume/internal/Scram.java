@@ -375,7 +375,29 @@ public class Scram implements AutoCloseable {
             return;
         }
         closed = true;
-        arena.close();
+        // The class promises an arena that is zeroed on close, and closing an
+        // arena releases memory without erasing it. The password-derived keys
+        // are wiped where they are used; what is left - the server
+        // signature expected, the auth message, nonces and salt - is wiped
+        // here, so the promise holds for everything. (External audit,
+        // 28.09.2026.)
+        try {
+            wipe(expectedServerSignature);
+            wipe(authMessage.segment());
+            wipe(clientNonce);
+            wipe(serverNonce);
+            wipe(salt);
+            wipe(bindingData);
+            wipe(gs2Header);
+        } finally {
+            arena.close();
+        }
+    }
+
+    private static void wipe(MemorySegment segment) {
+        if (segment != null) {
+            segment.fill((byte) 0);
+        }
     }
 
     // ---- odds and ends ---------------------------------------------------

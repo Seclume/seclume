@@ -178,6 +178,13 @@ memory rather than concatenated. This was documented as an unsupported gap for a
 than closed badly; the note is kept in `internal/docs` because the reasoning is worth more
 than the outcome.
 
+**Which TLS carries the fetch.** Vault and the three cloud vaults are asked over seclume's own
+TLS 1.3 client, so their answer is decrypted into native memory only. The JDK's `SSLEngine`
+decrypts through short-lived heap arrays, which put the answer, and the password in it, on
+the heap until the next collection. For a server that cannot do TLS 1.3 with P-256,
+`-Dseclume.secretFetch.tlsStack=jsse` switches back to JSSE, with that exposure. The trust
+store, `tlsRootCert` and `verify` behave the same on both stacks.
+
 ### Workload identity: no stored credential at all
 
 ```properties
