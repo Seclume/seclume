@@ -218,10 +218,31 @@ class ServerHelloStrictnessTest {
         assertEquals(TlsAlertException.ILLEGAL_PARAMETER, refused(peer).alert());
     }
 
+    /**
+     * RFC 8446 section 4.2.1: with supported_versions present, the client
+     * MUST ignore legacy_version. This one used to refuse 0x0304 there with
+     * protocol_version (TLS-Anvil 8446-oysw9PbeiT, 28.09.2026). Ignored now:
+     * the handshake goes on to the key share - off the curve in this test
+     * server's answer, which is where it stops.
+     */
     @Test
-    void aWrongLegacyVersionIsRefused() {
-        Peer peer = new Peer(id -> with(serverHello(id,
-                concat(supportedVersions(), p256Share()), false), 5 + 4 + 1, 4));
+    void aWrongLegacyVersionIsIgnoredWhenSupportedVersionsSaysThirteen() {
+        for (int[] version : new int[][] {{3, 4}, {5, 5}}) {
+            Peer peer = new Peer(id -> with(with(serverHello(id,
+                    concat(supportedVersions(), p256Share()), false),
+                    5 + 4, version[0]), 5 + 4 + 1, version[1]));
+            TlsProtocolException refused = refused(peer);
+            assertEquals(TlsAlertException.ILLEGAL_PARAMETER, refused.alert(),
+                    refused.getMessage());
+            assertTrue(refused.getMessage().contains("key share was refused"),
+                    refused.getMessage());
+        }
+    }
+
+    /** Without supported_versions the header decides nothing, and TLS 1.3 was not chosen. */
+    @Test
+    void withoutSupportedVersionsTheServerDidNotChooseThirteen() {
+        Peer peer = new Peer(id -> serverHello(id, p256Share(), false));
         assertEquals(TlsAlertException.PROTOCOL_VERSION, refused(peer).alert());
     }
 

@@ -397,10 +397,13 @@ public final class ClientHandshake {
         };
         int keyLength = suite == ClientHello.AES_256_GCM_SHA384 ? 32 : 16;
 
-        if (Handshake.u16(serverHello, body) != Handshake.LEGACY_VERSION) {
-            throw new TlsProtocolException(TlsAlertException.PROTOCOL_VERSION,
-                    "the ServerHello's legacy_version is not 0x0303");
-        }
+        // legacy_version is deliberately not checked. RFC 8446 section 4.2.1:
+        // with supported_versions present, "clients MUST ignore the
+        // ServerHello.legacy_version value" - and this client requires that
+        // extension to say 0x0304 below, so the header cannot negotiate
+        // anything. Refusing a header other than 0x0303 broke that MUST
+        // (TLS-Anvil 8446-oysw9PbeiT, 28.09.2026; OpenSSL's client ignores it
+        // as well).
         long compression = Handshake.sessionIdOffset(body) + sessionLength + 2;
         if (serverHello.get(ValueLayout.JAVA_BYTE, compression) != 0) {
             throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
