@@ -7,8 +7,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.concurrent.TimeUnit;
 
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.SecretKeyFactory; // seclume-allow: the JDK as a yardstick, fed a fixed public test string
+import javax.crypto.spec.PBEKeySpec; // seclume-allow: the JDK as a yardstick, fed a fixed public test string
 
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -62,6 +62,7 @@ public class Pbkdf2Benchmark {
     public void prepare() throws GeneralSecurityException {
         hash = HashAlgorithm.valueOf(algorithm);
         arena = Arena.ofConfined();
+        // seclume-allow: a fixed public test string, not a secret
         byte[] bytes = PASSWORD.getBytes(StandardCharsets.US_ASCII);
         password = arena.allocate(bytes.length);
         MemorySegment.copy(bytes, 0, password, ValueLayout.JAVA_BYTE, 0, bytes.length);
