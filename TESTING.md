@@ -369,6 +369,25 @@ has to be exactly 2: each transaction landed once, not zero times and not twice.
 
 A third case checks the other direction: a duplicate key is run **once** and not three times.
 
+## The TLS client against TLS-Anvil
+
+`.github/workflows/tls-anvil.yml` runs seclume's own TLS 1.3 client against
+[TLS-Anvil](https://tls-anvil.com) (Ruhr University Bochum, Paderborn University, Hackmanit;
+Apache-2.0). TLS-Anvil plays the server and runs several hundred tests derived from RFC 8446 -
+reordered, repeated and malformed messages, wrong extensions and alerts, bad signatures - each
+in many combinations, and judges what the client does. It is built from its source at a pinned
+commit; `seclume-tls-anvil` is the client it drives, one connection per trigger.
+
+It runs weekly, by hand, and on pull requests that touch `tls/` or `crypto/`, and takes the
+better part of an hour. The results are the job summary, a comment on the pull request, and an
+artifact. `tls-anvil/expected-results.json`, once committed from a reviewed run
+(`summarize.py --write-expected`), is the baseline: a test that passed there and fails later
+turns the run red.
+
+The client runs without a trust store, because TLS-Anvil makes its certificates up per test:
+what is measured is how the protocol is handled. How certificates are trusted is the JDK's
+PKIX and is tested in `CertificateTrustTest` and `HostnameMatchTest`.
+
 ## The drivers on our own TLS
 
 `LocalOwnTlsStackTest` (PostgreSQL) and `LocalMyOwnTlsStackTest` (MySQL) run the same login,

@@ -220,6 +220,11 @@ public final class TlsConnection implements Transport {
         RecordStream.Incoming record;
         try {
             record = records.next();
+        } catch (TlsProtocolException refused) {
+            // The record layer refused what arrived - a bad tag, an overflow:
+            // the peer is told why, as RFC 8446 section 6 asks.
+            abort(refused.alert());
+            throw refused;
         } catch (TlsAlertException alert) {
             if (alert.isCloseNotify()) {
                 endOfStream = true;           // the peer said goodbye; that is an end, not a fault

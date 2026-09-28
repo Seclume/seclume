@@ -24,6 +24,10 @@ public class TlsAlertException extends IOException {
     public static final int HANDSHAKE_FAILURE = 40;
     public static final int ILLEGAL_PARAMETER = 47;
     public static final int DECODE_ERROR = 50;
+    public static final int BAD_RECORD_MAC = 20;
+    public static final int RECORD_OVERFLOW = 22;
+    public static final int PROTOCOL_VERSION = 70;
+    public static final int UNSUPPORTED_EXTENSION = 110;
 
     private final int level;
     private final int description;
