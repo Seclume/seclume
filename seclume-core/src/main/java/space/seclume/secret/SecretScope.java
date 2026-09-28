@@ -303,6 +303,16 @@ public final class SecretScope implements AutoCloseable {
      */
     @Override
     public void close() {
+        // Before the flag, not after: a confined scope closed from another
+        // thread used to set it and then fail in fill() with
+        // WrongThreadException - the secret neither wiped nor released, and
+        // every later close() a no-op, the owner's included. Now the wrong
+        // thread is refused and the owner can still close it. Found in an
+        // external audit, 28.09.2026.
+        if (!closed.get() && !segment.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("this secret scope belongs to another thread, "
+                    + "and only that thread can wipe it - it is still open");
+        }
         if (!closed.compareAndSet(false, true)) {
             return;
         }

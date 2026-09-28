@@ -323,9 +323,32 @@ public final class TlsChannel implements TlsLayer {
         close();
     }
 
+    /**
+     * Closes the engine and zeroes the three buffers.
+     *
+     * <p>They are direct, so nothing here is in an hprof - but {@code appIn}
+     * and {@code netIn} hold decrypted records (JSSE decrypts in place), and
+     * over a cleartext login or a secret manager's answer those carry the
+     * password. A direct buffer is freed without being erased, so the
+     * plaintext used to stay in the process, and in a core file, until the
+     * allocator handed the memory to someone else. Found in an external
+     * audit, 28.09.2026.
+     */
     @Override
     public void close() {
-        engine.closeOutbound();
+        try {
+            engine.closeOutbound();
+        } finally {
+            wipe(appIn);
+            wipe(netIn);
+            wipe(netOut);
+        }
+    }
+
+    private static void wipe(ByteBuffer buffer) {
+        java.lang.foreign.MemorySegment.ofBuffer(buffer.duplicate().clear()).fill((byte) 0);
+        buffer.clear();
+        buffer.limit(0);
     }
 
     /**

@@ -245,8 +245,11 @@ It does **not** make the process a vault:
 - **Your data is still on the heap.** Rows you read and parameters you bind are Java objects,
   as with any driver. Columns that hold secrets can be read and bound off the heap
   (`Sensitive`, `SensitiveParameters`), but that is opt-in, per column.
-- **With the default TLS (JSSE), the session keys are on the heap.** Only `tlsStack=seclume`
-  keeps the traffic secrets out of it, and that stack is newer and has had less scrutiny than
+- **With the default TLS (JSSE), the session keys are on the heap**, and so, briefly, is what
+  JSSE decrypts: the JDK's AES-GCM passes direct buffers through short-lived heap arrays. A
+  login that goes in clear text inside TLS (PostgreSQL `password`, MySQL's full
+  `caching_sha2_password`, SQL Server's Login7) is best run on `tlsStack=seclume`. Only
+  `tlsStack=seclume` keeps the traffic secrets out of it, and that stack is newer and has had less scrutiny than
   JSSE. See [TLS.md](TLS.md#which-tls-carries-it-a-separate-question).
 - **Other secrets in your application are yours.** An API key in `application.yml` is on the
   heap whatever driver you use. The starter warns about plaintext passwords it can see, and

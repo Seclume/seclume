@@ -5,6 +5,22 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Security: findings from an external audit (28.09.2026)
+
+- **Secret managers are asked over seclume's own TLS 1.3 by default.** Vault, AWS Secrets
+  Manager, Azure Key Vault and Google Secret Manager used the JDK's `SSLEngine`, whose AES-GCM
+  decrypts a direct buffer through short-lived `byte[]` on the heap - so the answer, with the
+  password in clear text, passed through the heap until the next collection. A heap dump
+  taken with `live=false` before that collection could contain it.
+  `-Dseclume.secretFetch.tlsStack=jsse` brings the JDK's TLS back for a server that cannot do
+  TLS 1.3 with P-256, with that exposure.
+- The JSSE layer (`tlsStack=jsse`, the database default) zeroes its three direct buffers on
+  close. They held decrypted records and were freed without being erased.
+- `SecretScope.close()` from a thread that does not own the scope is refused with
+  `WrongThreadException` and leaves the scope open for its owner. It used to mark the scope
+  closed and then fail in the wipe, leaving the secret in memory for good.
+- `Scram.close()` zeroes what is left in its arena, as its documentation always said.
+
 ### Events and metrics for every module
 
 - New JFR events: `space.seclume.SecretUse` for every secret seclume writes into a request

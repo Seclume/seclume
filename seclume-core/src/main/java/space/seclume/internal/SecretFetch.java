@@ -45,6 +45,57 @@ public final class SecretFetch {
     private SecretFetch() {
     }
 
+    /**
+     * The system property that picks the TLS stack a secret is fetched over.
+     *
+     * <p>{@code seclume}, the default, is this project's own TLS 1.3 client:
+     * the response - which holds the password in clear text - is decrypted
+     * into native memory and nowhere else. {@code jsse} is the JDK's
+     * {@code SSLEngine}, for a secret manager that cannot do TLS 1.3 with
+     * P-256.
+     *
+     * <p>Why that is not the default any more: the JDK's AES-GCM decrypts a
+     * <em>direct</em> buffer by copying it through short-lived {@code byte[]}
+     * on the heap ({@code com.sun.crypto.provider.GCTR} and
+     * {@code GaloisCounterMode}, JDK 21 to 25), and the plaintext stays in
+     * those arrays until the next collection reclaims them. A heap dump
+     * taken with {@code live=false} before that collection - what
+     * {@code jmap -dump:format=b} and {@code HeapDumpOnOutOfMemoryError}
+     * write - held the whole password from a Vault answer. Found in an
+     * external audit, 28.09.2026; see {@code SecretFetchTlsStackTest}.
+     */
+    public static final String TLS_STACK_PROPERTY = "seclume.secretFetch.tlsStack";
+
+    /**
+     * The handshake, on the stack {@link #TLS_STACK_PROPERTY} names. Not
+     * through {@link TlsLayers}: that applies a database connection's
+     * {@code tlsPin}, and a secret manager is a different server. The trust
+     * is what it was before - {@link TrustChoice} for both stacks.
+     */
+    private static TlsLayer startTls(Transport socket, String host, int port, boolean verify)
+            throws IOException {
+        if (stack() == space.seclume.internal.jdbc.TlsStack.SECLUME) {
+            return SeclumeTls.start(socket, host, verify, null);
+        }
+        TlsChannel jsse = TlsChannel.create(socket, host, port, verify);
+        try {
+            jsse.handshake();
+            return jsse;
+        } catch (IOException | RuntimeException failed) {
+            jsse.close();
+            throw failed;
+        }
+    }
+
+    static space.seclume.internal.jdbc.TlsStack stack() throws IOException {
+        String value = System.getProperty(TLS_STACK_PROPERTY, "seclume");
+        try {
+            return space.seclume.internal.jdbc.TlsStack.of(value);
+        } catch (java.sql.SQLException unknown) {
+            throw new IOException(TLS_STACK_PROPERTY + ": " + unknown.getMessage(), unknown);
+        }
+    }
+
     /** What the server said, with the body already in the caller's segment. */
     public record Response(int status, int bodyLength) {
 
@@ -99,8 +150,7 @@ public final class SecretFetch {
             MemorySegment body) throws IOException {
 
         try (Transport socket = SocketTransport.connect(host, port, timeoutMillis);
-             TlsChannel tls = TlsChannel.create(socket, host, port, verify)) {
-            tls.handshake();
+             TlsLayer tls = startTls(socket, host, port, verify)) {
 
             ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024
                     + (secretBody == null ? 0 : secretBody.length()));
