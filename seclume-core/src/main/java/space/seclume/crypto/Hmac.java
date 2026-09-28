@@ -12,17 +12,28 @@ import java.lang.foreign.ValueLayout;
  * {@link javax.crypto.Mac} and {@link javax.crypto.spec.SecretKeySpec}: each
  * takes the key as a {@code byte[]} and copies it again internally.
  *
- * <p>The prepared pads stay in memory for the lifetime of the object - that is
- * deliberate, so PBKDF2 does not have to prepare the key again on each of its
- * ten thousand rounds - but off-heap, and zeroed on close.
+ * <p>The hash state after the padded key stays in memory for the lifetime of
+ * the object - that is deliberate, so PBKDF2 does not have to hash the key
+ * again on each of its thousands of rounds - but off-heap, and zeroed on
+ * close.
  */
 public final class Hmac implements AutoCloseable {
 
     private final Arena arena = Arena.ofConfined();
-    private final Digest inner;
-    private final Digest outer;
-    private final MemorySegment ipad;
-    private final MemorySegment opad;
+    private final BlockDigest inner;
+    private final BlockDigest outer;
+    /**
+     * The chaining values after the padded key block, inner and outer. Every
+     * message under this key starts from them, so they are computed once and
+     * restored - instead of compressing K0 ^ ipad and K0 ^ opad again on each
+     * {@link #doFinal}. In PBKDF2 that is half the work of every round.
+     * Derived from the key, so off-heap and zeroed on close like the pads
+     * they replace.
+     */
+    private final MemorySegment innerChain;
+    private final MemorySegment outerChain;
+    private final long innerCount;
+    private final long outerCount;
     private final MemorySegment scratch;
     private final int digestLength;
     private boolean closed;
@@ -31,29 +42,37 @@ public final class Hmac implements AutoCloseable {
     public Hmac(HashAlgorithm algorithm, MemorySegment key, long keyOffset, long keyLength) {
         int blockLength = algorithm.blockLength();
         this.digestLength = algorithm.digestLength();
-        this.inner = algorithm.newDigest();
-        this.outer = algorithm.newDigest();
-        this.ipad = arena.allocate(blockLength);
-        this.opad = arena.allocate(blockLength);
+        this.inner = (BlockDigest) algorithm.newDigest();
+        this.outer = (BlockDigest) algorithm.newDigest();
+        this.innerChain = arena.allocate(inner.chainLength());
+        this.outerChain = arena.allocate(outer.chainLength());
         this.scratch = arena.allocate(digestLength);
 
         // K0: longer keys are hashed, shorter ones padded with zeroes.
         MemorySegment k0 = arena.allocate(blockLength);
+        MemorySegment pad = arena.allocate(blockLength);
         try {
             if (keyLength > blockLength) {
                 algorithm.hash(key, keyOffset, keyLength, k0, 0);
             } else {
                 MemorySegment.copy(key, keyOffset, k0, 0, keyLength);
             }
-            for (int i = 0; i < blockLength; i++) {
-                byte b = k0.get(ValueLayout.JAVA_BYTE, i);
-                ipad.set(ValueLayout.JAVA_BYTE, i, (byte) (b ^ 0x36));
-                opad.set(ValueLayout.JAVA_BYTE, i, (byte) (b ^ 0x5c));
-            }
+            xor(k0, (byte) 0x36, pad, blockLength);
+            inner.update(pad);
+            this.innerCount = inner.saveChain(innerChain);
+            xor(k0, (byte) 0x5c, pad, blockLength);
+            outer.update(pad);
+            this.outerCount = outer.saveChain(outerChain);
         } finally {
             k0.fill((byte) 0);
+            pad.fill((byte) 0);
         }
-        inner.update(ipad);
+    }
+
+    private static void xor(MemorySegment k0, byte value, MemorySegment pad, int length) {
+        for (int i = 0; i < length; i++) {
+            pad.set(ValueLayout.JAVA_BYTE, i, (byte) (k0.get(ValueLayout.JAVA_BYTE, i) ^ value));
+        }
     }
 
     /** HMAC over the whole key segment. */
@@ -91,13 +110,12 @@ public final class Hmac implements AutoCloseable {
         checkOpen();
         try {
             inner.digest(scratch, 0);
-            outer.update(opad);
+            outer.restoreChain(outerChain, outerCount);
             outer.update(scratch, 0, digestLength);
             outer.digest(out, offset);
         } finally {
             scratch.fill((byte) 0);
-            inner.reset();
-            inner.update(ipad);
+            inner.restoreChain(innerChain, innerCount);
         }
     }
 
@@ -107,8 +125,8 @@ public final class Hmac implements AutoCloseable {
             return;
         }
         closed = true;
-        ipad.fill((byte) 0);
-        opad.fill((byte) 0);
+        innerChain.fill((byte) 0);
+        outerChain.fill((byte) 0);
         scratch.fill((byte) 0);
         inner.close();
         outer.close();

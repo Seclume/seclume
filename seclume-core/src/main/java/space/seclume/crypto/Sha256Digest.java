@@ -101,6 +101,11 @@ final class Sha256Digest extends BlockDigest {
     }
 
     @Override
+    int chainLength() {
+        return 32;
+    }
+
+    @Override
     void writeResult(MemorySegment out, long offset) {
         MemorySegment.copy(state, H_OFFSET, out, offset, 32);
     }

@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Faster PBKDF2 (SCRAM, Oracle 12c)
+
+- `Hmac` hashes the padded key once and restores that state for every message instead of
+  hashing both pads again on each `doFinal`. That removes two of the four hash compressions
+  in every PBKDF2 round. Measured 4096 rounds, best of several runs on a 2-vCPU host:
+  SHA-256 about 4.5-6 ms before and 2.7-4 ms after; SHA-512 about 6.6-8.7 ms before and
+  3.5-4.7 ms after, which puts SHA-512 on a par with the JDK. `Pbkdf2Benchmark` in
+  `seclume-bench` measures it with JMH, no database needed.
+- Tried and not kept: PBKDF2 through OpenSSL 3.0's `PKCS5_PBKDF2_HMAC` was no faster than
+  this, and it would have put copies of the password in OpenSSL memory that is not kept out
+  of core dumps. Unrolling SHA-256's rounds ran out of registers under C2 and was slower.
+
 ### Security: findings from an external audit (28.09.2026)
 
 - **Secret managers are asked over seclume's own TLS 1.3 by default.** Vault, AWS Secrets

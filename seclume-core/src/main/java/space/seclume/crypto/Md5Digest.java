@@ -94,6 +94,11 @@ final class Md5Digest extends BlockDigest {
     }
 
     @Override
+    int chainLength() {
+        return 16;
+    }
+
+    @Override
     void writeResult(MemorySegment out, long offset) {
         MemorySegment.copy(state, 0, out, offset, 16);
     }
