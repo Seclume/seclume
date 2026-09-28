@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### TLS 1.3 client: legacy_version ignored, as RFC 8446 requires
+
+- seclume's own TLS client refused a ServerHello whose `legacy_version` was not 0x0303,
+  with a `protocol_version` alert. RFC 8446 section 4.2.1 says the client MUST ignore that
+  field when `supported_versions` is present, and this client requires `supported_versions`
+  to say TLS 1.3 in every case. Found by TLS-Anvil (`8446-oysw9PbeiT`), the one test that
+  failed in its first run.
+
 ### Faster PBKDF2 (SCRAM, Oracle 12c)
 
 - `Hmac` hashes the padded key once and restores that state for every message instead of
