@@ -206,8 +206,8 @@ Everything below works on all four databases unless the row says otherwise.
 | | `seclume-verify --migrate`: your Hikari/pgjdbc/mssql-jdbc configuration translated, unsafe settings named | [OBSERVABILITY.md](OBSERVABILITY.md#seclume-verify) |
 | | `NoSecretInHeap`: the heap-dump proof in your own tests; `seclume-heapcheck` for any process |
 | **Your own library** | `seclume-core`'s secret classes for any client that holds a secret: mail, API keys, signing keys | [SECRETS-API.md](SECRETS-API.md) | [FEATURES.md](FEATURES.md#proving-there-is-no-secret-on-the-heap-for-any-application) |
-| **Kafka** | SASL/SCRAM (SHA-256, SHA-512) with the password off the heap: `seclume-kafka` | [FEATURES.md](FEATURES.md#kafka) |
-| **Redis** | Jedis logged in from native memory, over TLS 1.3 with keys off the heap: `seclume-redis` | [FEATURES.md](FEATURES.md#redis) |
+| **Kafka** | SASL/SCRAM, PLAIN and OAUTHBEARER with the password or token off the heap, PLAIN and OAUTHBEARER over seclume's own TLS 1.3: `seclume-kafka` | [FEATURES.md](FEATURES.md#kafka) |
+| **Redis** | Jedis and Lettuce logged in from native memory, over TLS 1.3 with keys off the heap: `seclume-redis` | [FEATURES.md](FEATURES.md#redis) |
 | **Mail** | Sending (SMTP) and reading (IMAP, POP3), logged in with PLAIN, LOGIN or XOAUTH2 from native memory over STARTTLS or implicit TLS 1.3; a Jakarta Mail session for Spring's `JavaMailSender`, Spring Integration and Camel: `seclume-mail` | [FEATURES.md](FEATURES.md#mail) |
 | **HTTPS APIs** | API keys, bearer tokens and Basic passwords written from native memory, per request and only to their own origin; standalone or as the request factory for Spring's `RestClient` and `RestTemplate`: `seclume-http` | [FEATURES.md](FEATURES.md#https-apis) |
 | **Signing keys** | JWTs signed and checked with HMAC keys, signed with RSA or EC keys held by OpenSSL; GitHub and Stripe webhook signatures checked: `seclume-jwt` | [FEATURES.md](FEATURES.md#signing-keys-jwt-and-webhooks) |

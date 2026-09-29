@@ -4,11 +4,8 @@ import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.net.Socket;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 import redis.clients.jedis.JedisSocketFactory;
 import redis.clients.jedis.exceptions.JedisConnectionException;
@@ -18,7 +15,6 @@ import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
 import space.seclume.internal.jdbc.TlsStack;
 import space.seclume.secret.SecretProvider;
-import space.seclume.secret.SecretProviders;
 import space.seclume.secret.SecretScope;
 
 /**
@@ -76,53 +72,10 @@ public final class SeclumeRedisSocketFactory implements JedisSocketFactory {
 
     /** From a {@code redis://} or {@code rediss://} URL - see the class comment. */
     public static SeclumeRedisSocketFactory of(String url) {
-        URI uri = URI.create(url);
-        boolean tls = switch (String.valueOf(uri.getScheme())) {
-            case "redis" -> false;
-            case "rediss" -> true;
-            default -> throw new IllegalArgumentException(
-                    "a Redis URL begins with redis:// or rediss://");
-        };
-        if (uri.getRawUserInfo() != null) {
-            throw new IllegalArgumentException("a user or password in front of the host is not "
-                    + "taken: the password would be a String for the life of the application. "
-                    + "Name the user with user= and the secret with provider= and path=");
-        }
-        Map<String, String> options = new LinkedHashMap<>();
-        String query = uri.getRawQuery();
-        if (query != null) {
-            for (String pair : query.split("&")) {
-                int equals = pair.indexOf('=');
-                if (equals > 0) {
-                    options.put(decode(pair.substring(0, equals)), decode(pair.substring(equals + 1)));
-                }
-            }
-        }
-        String user = options.remove("user");
-        String rootCert = options.remove(TrustChoice.ROOT_CERT);
-        String pin = options.remove(TrustChoice.PIN);
-        int connectTimeout = Integer.parseInt(options.getOrDefault("connectTimeout", "5000"));
-        int timeout = Integer.parseInt(options.getOrDefault("timeout", "2000"));
-        options.remove("connectTimeout");
-        options.remove("timeout");
-        TrustChoice.Choice trust = null;
-        if (rootCert != null || pin != null) {
-            java.util.Properties named = new java.util.Properties();
-            if (rootCert != null) {
-                named.setProperty(TrustChoice.ROOT_CERT, rootCert);
-            }
-            if (pin != null) {
-                named.setProperty(TrustChoice.PIN, pin);
-            }
-            try {
-                trust = TrustChoice.of(null, named);
-            } catch (SQLException e) {
-                throw new IllegalArgumentException(e.getMessage(), e);
-            }
-        }
-        return new SeclumeRedisSocketFactory(uri.getHost(), uri.getPort() < 0 ? 6379
-                : uri.getPort(), user, tls, trust, connectTimeout, timeout,
-                SecretProviders.of(options));
+        RedisUrl parsed = RedisUrl.parse(url);
+        return new SeclumeRedisSocketFactory(parsed.host(), parsed.port(), parsed.user(),
+                parsed.tls(), parsed.trust(), parsed.connectTimeout(), parsed.timeout(),
+                parsed.secret());
     }
 
     @Override
@@ -202,10 +155,6 @@ public final class SeclumeRedisSocketFactory implements JedisSocketFactory {
         }
         text.append('$').append(passwordLength).append("\r\n");
         return text.toString().getBytes(StandardCharsets.UTF_8); // seclume-allow: the command head, no secret in it
-    }
-
-    private static String decode(String text) {
-        return java.net.URLDecoder.decode(text, StandardCharsets.UTF_8);
     }
 
     /** For the tests: which way it is encrypted. */

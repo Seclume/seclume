@@ -13,11 +13,11 @@
   <artifactId>seclume-kafka</artifactId>
   <name>seclume Kafka</name>
   <description>
-    SASL/SCRAM for the Kafka client with the password off the heap: a JAAS
-    login module that names a secret provider instead of a password, and a
-    SCRAM-SHA-256/512 client that reads the secret for the one step that needs
-    it and wipes it after. Built on the JDK's SASL interfaces only - Kafka is
-    needed at run time, not to compile against.</description>
+    SASL for the Kafka client with the secret off the heap: JAAS login modules
+    that name a secret provider instead of a password or token - SCRAM-SHA-256/512,
+    PLAIN and OAUTHBEARER - and, for the last two, Kafka's TLS on seclume's own
+    TLS 1.3 stack, which writes the secret into the login request from native
+    memory as it is encrypted.</description>
 
   <properties>
     <kafka.version>4.3.1</kafka.version>
@@ -29,11 +29,19 @@
       <artifactId>seclume-core</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- SslEngineFactory; the application brings its own Kafka client. -->
     <dependency>
       <groupId>org.apache.kafka</groupId>
       <artifactId>kafka-clients</artifactId>
       <version>${kafka.version}</version>
-      <scope>test</scope>
+      <scope>provided</scope>
+    </dependency>
+    <!-- OAUTHBEARER with token-url: the client credentials grant. Optional. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-http</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
     </dependency>
     <dependency>
       <groupId>space.seclume</groupId>

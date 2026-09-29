@@ -44,7 +44,7 @@ public final class SeclumeScramLoginModule implements LoginModule {
     @Override
     public void initialize(Subject subject, CallbackHandler callbackHandler,
                            Map<String, ?> sharedState, Map<String, ?> options) {
-        ScramProvider.install();
+        SeclumeSaslProvider.install();
         Object username = options.get(USERNAME);
         if (!(username instanceof String name) || name.isEmpty()) {
             throw new IllegalArgumentException(
