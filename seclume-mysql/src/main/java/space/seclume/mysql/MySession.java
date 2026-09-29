@@ -919,7 +919,7 @@ public final class MySession implements AutoCloseable {
             throw new java.sql.SQLInvalidAuthorizationSpecException(
                     "the server asks for Kerberos (auth_gssapi_client), which seclume speaks "
                     + "through the system's GSSAPI library (libgssapi_krb5.so.2) on 64-bit "
-                    + "Linux - it is not there", "28000");
+                    + "Linux and through SSPI on 64-bit Windows - neither is there", "28000");
         }
         try (space.seclume.internal.Gssapi.Context gss =
                      space.seclume.internal.Gssapi.initiatePrincipal(principal)) {

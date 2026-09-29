@@ -5,11 +5,14 @@ import java.sql.Statement;
 
 /**
  * A PostgreSQL login by Kerberos: no password anywhere, the ticket in the
- * system's credential cache. Run by proof/kerberos.sh.
+ * system's credential cache (Linux) or the logon session's (Windows, SSPI).
+ * Run by proof/kerberos.sh and proof/sspi.ps1; the port is the first
+ * argument, 5432 if none.
  */
 public class KerberosProof {
     public static void main(String[] args) throws Exception {
-        String url = "jdbc:seclume:postgresql://pg.seclume.test:5432/postgres?user=alice"
+        String port = args.length > 0 ? args[0] : "5432";
+        String url = "jdbc:seclume:postgresql://pg.seclume.test:" + port + "/postgres?user=alice"
                 + "&tls=off&provider=none";
         try (Connection c = DriverManager.getConnection(url);
              Statement s = c.createStatement();

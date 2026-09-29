@@ -25,8 +25,9 @@ import java.nio.charset.StandardCharsets;
  * wants, and hands the tokens on. The tokens themselves are protocol data -
  * a ticket encrypted for the server and an authenticator - not the key.
  *
- * <p>64-bit Linux; elsewhere {@link #available()} says no. (Windows speaks
- * Kerberos through SSPI, which is a different library and not this one.)
+ * <p>64-bit Linux through MIT's library, and 64-bit Windows through SSPI
+ * ({@link Sspi}), which hands out the same Kerberos tokens; elsewhere
+ * {@link #available()} says no.
  */
 public final class Gssapi {
 
@@ -41,9 +42,9 @@ public final class Gssapi {
     private Gssapi() {
     }
 
-    /** Whether the system's GSSAPI library can be used here. */
+    /** Whether Kerberos can be used here - MIT's GSSAPI on Linux, SSPI on Windows. */
     public static boolean available() {
-        return Native.AVAILABLE;
+        return Native.AVAILABLE || Sspi.available();
     }
 
     /**
@@ -51,11 +52,14 @@ public final class Gssapi {
      * for PostgreSQL - to be driven by {@link Context#step}.
      */
     public static Context initiate(String service, String host) {
+        if (Sspi.available()) {
+            return Sspi.initiate(service + "/" + host);        // an SPN, as SSPI names it
+        }
         if (!available()) {
             throw new IllegalStateException("Kerberos needs the GSSAPI library "
-                    + "(libgssapi_krb5.so.2) on 64-bit Linux");
+                    + "(libgssapi_krb5.so.2) on 64-bit Linux, or SSPI on 64-bit Windows");
         }
-        return new Context(service + "@" + host, Native.HOSTBASED);
+        return new Mit(service + "@" + host, Native.HOSTBASED);
     }
 
     /**
@@ -64,22 +68,41 @@ public final class Gssapi {
      * itself to the client.
      */
     public static Context initiatePrincipal(String principal) {
+        if (Sspi.available()) {
+            return Sspi.initiate(principal);
+        }
         if (!available()) {
             throw new IllegalStateException("Kerberos needs the GSSAPI library "
-                    + "(libgssapi_krb5.so.2) on 64-bit Linux");
+                    + "(libgssapi_krb5.so.2) on 64-bit Linux, or SSPI on 64-bit Windows");
         }
-        return new Context(principal, Native.USER_NAME);
+        return new Mit(principal, Native.USER_NAME);
     }
 
     /** One login's exchange of tokens. */
-    public static final class Context implements AutoCloseable {
+    public interface Context extends AutoCloseable {
+
+        /**
+         * The next token for the server, from the server's last one (null for
+         * the first step). Empty when there is nothing more to send.
+         */
+        byte[] step(MemorySegment serverToken, long offset, int length);
+
+        /** Whether the context is established - the server has proved who it is. */
+        boolean complete();
+
+        @Override
+        void close();
+    }
+
+    /** The context through MIT's library. */
+    private static final class Mit implements Context {
 
         private final Arena arena = Arena.ofShared();
         private final MemorySegment name;
         private final MemorySegment handle;
         private boolean complete;
 
-        private Context(String principal, MemorySegment nameType) {
+        private Mit(String principal, MemorySegment nameType) {
             MemorySegment minor = arena.allocate(JAVA_INT);
             MemorySegment input = arena.allocate(BUFFER);
             byte[] text = principal.getBytes(StandardCharsets.UTF_8); // seclume-allow: a service name, not a secret
@@ -94,10 +117,7 @@ public final class Gssapi {
             handle = arena.allocate(ADDRESS);          // GSS_C_NO_CONTEXT to begin with
         }
 
-        /**
-         * The next token for the server, from the server's last one (null for
-         * the first step). Empty when there is nothing more to send.
-         */
+        @Override
         public byte[] step(MemorySegment serverToken, long offset, int length) {
             try (Arena call = Arena.ofConfined()) {
                 MemorySegment minor = call.allocate(JAVA_INT);
@@ -124,7 +144,7 @@ public final class Gssapi {
             }
         }
 
-        /** Whether the library considers the context established. */
+        @Override
         public boolean complete() {
             return complete;
         }

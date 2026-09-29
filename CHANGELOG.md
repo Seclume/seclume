@@ -5,6 +5,28 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Kerberos on Windows: SSPI
+
+- The Kerberos logins now work on Windows through SSPI (`secur32.dll`, the Kerberos package,
+  mutual authentication required):
+  - SQL Server's `authentication=kerberos`;
+  - PostgreSQL's `gss`;
+  - MariaDB's `auth_gssapi`.
+- The credentials are the logon session's: from the domain logon, or from `runas /netonly`
+  outside a domain. No password or key enters the process.
+- `Gssapi.Context` is now an interface, with MIT's library behind it on Linux and SSPI on
+  Windows. `SspiTest`: the library binds, and an unknown service is refused with its SSPI
+  status by name.
+- Shown from a Windows 11 machine outside any domain (`seclume-postgresql/proof/sspi.ps1`,
+  server side `sspi-server.sh`), against an MIT KDC and PostgreSQL 16:
+  - with alice's network credentials: logged in as alice by `gss`;
+  - without them: refused with `SEC_E_NO_CREDENTIALS`.
+- The script puts the machine back byte for byte: the hosts file, and `ksetup`'s realm, KDC
+  and mappings.
+- Against Samba AD, the same machine gets a TGT but asks for no service ticket with it. This
+  happened with Samba 4.17 and 4.22, and `klist get` fails the same way. It matches the
+  reported Windows 11 24H2 regression for machines outside the domain.
+
 ### Kafka: PLAIN and OAUTHBEARER with the secret off the heap
 
 - New login modules for SASL PLAIN and OAUTHBEARER in `seclume-kafka`:
