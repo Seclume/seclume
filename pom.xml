@@ -118,13 +118,6 @@
         <artifactId>jazzer-junit</artifactId>
         <version>${jazzer.version}</version>
       </dependency>
-      <!-- Not ours: Spring, gRPC and Quarkus bring it. Held at a release with
-           CVE-2026-68497 (unbounded numeric parsing) fixed, wherever it comes from. -->
-      <dependency>
-        <groupId>com.fasterxml.jackson.core</groupId>
-        <artifactId>jackson-databind</artifactId>
-        <version>2.22.2</version>
-      </dependency>
       <dependency>
         <groupId>org.junit</groupId>
         <artifactId>junit-bom</artifactId>
