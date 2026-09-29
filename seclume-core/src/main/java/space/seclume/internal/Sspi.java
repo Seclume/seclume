@@ -58,10 +58,10 @@ final class Sspi {
         if (!available()) {
             throw new IllegalStateException("Kerberos needs SSPI (secur32.dll) on 64-bit Windows");
         }
-        return new Context(target);
+        return new SspiContext(target);
     }
 
-    private static final class Context implements Gssapi.Context {
+    private static final class SspiContext implements Gssapi.Context {
 
         private final Arena arena = Arena.ofShared();
         private final String target;
@@ -71,7 +71,7 @@ final class Sspi {
         private boolean started;
         private boolean complete;
 
-        private Context(String target) {
+        private SspiContext(String target) {
             this.target = target;
             byte[] utf16 = (target + "\0").getBytes(StandardCharsets.UTF_16LE); // seclume-allow: a service name, not a secret
             wideTarget = arena.allocate(utf16.length);
