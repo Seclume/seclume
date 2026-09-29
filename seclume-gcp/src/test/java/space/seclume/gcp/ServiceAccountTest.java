@@ -102,7 +102,7 @@ class ServiceAccountTest {
                 "  printf '\",\"client_email\":\"app@project.iam.gserviceaccount.com\","
                         + "\"client_id\":\"1\",\"token_uri\":\"" + tokenUri + "\"}'",
                 "} > service-account.json", ""));
-        Process process = new ProcessBuilder("/bin/sh", script.toString())
+        Process process = space.seclume.tck.Shell.builder(script.toString())
                 .redirectErrorStream(true).start();
         assertEquals(0, process.waitFor(), new String(process.getInputStream().readAllBytes()));
         publicKey = KeyFactory.getInstance("RSA").generatePublic(

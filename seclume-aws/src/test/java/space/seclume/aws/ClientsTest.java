@@ -103,7 +103,7 @@ class ClientsTest {
                     + "rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2 -subj /CN=localhost"
                     + " -addext subjectAltName=DNS:localhost 2>/dev/null && openssl pkcs12 "
                     + "-export -in cert.pem -inkey key.pem -out store.p12 -passout pass:store\n");
-            Process process = new ProcessBuilder("/bin/sh", script.toString()).start();
+            Process process = space.seclume.tck.Shell.builder(script.toString()).start();
             assertEquals(0, process.waitFor());
             java.security.KeyStore store = java.security.KeyStore.getInstance("PKCS12");
             try (var in = Files.newInputStream(directory.resolve("store.p12"))) {

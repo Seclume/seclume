@@ -39,7 +39,7 @@ class KubernetesClientTest {
                         + " -subj /CN=localhost -addext subjectAltName=DNS:localhost 2>/dev/null",
                 "openssl pkcs12 -export -in ca.crt -inkey key.pem -out store.p12 -passout pass:store",
                 "head -c 300 /dev/urandom | base64 | tr -d '\\n/+=' > token", ""));
-        assertEquals(0, new ProcessBuilder("/bin/sh", script.toString()).start().waitFor());
+        assertEquals(0, space.seclume.tck.Shell.builder(script.toString()).start().waitFor());
         server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java")
                 .toString(), "-cp", System.getProperty("java.class.path"),
                 ApiServerProcess.class.getName(), directory.toString())
@@ -51,8 +51,8 @@ class KubernetesClientTest {
             Thread.sleep(50);
         }
         url = "https://localhost:" + Files.readString(directory.resolve("port")).trim()
-                + "?tlsRootCert=" + directory.resolve("ca.crt") + "&provider=file&path="
-                + directory.resolve("token");
+                + "?tlsRootCert=" + directory.resolve("ca.crt").toString().replace('\\', '/')
+                + "&provider=file&path=" + directory.resolve("token").toString().replace('\\', '/');
     }
 
     @AfterAll
@@ -80,7 +80,8 @@ class KubernetesClientTest {
         Path wrong = directory.resolve("wrong-token");
         Files.writeString(wrong, "not-the-token");
         ApiClient client = SeclumeKubernetes.client(url.replace(
-                directory.resolve("token").toString(), wrong.toString()));
+                directory.resolve("token").toString().replace('\\', '/'),
+                wrong.toString().replace('\\', '/')));
         ApiException refused = assertThrows(ApiException.class, () -> pods(client));
         assertEquals(401, refused.getCode());
     }
@@ -104,6 +105,6 @@ class KubernetesClientTest {
         Path script = directory.resolve("rotate.sh");
         Files.writeString(script, "cd '" + directory + "' && head -c 300 /dev/urandom | base64"
                 + " | tr -d '\\n/+=' > token.new && mv token.new token\n");
-        assertEquals(0, new ProcessBuilder("/bin/sh", script.toString()).start().waitFor());
+        assertEquals(0, space.seclume.tck.Shell.builder(script.toString()).start().waitFor());
     }
 }

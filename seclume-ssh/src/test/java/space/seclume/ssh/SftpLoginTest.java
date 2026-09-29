@@ -122,7 +122,7 @@ class SftpLoginTest {
         Path script = directory.resolve("keygen-" + type + ".sh");
         Files.writeString(script, "command -v ssh-keygen >/dev/null || exit 3\n"
                 + "ssh-keygen -q -t " + type + " -N '' -f '" + key + "'\n");
-        int exit = new ProcessBuilder("/bin/sh", script.toString()).start().waitFor();
+        int exit = space.seclume.tck.Shell.builder(script.toString()).start().waitFor();
         assumeTrue(exit != 3, "ssh-keygen is not installed");
         assertEquals(0, exit);
         String spec = "provider=file&path=" + key;

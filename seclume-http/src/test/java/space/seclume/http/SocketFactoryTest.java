@@ -53,7 +53,7 @@ class SocketFactoryTest {
                 "openssl pkcs12 -export -in cert.pem -inkey key.pem -out store.p12 -passout pass:store",
                 "head -c 48 /dev/urandom | base64 | tr -d '\\n/+=' > token",
                 "head -c 24 /dev/urandom | base64 | tr -d '\\n' > password", ""));
-        assertEquals(0, new ProcessBuilder("/bin/sh", script.toString()).start().waitFor());
+        assertEquals(0, space.seclume.tck.Shell.builder(script.toString()).start().waitFor());
         server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java")
                 .toString(), "-cp", System.getProperty("java.class.path"),
                 CredentialServerProcess.class.getName(), directory.toString())

@@ -41,7 +41,7 @@ class JGitTest {
                 "openssl pkcs12 -export -in cert.pem -inkey key.pem -out store.p12 -passout pass:store",
                 "head -c 30 /dev/urandom | base64 | tr -d '\\n' > password",
                 "printf wrong-password > wrong", ""));
-        assertEquals(0, new ProcessBuilder("/bin/sh", script.toString()).start().waitFor());
+        assertEquals(0, space.seclume.tck.Shell.builder(script.toString()).start().waitFor());
         server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java")
                 .toString(), "-cp", System.getProperty("java.class.path"),
                 GitServerProcess.class.getName(), directory.toString())
@@ -89,7 +89,9 @@ class JGitTest {
     void cloneAndPush() throws Exception {
         try (Git git = cloneInto("work", "password")) {
             Path work = directory.resolve("work");
-            assertEquals("hello from the server\n", Files.readString(work.resolve("README")));
+            // Line endings as the user's git config checks them out (core.autocrlf on Windows).
+            assertEquals("hello from the server\n",
+                    Files.readString(work.resolve("README")).replace("\r\n", "\n"));
             Files.writeString(work.resolve("CHANGES"), "pushed through seclume\n");
             git.add().addFilepattern("CHANGES").call();
             git.commit().setMessage("second").setAuthor("dev", "dev@example.com")
@@ -106,7 +108,8 @@ class JGitTest {
         try (Git again = cloneInto("again", "password")) {
             assertEquals("second", again.log().call().iterator().next().getShortMessage());
             assertEquals("pushed through seclume\n",
-                    Files.readString(directory.resolve("again").resolve("CHANGES")));
+                    Files.readString(directory.resolve("again").resolve("CHANGES"))
+                            .replace("\r\n", "\n"));
         }
     }
 

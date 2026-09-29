@@ -37,7 +37,7 @@ class OpenSshKeyTest {
     @BeforeAll
     static void keys() throws Exception {
         assumeTrue(OpenSslSigningKey.available(), "OpenSSL 3 on 64-bit Linux");
-        Process probe = new ProcessBuilder("/bin/sh", "-c", "command -v ssh-keygen").start();
+        Process probe = space.seclume.tck.Shell.builder("-c", "command -v ssh-keygen").start();
         assumeTrue(probe.waitFor() == 0, "ssh-keygen is not installed");
         Path script = directory.resolve("keys.sh");
         Files.writeString(script, String.join("\n",
@@ -60,7 +60,7 @@ class OpenSshKeyTest {
                         + " | sed '1d;$d' | tr -d ' :\\n' | sed 's/^00//'"
                         + " | perl -ne 'print pack(\"H*\", $_)' > rsa.prime.bin",
                 "grep -q 'BEGIN OPENSSH PRIVATE KEY' rsa", ""));
-        Process process = new ProcessBuilder("/bin/sh", script.toString())
+        Process process = space.seclume.tck.Shell.builder(script.toString())
                 .redirectErrorStream(true).start();
         assertEquals(0, process.waitFor(), new String(process.getInputStream().readAllBytes()));
     }

@@ -64,7 +64,7 @@ class SharedKeyEquivalenceTest {
     @Test
     void signsAsTheSdkDoes() throws Exception {
         Path key = directory.resolve("key");
-        Process process = new ProcessBuilder("/bin/sh", "-c",
+        Process process = space.seclume.tck.Shell.builder("-c",
                 "head -c 64 /dev/urandom | base64 | tr -d '\\n' > '" + key + "'").start();
         assertEquals(0, process.waitFor());
         StorageSharedKeyCredential reference = new StorageSharedKeyCredential("acct",

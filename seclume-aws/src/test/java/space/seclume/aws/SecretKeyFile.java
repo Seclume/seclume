@@ -18,7 +18,7 @@ final class SecretKeyFile {
         Path script = directory.resolve("make-key.sh");
         java.nio.file.Files.writeString(script, "head -c 30 /dev/urandom | base64 "
                 + "| tr -d '\\n' > '" + file + "'\n");
-        Process process = new ProcessBuilder("/bin/sh", script.toString()).start();
+        Process process = space.seclume.tck.Shell.builder(script.toString()).start();
         if (!process.waitFor(30, TimeUnit.SECONDS) || process.exitValue() != 0) {
             throw new IllegalStateException("the key file could not be written");
         }

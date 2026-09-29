@@ -3,6 +3,7 @@ package space.seclume.keys;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -24,6 +25,11 @@ class ReloadingKeyTest {
 
     @TempDir
     Path directory;
+
+    @org.junit.jupiter.api.BeforeEach
+    void needsOpenSsl() {
+        assumeTrue(space.seclume.crypto.OpenSslSigningKey.available(), "OpenSSL 3 on 64-bit Linux");
+    }
 
     private static void put(Path from, Path to) throws Exception {
         Path next = to.resolveSibling(to.getFileName() + ".next");
