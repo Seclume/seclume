@@ -23,9 +23,13 @@ All notable changes to seclume are recorded here. Versions follow
   - without them: refused with `SEC_E_NO_CREDENTIALS`.
 - The script puts the machine back byte for byte: the hosts file, and `ksetup`'s realm, KDC
   and mappings.
-- Against Samba AD, the same machine gets a TGT but asks for no service ticket with it. This
-  happened with Samba 4.17 and 4.22, and `klist get` fails the same way. It matches the
-  reported Windows 11 24H2 regression for machines outside the domain.
+- Shown from a domain member as well: a Windows Server 2022 VM joined to the Samba AD domain
+  of `seclume-sqlserver/proof/kerberos.sh`, the proof run as `SECLUME\alice`. SQL Server
+  reported `SECLUME\alice`, `auth_scheme` KERBEROS, encrypted, from the VM's address. The VM,
+  the domain and everything that belonged to them were removed afterwards.
+- Outside a domain, against Active Directory, Windows 11 24H2 and later gets the TGT but asks
+  for no service ticket with it. This happened with Samba 4.17 and 4.22, and `klist get`
+  fails the same way. It matches the reported regression for machines outside the domain.
 
 ### Kafka: PLAIN and OAUTHBEARER with the secret off the heap
 

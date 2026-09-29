@@ -100,10 +100,15 @@ providers each have a page of their own: [TLS.md](TLS.md),
     PostgreSQL 16 (`seclume-postgresql/proof/sspi-server.sh` and `sspi.ps1`):
     - with alice's network credentials: logged in as alice by `gss`;
     - without them: refused with `SEC_E_NO_CREDENTIALS`.
-  - **Not shown end to end: SQL Server against Samba AD from that machine.** Windows gets
-    the TGT from a Samba AD KDC but asks for no service ticket with it, not even for
-    `klist get`. This held for both Samba 4.17 and 4.22, and matches the reported Windows 11
-    24H2 regression for machines outside the domain. From an MIT KDC it gets both.
+  - **Shown from a domain member against SQL Server:** a Windows Server 2022 VM joined to
+    the Samba AD domain of `seclume-sqlserver/proof/kerberos.sh`, the proof run as
+    `SECLUME\alice` (a real domain logon, by the task scheduler with her password). SQL
+    Server reported the session as `SECLUME\alice`, `auth_scheme` KERBEROS, encrypted,
+    from the VM's address (29.09.2026).
+  - **Outside a domain, against Active Directory:** Windows 11 24H2 and later gets the TGT
+    from a Samba AD KDC but asks for no service ticket with it, not even for `klist get`.
+    This held for Samba 4.17 and 4.22, and matches the reported regression for machines
+    outside the domain. From an MIT KDC it gets both. On a domain member (above) it works.
 
 ## PostgreSQL only
 
