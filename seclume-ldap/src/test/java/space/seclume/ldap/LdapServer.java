@@ -55,7 +55,7 @@ final class LdapServer implements AutoCloseable {
                 "LDIF");
         Path file = directory.resolve("prepare.sh");
         java.nio.file.Files.writeString(file, script + "\n");
-        Process prepare = new ProcessBuilder("/bin/sh", file.toString()).redirectErrorStream(true)
+        Process prepare = space.seclume.tck.Shell.builder(file.toString()).redirectErrorStream(true)
                 .start();
         String output = new String(prepare.getInputStream().readAllBytes());
         if (!prepare.waitFor(60, TimeUnit.SECONDS) || prepare.exitValue() != 0) {
@@ -95,7 +95,8 @@ final class LdapServer implements AutoCloseable {
 
     String url(Path passwordFile) {
         return "ldaps://localhost:" + port + "/" + BASE + "?user=" + SERVICE
-                + "&tlsRootCert=" + certificate + "&provider=file&path=" + passwordFile;
+                + "&tlsRootCert=" + certificate.toString().replace('\\', '/')
+                + "&provider=file&path=" + passwordFile.toString().replace('\\', '/');
     }
 
     String url() {

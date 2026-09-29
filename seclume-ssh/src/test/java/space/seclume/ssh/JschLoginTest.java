@@ -63,7 +63,7 @@ class JschLoginTest {
                 "openssl pkey -in rsa.pkcs8 -text -noout | sed -n '/^prime1:/,/^[a-zA-Z]/p'"
                         + " | sed '1d;$d' | tr -d ' :\\n' | sed 's/^00//'"
                         + " | perl -ne 'print pack(\"H*\", $_)' > rsa.prime.bin", ""));
-        int exit = new ProcessBuilder("/bin/sh", script.toString()).start().waitFor();
+        int exit = space.seclume.tck.Shell.builder(script.toString()).start().waitFor();
         assumeTrue(exit != 3, "ssh-keygen is not installed");
         assertEquals(0, exit);
     }

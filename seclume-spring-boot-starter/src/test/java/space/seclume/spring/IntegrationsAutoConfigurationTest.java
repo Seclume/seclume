@@ -112,7 +112,8 @@ class IntegrationsAutoConfigurationTest {
         Files.writeString(password, "an-ldap-password");
         try (AnnotationConfigApplicationContext context = context(
                 SeclumeLdapAutoConfiguration.class, "seclume.ldap.url=ldaps://ad.example.com/"
-                        + "dc=example,dc=com?user=svc@example.com&provider=file&path=" + password)) {
+                        + "dc=example,dc=com?user=svc@example.com&provider=file&path="
+                        + password.toString().replace('\\', '/'))) {
             LdapContextSource source = context.getBean(LdapContextSource.class);
             assertEquals("ldaps://ad.example.com:636", source.getUrls()[0]);
             assertEquals("dc=example,dc=com", source.getBaseLdapPathAsString());
@@ -127,7 +128,7 @@ class IntegrationsAutoConfigurationTest {
         Path script = directory.resolve("key.sh");
         Files.writeString(script, "cd '" + directory + "' && openssl genpkey -algorithm EC "
                 + "-pkeyopt ec_paramgen_curve:P-256 -out id_ecdsa 2>/dev/null\n");
-        Process process = new ProcessBuilder("/bin/sh", script.toString()).start();
+        Process process = space.seclume.tck.Shell.builder(script.toString()).start();
         assertTrue(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0);
         try (AnnotationConfigApplicationContext context = context(
                 SeclumeSshAutoConfiguration.class,

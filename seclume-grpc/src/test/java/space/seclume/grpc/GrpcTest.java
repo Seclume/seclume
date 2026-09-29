@@ -45,7 +45,7 @@ class GrpcTest {
                 "openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2"
                         + " -subj /CN=localhost -addext subjectAltName=DNS:localhost 2>/dev/null",
                 "head -c 48 /dev/urandom | base64 | tr -d '\\n/+=' > token", ""));
-        assertEquals(0, new ProcessBuilder("/bin/sh", script.toString()).start().waitFor());
+        assertEquals(0, space.seclume.tck.Shell.builder(script.toString()).start().waitFor());
         server = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java")
                 .toString(), "-cp", System.getProperty("java.class.path"),
                 GrpcServerProcess.class.getName(), directory.toString())
@@ -153,7 +153,7 @@ class GrpcTest {
         String before = Files.readString(token);
         try {
             Path next = directory.resolve("token.next");
-            assertEquals(0, new ProcessBuilder("/bin/sh", "-c",
+            assertEquals(0, space.seclume.tck.Shell.builder("-c",
                     "head -c 48 /dev/urandom | base64 | tr -d '\\n/+=' > token.next")
                     .directory(directory.toFile()).start().waitFor());
             Files.move(next, token, java.nio.file.StandardCopyOption.REPLACE_EXISTING,

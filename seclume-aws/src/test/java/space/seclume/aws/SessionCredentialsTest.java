@@ -52,7 +52,7 @@ class SessionCredentialsTest {
                 "printf 'eyJhbGciOiJSUzI1NiJ9.' > web-identity-token",
                 "head -c 120 /dev/urandom | base64 | tr -d '\\n/+=' >> web-identity-token",
                 ""));
-        Process prepare = new ProcessBuilder("/bin/sh", script.toString()).redirectErrorStream(true)
+        Process prepare = space.seclume.tck.Shell.builder(script.toString()).redirectErrorStream(true)
                 .start();
         assertEquals(0, prepare.waitFor(), new String(prepare.getInputStream().readAllBytes()));
         aws = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(),

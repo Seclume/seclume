@@ -49,7 +49,7 @@ class AzuriteTest {
     @BeforeAll
     static void start() throws Exception {
         String executable = System.getenv().getOrDefault("SECLUME_AZURITE", "azurite");
-        Process probe = new ProcessBuilder("/bin/sh", "-c", "command -v " + executable)
+        Process probe = space.seclume.tck.Shell.builder("-c", "command -v " + executable)
                 .start();
         assumeTrue(probe.waitFor() == 0, "Azurite is not installed");
         blobPort = freePort();
@@ -66,7 +66,7 @@ class AzuriteTest {
                         + " --queueHost 127.0.0.1 --queuePort " + queuePort
                         + " --tableHost 127.0.0.1 --tablePort " + freePort()
                         + " --skipApiVersionCheck --loose", ""));
-        azurite = new ProcessBuilder("/bin/sh", script.toString()).redirectErrorStream(true)
+        azurite = space.seclume.tck.Shell.builder(script.toString()).redirectErrorStream(true)
                 .redirectOutput(directory.resolve("azurite.log").toFile()).start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
         while (true) {

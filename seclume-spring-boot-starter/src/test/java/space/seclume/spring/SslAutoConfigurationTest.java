@@ -45,7 +45,7 @@ class SslAutoConfigurationTest {
                 + "openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out key.pem"
                 + " && openssl req -x509 -new -key key.pem -out cert.pem -days 2"
                 + " -subj /CN=localhost -addext subjectAltName=DNS:localhost\n");
-        Process process = new ProcessBuilder("/bin/sh", script.toString())
+        Process process = space.seclume.tck.Shell.builder(script.toString())
                 .redirectErrorStream(true).start();
         assertTrue(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0);
         certificate = directory.resolve("cert.pem");
