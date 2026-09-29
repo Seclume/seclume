@@ -5,6 +5,59 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Kafka: PLAIN and OAUTHBEARER with the secret off the heap
+
+- New login modules for SASL PLAIN and OAUTHBEARER in `seclume-kafka`:
+  `SeclumePlainLoginModule` and `SeclumeOAuthBearerLoginModule`.
+  - They give Kafka a placeholder instead of the password or token.
+  - `SeclumeSslEngineFactory` (`ssl.engine.factory.class`) puts Kafka's TLS on seclume's own
+    TLS 1.3 stack.
+  - As the SaslAuthenticate request is encrypted, the engine writes the secret and the
+    lengths that follow from it into the request from native memory.
+- OAUTHBEARER has two token sources:
+  - the OAuth 2.0 client credentials grant of `seclume-http` (`token-url=...`, new public
+    `OAuthClientCredentials`);
+  - any secret provider, such as a token file, `azure-managed-identity` or `gcp-metadata`.
+  - `extension_*` options are sent as SASL extensions.
+- Both modules refuse to log in without `SASL_SSL` and that engine factory.
+- Shown three ways:
+  - Kafka's own serialisation and parsing (`SaslAuthenticateRewriterTest`, SaslAuthenticate
+    v0 to v2).
+  - A Kafka 4.1 broker on SASL_SSL (`LocalKafkaSaslSslTest`): PLAIN, OAUTHBEARER and SCRAM
+    produce and consume, and the heap dump holds neither the password nor the token.
+  - A control: Kafka's own `PlainLoginModule` on the JDK's TLS, where the same search finds
+    the password.
+- `seclume-kafka` now compiles against `kafka-clients` (scope `provided`) and has no
+  `module-info` any more, like the other client modules.
+
+### Redis: Lettuce with the password off the heap
+
+- New `SeclumeLettuce.client("rediss://...")` in `seclume-redis`.
+  - Lettuce gets a random placeholder for the password.
+  - The password is written in its place from native memory, with its RESP length:
+    - for `rediss://`, inside a Netty `SslHandler` on seclume's own TLS 1.3 engine;
+    - for `redis://`, by the first handler before the socket.
+  - This covers every `AUTH` and `HELLO`, reconnects included.
+- Shown against Redis 8 (`LocalLettuceTest`):
+  - plain and TLS logins;
+  - a server-side kill and the new login after it;
+  - a wrong password and an untrusted server refused;
+  - a heap free of the password, where the control (Lettuce given the password) leaves it.
+
+### TLS: seclume's TLS 1.3 client as an `SSLEngine`
+
+- New `SeclumeSslEngine`, for clients that take an engine rather than a socket, such as Kafka
+  and Netty.
+  - The handshake runs on a virtual thread over an in-memory pipe, and `wrap` and `unwrap`
+    wait for it, so no delegated task is ever asked for.
+  - After the handshake, whole records pass through `wrap` and `unwrap`.
+  - An `Outgoing` hook may replace plaintext with bytes from a `SecretScope` on its way into
+    the cipher.
+- `SeclumeSslEngineTest` runs it against the JDK's engine as the server:
+  - handshake, data both ways over many records, the replacement;
+  - a wrong host name and an unknown CA refused;
+  - `close_notify` on close.
+
 ### TLS 1.3 client: legacy_version ignored, as RFC 8446 requires
 
 - seclume's own TLS client refused a ServerHello whose `legacy_version` was not 0x0303,

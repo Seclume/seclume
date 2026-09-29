@@ -217,6 +217,37 @@ class OAuthClientCredentialsTest {
         }
     }
 
+    /** The same grant as a secret provider, for protocols other than HTTP - Kafka's OAUTHBEARER. */
+    @Test
+    void asASecretProviderTheTokenIsWrittenAndReused() throws Exception {
+        try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext())) {
+            Map<String, String> options = new java.util.LinkedHashMap<>();
+            options.put("token-url", "https://localhost:" + tokens.port() + "/t/oauth2/token");
+            options.put("token-tlsPin", pki.pin());
+            options.put("client-id", "app-1");
+            options.put("scope", "kafka");
+            options.put("provider", "file");
+            options.put("path", secretFile.toString());
+            try (OAuthClientCredentials provider = OAuthClientCredentials.of(options);
+                 space.seclume.secret.SecretScope first =
+                         space.seclume.secret.SecretScope.fromProvider(provider);
+                 space.seclume.secret.SecretScope second =
+                         space.seclume.secret.SecretScope.fromProvider(provider)) {
+                byte[] token = new byte[first.length()];
+                java.lang.foreign.MemorySegment.copy(first.segment(),
+                        java.lang.foreign.ValueLayout.JAVA_BYTE, 0, token, 0, token.length);
+                assertTrue(tokens.valid.contains("Bearer "
+                        + new String(token, StandardCharsets.US_ASCII)));
+                assertEquals(first.length(), second.length());
+                assertEquals(1, tokens.issued.get(), "the token is reused until it is due");
+                assertEquals("kafka", tokens.grants.get(0).get("scope"));
+                provider.invalidate();
+                space.seclume.secret.SecretScope.fromProvider(provider).close();
+                assertEquals(2, tokens.issued.get(), "a refused token is fetched again");
+            }
+        }
+    }
+
     @Test
     void settingsRefusals() {
         String base = "https://api.example?auth=oauth2&provider=file&path=/x";

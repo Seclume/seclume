@@ -89,6 +89,32 @@ final class OAuthToken implements BearerSource {
         return line;
     }
 
+    /**
+     * The access token alone, into {@code target} - renewed first if it is
+     * due. For {@link OAuthClientCredentials}, where another protocol than
+     * HTTP carries it.
+     */
+    synchronized int writeToken(MemorySegment target) throws IOException {
+        if (closed) {
+            throw new IllegalStateException("this token source is closed");
+        }
+        if (token == null || System.nanoTime() - refreshAt > 0) {
+            refresh();
+        }
+        long room = target.byteSize();
+        if (token.length() > room) {
+            throw new IOException("the access token is longer than the " + room
+                    + " bytes made room for");
+        }
+        MemorySegment.copy(token.segment(), 0, target, 0, token.length());
+        return token.length();
+    }
+
+    /** The largest token {@link #writeToken} writes. */
+    static int maxTokenLength() {
+        return MAX_TOKEN;
+    }
+
     /** The API refused the token: the next request fetches a new one. */
     @Override
     public synchronized void invalidate() {

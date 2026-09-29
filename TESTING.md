@@ -654,16 +654,23 @@ Nothing is read out of those files by the tests. The path goes into the driver's
 and the driver fetches the secret straight into native memory — the same path an application
 uses, which is the point of the library.
 
-**Redis** (`seclume-redis`, `LocalRedisTest`) runs only when `seclume.redis.host` is set.
+**Redis** (`seclume-redis`, `LocalRedisTest` for Jedis, `LocalLettuceTest` for Lettuce) runs
+only when `seclume.redis.host` is set.
 `seclume-redis/proof/redis.sh up <address>` starts Redis 8 with an ACL user `orders`, a plain
 port (16379) and a TLS 1.3 port (16380) with a certificate from a CA of its own. Copy its
 `password` and `ca.pem` unread to `.local-redis-password` and `.local-redis-ca.pem`.
 
-**Kafka** (`seclume-kafka`, `LocalKafkaScramTest`) runs only when `seclume.kafka.host` is set.
-`seclume-kafka/proof/broker.sh up <address>` starts a single KRaft broker with SCRAM-SHA-256
-and SCRAM-SHA-512 and writes a random password for the user `orders` to a file on the broker's
-machine. Copy that file unread to `.local-kafka-password`. `broker.sh down` removes the broker
-and shreds the file.
+**Kafka** (`seclume-kafka`, `LocalKafkaScramTest`, `LocalKafkaSaslSslTest`) runs only when
+`seclume.kafka.host` is set. `seclume-kafka/proof/broker.sh up <address>` starts a single KRaft
+broker: SASL_PLAINTEXT on 19092 with SCRAM-SHA-256 and SCRAM-SHA-512, and SASL_SSL on 19093
+(TLS 1.3, a certificate from a CA of its own) with SCRAM, PLAIN and OAUTHBEARER. It writes a
+random password for the user `orders`, an unsigned token for OAUTHBEARER, and the CA to files on
+the broker's machine. Copy them unread to `.local-kafka-password`, `.local-kafka-token` and
+`.local-kafka-ca.pem`. `broker.sh down` removes the broker and shreds the files.
+
+Both have a control, run on its own: `-Dseclume.kafka.control=true` and
+`-Dseclume.redis.control=true` log in the vendor's way, and the heap search has to find the
+password.
 
 ## The four databases
 

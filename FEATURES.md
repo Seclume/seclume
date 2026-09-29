@@ -386,6 +386,63 @@ password refused, and afterwards a heap dump of the test JVM holds no copy of th
 The same check against Kafka's own login module finds it. Delegation tokens (`tokenauth`) are
 not covered: they are secrets Kafka hands out itself.
 
+### PLAIN and OAUTHBEARER
+
+PLAIN sends the password itself, and OAUTHBEARER the token itself, so for these two the secret
+has to reach the wire. With Kafka's own modules it passes through Kafka's request buffer and
+then the JDK's TLS engine on the way, heap buffers that are never wiped. `seclume-kafka` puts
+Kafka's TLS on seclume's own TLS 1.3 stack and gives Kafka a placeholder instead of the secret.
+As the SaslAuthenticate request is encrypted, the engine writes the secret in the placeholder's
+place from native memory, along with the two lengths that follow from it:
+
+```properties
+security.protocol=SASL_SSL
+ssl.engine.factory.class=space.seclume.kafka.SeclumeSslEngineFactory
+ssl.truststore.type=PEM
+ssl.truststore.location=/etc/kafka/ca.pem
+sasl.mechanism=PLAIN
+sasl.jaas.config=space.seclume.kafka.SeclumePlainLoginModule required \
+    username="orders" provider="file" path="/run/secrets/kafka";
+```
+
+```properties
+sasl.mechanism=OAUTHBEARER
+sasl.jaas.config=space.seclume.kafka.SeclumeOAuthBearerLoginModule required \
+    token-url="https://login.example.com/oauth2/token" client-id="orders" scope="kafka" \
+    provider="file" path="/run/secrets/client-secret";
+```
+
+- **PLAIN** (Confluent Cloud's API key and secret): the password is read from its provider at
+  every login.
+- **OAUTHBEARER** has two token sources. With `token-url`, it uses the OAuth 2.0 client
+  credentials grant of `seclume-http` (same options as `auth=oauth2`; the client secret and
+  the token stay in native memory, and the token is fetched again before it expires). Without
+  it, the provider names the token itself: a file another process keeps fresh,
+  `azure-managed-identity`, or `gcp-metadata`. `extension_<name>="..."` options go to the
+  broker as SASL extensions, for example Confluent Cloud's `logicalCluster` and
+  `identityPoolId`.
+- **The engine factory**, `SeclumeSslEngineFactory`, always checks the broker's certificate and
+  host name. It trusts `ssl.truststore.location` (PEM, JKS or PKCS12) or
+  `ssl.truststore.certificates` if one is set, and otherwise the JVM's store;
+  `seclume.tls.pin=sha256/...` pins the broker's key. It speaks TLS 1.3 only.
+  - Turning host name verification off (`ssl.endpoint.identification.algorithm=`) is refused.
+  - Client certificates (`ssl.keystore.*`) are refused.
+  - SCRAM also works over this engine.
+- **Without the engine** (`SASL_PLAINTEXT`, or the JDK's engine), the PLAIN and OAUTHBEARER
+  modules refuse to log in rather than send the secret some other way.
+
+Shown in three ways:
+- **Kafka's own classes** (`SaslAuthenticateRewriterTest`): Kafka serialises the request in
+  every SaslAuthenticate version, the rewrite runs, and Kafka parses it back. The secret sits
+  where the placeholder was, and the frame and varint lengths agree, including a token long
+  enough to push the varint to a second byte.
+- **A real broker** on SASL_SSL (`LocalKafkaSaslSslTest`, broker 4.1 from `proof/broker.sh`):
+  PLAIN, OAUTHBEARER and SCRAM each produce and consume, a wrong password is refused by the
+  broker, and a broker whose CA is not named is refused by the client. The heap dump holds
+  neither the password nor the token.
+- **The control** (`-Dseclume.kafka.control=true`): the same search finds the password with
+  Kafka's own `PlainLoginModule` on the JDK's TLS.
+
 ## Redis
 
 `seclume-redis` is a socket factory for Jedis that hands over a connection which is already
@@ -411,8 +468,43 @@ Shown against Redis 8 (`LocalRedisTest`, server from `seclume-redis/proof/redis.
 user over plain TCP and over TLS 1.3 with a CA of its own, one connection and a pool, a wrong
 password refused, a certificate the JVM does not trust refused. Afterwards the heap dump of
 the test JVM holds no copy of the password. Jedis configured the ordinary way leaves it there,
-and the same check finds it. Lettuce is not covered: it takes the password as a `char[]` and
-encodes it into Netty's buffers.
+and the same check finds it.
+
+### Lettuce
+
+```java
+RedisClient redis = SeclumeLettuce.client(
+        "rediss://cache:6380?user=orders&provider=file&path=/run/secrets/redis");
+try (StatefulRedisConnection<String, String> connection = redis.connect()) { ... }
+redis.shutdown();                      // shuts down its client resources as well
+```
+
+Lettuce given a password keeps it as a `char[]` in its credentials and encodes it into a Netty
+buffer for `AUTH` or `HELLO` at every connect and reconnect. Over TLS, the JDK's engine or
+OpenSSL's then copies it once more. `SeclumeLettuce` gives Lettuce a random placeholder instead.
+The password is read from its provider into native memory for each of those commands and
+written in the placeholder's place, together with its RESP length, just before it leaves:
+
+- over `rediss://`, by a Netty `SslHandler` on seclume's own TLS 1.3 engine, the first handler
+  before the socket. Lettuce itself sees a plain connection. The engine checks the certificate
+  and host name (`tlsRootCert=`, `tlsPin=`) and puts the password into the cipher from native
+  memory.
+- over `redis://`, by the first handler before the socket, which hands the socket a direct
+  buffer over the native memory and wipes it once the socket has taken it.
+
+A standalone server only: the certificate is checked against the URL's host, which a Cluster
+or Sentinel topology does not have.
+
+Shown against Redis 8 (`LocalLettuceTest`):
+
+- plain TCP and TLS 1.3 both log in over RESP3's `HELLO`;
+- when the server kills the connection, Lettuce reconnects and logs in again through the same
+  path;
+- a wrong password is refused, and so is a server the JVM does not trust;
+- the heap dump holds no copy of the password.
+
+With `-Dseclume.redis.control=true`, Lettuce is given the password itself, and the same search
+finds it.
 
 ## Mail
 
