@@ -83,10 +83,27 @@ providers each have a page of their own: [TLS.md](TLS.md),
   or a keytab. There is no user, no password and no provider. The service principal is
   `MSSQLSvc/<host>:<port>`, or `serverSpn=` if it is registered under another name. The login
   counts only when the server proved it holds the service's key (mutual authentication).
-  Needs the GSSAPI library, so Linux; Windows' SSPI is not built. Shown against SQL Server 2022
+  On Linux through the GSSAPI library, on Windows through SSPI (see below). Shown against SQL Server 2022
   joined to a Samba Active Directory, all in containers (`proof/kerberos.sh`): logged in as
   `SECLUMElice`, with the server reporting `auth_scheme` KERBEROS, and refused without a
   ticket.
+
+- **Kerberos on Windows: SSPI.** The same logins (SQL Server, PostgreSQL `gss`, MariaDB
+  `auth_gssapi`) work on Windows through SSPI (`secur32.dll`).
+  - **Credentials:** those of the logon session. On a domain member that is the user's own
+    logon; outside a domain it is `runas /netonly` or equivalent, where the LSA holds the
+    password and the process never does.
+  - **Package:** only Kerberos, never Negotiate, so NTLM (a hash a server could relay) is
+    never offered.
+  - **Mutual authentication** is required.
+  - **Shown** from Windows 11 (build 26200) outside any domain, against an MIT KDC and
+    PostgreSQL 16 (`seclume-postgresql/proof/sspi-server.sh` and `sspi.ps1`):
+    - with alice's network credentials: logged in as alice by `gss`;
+    - without them: refused with `SEC_E_NO_CREDENTIALS`.
+  - **Not shown end to end: SQL Server against Samba AD from that machine.** Windows gets
+    the TGT from a Samba AD KDC but asks for no service ticket with it, not even for
+    `klist get`. This held for both Samba 4.17 and 4.22, and matches the reported Windows 11
+    24H2 regression for machines outside the domain. From an MIT KDC it gets both.
 
 ## PostgreSQL only
 

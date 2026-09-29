@@ -346,6 +346,14 @@
       },
       {
         "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "jint", "void*", "void*", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "void*", "jint", "jint", "jint", "void*", "jint", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
         "parameterTypes": []
       },
       {

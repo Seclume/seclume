@@ -265,11 +265,13 @@ heap-dump endpoints anyway.
 
 ## What it does not do yet
 
-- **Integrated authentication on Windows, and for Oracle.** Kerberos works for PostgreSQL,
-  MariaDB (`auth_gssapi`) and SQL Server (`authentication=kerberos`, against Active Directory)
-  through the system's GSSAPI library on Linux: a ticket from `kinit` or a keytab, and no
-  secret in the process at all. Windows' SSPI and Oracle's Kerberos/NTS are refused with a
-  message saying so. Oracle's goes through the same undocumented negotiation as its native
+- **Integrated authentication for Oracle.** Kerberos works for PostgreSQL, MariaDB
+  (`auth_gssapi`) and SQL Server (`authentication=kerberos`, against Active Directory):
+  - on Linux through the system's GSSAPI library, with a ticket from `kinit` or a keytab;
+  - on Windows through SSPI, with the logon session's credentials.
+
+  Either way there is no secret in the process at all. Oracle's Kerberos/NTS is refused with
+  a message saying so: it goes through the same undocumented negotiation as Oracle's native
   encryption.
 - **Moving a live session from one host to another.** It is being built, but not here. The
   drivers hold their own protocol and TLS state, which is exactly what such a move needs and

@@ -695,8 +695,8 @@ public final class PgSession implements AutoCloseable {
                         if (!space.seclume.internal.Gssapi.available()) {
                             throw new SQLException("this server asks for Kerberos (GSSAPI), "
                                     + "which seclume speaks through the system's GSSAPI library "
-                                    + "on Linux (libgssapi_krb5) - it is not there on this "
-                                    + "platform; Windows' SSPI is not supported yet", "28000");
+                                    + "on Linux (libgssapi_krb5) and through SSPI on Windows - "
+                                    + "neither is there on this platform", "28000");
                         }
                         authenticationMethod = "gss";
                         gss = kerberos(space.seclume.internal.Gssapi.initiate("postgres",
