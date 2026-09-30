@@ -279,7 +279,7 @@ jobs:
           ignore_startup_parameters = extra_float_digits,options
           EOF
           chmod 777 bouncer && chmod 666 bouncer/*
-          docker run -d --name bouncer --network host -v "$PWD/bouncer:/etc/pgbouncer" edoburu/pgbouncer:latest
+          docker run -d --name bouncer --network host -v "$PWD/bouncer:/etc/pgbouncer" edoburu/pgbouncer@sha256:9c78945868a6a142c7fc40ccd843bbe5a606df163c7ffce4de70e0d628d696a2   # PgBouncer 1.26.0
           for i in $(seq 1 20); do (echo > /dev/tcp/127.0.0.1/6432) 2>/dev/null && break; sleep 1; done
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pgtls-password
       - run: >-
