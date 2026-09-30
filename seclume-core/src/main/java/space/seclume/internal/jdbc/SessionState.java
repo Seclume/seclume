@@ -7,10 +7,9 @@ import java.util.regex.Pattern;
  * What statements have set in a session beyond its transaction - noted as
  * they pass, for {@link space.seclume.SessionReset}.
  *
- * <p>A statement is recognised by its first word and by a handful of calls
- * anywhere in it. The list errs on the side of noting: a false alarm costs one
- * reset when the connection goes back to the pool, a statement missed costs
- * the next borrower the session state of the previous one.
+ * <p>This is a diagnostic heuristic, not an isolation boundary. Side effects
+ * inside functions and procedures cannot be inferred from SQL text. Pools
+ * must reset used sessions even when {@link #changed()} returns false.
  */
 public final class SessionState {
 

@@ -15,28 +15,27 @@ import java.sql.SQLException;
  * with it - the most common way row-level security breaks in practice, since
  * the tenant of one request becomes the tenant of the next.
  *
- * <p><b>How.</b> The four drivers note every statement that sets such state -
- * they read each statement anyway - and the pool asks on return: only a
- * connection that had one is reset, so the ordinary return costs nothing. The
- * reset is the server's own: {@code RESET ALL}, {@code DISCARD TEMP} and their
- * kind on PostgreSQL, {@code COM_RESET_CONNECTION} on MySQL, the
- * RESETCONNECTION bit on the next TDS request for SQL Server (no round trip
- * of its own), package state and client identifiers on Oracle. What cannot be
- * put back - an Oracle {@code ALTER SESSION} - makes {@link #resetSessionState}
- * say so, and the pool closes that connection instead of lending it again.
+ * <p>The pool resets every used session, regardless of SQL text. Functions and
+ * stored procedures can change session state without the driver noticing.
+ * PostgreSQL uses {@code DISCARD ALL}, MySQL {@code COM_RESET_CONNECTION},
+ * and SQL Server the RESETCONNECTION bit on the next request. Oracle reports
+ * that a complete reset is unavailable, so the pool retires that session.
+ * Prepared statement caches must be invalidated along with server state.
  *
- * <p>Noting errs towards resetting: a statement that only looks like it sets
- * something costs one reset, a statement that sets something unnoticed would
- * cost the next borrower their tenant.
+ * <p>This boundary is the return of a borrow, not migration. Detaching and
+ * adopting a live connection must preserve its transaction and session state.
  */
 public interface SessionReset {
 
-    /** Whether a statement since the last reset set state beyond the transaction. */
+    /**
+     * Whether the SQL tracker noticed session state changes. A false result is
+     * not proof of a clean session and must never be used to skip a pool reset.
+     */
     boolean sessionStateChanged();
 
     /**
-     * Puts the session back to how the login left it, as far as the server
-     * allows, and forgets what was noted.
+     * Resets the session unconditionally and forgets what was noted. Returns
+     * false if the driver cannot fully restore the session for another borrower.
      *
      * <p>Only between transactions: call it with auto-commit on and nothing
      * open, as a pool does after its own rollback.

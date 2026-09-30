@@ -166,27 +166,23 @@ public final class PgConnection
     }
 
     /**
-     * Everything a session can carry that is not the transaction, in one
-     * round trip: open cursors, a changed role, every setting ({@code RESET
-     * ALL} goes back to what the login gave), listened channels, session-level
-     * advisory locks, temporary tables and sequences' cached values. Prepared
-     * statements stay - the driver's own and the pool's cache use them, and
-     * they carry no state of a borrower's. The isolation and read-only the
-     * connection has are sent again when they are not the login's.
+     * DISCARD ALL resets server state, including prepared statements. Close
+     * statements and flush their pending protocol work before discarding it;
+     * then invalidate the local plan cache. Only used at a borrow boundary.
      */
     @Override
     public boolean resetSessionState() throws SQLException {
         checkOpen();
-        if (!sessionState.changed()) {
-            return true;
-        }
         if (!autoCommit) {
-            return false;                        // DISCARD TEMP refuses inside a transaction
+            return false;                        // DISCARD ALL refuses inside a transaction
         }
         session.dropPendingContext();
-        session.execute("close all; set session authorization default; reset all; "
-                + "unlisten *; select pg_advisory_unlock_all(); discard temp; "
-                + "discard sequences");
+        for (PgStatement statement : List.copyOf(open)) {
+            statement.close();
+        }
+        session.flushPending();
+        session.execute("discard all");
+        idlePlans.clear();
         sessionState.clear();
         if (isolation != TRANSACTION_READ_COMMITTED) {
             int wanted = isolation;

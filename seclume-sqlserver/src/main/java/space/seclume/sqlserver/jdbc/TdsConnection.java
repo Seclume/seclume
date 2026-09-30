@@ -141,9 +141,6 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
     @Override
     public boolean resetSessionState() throws SQLException {
         checkOpen();
-        if (!sessionState.changed()) {
-            return true;
-        }
         if (!autoCommit) {
             return false;
         }

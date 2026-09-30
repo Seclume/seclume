@@ -58,7 +58,8 @@ class SessionResetTest {
                         TestHosts.postgresPasswordFile(), "select pg_backend_pid()",
                         "set app.tenant_id = '42'",
                         "select current_setting('app.tenant_id', true)", null),
-                new Db("MySQL", "jdbc:seclume:mysql://" + host + ":3307/seclume_test"
+                new Db("MySQL", "jdbc:seclume:mysql://" + host + ":"
+                        + Integer.getInteger("seclume.mysql.port", 3307) + "/seclume_test"
                         + "?user=seclume_test&tls=off&allowPublicKeyRetrieval=true",
                         ".local-mysql-password", "select connection_id()",
                         "set @tenant_id = '42'", "select @tenant_id", null),
@@ -69,7 +70,7 @@ class SessionResetTest {
                         "select cast(session_context(N'tenant_id') as varchar(10))", null),
                 new Db("Oracle", "jdbc:seclume:oracle://" + host + ":1521/FREEPDB1"
                         + "?user=seclume_test", ".local-oracle-password",
-                        "select sys_context('USERENV', 'SID') from dual",
+                        "select sys_context('USERENV', 'SESSIONID') from dual",
                         "begin dbms_session.set_identifier('42'); end;",
                         "select sys_context('USERENV', 'CLIENT_IDENTIFIER') from dual", null));
     }
@@ -90,8 +91,7 @@ class SessionResetTest {
                 assertEquals("42", ask(c, db.read()));
             }
             try (Connection c = pool.getConnection()) {
-                assertEquals(session, ask(c, db.identity()),
-                        "not the same session - the test shows nothing");
+                assertSessionIdentity(db, session, ask(c, db.identity()));
                 assertEquals(null, blank(ask(c, db.read())),
                         "the next borrower inherited the tenant");
                 try (PreparedStatement p = c.prepareStatement(db.identity())) {
@@ -118,7 +118,7 @@ class SessionResetTest {
                 ask(c, db.identity());
             }
             try (Connection c = pool.getConnection()) {
-                assertEquals(session, ask(c, db.identity()));
+                assertSessionIdentity(db, session, ask(c, db.identity()));
                 assertEquals(Connection.TRANSACTION_READ_COMMITTED == pooledDefault(db)
                                 ? Connection.TRANSACTION_READ_COMMITTED
                                 : pooledDefault(db), c.getTransactionIsolation(),
@@ -181,6 +181,58 @@ class SessionResetTest {
     private static int pooledDefault(Db db) {
         return db.name().equals("MySQL") ? Connection.TRANSACTION_REPEATABLE_READ
                 : Connection.TRANSACTION_READ_COMMITTED;
+    }
+
+    private static void assertSessionIdentity(Db db, String before, String after) {
+        if (db.name().equals("Oracle")) {
+            assertNotEquals(before, after, "Oracle must retire an incompletely reset session");
+        } else {
+            assertEquals(before, after, "the reset must allow the same physical session to be reused");
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void hiddenProcedureStateDoesNotReachTheNextBorrower(Db db) throws Exception {
+        String create = switch (db.name()) {
+            case "PostgreSQL" -> "create or replace function audit_hidden_tenant() returns void "
+                    + "language plpgsql as $$ begin perform set_config('app.tenant_id', '42', false); end $$";
+            case "MySQL" -> "create procedure audit_hidden_tenant() set @tenant_id = '42'";
+            case "SQL Server" -> "create procedure audit_hidden_tenant as "
+                    + "exec sys.sp_set_session_context @key=N'tenant_id', @value=N'42'";
+            case "Oracle" -> "create or replace procedure audit_hidden_tenant as begin "
+                    + "dbms_session.set_identifier('42'); end;";
+            default -> throw new AssertionError(db.name());
+        };
+        String call = switch (db.name()) {
+            case "PostgreSQL" -> "select audit_hidden_tenant()";
+            case "MySQL" -> "call audit_hidden_tenant()";
+            case "SQL Server" -> "exec audit_hidden_tenant";
+            case "Oracle" -> "begin audit_hidden_tenant; end;";
+            default -> throw new AssertionError(db.name());
+        };
+        String drop = db.name().equals("PostgreSQL")
+                ? "drop function audit_hidden_tenant()" : "drop procedure audit_hidden_tenant";
+        String url = url(db);
+        try (Connection setup = DriverManager.getConnection(url)) {
+            execute(setup, create);
+            try (SeclumePool pool = new SeclumePool(new UrlSource(url), settings())) {
+                String identity;
+                try (Connection first = pool.getConnection()) {
+                    identity = ask(first, db.identity());
+                    execute(first, call);
+                    assertEquals("42", ask(first, db.read()));
+                    assertEquals(false, first.unwrap(space.seclume.SessionReset.class)
+                            .sessionStateChanged(), "the regression must bypass the SQL heuristic");
+                }
+                try (Connection next = pool.getConnection()) {
+                    assertSessionIdentity(db, identity, ask(next, db.identity()));
+                    assertEquals(null, blank(ask(next, db.read())), "hidden tenant survived return");
+                }
+            } finally {
+                execute(setup, drop);
+            }
+        }
     }
 
     private static PoolSettings settings() {

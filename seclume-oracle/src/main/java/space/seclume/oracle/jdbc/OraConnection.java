@@ -143,26 +143,14 @@ public final class OraConnection implements Connection, space.seclume.internal.j
         return sessionState.changed();
     }
 
-    /**
-     * Package state, the client identifier, module, action and client info,
-     * back to empty - one round trip. An {@code ALTER SESSION} cannot be
-     * undone without knowing what it replaced: that connection is reported as
-     * not reset, and a pool closes it rather than lend it again.
-     */
+    /** Oracle sessions require retirement: arbitrary application contexts cannot be reset. */
     @Override
     public boolean resetSessionState() throws SQLException {
         checkOpen();
-        if (!sessionState.changed()) {
-            return true;
-        }
-        if (sessionState.irreversible() || !autoCommit) {
-            return false;
-        }
-        session.query("begin dbms_session.modify_package_state(dbms_session.reinitialize); "
-                + "dbms_session.clear_identifier; dbms_application_info.set_module(null, null); "
-                + "dbms_application_info.set_client_info(null); end;", null);
-        sessionState.clear();
-        return true;
+        // A procedure can change application contexts or ALTER SESSION through
+        // dynamic SQL. Package reinitialization cannot restore all of that.
+        // Retire the physical session until a complete server reset is supported.
+        return false;
     }
 
     private final OracleSession session;
