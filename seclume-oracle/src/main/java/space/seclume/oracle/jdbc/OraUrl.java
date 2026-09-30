@@ -46,8 +46,20 @@ final class OraUrl {
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }
+        String authentication = parsed.option("authentication");
+        space.seclume.oracle.OracleOsLogin osLogin = null;
+        if (authentication != null && !authentication.isBlank()) {
+            osLogin = switch (authentication.trim().toLowerCase(java.util.Locale.ROOT)) {
+                case "kerberos" -> space.seclume.oracle.OracleOsLogin.KERBEROS;
+                case "nts" -> space.seclume.oracle.OracleOsLogin.NTS;
+                default -> throw new SQLException("authentication is kerberos or nts, or left "
+                        + "out for a password login - not '" + authentication + "'", "08001");
+            };
+        }
         String user = parsed.option("user");
-        if (user == null || user.isBlank()) {
+        if (osLogin != null) {
+            user = "";                              // the system says who it is
+        } else if (user == null || user.isBlank()) {
             throw new SQLException("no 'user' - seclume does not guess the database user");
         }
         if (parsed.database().isEmpty()) {
@@ -57,7 +69,8 @@ final class OraUrl {
 
         SecretProvider secret;
         try {
-            secret = SecretProviders.of(new HashMap<>(parsed.options()));
+            secret = osLogin != null ? osLogin
+                    :SecretProviders.of(new HashMap<>(parsed.options()));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }
@@ -80,7 +93,11 @@ final class OraUrl {
                     // A client certificate, when one is configured. Building
                     // it here rather than per connection is deliberate - see
                     // ClientIdentities: the key is loaded once and shared.
-                    space.seclume.tls.ClientIdentities.of(parsed.options()));
+                    space.seclume.tls.ClientIdentities.of(parsed.options()),
+                    // Oracle's own encryption, for listeners that require it
+                    // (SQLNET.ENCRYPTION_SERVER) rather than offering TCPS.
+                    space.seclume.oracle.net.AdvancedNegotiation.Mode.of(
+                            parsed.option("nativeEncryption", null)));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

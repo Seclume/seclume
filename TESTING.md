@@ -568,6 +568,35 @@ message names what is missing rather than reporting a driver fault. The test ask
 The 7.4 case in that class runs against the same 2025 server, which is deliberate: it shows
 the old nesting still works there, so `tds=8.0` is a choice and not a migration.
 
+## Oracle with Native Network Encryption
+
+`LocalOracleNneTest` needs a listener that **requires** Oracle's native encryption and
+checksums. `seclume-oracle/proof/nne.sh up` starts Oracle Free 23 on port 1525 and adds
+`SQLNET.ENCRYPTION_SERVER` and `SQLNET.CRYPTO_CHECKSUM_SERVER = REQUIRED` (AES256, SHA256) to
+its `sqlnet.ora`. It writes the app user's password to a file on that machine; copy that
+file unread to `.local-ora-nne-password`. Point the test at the host with
+`-Dseclume.oracle.nne.host=...`. `nne.sh down` removes the container and shreds the files.
+One case also uses the ordinary Oracle fixture, to show that `required` encrypts against a
+listener at its defaults.
+
+**Oracle Kerberos** has its own fixture, all of it in containers on one network:
+`seclume-oracle/proof/kerberos.sh up` starts an MIT KDC, an Oracle Free with
+`SQLNET.AUTHENTICATION_SERVICES = (KERBEROS5)` and a keytab, a database user identified
+externally as `alice@SECLUME.TEST`, and a client with MIT Kerberos.
+`kerberos.sh run <dir with seclume-core.jar and seclume-oracle.jar> [URL options]` runs
+`KerberosProof` with a ticket for alice and then without one; `nativeEncryption=required` as
+the option adds encryption. `kerberos.sh down` removes everything.
+
+**Oracle NTS** exists only on a database server running Windows, so its fixture is a VM:
+`seclume-oracle/proof/nts.sh up <dir with the two jars>` starts a Windows Server 2022 VM
+(`dockurr/windows`, needs `/dev/kvm` and about 40 GB of disk - it lives under `/home`, not
+`/tmp`) with Oracle Database Free for Windows, installed unattended. Inside, `nts/setup.ps1`
+creates the database user for the local Windows user `seclume` and a second Windows user the
+database does not know; `nts/proof.ps1` logs in with `NtsProof` as `seclume` - as it comes,
+with `nativeEncryption=required` and with `off` - and as the stranger. `nts.sh wait` prints
+the result after about 20 minutes, `nts.sh run <dir>` runs it again with new jars, and
+`nts.sh down` removes the VM and its disk.
+
 ## Oracle over TCPS
 
 `LocalOracleTlsTest` needs a **TCPS listener**, which the ordinary fixture has not got, so it

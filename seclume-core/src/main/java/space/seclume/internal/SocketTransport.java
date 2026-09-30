@@ -112,6 +112,19 @@ public final class SocketTransport implements Transport, NetworkTimeouts.Watched
         return new SocketTransport(channel);
     }
 
+    /**
+     * This end's address, as the peer sees the connection - Oracle's Kerberos
+     * exchange names it; null when the socket cannot say.
+     */
+    public java.net.InetAddress localAddress() {
+        try {
+            return channel.getLocalAddress() instanceof java.net.InetSocketAddress local
+                    ? local.getAddress() : null;
+        } catch (IOException closed) {
+            return null;
+        }
+    }
+
     @Override
     public int read(ByteBuffer into) throws IOException {
         long quiet = System.nanoTime() - lastTraffic;

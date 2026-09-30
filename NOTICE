@@ -19,9 +19,15 @@ granted here. Enquiries: https://seclume.space/
 Third-party code
 --------------------------------------------------------------------------------
 
-None. seclume implements the PostgreSQL, MySQL, TDS and Oracle TTC wire
-protocols itself and depends on nothing outside the JDK at runtime. The Spring
-Boot starter depends on Spring, which the application brings anyway.
+seclume implements the PostgreSQL, MySQL, TDS and Oracle TTC wire protocols
+itself and depends on nothing outside the JDK at runtime. The Spring Boot
+starter depends on Spring, which the application brings anyway.
+
+Oracle native network encryption (seclume-oracle, the advanced negotiation and
+the encryption and checksums of each packet) follows the implementation in
+go-ora (https://github.com/sijms/go-ora), Copyright (c) 2020 Samy Sultan,
+licensed under the MIT License. The licence text is in
+licenses/go-ora-MIT.txt.
 
 Data, not code: seclume-core carries Amazon RDS's public CA certificate bundle
 (space/seclume/internal/aws-rds-global-bundle.pem), as published by Amazon Web

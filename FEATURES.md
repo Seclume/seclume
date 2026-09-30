@@ -45,6 +45,65 @@ providers each have a page of their own: [TLS.md](TLS.md),
 - **`tnsnames.ora` aliases.** `jdbc:seclume:oracle:tns:ORDERS` looks the alias up in
   `tnsnames.ora` (`tnsAdmin`, `-Doracle.net.tns_admin` or `TNS_ADMIN`). Address lists become the
   host list, `SERVICE_NAME` the service, and TCPS switches on TLS.
+- **Native Network Encryption.** Oracle's own encryption and checksums, for listeners that
+  require it (`SQLNET.ENCRYPTION_SERVER`, `SQLNET.CRYPTO_CHECKSUM_SERVER`) instead of offering
+  TCPS. `nativeEncryption` in the URL or on the data source:
+
+  | Value | What happens |
+  |---|---|
+  | `accepted` (default) | As Oracle's own client: negotiated when the server asks for it, otherwise nothing changes, not even a round trip |
+  | `requested` | Offered in the CONNECT; used when the server agrees |
+  | `required` | Offered, and the connection refused without it. A server left at Oracle's defaults agrees, so this encrypts without anyone touching the server |
+  | `off` | Never; a server that requires it is refused before the login, saying why |
+
+  - **Algorithms:** AES-256, -192 or -128 in CBC, with SHA-256, -384 or -512 checksums. RC4,
+    DES, MD5 and SHA-1 are not offered.
+  - **Keys:** agreed by Diffie-Hellman on the group the server sends. The private exponent,
+    the shared secret, the AES keys and the checksum keystream all stay in native memory, and
+    the exponent is used in constant time.
+  - **A session that moves** to another host is refused under native encryption: its
+    checksum keystream cannot leave the process. Use TCPS on seclume's own TLS instead.
+  - **Shown** against Oracle Free 23 with both settings REQUIRED (AES256, SHA256,
+    `seclume-oracle/proof/nne.sh`, `LocalOracleNneTest`):
+    - the server's own `v$session_connect_info` names the AES256 and SHA256 adapters;
+    - a 69 000-character CLOB bind and a 200 KB result travel in many sealed packets;
+    - failing statements go through the break and reset markers after which both ends derive
+      the checksum keys anew;
+    - the heap dump holds no password;
+    - `required` against a listener at its defaults encrypts as well.
+  - **Source:** the protocol follows go-ora (MIT, see [NOTICE](NOTICE) and
+    [PROVENANCE.md](PROVENANCE.md)).
+- **Kerberos.** `authentication=kerberos` logs in with the ticket the operating system holds.
+  There is no user and no password: `kinit` or a keytab through GSSAPI on Linux, the logon
+  session through SSPI on Windows.
+  - **How:** the exchange runs inside Oracle's advanced negotiation. The server names its
+    service and host, and the client answers with an AP-REQ for `service/host`.
+  - **Mutual authentication:** the server's AP-REP is checked, so the login counts only once
+    the server has proved it holds the service key.
+  - **The database user** is the one the principal maps to (`IDENTIFIED EXTERNALLY AS
+    'alice@REALM'`).
+  - **Combines with native encryption** (`nativeEncryption=required`).
+  - **Shown** with an MIT KDC, Oracle Free 23 and a client, all in containers
+    (`seclume-oracle/proof/kerberos.sh`):
+    - `SESSION_USER` KALICE, `AUTHENTICATION_METHOD` KERBEROS, `AUTHENTICATED_IDENTITY`
+      alice@SECLUME.TEST, also with AES256;
+    - without a ticket, refused with the library's reason.
+- **Windows-native authentication (NTS).** `authentication=nts` logs in as the Windows user
+  the application runs as, against an Oracle database that runs on Windows. There is no user
+  and no password: SSPI does NTLM with the logon session's credentials, and the secret never
+  enters the process.
+  - **How:** NTLM's three messages travel inside Oracle's advanced negotiation.
+  - **NTLM proves nothing about the server.** Where there is a domain, prefer Kerberos. NTS is
+    only used when the URL asks for it by name; Kerberos never falls back to NTLM.
+  - **The database user** is the Windows account with Oracle's prefix
+    (`"OPS$HOST\ALICE" IDENTIFIED EXTERNALLY`).
+  - **Combines with native encryption**, and a Windows server encrypts by default.
+  - **Windows only**, on both ends.
+  - **Shown** with a Windows Server 2022 VM running Oracle Database Free 23.9 for Windows
+    (`seclume-oracle/proof/nts.sh`):
+    - `SESSION_USER` `OPS$<HOST>\SECLUME`, `AUTHENTICATION_METHOD` OS, encrypted with AES256;
+      also with `nativeEncryption=required` and, unencrypted, with `nativeEncryption=off`;
+    - a Windows user the database does not know is refused with ORA-01017.
 
 ## MySQL only
 

@@ -259,20 +259,13 @@ It does **not** make the process a vault:
   `/run/secrets/db` or the Vault token does not need a dump. seclume closes the leak through
   the dump, not a compromised host.
 
-Where you can, log in **without a secret at all**: Kerberos (PostgreSQL, MariaDB, SQL Server), short-lived
+Where you can, log in **without a secret at all**: Kerberos (PostgreSQL, MariaDB, SQL Server, Oracle),
+Oracle's Windows-native login (NTS), short-lived
 IAM or Entra tokens, or PostgreSQL 18 OAuth. seclume supports those too. And lock down the
 heap-dump endpoints anyway.
 
 ## What it does not do yet
 
-- **Integrated authentication for Oracle.** Kerberos works for PostgreSQL, MariaDB
-  (`auth_gssapi`) and SQL Server (`authentication=kerberos`, against Active Directory):
-  - on Linux through the system's GSSAPI library, with a ticket from `kinit` or a keytab;
-  - on Windows through SSPI, with the logon session's credentials.
-
-  Either way there is no secret in the process at all. Oracle's Kerberos/NTS is refused with
-  a message saying so: it goes through the same undocumented negotiation as Oracle's native
-  encryption.
 - **Moving a live session from one host to another.** It is being built, but not here. The
   drivers hold their own protocol and TLS state, which is exactly what such a move needs and
   what no driver built on an `SSLEngine` can offer. So this repository carries the seams it

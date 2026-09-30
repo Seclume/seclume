@@ -27,7 +27,8 @@ import java.nio.charset.StandardCharsets;
  * Kerberos mechanism (SQL Server's integrated login, PostgreSQL's
  * {@code gss}, MariaDB's {@code auth_gssapi}) gets the same tokens MIT's
  * library would send, and NTLM - a password hash the server could relay - is
- * never offered. Mutual authentication is required.
+ * never offered in its place. Mutual authentication is required. NTLM exists
+ * here only as {@link #initiateNtlm}, for Oracle's NTS, asked for by name.
  */
 final class Sspi {
 
@@ -58,27 +59,44 @@ final class Sspi {
         if (!available()) {
             throw new IllegalStateException("Kerberos needs SSPI (secur32.dll) on 64-bit Windows");
         }
-        return new SspiContext(target);
+        return new SspiContext(target, "Kerberos", true);
+    }
+
+    /**
+     * NTLM, for the one server that asks for nothing else: Oracle's NTS on a
+     * database server running Windows. The same logon session's credentials,
+     * but NTLM has no mutual authentication - the server proves nothing about
+     * itself - so this is only ever used when the caller asked for it by name.
+     */
+    static Gssapi.Context initiateNtlm(String target) {
+        if (!available()) {
+            throw new IllegalStateException("NTLM needs SSPI (secur32.dll) on 64-bit Windows");
+        }
+        return new SspiContext(target, "NTLM", false);
     }
 
     private static final class SspiContext implements Gssapi.Context {
 
         private final Arena arena = Arena.ofShared();
         private final String target;
+        private final String mechanism;
+        private final boolean mutual;
         private final MemorySegment wideTarget;
         private final MemorySegment credentials;
         private final MemorySegment context;
         private boolean started;
         private boolean complete;
 
-        private SspiContext(String target) {
+        private SspiContext(String target, String mechanism, boolean mutual) {
             this.target = target;
+            this.mechanism = mechanism;
+            this.mutual = mutual;
             byte[] utf16 = (target + "\0").getBytes(StandardCharsets.UTF_16LE); // seclume-allow: a service name, not a secret
             wideTarget = arena.allocate(utf16.length);
             MemorySegment.copy(utf16, 0, wideTarget, JAVA_BYTE, 0, utf16.length);
-            byte[] kerberos = "Kerberos\0".getBytes(StandardCharsets.UTF_16LE); // seclume-allow: the package's name
-            MemorySegment packageName = arena.allocate(kerberos.length);
-            MemorySegment.copy(kerberos, 0, packageName, JAVA_BYTE, 0, kerberos.length);
+            byte[] name = (mechanism + "\0").getBytes(StandardCharsets.UTF_16LE); // seclume-allow: the package's name
+            MemorySegment packageName = arena.allocate(name.length);
+            MemorySegment.copy(name, 0, packageName, JAVA_BYTE, 0, name.length);
             credentials = arena.allocate(HANDLE);
             context = arena.allocate(HANDLE);
             MemorySegment expiry = arena.allocate(8);
@@ -87,9 +105,9 @@ final class Sspi {
                     SECPKG_CRED_OUTBOUND, NULL, NULL, NULL, NULL, credentials, expiry);
             if (status != SEC_E_OK) {
                 arena.close();
-                throw new IllegalStateException("Windows has no Kerberos credentials for this "
-                        + "process (" + describe(status) + ") - log on to the domain, or start "
-                        + "the application with runas /netonly");
+                throw new IllegalStateException("Windows has no " + mechanism + " credentials "
+                        + "for this process (" + describe(status) + ") - log on to the domain, "
+                        + "or start the application with runas /netonly");
             }
         }
 
@@ -116,7 +134,8 @@ final class Sspi {
                 MemorySegment expiry = call.allocate(8);
                 int status = (int) Native.call(Native.INITIALIZE_CONTEXT, credentials,
                         started ? context : NULL, wideTarget,
-                        ISC_REQ_MUTUAL_AUTH | ISC_REQ_ALLOCATE_MEMORY, 0, SECURITY_NATIVE_DREP,
+                        (mutual ? ISC_REQ_MUTUAL_AUTH : 0) | ISC_REQ_ALLOCATE_MEMORY, 0,
+                        SECURITY_NATIVE_DREP,
                         input, 0, context, output, attributes, expiry);
                 started = true;
                 int size = outBuffer.get(JAVA_INT, 0);
@@ -132,14 +151,14 @@ final class Sspi {
                     }
                 }
                 if (status == SEC_E_OK) {
-                    if ((attributes.get(JAVA_INT, 0) & ISC_RET_MUTUAL_AUTH) == 0) {
+                    if (mutual && (attributes.get(JAVA_INT, 0) & ISC_RET_MUTUAL_AUTH) == 0) {
                         throw new IllegalStateException("the Kerberos exchange with " + target
                                 + " ended without the server proving who it is");
                     }
                     complete = true;
                 } else if (status != SEC_I_CONTINUE_NEEDED) {
-                    throw new IllegalStateException("the Kerberos exchange with " + target
-                            + " failed - SSPI says " + describe(status));
+                    throw new IllegalStateException("the " + mechanism + " exchange with "
+                            + target + " failed - SSPI says " + describe(status));
                 }
                 return bytes;
             }

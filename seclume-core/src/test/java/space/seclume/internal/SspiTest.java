@@ -36,6 +36,19 @@ class SspiTest {
     }
 
     @Test
+    void ntlmOpensWithANegotiateMessage() {
+        Assumptions.assumeTrue(Sspi.available());
+        try (Gssapi.Context context = Gssapi.initiateNtlm("localhost")) {
+            byte[] negotiate = context.step(null, 0, 0);
+            assertTrue(negotiate.length > 12);
+            assertEquals("NTLMSSP\0", new String(negotiate, 0, 8,
+                    java.nio.charset.StandardCharsets.US_ASCII));
+            assertEquals(1, negotiate[8]);                  // message type 1
+            assertTrue(!context.complete());
+        }
+    }
+
+    @Test
     void statusCodesAreNamed() {
         assertEquals("SEC_E_TARGET_UNKNOWN: the KDC does not know that service principal (SPN) "
                 + "(0x80090303)", Sspi.describe(0x80090303));

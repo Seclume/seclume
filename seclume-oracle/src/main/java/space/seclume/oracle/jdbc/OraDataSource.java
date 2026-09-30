@@ -178,6 +178,27 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
         this.identity = settings.identity();
         this.service = settings.service();
         this.tls = settings.tls();
+        this.nativeEncryption = settings.nativeEncryption();
+    }
+
+    /**
+     * Oracle's native network encryption: {@code accepted} (the default -
+     * negotiated when the server requires it), {@code off}, {@code requested}
+     * or {@code required}. See AdvancedNegotiation.Mode.
+     */
+    private space.seclume.oracle.net.AdvancedNegotiation.Mode nativeEncryption =
+            space.seclume.oracle.net.AdvancedNegotiation.Mode.ACCEPTED;
+
+    public void setNativeEncryption(String mode) throws SQLException {
+        try {
+            this.nativeEncryption = space.seclume.oracle.net.AdvancedNegotiation.Mode.of(mode);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException(e.getMessage(), "08001", e);
+        }
+    }
+
+    public String getNativeEncryption() {
+        return nativeEncryption.name().toLowerCase(java.util.Locale.ROOT);
     }
 
     /**
@@ -228,7 +249,7 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
                 user, provider, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity());
+                resolvedIdentity(), nativeEncryption);
         return new OraConnection(space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> OracleSession.open(settings))),

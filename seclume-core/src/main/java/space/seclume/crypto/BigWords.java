@@ -221,4 +221,46 @@ final class BigWords {
             baseReduced.fill((byte) 0);
         }
     }
+
+    /**
+     * {@code base^exponent mod modulus} for a secret exponent - a Diffie-Hellman
+     * private key. Unlike {@link #modPow}, every bit costs the same: the square
+     * and the multiplication are both done, always, and the product is kept by
+     * a mask rather than a branch, so the running time says nothing about the
+     * exponent's bits.
+     *
+     * @param exponent big-endian bytes, all of them processed, leading zeroes too
+     */
+    static void modPowSecret(MemorySegment base, MemorySegment exponent, long exponentOffset,
+                             int exponentLength, MemorySegment modulus, int words,
+                             MemorySegment result, Arena arena) {
+        MemorySegment accumulator = arena.allocate(words * 4L);
+        MemorySegment multiplied = arena.allocate(words * 4L);
+        MemorySegment product = arena.allocate(words * 8L);
+        MemorySegment baseReduced = arena.allocate(words * 4L);
+        try {
+            mod(base, words, modulus, words, baseReduced, arena);
+            setSmall(accumulator, words, 1);
+            for (int i = 0; i < exponentLength; i++) {
+                int value = exponent.get(ValueLayout.JAVA_BYTE, exponentOffset + i) & 0xff;
+                for (int bit = 7; bit >= 0; bit--) {
+                    multiply(accumulator, words, accumulator, words, product);
+                    mod(product, 2 * words, modulus, words, accumulator, arena);
+                    multiply(accumulator, words, baseReduced, words, product);
+                    mod(product, 2 * words, modulus, words, multiplied, arena);
+                    int keep = -((value >>> bit) & 1);   // all ones when the bit is set
+                    for (int w = 0; w < words; w++) {
+                        set(accumulator, w, (get(multiplied, w) & keep)
+                                | (get(accumulator, w) & ~keep));
+                    }
+                }
+            }
+            MemorySegment.copy(accumulator, 0, result, 0, words * 4L);
+        } finally {
+            accumulator.fill((byte) 0);
+            multiplied.fill((byte) 0);
+            product.fill((byte) 0);
+            baseReduced.fill((byte) 0);
+        }
+    }
 }

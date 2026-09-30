@@ -13,6 +13,66 @@ All notable changes to seclume are recorded here. Versions follow
   now asks for the isolation level, which leaks on both - `proxyMode=transaction` is still
   needed - and the image is pinned by digest.
 
+### Oracle: Kerberos
+
+- `authentication=kerberos` for Oracle: no user and no password, the operating system's
+  ticket - GSSAPI on Linux, SSPI on Windows.
+- How it works:
+  - The exchange runs inside the advanced negotiation.
+  - The AP-REQ goes to Oracle without the GSS-API frame, as `Krb5Token`, and the server's
+    AP-REP is checked for mutual authentication.
+  - The login's second stage is sent without a user or password
+    (`TtcLogin.phaseTwoExternal`), after protocol and data types are negotiated on their own.
+- Combines with native encryption.
+- Shown with an MIT KDC, Oracle Free 23 and a client in containers (`proof/kerberos.sh`):
+  - the server reports KALICE by KERBEROS for alice@SECLUME.TEST, with and without AES256;
+  - without a ticket, refused.
+
+### Oracle: Windows-native authentication (NTS)
+
+- `authentication=nts` for Oracle on Windows: no user and no password, the Windows logon
+  session's credentials through SSPI.
+- How it works:
+  - NTLM's negotiate, challenge and authenticate messages travel inside the advanced
+    negotiation; SSPI makes them, so no password or hash enters the process.
+  - SSPI's NTLM is a separate context (`Gssapi.initiateNtlm`). The Kerberos context still
+    never offers NTLM.
+  - The login's second stage is the same as for Kerberos.
+- `OracleOsLogin` (`KERBEROS`, `NTS`) stands in for the secret provider in both cases.
+- Shown with Oracle Database Free 23.9 for Windows in a Windows Server 2022 VM
+  (`proof/nts.sh`):
+  - the server reports `OPS$<HOST>\SECLUME` by OS, with AES256 by default and with
+    `nativeEncryption=required`, unencrypted with `nativeEncryption=off`;
+  - a Windows user the database does not know is refused with ORA-01017.
+
+### Oracle: Native Network Encryption
+
+- Oracle's own encryption and checksums, for listeners that require them
+  (`SQLNET.ENCRYPTION_SERVER`, `SQLNET.CRYPTO_CHECKSUM_SERVER`) rather than offering TCPS.
+  Those listeners used to hang up after the ACCEPT, and the driver reported only "the login
+  failed".
+- New option `nativeEncryption`:
+  - `accepted` (default): as Oracle's client, negotiated when the server asks for it.
+    Nothing changes for any other server, not even a round trip.
+  - `requested`, `required`: offered in the CONNECT. `required` refuses a plain session, and
+    a listener at Oracle's defaults agrees to it.
+  - `off`: a server that requires it is refused before the login, with the reason.
+- AES-256/192/128-CBC with SHA-256/384/512 checksums. RC4, DES, MD5 and SHA-1 are not offered.
+- Everything keyed lives in native memory:
+  - the Diffie-Hellman exponent, through the new `DiffieHellman` and a constant-time
+    `modPowSecret`;
+  - the shared secret, the AES keys and the checksum keystream.
+- Detaching or snapshotting a session under native encryption is refused, since the keystream
+  cannot move.
+- The protocol follows go-ora (MIT); see NOTICE, `licenses/go-ora-MIT.txt` and PROVENANCE.md.
+- Shown against Oracle Free 23 with encryption and checksums REQUIRED (`proof/nne.sh`,
+  `LocalOracleNneTest`):
+  - the server's `v$session_connect_info` names AES256 and SHA256;
+  - large binds and results go out in many sealed packets;
+  - failing statements go through the markers and the re-keying;
+  - the heap dump holds no password;
+  - `required` against a default listener encrypts too.
+
 ### Kerberos on Windows: SSPI
 
 - The Kerberos logins now work on Windows through SSPI (`secur32.dll`, the Kerberos package,
@@ -1181,7 +1241,8 @@ by name rather than silently ignored: a `SID`, `FAILOVER_MODE`,
 `SOURCE_ROUTE`, a protocol other than TCP/TCPS. `seclume-verify --migrate`
 translates `jdbc:oracle:thin:@ORDERS` into the `tns:` form. `TnsNamesTest`
 covers the parsing, the rewriting, and a real login through an alias against
-the test server. Native Network Encryption is still not supported.
+the test server. (Native Network Encryption followed later - see "Oracle: Native Network
+Encryption".)
 
 ### A primary and a read replica as one data source: `ReadWriteSplit`
 

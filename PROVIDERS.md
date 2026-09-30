@@ -285,11 +285,19 @@ into three that are written down and decided on, and it is meant to get shorter.
 ## Which one to pick
 
 The option that makes all of this unnecessary is **Kerberos**: there is no secret in the
-process at all, only a ticket in the operating system's credential cache. It works for
-PostgreSQL and MariaDB on Linux through the system's GSSAPI library. Use `provider=none`, let
-`kinit` or a keytab provide the ticket, and put `gss` in `pg_hba.conf` or create the MariaDB
-user `IDENTIFIED VIA gssapi`. Windows' SSPI, SQL Server Integrated
-Security and Oracle Kerberos/NTS are not supported yet. Everywhere else:
+process at all, only a ticket the operating system holds. It works for all four databases:
+on Linux through the system's GSSAPI library, with `kinit` or a keytab providing the ticket;
+on Windows through SSPI, with the logon session's credentials.
+
+- **PostgreSQL:** `provider=none`, and `gss` in `pg_hba.conf`.
+- **MariaDB:** `provider=none`, and the user created `IDENTIFIED VIA gssapi`.
+- **SQL Server and Oracle:** `authentication=kerberos`. For Oracle, the database user is
+  `IDENTIFIED EXTERNALLY AS 'alice@REALM'`.
+
+Against an Oracle database on Windows, `authentication=nts` does the same with the Windows
+logon session (NTLM through SSPI; the user is `"OPS$HOST\ALICE" IDENTIFIED EXTERNALLY`).
+NTLM does not prove who the server is, so prefer Kerberos where there is a domain.
+Everywhere else:
 
 - **A container platform with secret mounts** — `file`. It is the shortest path and the one
   with nothing to go wrong.
