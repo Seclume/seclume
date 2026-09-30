@@ -5,6 +5,28 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Faster: `select 1` level with Connector/J
+
+A plain `Statement` round trip on MySQL went from 45.0 to 41.6 µs against Connector/J's
+41.4 (same machine, same server, JMH, 4 forks - within the error). Found by profiling it with
+JFR; nothing about what is checked or wiped changed:
+
+- **The receive buffer was wiped whole after every answer** - 32 KB on MySQL, and on Oracle at
+  every packet. Only what the bytes reached is wiped now: nothing is ever written behind the
+  filled mark, so the rest is still zero. PostgreSQL, whose buffer can be swapped, keeps a
+  high-water mark and wipes a swapped-in buffer whole once. The three `ReceiveBufferWipeTest`s
+  still hold, and fail when the wipe is removed.
+- **Session-state tracking ran two regular expressions over every statement.** Exact filters
+  in front: the leading expression can only match statements that begin with one of eight
+  words, the other only text with `_`, `#` or `@` in it; a statement without a `;` is judged
+  whole. `SessionStateTest` checks 20 000 random statements against the expressions alone.
+- **MySQL's column descriptions were decoded into four strings each, every time.** A
+  description byte-identical to the last one for that column is now taken over as it was.
+- Small ones: no array and no string for an empty protocol string; a short run of zeroes
+  written byte by byte instead of through a slice made for it.
+
+The numbers in the README follow with the next recorded run (`BenchRecord`).
+
 ### CI: PgBouncer pinned, and its control on what still leaks
 
 - PgBouncer 1.26.0 resets read-only between clients in transaction mode; the isolation level it

@@ -1956,6 +1956,10 @@ public final class MySession implements AutoCloseable {
         readRows(handler, binary);
     }
 
+    /** The last column descriptions this session read, raw and decoded - see below. */
+    private byte[][] seenColumns = new byte[0][]; // seclume-allow: column descriptions, never a secret
+    private Field[] seenFields = new Field[0];
+
     private List<Field> readFieldDescriptions(int count) throws SQLException, IOException {
         if (count == 0) {
             return List.of();
@@ -1977,9 +1981,30 @@ public final class MySession implements AutoCloseable {
                     + "result set"));
         }
         List<Field> list = new ArrayList<>(count);
+        if (seenColumns.length < count) {
+            seenColumns = java.util.Arrays.copyOf(seenColumns, count);
+            seenFields = java.util.Arrays.copyOf(seenFields, count);
+        }
         for (int i = 0; i < count; i++) {
             channel.nextPacket();
             WireBuffer in = channel.packet();
+            // The same statement describes its columns in the same bytes every
+            // time; decoding them into four strings each was a microsecond of a
+            // select 1. The description is a pure function of those bytes, so
+            // byte-identical means the same Field - taken over, not decoded.
+            int start = in.position();
+            int length = channel.packetRemaining();
+            byte[] seen = seenColumns[i];
+            if (seen != null && seen.length == length && java.lang.foreign.MemorySegment.mismatch(
+                    in.segment(), start, start + length,
+                    java.lang.foreign.MemorySegment.ofArray(seen), 0, length) == -1) {
+                channel.endPacket();
+                list.add(seenFields[i]);
+                continue;
+            }
+            byte[] bytes = new byte[length]; // seclume-allow: a column description - names and types, never a secret
+            java.lang.foreign.MemorySegment.copy(in.segment(),
+                    java.lang.foreign.ValueLayout.JAVA_BYTE, start, bytes, 0, length);
             MyPackets.skipLengthEncodedString(in);            // Katalog, immer "def"
             String schema = MyPackets.readLengthEncodedString(in);
             String table = MyPackets.readLengthEncodedString(in);
@@ -1993,8 +2018,11 @@ public final class MySession implements AutoCloseable {
             int flags = in.getShortLe() & 0xffff;
             int decimals = in.getByte() & 0xff;
             channel.endPacket();
-            list.add(new Field(schema, table, name, originalName, charset, columnLength,
-                    type, flags, decimals));
+            Field field = new Field(schema, table, name, originalName, charset, columnLength,
+                    type, flags, decimals);
+            seenColumns[i] = bytes;
+            seenFields[i] = field;
+            list.add(field);
         }
         if (!MyCapabilities.has(capabilities, MyCapabilities.DEPRECATE_EOF)) {
             channel.nextPacket();                             // das EOF nach den Spalten

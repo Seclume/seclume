@@ -788,7 +788,12 @@ public final class NsChannel implements AutoCloseable {
         // followed by a short one is never. The heap dump harness cannot see
         // this buffer, so nothing else would have found it.
         int keep = Math.max(leftover, 0);
-        in.segment().asSlice(keep, in.capacity() - keep).fill((byte) 0);
+        // Up to where the bytes reached: nothing is written behind filled -
+        // reads land below it, native encryption opens in place - so the rest
+        // is still zero. The whole 32 KB went at every packet.
+        if (filled > keep) {
+            in.segment().asSlice(keep, filled - keep).fill((byte) 0);
+        }
         in.rewind();
         filled = keep;
         packetEnd = 0;

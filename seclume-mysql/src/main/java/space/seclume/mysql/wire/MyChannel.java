@@ -494,7 +494,13 @@ public final class MyChannel implements AutoCloseable {
         if (rest > 0) {
             java.lang.foreign.MemorySegment.copy(in.segment(), position, in.segment(), 0, rest);
         }
-        in.segment().asSlice(rest, in.capacity() - rest).fill((byte) 0);
+        // Up to where the bytes reached, not the whole buffer: nothing is ever
+        // written behind filled (reads land below it), so what lies there is
+        // still zero. Wiping all 32 KB after every answer was a microsecond
+        // of each select 1 (30.09.2026).
+        if (filled > rest) {
+            in.segment().asSlice(rest, filled - rest).fill((byte) 0);
+        }
         in.position(0);
         filled = rest;
         in.limit(filled);

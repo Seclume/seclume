@@ -73,4 +73,70 @@ class SessionStateTest {
         assertFalse(state.changed());
         assertFalse(state.irreversible());
     }
+
+    /**
+     * The filters in front of the two expressions change no verdict: every
+     * statement is judged the same as by the expressions alone - the words
+     * each alternative starts with, in any case, behind comments and
+     * parentheses, in batches, and thousands of statements put together from
+     * the pieces at random.
+     */
+    @Test
+    void theFiltersChangeNoVerdict() {
+        java.util.regex.Pattern leading = java.util.regex.Pattern.compile(
+                "^(set|use|prepare|listen|alter\\s+session|exec(ute)?\\s+as\\s|setuser"
+                        + "|create\\s+(local\\s+|global\\s+)?temp(orary)?\\s"
+                        + "|create\\s+table\\s+#"
+                        + "|declare\\s+\\S+\\s+(binary\\s+)?(insensitive\\s+)?(no\\s+)?(scroll\\s+)?"
+                        + "cursor\\s+with\\s+hold)",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+        java.util.regex.Pattern anywhere = java.util.regex.Pattern.compile(
+                "set_config\\s*\\(|dbms_session\\s*\\.|dbms_application_info\\s*\\."
+                        + "|sp_setapprole|sp_set_session_context|context_info"
+                        + "|pg_advisory_lock\\s*\\(|pg_try_advisory_lock\\s*\\(|get_lock\\s*\\("
+                        + "|\\binto\\s+#|@\\w+\\s*:=",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+        String[] pieces = {"select 1", "SET search_path = x", "Use db", "prepare p as select 1",
+            "LISTEN ch", "alter session set x", "Alter Table t", "exec as user = 'u'",
+            "EXECUTE AS LOGIN = 'l'", "setuser 'u'", "create temp table t (a int)",
+            "CREATE GLOBAL TEMPORARY TABLE t (a int)", "create table #t (a int)",
+            "create table t (a int)", "declare c cursor with hold for select 1",
+            "declare c binary insensitive no scroll cursor with hold for select 1",
+            "select set_config('a', 'b', false)", "begin dbms_session.set_role('r'); end;",
+            "call DBMS_APPLICATION_INFO.set_module('m', null)", "exec sp_setapprole 'r', 'p'",
+            "exec sp_set_session_context 'k', 'v'", "set context_info 0x1",
+            "select pg_advisory_lock(1)", "select pg_try_advisory_lock (1)",
+            "select get_lock('l', 1)", "select a into #t from x", "select @a := 1",
+            "select a_b from t", "select '#' from t", "select '@x' from t", "update t set a = 1",
+            "insert into t values (1)", "delete from t", "  /* c */ ( set x = 1 )",
+            "-- c\nuse db", "setting", "settle", "users", "execution", "select 1; set role admin"};
+        java.util.Random random = new java.util.Random(46);
+        for (int i = 0; i < 20_000; i++) {
+            StringBuilder sql = new StringBuilder();
+            int parts = 1 + random.nextInt(3);
+            for (int p = 0; p < parts; p++) {
+                sql.append(p > 0 ? "; " : "").append(pieces[random.nextInt(pieces.length)]);
+            }
+            String text = random.nextBoolean() ? sql.toString() : sql.toString().toUpperCase(
+                    java.util.Locale.ROOT);
+            SessionState state = new SessionState();
+            state.note(text);
+            assertTrue(state.changed() == reference(text, leading, anywhere), text);
+        }
+    }
+
+    /** The expressions alone, on the same statement boundaries note() uses. */
+    private static boolean reference(String sql, java.util.regex.Pattern leading,
+            java.util.regex.Pattern anywhere) {
+        if (anywhere.matcher(sql).find()) {
+            return true;
+        }
+        for (String statement : sql.split(";")) {
+            String start = statement.replaceAll("^(\\s|\\(|/\\*.*?\\*/|--[^\\n]*\\n)*", "");
+            if (leading.matcher(start).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

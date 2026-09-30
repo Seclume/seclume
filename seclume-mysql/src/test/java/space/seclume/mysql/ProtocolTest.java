@@ -82,6 +82,42 @@ class ProtocolTest {
         }
     }
 
+    /**
+     * Column descriptions are taken over when their bytes are the same as
+     * last time - and only then: a different name, a different type, fewer
+     * columns and back again each come through as the server sent them.
+     */
+    @Test
+    void columnDescriptionsFollowTheServerFromQueryToQuery() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.start();
+            try (MySession session = MySession.open(settings(server))) {
+                List<List<Column>> shapes = List.of(
+                        List.of(new Column("id", MyTypes.LONGLONG), new Column("label", MyTypes.VAR_STRING)),
+                        List.of(new Column("id", MyTypes.LONGLONG), new Column("label", MyTypes.VAR_STRING)),
+                        List.of(new Column("id", MyTypes.LONGLONG), new Column("title", MyTypes.VAR_STRING)),
+                        List.of(new Column("id", MyTypes.LONG), new Column("title", MyTypes.VAR_STRING)),
+                        List.of(new Column("id", MyTypes.LONG)),
+                        List.of(new Column("id", MyTypes.LONGLONG), new Column("label", MyTypes.VAR_STRING)));
+                for (List<Column> shape : shapes) {
+                    List<String> row = new ArrayList<>();
+                    for (int c = 0; c < shape.size(); c++) {
+                        row.add(String.valueOf(c + 1));
+                    }
+                    server.answerWith(shape, List.of(row));
+                    session.query("select *", r -> { });
+                    List<MySession.Field> fields = session.fields();
+                    assertEquals(shape.size(), fields.size());
+                    for (int c = 0; c < shape.size(); c++) {
+                        assertEquals(shape.get(c).name(), fields.get(c).name());
+                        assertEquals(shape.get(c).type(), fields.get(c).type());
+                    }
+                }
+            }
+            server.rethrowFailure();
+        }
+    }
+
     /** A wrong password does not get past the test server. */
     @Test
     void aWrongPasswordIsRejected() throws Exception {
