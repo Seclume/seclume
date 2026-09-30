@@ -41,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test required database coverage gate
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: '25'
@@ -202,6 +204,11 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
       - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
+      - name: Verify pool isolation against PostgreSQL
+        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest,PoolHandOnSeamTest -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Require executed database regression tests
+        if: always()
+        run: python3 .github/scripts/require_pool_tests.py "PostgreSQL"
       - if: failure()
         run: |
           python3 - <<'PY'
@@ -333,6 +340,11 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
       - run: ./mvnw -B -pl seclume-mysql -am test
+      - name: Verify pool isolation against MySQL
+        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
+      - name: Require executed database regression tests
+        if: always()
+        run: python3 .github/scripts/require_pool_tests.py "MySQL"
       - if: always()
         run: rm -f .local-mysql-password
 
@@ -382,6 +394,11 @@ jobs:
           exit 1
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
       - run: ./mvnw -B -pl seclume-sqlserver -am test
+      - name: Verify pool isolation against SQL Server
+        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Require executed database regression tests
+        if: always()
+        run: python3 .github/scripts/require_pool_tests.py "SQL Server"
       - if: always()
         run: rm -f .local-mssql-password
 
@@ -432,6 +449,11 @@ jobs:
           exit 1
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
       - run: ./mvnw -B -pl seclume-oracle -am test
+      - name: Verify pool isolation against Oracle
+        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Require executed database regression tests
+        if: always()
+        run: python3 .github/scripts/require_pool_tests.py "Oracle"
       - if: always()
         run: rm -f .local-oracle-password
 

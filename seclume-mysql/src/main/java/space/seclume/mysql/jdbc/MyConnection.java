@@ -156,9 +156,6 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
     @Override
     public boolean resetSessionState() throws SQLException {
         checkOpen();
-        if (!sessionState.changed()) {
-            return true;
-        }
         if (!autoCommit) {
             return false;
         }

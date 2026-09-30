@@ -36,6 +36,7 @@ final class StubDataSource implements DataSource {
         volatile boolean readOnly;
         volatile int isolation = Connection.TRANSACTION_READ_COMMITTED;
         volatile boolean valid = true;
+        space.seclume.SessionReset sessionReset;
         final AtomicInteger validations = new AtomicInteger();
         /** From now on every call fails the way a dropped socket fails. */
         volatile boolean broken;
@@ -88,6 +89,14 @@ final class StubDataSource implements DataSource {
                 throw new SQLException("the connection to the server was lost", "08006");
             }
             return switch (method.getName()) {
+                case "isWrapperFor" -> args[0] == space.seclume.SessionReset.class
+                        && state.sessionReset != null;
+                case "unwrap" -> {
+                    if (args[0] == space.seclume.SessionReset.class && state.sessionReset != null) {
+                        yield state.sessionReset;
+                    }
+                    throw new SQLException("not a wrapper");
+                }
                 case "createStatement", "prepareStatement", "prepareCall" -> {
                     state.statements.incrementAndGet();
                     StubStatement statement = new StubStatement();

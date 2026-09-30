@@ -188,7 +188,7 @@ final class PooledConnection implements Connection {
         if (!broken) {
             try {
                 restore();
-            } catch (SQLException e) {
+            } catch (SQLException | RuntimeException e) {
                 broken = true;
             }
         }
@@ -290,23 +290,19 @@ final class PooledConnection implements Connection {
         if (used) {
             delegate.clearWarnings();
         }
-        // What a statement set beyond the transaction - a tenant, a
-        // search_path, a temporary table - would otherwise go to the next
-        // borrower. Only when the driver noted such a statement, so the
-        // ordinary return costs nothing. See space.seclume.SessionReset.
+        // SQL text cannot reveal side effects hidden in functions or procedures.
+        // Always reset a used session before another borrower can receive it.
         if (used) {
             closeLeftStatements();
         }
         space.seclume.SessionReset session = used ? sessionReset() : null;
         if (session != null) {
-            if (session.sessionStateChanged()) {
-                if (statements != null) {
-                    statements.closeAll();       // MySQL drops prepared statements with the rest
-                }
-                if (!session.resetSessionState()) {
-                    throw new SQLException("the session carries state that cannot be put "
-                            + "back - the connection is closed rather than lent again");
-                }
+            if (statements != null) {
+                statements.closeAll();
+            }
+            if (!session.resetSessionState()) {
+                throw new SQLException("the session cannot be fully reset - "
+                        + "the connection is closed rather than lent again");
             }
         }
     }
@@ -813,9 +809,11 @@ final class PooledConnection implements Connection {
 
     @Override
     public <T> T unwrap(Class<T> iface) throws SQLException {
+        checkOpen();
         if (iface.isInstance(this)) {
             return iface.cast(this);
         }
+        used = true;
         return delegate.unwrap(iface);
     }
 

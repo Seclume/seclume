@@ -176,6 +176,33 @@ class PoolHandOnSeamTest {
         }
     }
 
+    @Test
+    void tenantAndTransactionSurviveHandoffAndAreResetOnlyOnReturn() throws Exception {
+        try (SeclumePool sender = new SeclumePool(dataSource(), settings(1, 8));
+             SeclumePool receiver = new SeclumePool(dataSource(), settings(1, 8))) {
+            Connection handle = sender.getConnection();
+            String backend = ask(handle, "select pg_backend_pid()");
+            ask(handle, "select set_config('app.tenant_id', 'moving-tenant', false)");
+            handle.setAutoCommit(false);
+            String transaction = ask(handle, "select txid_current()");
+            Connection physical = sender.detach(handle);
+            handle.close();
+            try (Connection resumed = receiver.adopt(physical)) {
+                assertEquals(backend, ask(resumed, "select pg_backend_pid()"));
+                assertEquals(transaction, ask(resumed, "select txid_current()"));
+                assertEquals("moving-tenant", ask(resumed, "select current_setting('app.tenant_id')"));
+                assertFalse(resumed.getAutoCommit());
+                resumed.commit();
+            }
+            try (Connection next = receiver.getConnection()) {
+                assertEquals(backend, ask(next, "select pg_backend_pid()"));
+                assertTrue(next.getAutoCommit());
+                assertEquals(null, ask(next,
+                        "select nullif(current_setting('app.tenant_id', true), '')"));
+            }
+        }
+    }
+
     private static String ask(Connection connection, String sql) throws SQLException {
         try (Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery(sql)) {

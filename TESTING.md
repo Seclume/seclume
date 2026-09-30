@@ -878,3 +878,25 @@ quietly stopped asking would fail the job rather than pass it.
 
 If a run of yours has no server, it stays green and proves less. That is deliberate: a suite
 that fails on a laptop teaches people to ignore it.
+
+## Required pool isolation and migration coverage
+
+The PostgreSQL, MySQL/MariaDB, SQL Server and Oracle CI jobs run
+`SessionResetTest` against their provisioned database. PostgreSQL also runs
+`PoolHandOnSeamTest`, including transaction and tenant preservation across
+pool detach/adopt. `.github/scripts/require_pool_tests.py` checks the Surefire
+reports and fails the job if a required case is absent, skipped or failed.
+Other databases may be skipped in that job; its own database may not.
+
+For a local run against the servers configured in `.local-test.properties`:
+
+```sh
+./mvnw -pl seclume-pool -am test \
+  -Dtest=UnconditionalSessionResetTest,SessionResetTest,PoolHandOnSeamTest \
+  -Dsurefire.failIfNoSpecifiedTests=false
+python3 .github/scripts/require_pool_tests.py PostgreSQL
+```
+
+Pass `-Dseclume.mysql.port=3306` when using the CI MySQL port (the local pool
+tests default to 3307). Missing local servers remain explicit skips; a green
+local build with skips is not a completed database verification.

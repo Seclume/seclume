@@ -276,15 +276,21 @@ message names the oldest holders. Beyond that, what matters is what a connection
   one request then moves on to the next request on that connection, which is the most common
   way row-level security breaks in practice. The same goes for a `search_path`, a temporary
   table, a MySQL user variable, a session-level advisory lock, or an Oracle client identifier
-  or package variable. The drivers note every statement that sets such state, and on return
-  the pool resets only a connection that had some. The ordinary return costs nothing:
+  or package variable. The pool resets every used Seclume connection, including calls whose
+  side effects are hidden inside stored procedures or functions. SQL tracking is diagnostic
+  only. Reset failures retire the connection; prepared statement caches are invalidated.
 
   | | the reset |
   |---|---|
-  | PostgreSQL | one round trip (`RESET ALL`, `UNLISTEN *`, advisory unlocks, `DISCARD TEMP`, …); prepared statements stay |
+  | PostgreSQL | `DISCARD ALL`, including server and local prepared statement caches |
   | MySQL | `COM_RESET_CONNECTION` |
-  | SQL Server | the RESETCONNECTION bit on the next request, with no round trip of its own |
-  | Oracle | package state, client identifier, module and client info; a connection with an `ALTER SESSION` is closed rather than lent again |
+  | SQL Server | the RESETCONNECTION bit on the next request |
+  | Oracle | used sessions are closed because a complete reset of arbitrary application contexts is unavailable |
+
+  This adds reset work to each used borrow; Oracle opens a new physical session for the next
+  borrower. Foreign JDBC drivers without `SessionReset` retain JDBC-only cleanup and do not
+  receive this isolation guarantee. Migration with `detach()` / `adopt()` preserves the live
+  session and its transaction; cleanup occurs only when the adopted borrow is returned.
 
 - **The tenant on every borrow.** With `PoolSettings.setSessionContext(...)`, or a
   `SeclumeSessionContext` bean in Spring, every borrow gives the connection the context of the
