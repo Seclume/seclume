@@ -12,13 +12,15 @@ import space.seclume.internal.MemoryLock;
  *
  * <p>It wraps the three things every piece of protocol code would otherwise
  * have to get right on its own, and would eventually forget: allocation in a
- * {@link Arena#ofConfined() confined arena}, pinning the page in RAM, and - the
+ * {@link Arena#ofShared() shared arena}, pinning the page in RAM, and - the
  * actual point - <b>zeroing before release</b>. Released native memory is
  * reused by the allocator, not erased; without the zeroing the password would
  * still be sitting somewhere in the process.
  *
- * <p>A scope belongs to exactly one thread (confined arena) and lives as
- * briefly as possible - typically for the duration of a handshake:
+ * <p>An owned scope can be closed by a timeout or cancellation thread. Its
+ * contents still require coordinated access: stop writers before closing,
+ * and safely publish the scope when handing it to another thread. It lives
+ * as briefly as possible - typically for the duration of a handshake:
  *
  * {@snippet :
  * try (SecretScope scope = SecretScope.fromProvider(provider)) {
@@ -100,20 +102,17 @@ public final class SecretScope implements AutoCloseable {
         ALLOCATIONS.incrementAndGet();
     }
 
-    /** An empty segment of the requested size in an arena of its own. */
+    /** An empty segment in its own shared arena, closable from any thread. */
     public static SecretScope allocate(int capacity) {
-        return new SecretScope(Arena.ofConfined(), true, capacity);
+        return new SecretScope(Arena.ofShared(), true, capacity);
     }
 
     /**
-     * Like {@link #allocate}, in an arena of its own that more than one thread
-     * may use - for a secret written by one thread and read by another, as a
-     * copy kept for another process is: received on one thread, taken up on
-     * whichever serves the request that needs it. Locked and wiped the same;
-     * closing releases it.
+     * Explicit shared-allocation spelling, equivalent to {@link #allocate}.
+     * Kept for callers that already request cross-thread ownership explicitly.
      */
     public static SecretScope allocateShared(int capacity) {
-        return new SecretScope(Arena.ofShared(), true, capacity);
+        return allocate(capacity);
     }
 
     /**
@@ -123,6 +122,9 @@ public final class SecretScope implements AutoCloseable {
      * <p>Meant for callers that already have an arena for the handshake, and
      * for the zeroing proof in the tests: there the segment has to stay
      * readable after closing, so that it can be shown to really be zero.
+     * The caller must keep the arena alive until this scope closes. A confined
+     * arena retains its owner-thread restriction; use a shared arena when
+     * cancellation or migration may close the scope on another thread.
      */
     public static SecretScope in(Arena arena, int capacity) {
         return new SecretScope(arena, false, capacity);
@@ -299,10 +301,11 @@ public final class SecretScope implements AutoCloseable {
     /**
      * Zeroes the segment and releases it. Closing more than once is allowed,
      * so that try-with-resources and an error path that closes early do not
-     * get in each other's way.
+     * get in each other's way. Concurrent closers wait for the wipe and release
+     * to complete before returning. Callers must stop concurrent segment writers.
      */
     @Override
-    public void close() {
+    public synchronized void close() {
         // Before the flag, not after: a confined scope closed from another
         // thread used to set it and then fail in fill() with
         // WrongThreadException - the secret neither wiped nor released, and

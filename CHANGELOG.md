@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### SEC-02: asynchronous secret cleanup
+
+- Owned `SecretScope` allocations now use shared arenas so timeout threads can
+  wipe and release them. Concurrent closes wait for cleanup to finish.
+- Caller-owned arenas retain their lifetime and thread restrictions; writers
+  must be stopped before cleanup. `allocateShared` remains source compatible.
+- Regression coverage includes async provider cleanup, complete capacity wipes,
+  concurrent closes and TLS record-state handoff to another thread.
+
 ### Faster: `select 1` level with Connector/J
 
 A plain `Statement` round trip on MySQL went from 45.0 to 41.6 µs against Connector/J's
