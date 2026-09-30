@@ -104,6 +104,87 @@ final class FakeMySqlServer implements AutoCloseable {
         return this;
     }
 
+    /**
+     * Answer the login with a switch to {@code client_ed25519} or
+     * {@code parsec}, and check the signature that comes back - with the
+     * JDK: for {@code client_ed25519} against the public key MariaDB documents
+     * for the password {@code secret} (so the test must use that password),
+     * for {@code parsec} by signing the same scrambles with the JDK's own
+     * Ed25519 under the seed the JDK's PBKDF2 derives. Ed25519 is
+     * deterministic, so the two signatures must be the same bytes.
+     */
+    FakeMySqlServer switchToSignature(String plugin) {
+        this.signaturePlugin = plugin;
+        return this;
+    }
+
+    /** The salt this server's parsec ext-salt carries. */
+    static final byte[] PARSEC_SALT = "eighteen salt byte".getBytes(StandardCharsets.US_ASCII);
+    /** MariaDB's documentation: {@code ed25519_password('secret')}. */
+    static final String SECRET_PUBLIC_KEY = "ZIgUREUg5PVgQ6LskhXmO+eZLS0nC8be6HPjYWR4YJY";
+
+    private volatile String signaturePlugin;
+
+    private void signatureLogin(InputStream in, OutputStream out) throws Exception {
+        byte[] nonce = new byte[32];
+        new java.util.Random(7).nextBytes(nonce);
+        ByteArrayOutputStream request = new ByteArrayOutputStream();
+        request.write(0xfe);
+        request.writeBytes((signaturePlugin + "\0").getBytes(StandardCharsets.US_ASCII));
+        request.writeBytes(nonce);
+        writePacket(out, request.toByteArray(), 2);
+        int sequence = 3;
+        if ("parsec".equals(signaturePlugin)) {
+            byte[] ask = readPacket(in);
+            if (ask.length != 0) {
+                throw new IllegalStateException("parsec: expected an empty packet, got "
+                        + ask.length + " bytes");
+            }
+            ByteArrayOutputStream extSalt = new ByteArrayOutputStream();
+            extSalt.write('P');
+            extSalt.write(0);                                   // 1024 iterations
+            extSalt.writeBytes(PARSEC_SALT);
+            writePacket(out, extSalt.toByteArray(), 4);
+            sequence = 5;
+        }
+        byte[] answer = readPacket(in);
+        boolean right;
+        if ("parsec".equals(signaturePlugin)) {
+            if (answer.length != 96) {
+                throw new IllegalStateException("parsec: expected 96 bytes, got " + answer.length);
+            }
+            javax.crypto.SecretKeyFactory pbkdf2 =
+                    javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512");
+            byte[] seed = pbkdf2.generateSecret(new javax.crypto.spec.PBEKeySpec(
+                    password.toCharArray(), PARSEC_SALT, 1024, 256)).getEncoded();
+            java.security.Signature jdk = java.security.Signature.getInstance("Ed25519");
+            jdk.initSign(java.security.KeyFactory.getInstance("Ed25519").generatePrivate(
+                    new java.security.spec.EdECPrivateKeySpec(
+                            java.security.spec.NamedParameterSpec.ED25519, seed)));
+            jdk.update(nonce);
+            jdk.update(answer, 0, 32);
+            right = java.util.Arrays.equals(jdk.sign(),
+                    java.util.Arrays.copyOfRange(answer, 32, 96));
+        } else {
+            byte[] raw = java.util.Base64.getDecoder().decode(SECRET_PUBLIC_KEY + "=");
+            byte[] prefix = java.util.HexFormat.of().parseHex("302a300506032b6570032100");
+            byte[] encoded = new byte[prefix.length + raw.length];
+            System.arraycopy(prefix, 0, encoded, 0, prefix.length);
+            System.arraycopy(raw, 0, encoded, prefix.length, raw.length);
+            java.security.Signature jdk = java.security.Signature.getInstance("Ed25519");
+            jdk.initVerify(java.security.KeyFactory.getInstance("Ed25519")
+                    .generatePublic(new java.security.spec.X509EncodedKeySpec(encoded)));
+            jdk.update(nonce);
+            right = answer.length == 64 && jdk.verify(answer);
+        }
+        if (right) {
+            sendOk(out, sequence + 1, 0, 0);
+        } else {
+            sendError(out, sequence + 1, 1045, "28000",
+                    "Access denied for user '" + expectedUser + "'@'localhost'");
+        }
+    }
+
     FakeMySqlServer start() {
         thread.start();
         return this;
@@ -179,7 +260,11 @@ final class FakeMySqlServer implements AutoCloseable {
                 }
                 return;
             }
-            sendOk(out, 2, 0, 0);
+            if (signaturePlugin != null) {
+                signatureLogin(in, out);
+            } else {
+                sendOk(out, 2, 0, 0);
+            }
 
             while (true) {
                 byte[] packet;
@@ -270,8 +355,10 @@ final class FakeMySqlServer implements AutoCloseable {
         byte[] response = new byte[responseLength];
         System.arraycopy(packet, at, response, 0, responseLength);
 
+        // A user of a signature plugin is switched whatever the first answer
+        // was - MariaDB does not check a native hash it has no use for.
         byte[] expected = nativePassword(password);
-        if (!java.util.Arrays.equals(expected, response)) {
+        if (signaturePlugin == null && !java.util.Arrays.equals(expected, response)) {
             throw new IllegalStateException("the authentication response is wrong");
         }
     }

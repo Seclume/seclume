@@ -27,6 +27,11 @@ another client's code.
 Implemented from the **client/server protocol** documentation that MySQL and MariaDB both
 publish, including the descriptions of `caching_sha2_password` and `mysql_native_password`.
 
+MariaDB's `client_ed25519` and `parsec` follow MariaDB's documentation of the two plugins; where
+it leaves the wire form open (the ext-salt's binary layout, the empty packet that asks for it)
+our own MariaDB 11.8 settled it. The Ed25519 signature follows RFC 8032, structured as in
+TweetNaCl, which is in the public domain.
+
 ## Microsoft SQL Server
 
 Implemented from **[MS-TDS], Tabular Data Stream Protocol**, which Microsoft publishes as part

@@ -739,6 +739,13 @@ printf '%s' "$PW" > .local-oracle-password
 The Spring Data suite additionally wants a schema per dialect; Flyway creates it on the first
 run from `seclume-spring-test/src/main/resources/db/migration`.
 
+**MariaDB's signature logins** have their own fixture: `seclume-mysql/proof/ed25519.sh up`
+starts MariaDB 11.8 on port 3309 with `auth_ed25519` and `auth_parsec`, and the users
+`ed_user` and `parsec_user` with one generated password in a file on that machine; copy it
+unread to `.local-mariadb-ed25519-password`. `LocalMariaDbEd25519Test` then logs in with both
+and checks the refusal and the heap (`-Dseclume.mariadb.ed25519.host=...` when the host is not
+the usual one). `ed25519.sh down` removes the container and shreds the files.
+
 ## When they are not on this machine
 
 The tests ask `space.seclume.tck.TestHosts` where to look, and it answers from the first of
