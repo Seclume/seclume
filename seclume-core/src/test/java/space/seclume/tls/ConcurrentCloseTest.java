@@ -37,6 +37,7 @@ import space.seclume.internal.jdbc.TlsStack;
  * test failing means the test run itself does not finish.
  */
 @Timeout(180)
+@org.junit.jupiter.api.parallel.Isolated
 class ConcurrentCloseTest {
 
     private static TestCertificates certificates;

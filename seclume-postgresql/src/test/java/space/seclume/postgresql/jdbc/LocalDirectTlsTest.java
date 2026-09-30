@@ -34,6 +34,14 @@ import space.seclume.tck.TestHosts;
 @Timeout(60)
 class LocalDirectTlsTest {
 
+    static {
+        // TestHosts copies .local-test.properties into the system properties
+        // when it is first loaded; the ports below are read as system
+        // properties, so it has to be loaded before them - with the classes
+        // running side by side, no other test can be relied on to do it first.
+        TestHosts.database();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"seclume", "jsse"})
     void directTlsReachesAnEncryptedSession(String stack) throws Exception {

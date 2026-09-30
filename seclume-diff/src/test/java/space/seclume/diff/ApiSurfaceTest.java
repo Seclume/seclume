@@ -166,24 +166,39 @@ class ApiSurfaceTest {
                 "select 1 as a, 'x' as b from dual", "{? = call abs(?)}"));
     }
 
-    /** Makes a fresh object of one interface on a connection. */
+    /**
+     * Makes a fresh object of one interface on a connection, and names in
+     * {@code opened} what has to be closed after it - so a connection can
+     * serve the next method without collecting open cursors.
+     */
     private interface Maker {
-        Object make(Connection connection, Target target) throws Exception;
+        Object make(Connection connection, Target target, List<AutoCloseable> opened)
+                throws Exception;
     }
 
+    private static final Maker CONNECTION = (c, t, opened) -> c;
+
     private static final Map<Class<?>, Maker> MAKERS = Map.of(
-            Connection.class, (c, t) -> c,
-            Statement.class, (c, t) -> c.createStatement(),
-            PreparedStatement.class, (c, t) -> c.prepareStatement(t.query()),
-            CallableStatement.class, (c, t) -> c.prepareCall(t.call()),
-            ResultSet.class, (c, t) -> {
-                ResultSet rows = c.createStatement(ResultSet.TYPE_SCROLL_INSENSITIVE,
-                        ResultSet.CONCUR_READ_ONLY).executeQuery(t.query());
+            Connection.class, CONNECTION,
+            Statement.class, (c, t, opened) -> kept(opened, c.createStatement()),
+            PreparedStatement.class, (c, t, opened) -> kept(opened,
+                    c.prepareStatement(t.query())),
+            CallableStatement.class, (c, t, opened) -> kept(opened, c.prepareCall(t.call())),
+            ResultSet.class, (c, t, opened) -> {
+                ResultSet rows = kept(opened, c.createStatement(
+                        ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY))
+                        .executeQuery(t.query());
                 rows.next();
-                return rows;
+                return kept(opened, rows);
             },
-            ResultSetMetaData.class, (c, t) ->
-                    c.createStatement().executeQuery(t.query()).getMetaData());
+            ResultSetMetaData.class, (c, t, opened) ->
+                    kept(opened, kept(opened, c.createStatement()).executeQuery(t.query()))
+                            .getMetaData());
+
+    private static <T extends AutoCloseable> T kept(List<AutoCloseable> opened, T object) {
+        opened.add(object);
+        return object;
+    }
 
     private static void compare(Target target) throws Exception {
         Properties vendor = new Properties();
@@ -193,19 +208,24 @@ class ApiSurfaceTest {
         Set<String> gaps = new TreeSet<>();
         Set<String> decided = new TreeSet<>();
         Set<String> beyond = new TreeSet<>();
-        // Every method on a fresh connection of each driver - a method may change
-        // the connection's state - so this is two logins per method, thousands in
-        // all. They go out eight at a time: one after the other it was the
-        // slowest class of the build (76 s, Oracle alone 43). Oracle not: its
-        // listener turns a burst of logins away (ORA-12516) - these and, with
-        // the modules building side by side, other modules' logins too. One at
-        // a time is the rate it has always taken.
+        // Every method on a fresh object of each driver. A Connection method
+        // may change the connection's state, so each of those gets a login of
+        // its own; the objects made from a connection (statements, results,
+        // their metadata) share one per driver and thread, which is checked
+        // after every method and replaced when it is not as a login leaves it
+        // (see Sessions) - a verdict is always reached on a connection that
+        // was, just before, as good as new. That took Oracle from 43 s to a few
+        // (30.09.2026): two logins per method were thousands, and Oracle's
+        // listener takes them one at a time (ORA-12516 in bursts - these and,
+        // with the modules building side by side, other modules' logins too).
+        // The others go out eight at a time.
         record Verdict(String name, boolean mine, boolean theirs) {
         }
         List<java.util.concurrent.Future<Verdict>> verdicts = new ArrayList<>();
         java.util.concurrent.ExecutorService logins =
                 java.util.concurrent.Executors.newFixedThreadPool(
                         target.name().equals("Oracle") ? 1 : 8);
+        Sessions sessions = new Sessions(target);
         try {
             for (Map.Entry<Class<?>, Maker> kind : MAKERS.entrySet()) {
                 List<Method> all = new ArrayList<>(Arrays.asList(kind.getKey().getMethods()));
@@ -216,8 +236,9 @@ class ApiSurfaceTest {
                     }
                     String name = kind.getKey().getSimpleName() + "." + signature(method);
                     verdicts.add(logins.submit(() -> new Verdict(name,
-                            refused(ours, null, kind.getValue(), method, target),
-                            refused(target.vendor(), vendor, kind.getValue(), method, target))));
+                            refused(sessions, ours, null, kind.getValue(), method, target),
+                            refused(sessions, target.vendor(), vendor, kind.getValue(), method,
+                                    target))));
                 }
             }
             for (java.util.concurrent.Future<Verdict> future : verdicts) {
@@ -240,6 +261,8 @@ class ApiSurfaceTest {
             }
         } finally {
             logins.shutdownNow();
+            logins.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
+            sessions.close();
         }
         int methods = verdicts.size();
         StringBuilder report = new StringBuilder("\n==== " + target.name() + ": " + methods
@@ -286,17 +309,112 @@ class ApiSurfaceTest {
     }
 
     /** Whether the method answers "not supported" on a fresh object. */
-    private static boolean refused(String url, Properties vendor, Maker maker, Method method,
-                                   Target target) throws Exception {
-        try (Connection connection = login(url, vendor)) {
-            Object object = maker.make(connection, target);
+    private static boolean refused(Sessions sessions, String url, Properties vendor, Maker maker,
+                                   Method method, Target target) throws Exception {
+        if (maker == CONNECTION) {
+            Connection connection = login(url, vendor);
             try {
-                method.invoke(object, arguments(method, target));
+                return invoke(connection, method, target);
+            } finally {
+                try {
+                    connection.close();
+                } catch (SQLException afterTheVerdict) {
+                    // The method may have left the connection unable to close
+                    // cleanly - setNetworkTimeout with a millisecond, and ojdbc's
+                    // logoff then times out (ORA-18730). The verdict was reached
+                    // before; the close says nothing about the method.
+                }
+            }
+        }
+        Connection connection = sessions.take(url, vendor);
+        List<AutoCloseable> opened = new ArrayList<>();
+        try {
+            return invoke(maker.make(connection, target, opened), method, target);
+        } finally {
+            for (int i = opened.size() - 1; i >= 0; i--) {
+                try {
+                    opened.get(i).close();
+                } catch (Exception alreadyGone) {
+                    // the method may have closed it itself
+                }
+            }
+            sessions.giveBack(url, connection);
+        }
+    }
+
+    private static boolean invoke(Object object, Method method, Target target) {
+        try {
+            method.invoke(object, arguments(method, target));
+            return false;
+        } catch (InvocationTargetException thrown) {
+            return thrown.getCause() instanceof SQLFeatureNotSupportedException;
+        } catch (IllegalAccessException | IllegalArgumentException wrongArguments) {
+            return false;
+        }
+    }
+
+    /**
+     * One connection per driver and thread for the objects made from it. It is
+     * handed out only as a login leaves it: after every method it has to be
+     * open, in auto-commit, and answer the target's query - otherwise it is
+     * closed and the next method gets a new login.
+     */
+    private static final class Sessions implements AutoCloseable {
+
+        private final Target target;
+        private final Map<String, Connection> idle = new java.util.concurrent.ConcurrentHashMap<>();
+        private final List<Connection> all = java.util.Collections.synchronizedList(
+                new ArrayList<>());
+
+        Sessions(Target target) {
+            this.target = target;
+        }
+
+        private static String key(String url) {
+            return url + "#" + Thread.currentThread().threadId();
+        }
+
+        Connection take(String url, Properties vendor) throws Exception {
+            Connection connection = idle.remove(key(url));
+            if (connection != null) {
+                return connection;
+            }
+            connection = login(url, vendor);
+            all.add(connection);
+            return connection;
+        }
+
+        void giveBack(String url, Connection connection) {
+            if (asALoginLeavesIt(connection)) {
+                idle.put(key(url), connection);
+                return;
+            }
+            try {
+                connection.close();
+            } catch (SQLException ignored) {
+                // it is being replaced because something is wrong with it
+            }
+        }
+
+        private boolean asALoginLeavesIt(Connection connection) {
+            try (Statement probe = connection.createStatement();
+                 ResultSet rows = probe.executeQuery(target.query())) {
+                return !connection.isClosed() && connection.getAutoCommit() && rows.next();
+            } catch (SQLException | RuntimeException broken) {
                 return false;
-            } catch (InvocationTargetException thrown) {
-                return thrown.getCause() instanceof SQLFeatureNotSupportedException;
-            } catch (IllegalArgumentException wrongArguments) {
-                return false;
+            }
+        }
+
+        @Override
+        public void close() {
+            synchronized (all) {
+                for (Connection connection : all) {
+                    try {
+                        connection.close();
+                    } catch (SQLException ignored) {
+                        // closing at the end, whatever state it is in
+                    }
+                }
             }
         }
     }

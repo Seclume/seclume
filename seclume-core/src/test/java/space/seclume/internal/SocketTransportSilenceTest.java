@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Timeout;
  * keepalive on, so fewer of them are cut at all.
  */
 @Timeout(30)
+@org.junit.jupiter.api.parallel.Isolated
 class SocketTransportSilenceTest {
 
     @AfterEach

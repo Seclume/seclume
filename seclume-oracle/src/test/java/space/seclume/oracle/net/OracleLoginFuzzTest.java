@@ -54,6 +54,7 @@ import space.seclume.tck.fuzz.HostileTransport;
  * between two of them is exactly the path nobody wrote a test for.
  */
 @Timeout(900)
+@org.junit.jupiter.api.parallel.Isolated
 class OracleLoginFuzzTest {
 
     private static final String PASSWORD = "ein Testpasswort";

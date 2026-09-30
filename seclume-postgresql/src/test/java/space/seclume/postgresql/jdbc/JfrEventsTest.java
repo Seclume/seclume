@@ -51,6 +51,7 @@ import space.seclume.tck.TestHosts;
  * the ones that would not be checked.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class JfrEventsTest {
 
     private static final String SECRET = "hunter2swordfishXY";

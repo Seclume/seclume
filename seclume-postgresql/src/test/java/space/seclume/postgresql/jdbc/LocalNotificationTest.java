@@ -31,6 +31,7 @@ import space.seclume.tck.TestHosts;
  * and without the asking starting a transaction.
  */
 @Timeout(60)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalNotificationTest {
 
     private static String url;

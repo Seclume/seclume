@@ -215,19 +215,51 @@ final class MailSettings {
                 connectTimeout, timeout, ehlo != null ? ehlo : localName(), secret);
     }
 
-    /** The name for EHLO: this host's, or its address literal when it has none. */
+    /**
+     * The name for EHLO: this host's, or its address literal when it has none.
+     *
+     * <p>Found once per JVM and kept. {@code getCanonicalHostName} is a reverse
+     * DNS lookup, the JDK does not keep its answer, and where nothing answers
+     * it waits for the resolver's timeout - 4.5 s on a Windows machine without
+     * a PTR record, for every {@code SeclumeMail.of} that named no EHLO. The
+     * host's name does not change while the process runs.
+     */
     private static String localName() {
-        try {
-            InetAddress local = InetAddress.getLocalHost();
-            String name = local.getCanonicalHostName();
-            if (name.contains(".") && !name.equals(local.getHostAddress())) {
-                return name;
+        return LocalName.EHLO;
+    }
+
+    /**
+     * This host's canonical name as {@code InetAddress} gives it - what
+     * Jakarta Mail would look up itself for a default sender and a
+     * Message-ID, and does not keep either; null when there is none.
+     */
+    static String canonicalHostName() {
+        return LocalName.CANONICAL;
+    }
+
+    private static final class LocalName {
+        static final InetAddress LOCAL = local();
+        static final String CANONICAL = LOCAL == null ? null : LOCAL.getCanonicalHostName();
+        static final String EHLO = ehlo();
+
+        private static InetAddress local() {
+            try {
+                return InetAddress.getLocalHost();
+            } catch (UnknownHostException e) {
+                return null;
             }
-            return local instanceof java.net.Inet6Address
-                    ? "[IPv6:" + local.getHostAddress() + "]"
-                    : "[" + local.getHostAddress() + "]";
-        } catch (UnknownHostException e) {
-            return "[127.0.0.1]";
+        }
+
+        private static String ehlo() {
+            if (LOCAL == null) {
+                return "[127.0.0.1]";
+            }
+            if (CANONICAL.contains(".") && !CANONICAL.equals(LOCAL.getHostAddress())) {
+                return CANONICAL;
+            }
+            return LOCAL instanceof java.net.Inet6Address
+                    ? "[IPv6:" + LOCAL.getHostAddress() + "]"
+                    : "[" + LOCAL.getHostAddress() + "]";
         }
     }
 

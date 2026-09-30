@@ -53,6 +53,7 @@ import space.seclume.internal.jdbc.TlsStack;
  * skip - CI sets it so that this cannot quietly stop running.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class HybridHandshakeTest {
 
     private static final String OPENSSL = System.getenv("SECLUME_OPENSSL35");

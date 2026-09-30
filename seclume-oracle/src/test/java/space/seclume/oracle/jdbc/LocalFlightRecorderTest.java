@@ -42,6 +42,7 @@ import space.seclume.Flight;
  * exception messages that used to carry the SQL text.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalFlightRecorderTest {
 
     private static final String HOST = System.getProperty("seclume.oracle.host",

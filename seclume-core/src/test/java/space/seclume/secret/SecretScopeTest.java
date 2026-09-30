@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import space.seclume.Segments;
 
+@org.junit.jupiter.api.parallel.Isolated
 class SecretScopeTest {
 
     /**

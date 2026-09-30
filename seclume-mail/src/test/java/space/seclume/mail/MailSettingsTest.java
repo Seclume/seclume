@@ -85,6 +85,28 @@ class MailSettingsTest {
                 "pop3s://mail.example.com?user=r%0D%0ADELE%201" + SECRET));
     }
 
+    /**
+     * The session carries this host's name for Jakarta Mail's default sender
+     * and Message-IDs, so that it does not look it up again for each - unless
+     * the caller set a host or a sender, which stay theirs.
+     */
+    @Test
+    void theSessionCarriesTheHostNameUnlessTheCallerChoseOne() {
+        String url = "smtp://smtp.example.com?auth=none";
+        String canonical = MailSettings.canonicalHostName();
+        org.junit.jupiter.api.Assumptions.assumeTrue(canonical != null, "no local host name");
+        assertEquals(canonical, SeclumeMail.session(url).getProperty("mail.host"));
+
+        java.util.Properties chosen = new java.util.Properties();
+        chosen.setProperty("mail.host", "relay.example.com");
+        assertEquals("relay.example.com",
+                SeclumeMail.session(chosen, url).getProperty("mail.host"));
+
+        java.util.Properties sender = new java.util.Properties();
+        sender.setProperty("mail.from", "reports@example.com");
+        assertEquals(null, SeclumeMail.session(sender, url).getProperty("mail.host"));
+    }
+
     @Test
     void xoauth2IsOnlyChosenByName() {
         assertEquals(MailSettings.Auth.XOAUTH2, MailSettings.of(

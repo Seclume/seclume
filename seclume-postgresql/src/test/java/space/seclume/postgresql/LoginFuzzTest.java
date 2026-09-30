@@ -53,6 +53,7 @@ import space.seclume.tck.fuzz.ScriptedTransportProvider;
  * unwinding.
  */
 @Timeout(600)
+@org.junit.jupiter.api.parallel.Isolated
 class LoginFuzzTest {
 
     private static final String PASSWORD = "ein Testpasswort";

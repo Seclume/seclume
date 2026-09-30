@@ -35,6 +35,7 @@ import space.seclume.internal.jdbc.XidText;
  * driver that does not look at the code would report success for a branch that
  * was never opened.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class LocalOraXaTest {
 
     private static final String HOST =

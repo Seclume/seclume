@@ -49,6 +49,7 @@ import space.seclume.secret.SecretScope;
  * <p>No database is needed. The server is forty lines of {@code ServerSocket}
  * speaking just enough of the protocol to get to the interesting moment.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class ConnectFailureWipeTest {
 
     private static final String PASSWORD = "hunter2-hunter2";

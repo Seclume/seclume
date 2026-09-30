@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Timeout;
 
 /** A peer that never answers, and the watch that gives up on it. */
 @Timeout(30)
+@org.junit.jupiter.api.parallel.Isolated
 class NetworkTimeoutsTest {
 
     @Test

@@ -29,6 +29,7 @@ import space.seclume.internal.JdbcUrl;
  * measured for real - a sleeping opener - where the question is whether
  * {@link HostList} writes them down at all.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class HostQualityTest {
 
     private static final long SECOND = 1_000_000_000L;

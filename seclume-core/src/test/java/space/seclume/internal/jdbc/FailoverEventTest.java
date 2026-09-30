@@ -32,6 +32,7 @@ import jdk.jfr.consumer.RecordingFile;
  * duration is the attempt's rather than zero or the whole loop's.
  */
 @Timeout(60)
+@org.junit.jupiter.api.parallel.Isolated
 class FailoverEventTest {
 
     /** Long enough that a duration of zero cannot be mistaken for it. */

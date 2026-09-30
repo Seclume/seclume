@@ -39,6 +39,7 @@ import org.junit.jupiter.api.io.TempDir;
  * either way, and the real check for that is
  * {@code space.seclume.tck.NoSecretInHeap}.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class EncryptedSecretProviderTest {
 
     private static final byte[] KEY_256 = new byte[32];

@@ -46,6 +46,7 @@ import space.seclume.tck.TestHosts;
  * worthless.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class LoginFailureWipeTest {
 
     private String host;

@@ -58,6 +58,7 @@ import space.seclume.tls.TestCertificates;
  * <b>not</b> fetched once per connection, and that its expiry is reported.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class VaultSecretProviderTest {
 
     private static TestCertificates certificates;

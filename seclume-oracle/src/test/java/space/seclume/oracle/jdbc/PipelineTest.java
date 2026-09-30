@@ -45,6 +45,7 @@ import space.seclume.tck.TestHosts;
  * would prove nothing.
  */
 @Timeout(240)
+@org.junit.jupiter.api.parallel.Isolated
 class PipelineTest {
 
     private String url;

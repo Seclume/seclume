@@ -38,6 +38,7 @@ import space.seclume.internal.jdbc.XidText;
  * turning it on means a restart. So when the server refuses, the two-phase
  * test says why it is skipped instead of failing.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class LocalXaTest {
 
     private static final String DATABASE = "seclume_test";

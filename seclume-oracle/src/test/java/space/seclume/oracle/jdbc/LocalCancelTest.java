@@ -53,6 +53,7 @@ import org.junit.jupiter.api.Timeout;
  * which in a pool under load is worse than the slow query was.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalCancelTest {
 
     /** ORA-01013, "user requested cancel of current operation". */

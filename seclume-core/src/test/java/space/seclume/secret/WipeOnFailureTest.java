@@ -48,6 +48,7 @@ import space.seclume.Segments;
  * that drops the connection mid-handshake, one that never answers - live with
  * their drivers, where there is a socket to misbehave on.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class WipeOnFailureTest {
 
     private static final String SECRET = "hunter2-hunter2-hunter2-hunter2!";

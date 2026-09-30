@@ -50,6 +50,7 @@ import space.seclume.tck.TestHosts;
  * broken searcher and a clean heap look identical.
  */
 @Timeout(300)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalSensitiveColumnTest {
 
     private static final String DATABASE = "seclume_test";

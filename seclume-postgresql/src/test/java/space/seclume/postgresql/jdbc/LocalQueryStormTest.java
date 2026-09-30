@@ -40,6 +40,7 @@ import space.seclume.tck.TestHosts;
  * were in there, the report of a performance problem would be a data leak.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalQueryStormTest {
 
     private static final String DATABASE = "seclume_test";

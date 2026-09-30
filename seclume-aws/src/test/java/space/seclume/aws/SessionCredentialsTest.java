@@ -73,9 +73,15 @@ class SessionCredentialsTest {
     }
 
     @AfterAll
-    static void stop() {
+    static void stop() throws InterruptedException {
         if (aws != null) {
+            // Waited for, not only told: on Windows the process still holds
+            // aws.log open for a moment, and the temporary directory's
+            // deletion right after this failed the class one build in three.
             aws.destroy();
+            if (!aws.waitFor(10, TimeUnit.SECONDS)) {
+                aws.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
+            }
         }
     }
 

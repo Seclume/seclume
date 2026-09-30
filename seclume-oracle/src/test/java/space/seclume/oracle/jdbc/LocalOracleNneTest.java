@@ -45,6 +45,7 @@ import space.seclume.tck.NoSecretInHeap;
  * The password of {@code seclume_test} is expected in {@code .local-ora-nne-password}.
  */
 @Timeout(180)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalOracleNneTest {
 
     private static final String HOST = System.getProperty("seclume.oracle.nne.host",

@@ -54,6 +54,7 @@ import space.seclume.internal.Transport;
  * a class nobody instantiates directly.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class CertificateReloadTest {
 
     private static final String HOSTNAME = "db.example.com";
