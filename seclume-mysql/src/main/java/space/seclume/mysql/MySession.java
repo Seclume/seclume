@@ -13,6 +13,7 @@ import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.RsaPublicKey;
 import space.seclume.internal.WireBuffer;
 import space.seclume.mysql.auth.CachingSha2Password;
+import space.seclume.mysql.auth.Ed25519Login;
 import space.seclume.mysql.auth.NativePassword;
 import space.seclume.mysql.auth.ServerPublicKey;
 import space.seclume.mysql.wire.MyChannel;
@@ -886,6 +887,20 @@ public final class MySession implements AutoCloseable {
                             kerberos(principal);
                             continue;
                         }
+                        if (Ed25519Login.handles(currentPlugin)) {
+                            if (in.remaining() < Ed25519Login.SCRAMBLE_LENGTH) {
+                                throw new SQLException("the server's switch to " + currentPlugin
+                                        + " carries " + in.remaining() + " bytes of scramble, "
+                                        + "not " + Ed25519Login.SCRAMBLE_LENGTH, "08P01");
+                            }
+                            MemorySegment nonce = arena.allocate(Ed25519Login.SCRAMBLE_LENGTH);
+                            MemorySegment.copy(in.slice(in.position(),
+                                    Ed25519Login.SCRAMBLE_LENGTH), 0, nonce, 0,
+                                    Ed25519Login.SCRAMBLE_LENGTH);
+                            channel.endPacket();
+                            signatureLogin(settings, currentPlugin, nonce);
+                            continue;
+                        }
                         int available = Math.min(in.remaining(),
                                 NativePassword.SCRAMBLE_LENGTH);
                         if (available > 0) {
@@ -903,6 +918,60 @@ public final class MySession implements AutoCloseable {
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
                     "the connection broke during authentication", "08006", e);
+        }
+    }
+
+    /**
+     * MariaDB's {@code client_ed25519} and {@code parsec}: a signature with a
+     * key from the password, see {@link Ed25519Login}. For {@code parsec} an
+     * empty packet asks for the ext-salt first. The server's OK or ERR follows
+     * in the caller's loop.
+     */
+    private void signatureLogin(Settings settings, String plugin, MemorySegment scramble)
+            throws SQLException, IOException {
+        MemorySegment extSalt = null;
+        int extSaltLength = 0;
+        try (Arena arena = Arena.ofConfined()) {
+            if (Ed25519Login.PARSEC.equals(plugin)) {
+                channel.beginPacket();                  // empty: "send me the ext-salt"
+                channel.end();
+                channel.flush();
+                int first = channel.nextPacket();
+                WireBuffer in = channel.packet();
+                if (first == MyPackets.ERR) {
+                    SQLException failure = readError(in, "the server rejected the login");
+                    channel.endPacket();
+                    throw failure;
+                }
+                long at = in.position();
+                int length = channel.packetRemaining();
+                if (first == MyPackets.AUTH_MORE_DATA) {    // the server's escape byte
+                    at++;
+                    length--;
+                }
+                extSaltLength = length;
+                extSalt = arena.allocate(Math.max(1, length));
+                MemorySegment.copy(in.segment(), at, extSalt, 0, length);
+                channel.endPacket();
+            }
+            channel.nextPacketCarriesTheCredential();
+            WireBuffer out = channel.beginPacket();
+            int at = out.position();
+            out.putZeroes(Ed25519Login.PARSEC_RESPONSE_LENGTH);
+            try (SecretScope password = SecretScope.fromProvider(settings.secret())) {
+                int written = extSalt == null
+                        ? Ed25519Login.ed25519Response(password.secret(), 0, password.length(),
+                                scramble, 0, out.segment(), at)
+                        : Ed25519Login.parsecResponse(password.secret(), 0, password.length(),
+                                scramble, 0, extSalt, 0, extSaltLength, out.segment(), at);
+                out.position(at + written);
+            } catch (IllegalArgumentException refused) {
+                throw new java.sql.SQLInvalidAuthorizationSpecException(
+                        "the " + plugin + " login cannot go on: " + refused.getMessage(),
+                        "28000", refused);
+            }
+            channel.end();
+            channel.flush();
         }
     }
 

@@ -120,6 +120,24 @@ providers each have a page of their own: [TLS.md](TLS.md),
   time an empty file. This closes the classic hole where a malicious server reads client
   files.
 
+- **MariaDB's logins by signature: `client_ed25519` and `parsec`.** The server stores only a
+  public key, so a stolen `mysql.global_priv` does not let anyone log in. Nothing to set: the
+  server switches the login, and the driver answers.
+  - **`client_ed25519`** (MariaDB 10.1.22+): the server's 32 random bytes, signed with Ed25519
+    under the key MariaDB expands from the password.
+  - **`parsec`** (MariaDB 11.6+): the key's seed is derived with PBKDF2-SHA-512 from the password
+    and the salt the server sends, and the signature covers the server's scramble and one of
+    the client's own.
+  - **On native memory, on every platform:** the Ed25519 signature is seclume's own
+    (`crypto/Ed25519`), because no library could take over. MariaDB expands the password
+    itself where the standard expands a 32-byte seed, and Windows' CNG has no Ed25519 at all.
+    The expanded key, the derived seed and every intermediate value live off the heap and are
+    zeroed. Checked against RFC 8032's vectors, against the JDK's Ed25519 for 200 random keys,
+    and against the public key MariaDB documents for the password `secret`.
+  - **Shown** against MariaDB 11.8 (`seclume-mysql/proof/ed25519.sh`,
+    `LocalMariaDbEd25519Test`): both users log in, a wrong password is refused by both, and
+    the heap holds no password.
+
 ## SQL Server only
 
 - **`varchar` parameters for `varchar` columns.** Text normally goes as `nvarchar`, and a

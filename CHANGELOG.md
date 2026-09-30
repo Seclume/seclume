@@ -73,6 +73,22 @@ All notable changes to seclume are recorded here. Versions follow
   - the heap dump holds no password;
   - `required` against a default listener encrypts too.
 
+### MariaDB: `client_ed25519` and `parsec`
+
+- The two MariaDB logins by signature, where the server keeps only a public key:
+  - `client_ed25519`: the server's scramble signed under the key expanded from the password;
+  - `parsec`: an empty packet asks for the ext-salt, the seed is PBKDF2-SHA-512 of password and
+    salt, and the client's own scramble goes with the signature over both.
+- New `crypto/Ed25519`: signing only, on native memory, the one curve computed by seclume itself.
+  No provider can do `client_ed25519` (MariaDB expands the password, not a 32-byte seed), and
+  CNG has no Ed25519.
+  - Checked against RFC 8032, against the JDK for 200 random keys and messages, and against
+    MariaDB's documented key for `secret`.
+  - About 2.5 ms per signature.
+- The fake server checks both answers with the JDK (`Ed25519LoginTest`); against MariaDB 11.8
+  both users log in, a wrong password is refused and the heap is clean
+  (`LocalMariaDbEd25519Test`, `proof/ed25519.sh`).
+
 ### Kerberos on Windows: SSPI
 
 - The Kerberos logins now work on Windows through SSPI (`secur32.dll`, the Kerberos package,
