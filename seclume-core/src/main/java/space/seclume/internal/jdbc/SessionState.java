@@ -51,24 +51,74 @@ public final class SessionState {
         // admin" sets a role as surely as "set role admin" does. A missed one
         // hands the next borrower the rights or the tenant of the previous
         // (found in review, 25.09.2026).
+        // One statement unless there is a semicolon somewhere: then the text is
+        // judged whole, without working out which characters are code.
+        if (sql.indexOf(';') < 0) {
+            judge(sql);
+            if (mayContain(sql) && ANYWHERE.matcher(sql).find()) {
+                changed = true;
+            }
+            return;
+        }
         boolean[] code = CallSyntax.codeMask(sql);
         int from = 0;
         for (int i = 0; i <= sql.length(); i++) {
             if (i < sql.length() && !(code[i] && sql.charAt(i) == ';')) {
                 continue;
             }
-            String start = leading(sql.substring(from, i));
-            if (LEADING.matcher(start).find()) {
-                changed = true;
-                if (IRREVERSIBLE.matcher(start).find()) {
-                    irreversible = true;
-                }
-            }
+            judge(sql.substring(from, i));
             from = i + 1;
         }
-        if (ANYWHERE.matcher(sql).find()) {
+        if (mayContain(sql) && ANYWHERE.matcher(sql).find()) {
             changed = true;
         }
+    }
+
+    /** One statement's leading words. */
+    private void judge(String statement) {
+        String start = leading(statement);
+        if (mayLead(start) && LEADING.matcher(start).find()) {
+            changed = true;
+            if (IRREVERSIBLE.matcher(start).find()) {
+                irreversible = true;
+            }
+        }
+    }
+
+    /**
+     * The words {@link #LEADING} can begin with. A statement that begins with
+     * none of them cannot match it - most statements, {@code select} first -
+     * and is spared the expression, which was a tenth of the allocation of a
+     * {@code select 1} (JFR, 30.09.2026). Only a filter: whatever passes it is
+     * decided by the expression as before.
+     */
+    private static final String[] LEADING_WORDS = {"set", "use", "prepare", "listen", "alter",
+        "exec", "create", "declare"};
+
+    private static boolean mayLead(String start) {
+        if (start.isEmpty()) {
+            return false;
+        }
+        switch (Character.toLowerCase(start.charAt(0))) {
+            case 's', 'u', 'p', 'l', 'a', 'e', 'c', 'd' -> { }
+            default -> {
+                return false;
+            }
+        }
+        for (String word : LEADING_WORDS) {
+            if (start.regionMatches(true, 0, word, 0, word.length())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Every form {@link #ANYWHERE} looks for has an underscore, a {@code #} or
+     * an {@code @} in it; a statement without any of the three cannot match.
+     */
+    private static boolean mayContain(String sql) {
+        return sql.indexOf('_') >= 0 || sql.indexOf('#') >= 0 || sql.indexOf('@') >= 0;
     }
 
     /** Whether a statement since the last {@link #clear()} set something. */

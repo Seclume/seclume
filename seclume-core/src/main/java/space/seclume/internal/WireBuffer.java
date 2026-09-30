@@ -135,7 +135,7 @@ public final class WireBuffer implements AutoCloseable {
 
     /** Resets the buffer without leaving the content behind. */
     public void clear() {
-        segment.asSlice(0, limit == 0 ? Math.min(capacity(), position) : limit).fill((byte) 0);
+        zero(0, limit == 0 ? Math.min(capacity(), position) : limit);
         position = 0;
         limit = 0;
     }
@@ -298,9 +298,24 @@ public final class WireBuffer implements AutoCloseable {
     /** {@code count} zero bytes - filler, as the protocols require in several places. */
     public WireBuffer putZeroes(int count) {
         ensureCapacity(position + count);
-        segment.asSlice(position, count).fill((byte) 0);
+        zero(position, count);
         position += count;
         return this;
+    }
+
+    /**
+     * Zeroes {@code count} bytes from {@code at}: a short run byte by byte, a
+     * long one in bulk. A packet header is four bytes, and a slice made to
+     * fill them cost more than the fill (30.09.2026).
+     */
+    private void zero(long at, long count) {
+        if (count <= 32) {
+            for (long i = 0; i < count; i++) {
+                segment.set(ValueLayout.JAVA_BYTE, at + i, (byte) 0);
+            }
+        } else {
+            segment.asSlice(at, count).fill((byte) 0);
+        }
     }
 
     public short getShortLe() {
@@ -476,6 +491,11 @@ public final class WireBuffer implements AutoCloseable {
     /** {@code length} bytes from {@code position} as text; advances. */
     public String readString(int length) {
         require(length);
+        if (length == 0) {
+            // Most of a column description is empty (no schema, no table for
+            // "select 1"): no array and no String for nothing.
+            return "";
+        }
         byte[] bytes = new byte[length]; // seclume-allow: protocol text such as column names and error messages, never a secret
         MemorySegment.copy(segment, ValueLayout.JAVA_BYTE, position, bytes, 0, length);
         position += length;

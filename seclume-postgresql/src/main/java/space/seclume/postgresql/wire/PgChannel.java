@@ -366,6 +366,9 @@ public final class PgChannel implements AutoCloseable {
         }
         WireBuffer handedOver = in;
         in = replacement;
+        // Whatever the replacement held before is not known: the next
+        // compaction wipes all of it once.
+        wipeTo = in.capacity();
         filled = Math.max(rest, 0);
         in.position(0);
         in.limit(filled);
@@ -472,6 +475,11 @@ public final class PgChannel implements AutoCloseable {
 
     /** The receive buffer is filled up to here. */
     private int filled;
+    /**
+     * Nothing behind this has been written since the last wipe - the upper
+     * end of what a compaction has to zero.
+     */
+    private int wipeTo;
     /** While true the receive buffer is not compacted - see keepBuffer. */
     private boolean keeping;
 
@@ -520,6 +528,7 @@ public final class PgChannel implements AutoCloseable {
                 throw new IOException("the server closed the connection");
             }
             filled += read;
+            wipeTo = Math.max(wipeTo, filled);
             in.limit(filled);
         }
         in.limit(filled);
@@ -543,8 +552,13 @@ public final class PgChannel implements AutoCloseable {
         if (rest > 0) {
             java.lang.foreign.MemorySegment.copy(in.segment(), position, in.segment(), 0, rest);
         }
-        // The area that became free may have held payload.
-        in.segment().asSlice(rest, in.capacity() - rest).fill((byte) 0);
+        // The area that became free may have held payload - up to where
+        // anything was ever written, not the whole buffer after every answer.
+        int dirty = Math.max(wipeTo, filled);
+        if (dirty > rest) {
+            in.segment().asSlice(rest, dirty - rest).fill((byte) 0);
+        }
+        wipeTo = rest;
         in.position(0);
         filled = rest;
         in.limit(filled);
