@@ -79,6 +79,14 @@ public final class NsChannel implements AutoCloseable {
      * a mistake here.
      */
     private static final byte CONNECT_FLAGS = 0x08;
+    /** The same with the advanced negotiation offered - see {@link #negotiate}. */
+    private static final byte CONNECT_FLAGS_NEGOTIATING = 0x01;
+    private byte connectFlags = CONNECT_FLAGS;
+    private int acceptFlags0;
+    private int acceptFlags1;
+    /** Native Network Encryption, once negotiated; null without it. */
+    private NativeEncryption nativeEncryption;
+    private WireBuffer sealed;
     private static final int CROSS_FACILITY = 0x0bb3;
     private static final int LARGE_SDU = 0x20000020;
 
@@ -222,8 +230,8 @@ public final class NsChannel implements AutoCloseable {
         out.putShort((short) description.length);
         out.putShort((short) CONNECT_DATA_OFFSET);
         out.putInt(MAX_RECEIVABLE_DATA);
-        out.putByte(CONNECT_FLAGS);
-        out.putByte(CONNECT_FLAGS);
+        out.putByte(connectFlags);
+        out.putByte(connectFlags);
         out.putShort((short) 0);                       // Cross-Facility 0
         out.putShort((short) CROSS_FACILITY);
         // The rest up to the start of the description is filler, with one
@@ -332,6 +340,9 @@ public final class NsChannel implements AutoCloseable {
             sawReset |= markerType() == NsPacket.MARKER_RESET;
             if (sawReset) {
                 sendMarker(NsPacket.MARKER_RESET);
+                if (nativeEncryption != null) {
+                    nativeEncryption.reset();       // both ends derive the checksum keys anew
+                }
                 sawReset = false;
             }
             current = nextPacket();
@@ -607,12 +618,57 @@ public final class NsChannel implements AutoCloseable {
             writingCredential = false;
         }
         int total = out.position();
+        if (nativeEncryption != null) {
+            sendSealed(total);
+            return;
+        }
         if (total <= negotiatedSdu) {
             writeHeader(total, NsPacket.TYPE_DATA, 0);
             flush();
             return;
         }
         sendSplit(total);
+    }
+
+    /**
+     * Sends the message in {@code out} under Native Network Encryption: in
+     * packets small enough that each, sealed, stays within the SDU - the
+     * checksum and the padding make it longer - each sealed on its own, the
+     * data flags in the clear as the protocol has them.
+     */
+    private void sendSealed(int total) throws IOException {
+        final int prefix = NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE;
+        int room = negotiatedSdu - prefix - nativeEncryption.overhead();
+        if (sealed == null) {
+            sealed = new WireBuffer(negotiatedSdu + 64);
+        }
+        sealed.ensureCapacity(negotiatedSdu + 64);
+        int flags = total >= prefix ? readOutBigEndian(NsPacket.HEADER_SIZE, 2) : 0;
+        int at = prefix;
+        do {
+            int length = Math.min(room, total - at);
+            int size = prefix + nativeEncryption.seal(out.segment(), at, length,
+                    sealed.segment(), prefix);
+            writeHeaderInto(sealed, 0, size, NsPacket.TYPE_DATA, 0);
+            sealed.putByteAt(NsPacket.HEADER_SIZE, (byte) (flags >>> 8));
+            sealed.putByteAt(NsPacket.HEADER_SIZE + 1, (byte) flags);
+            ByteBuffer view = sealed.view();
+            view.clear().position(0).limit(size);
+            writeAll(view);
+            at += length;
+        } while (at < total);
+        sealed.segment().asSlice(0, Math.min(sealed.capacity(), negotiatedSdu + 64))
+                .fill((byte) 0);
+        out.segment().asSlice(0, total).fill((byte) 0);
+        out.clear();
+    }
+
+    private int readOutBigEndian(int at, int length) {
+        int value = 0;
+        for (int i = 0; i < length; i++) {
+            value = (value << 8) | (out.getByte(at + i) & 0xff);
+        }
+        return value;
     }
 
     /**
@@ -652,21 +708,26 @@ public final class NsChannel implements AutoCloseable {
 
     /** The same, for a packet that does not start at the beginning of the buffer. */
     private void writeHeaderAt(int offset, int length, int type, int flags) {
-        if (NsPacket.hasLargeLength(protocolVersion)) {
-            putBigEndian(offset, length, 4);
-        } else {
-            putBigEndian(offset, length, 2);
-            putBigEndian(offset + 2, 0, 2);
-        }
-        out.putByteAt(offset + 4, (byte) type);
-        out.putByteAt(offset + 5, (byte) flags);
-        out.putByteAt(offset + 6, (byte) 0);
-        out.putByteAt(offset + 7, (byte) 0);
+        writeHeaderInto(out, offset, length, type, flags);
     }
 
-    private void putBigEndian(int at, int value, int length) {
+    /** The same, into any buffer - the sealed packets of native encryption have their own. */
+    private void writeHeaderInto(WireBuffer target, int offset, int length, int type, int flags) {
+        if (NsPacket.hasLargeLength(protocolVersion)) {
+            putBigEndian(target, offset, length, 4);
+        } else {
+            putBigEndian(target, offset, length, 2);
+            putBigEndian(target, offset + 2, 0, 2);
+        }
+        target.putByteAt(offset + 4, (byte) type);
+        target.putByteAt(offset + 5, (byte) flags);
+        target.putByteAt(offset + 6, (byte) 0);
+        target.putByteAt(offset + 7, (byte) 0);
+    }
+
+    private static void putBigEndian(WireBuffer target, int at, int value, int length) {
         for (int i = 0; i < length; i++) {
-            out.putByteAt(at + i, (byte) (value >>> (8 * (length - 1 - i))));
+            target.putByteAt(at + i, (byte) (value >>> (8 * (length - 1 - i))));
         }
     }
 
@@ -763,7 +824,14 @@ public final class NsChannel implements AutoCloseable {
 
         if (packetType == NsPacket.TYPE_DATA) {
             dataFlags = readBigEndian(NsPacket.HEADER_SIZE, 2);
-            in.position(NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE);
+            int contents = NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE;
+            if (nativeEncryption != null && length > contents) {
+                // Opened in place; the packet's end on the wire stays where
+                // it was, for whatever the socket delivered behind it.
+                int plain = nativeEncryption.open(in.segment(), contents, length - contents);
+                in.limit(contents + plain);
+            }
+            in.position(contents);
             if ((dataFlags & NsPacket.DATA_FLAGS_END_OF_RESPONSE) != 0) {
                 // The answer is complete: from here until the next request
                 // nobody is waiting, and a break would have no reader for the
@@ -855,6 +923,85 @@ public final class NsChannel implements AutoCloseable {
         int sdu = readBigEndian(NsPacket.HEADER_SIZE + 4, 2);
         this.protocolVersion = version;
         this.negotiatedSdu = sdu > 0 ? sdu : SDU;
+        if (packetEnd > 23) {
+            acceptFlags0 = in.getByte(22) & 0xff;
+            acceptFlags1 = in.getByte(23) & 0xff;
+        }
+        if (TRACE) {
+            System.err.println("[ns] accept version=" + version + " sdu=" + sdu
+                    + " flags=0x" + Integer.toHexString(acceptFlags0) + "/0x"
+                    + Integer.toHexString(acceptFlags1));
+        }
+    }
+
+    /**
+     * Whether the ACCEPT says the server wants the advanced negotiation - it
+     * then hangs up on TTC. Only meaningful after {@link #readAccept}.
+     */
+    public boolean serverWantsNegotiation() {
+        return AdvancedNegotiation.wanted(acceptFlags0, acceptFlags1);
+    }
+
+    /**
+     * Offers the advanced negotiation in the CONNECT - before
+     * {@link #sendConnect}. Without it the server never starts one; with it
+     * the server may, and then waits for it before TTC.
+     */
+    public void offerNegotiation() {
+        connectFlags = CONNECT_FLAGS_NEGOTIATING;
+    }
+
+    /**
+     * After the ACCEPT: runs the advanced negotiation when the server asks for
+     * it, and switches Native Network Encryption on when it was agreed.
+     *
+     * @return what the connection now runs under, e.g. {@code AES256/SHA256},
+     *         or null without encryption
+     */
+    public String negotiate(AdvancedNegotiation.Mode mode) throws IOException {
+        return negotiate(mode, null);
+    }
+
+    /**
+     * The same, with a login by the operating system when {@code authService}
+     * is {@code KERBEROS5} or {@code NTS}: it runs inside the negotiation, so
+     * the negotiation is required then, whatever {@code mode} says about
+     * encryption.
+     */
+    public String negotiate(AdvancedNegotiation.Mode mode, String authService)
+            throws IOException {
+        boolean wanted = AdvancedNegotiation.wanted(acceptFlags0, acceptFlags1);
+        if (authService != null) {
+            if (!wanted) {
+                throw new IOException("the server does not negotiate, and Oracle's " + authService
+                        + " login runs inside the negotiation - is "
+                        + "SQLNET.AUTHENTICATION_SERVICES set to " + authService + " on it?");
+            }
+            nativeEncryption = AdvancedNegotiation.negotiate(this, mode, authService);
+            return nativeEncryption == null ? null : nativeEncryption.description();
+        }
+        if (mode == AdvancedNegotiation.Mode.OFF) {
+            if (wanted) {
+                throw new IOException("the server requires Oracle native network encryption "
+                        + "(SQLNET.ENCRYPTION_SERVER or CRYPTO_CHECKSUM_SERVER), and "
+                        + "nativeEncryption=off - leave the option out, or set it to required");
+            }
+            return null;
+        }
+        if (!wanted) {
+            if (mode == AdvancedNegotiation.Mode.REQUIRED) {
+                throw new IOException("the server does not negotiate native encryption, and "
+                        + "nativeEncryption=required");
+            }
+            return null;
+        }
+        nativeEncryption = AdvancedNegotiation.negotiate(this, mode, null);
+        return nativeEncryption == null ? null : nativeEncryption.description();
+    }
+
+    /** What native encryption this connection runs under, or null. */
+    public String nativeEncryption() {
+        return nativeEncryption == null ? null : nativeEncryption.description();
     }
 
     /**
@@ -953,6 +1100,12 @@ public final class NsChannel implements AutoCloseable {
         return channel;
     }
 
+    /** This end's address on the connection, or null when the transport cannot say. */
+    java.net.InetAddress localAddress() {
+        return channel instanceof space.seclume.internal.SocketTransport socket
+                ? socket.localAddress() : null;
+    }
+
     /**
      * Whether nothing is half-written and no packet is half-read.
      *
@@ -1044,6 +1197,12 @@ public final class NsChannel implements AutoCloseable {
             // native memory this layer allocated, so skipping it would leak
             // an arena per connection.
             tls.close();
+        }
+        if (nativeEncryption != null) {
+            nativeEncryption.close();
+        }
+        if (sealed != null) {
+            sealed.close();
         }
         // The transport swallows its own close error - see Transport#close.
         channel.close();

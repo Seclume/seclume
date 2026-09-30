@@ -41,8 +41,8 @@ checked against the server by `SqlServerCollationTest` on every run.
 
 ## Oracle
 
-Oracle is the exception: **there is no published specification** of TNS/NS or TTC. Four
-sources were used, and which one supplied which field is documented — source by source — in
+Oracle is the exception: **there is no published specification** of TNS/NS or TTC. The
+sources below were used, and which one supplied which field is documented — source by source — in
 the project's internal notes.
 
 | Source | What it is | What it supplied |
@@ -52,6 +52,9 @@ the project's internal notes.
 | **A published 2012 analysis** of CVE-2012-3137 | a public mailing-list post describing the method in prose | Confirms the 11g key derivation and AES-192-CBC with a zero IV |
 | **Observation of a running server** | our own instance of Oracle Database Free, which we license | The fixed fields of the CONNECT packet, and several places where the derived values were wrong; the wire form of `TIMESTAMP WITH TIME ZONE` (UTC fields, offset or region number), of `INTERVAL`, `UROWID` and `BFILE`, read from dumps of our own rows |
 | **Observation of `python-oracledb` on the wire** | its own debug output (`PYO_DEBUG_PACKETS=1`) against that instance — bytes, not code | The shape of the close-cursors piggyback: the message type, the function number, and that the piggyback carries the lower call number of the pair |
+| **`go-ora`** | an independent Go driver for Oracle, **MIT licence** ([NOTICE](NOTICE), `licenses/go-ora-MIT.txt`) | Native Network Encryption: the advanced negotiation (message and field layout, service numbers, algorithm identifiers), the Diffie-Hellman exchange, the key and keystream derivation, and the layout of an encrypted packet. The Kerberos exchange inside the negotiation, the framing of the NTS (NTLM) messages in it, and the login's second stage without a password. The implementation here follows it, is credited accordingly, and runs on native memory with its own arithmetic |
+| **Observation of our own Oracle Free** with `SQLNET.ENCRYPTION_SERVER` and `SQLNET.CRYPTO_CHECKSUM_SERVER` set to REQUIRED | the ACCEPT flags and the server's `v$session_connect_info` | Which ACCEPT flags ask for the negotiation, that a listener at its defaults agrees when the client insists, and that each session really ran under AES256 and SHA256 |
+| **Observation of our own Oracle Free for Windows** | the server's own account of each NTS session (`AUTHENTICATION_METHOD`, `v$session_connect_info`) | That the NTS messages are accepted together with the Diffie-Hellman answer in one message, and that the user is the Windows account with `OS_AUTHENT_PREFIX` |
 
 **The method, and its limits, stated plainly.** Descriptions of behaviour were read; **no
 source code was taken**. The implementation works on `MemorySegment` rather than on Python

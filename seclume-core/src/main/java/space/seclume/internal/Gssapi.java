@@ -63,6 +63,14 @@ public final class Gssapi {
     }
 
     /**
+     * Windows only: NTLM through SSPI with the logon session's credentials,
+     * for Oracle's NTS. No mutual authentication - see {@link Sspi}.
+     */
+    public static Context initiateNtlm(String target) {
+        return Sspi.initiateNtlm(target);
+    }
+
+    /**
      * A security context for a Kerberos principal written out in full -
      * {@code mariadb/db.example@EXAMPLE.COM} - which is how MariaDB names
      * itself to the client.

@@ -10,11 +10,13 @@ import space.seclume.oracle.net.OracleColumn;
 import space.seclume.oracle.net.NsPacket;
 import space.seclume.oracle.net.TtcAuth;
 import space.seclume.oracle.net.TtcClose;
+import space.seclume.oracle.net.TtcDataTypes;
 import space.seclume.oracle.net.TtcFastAuth;
 import space.seclume.oracle.net.TtcLob;
 import space.seclume.oracle.net.TtcLogin;
 import space.seclume.oracle.net.TtcMessage;
 import space.seclume.oracle.net.TtcParameters;
+import space.seclume.oracle.net.TtcProtocol;
 import space.seclume.oracle.net.TtcFetch;
 import space.seclume.oracle.net.TtcQuery;
 import space.seclume.oracle.net.TtcResult;
@@ -72,7 +74,19 @@ public final class OracleSession implements AutoCloseable {
                            SecretProvider secret, int connectTimeoutMillis, HostList hosts,
                            ResultLimit resultLimit, TlsMode tls,
                            space.seclume.internal.jdbc.TlsStack tlsStack,
-                           space.seclume.tls.ClientIdentity identity) {
+                           space.seclume.tls.ClientIdentity identity,
+                           space.seclume.oracle.net.AdvancedNegotiation.Mode nativeEncryption) {
+
+        /** Oracle's native network encryption as the server asks - see AdvancedNegotiation.Mode. */
+        public Settings(String host, int port, String service, String user,
+                        SecretProvider secret, int connectTimeoutMillis, HostList hosts,
+                        ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity) {
+            this(host, port, service, user, secret, connectTimeoutMillis, hosts, resultLimit,
+                    tls, tlsStack, identity,
+                    space.seclume.oracle.net.AdvancedNegotiation.Mode.ACCEPTED);
+        }
 
         /**
          * Without a client certificate - what almost every connection is.
@@ -130,7 +144,8 @@ public final class OracleSession implements AutoCloseable {
         /** The same settings pointed at another listener of the list. */
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), service, user, secret,
-                    connectTimeoutMillis, hosts, resultLimit, tls, tlsStack, identity);
+                    connectTimeoutMillis, hosts, resultLimit, tls, tlsStack, identity,
+                    nativeEncryption);
         }
 
         /** The {@code (DESCRIPTION=...)} the listener wants. */
@@ -201,6 +216,20 @@ public final class OracleSession implements AutoCloseable {
     }
 
     /**
+     * Native Network Encryption's checksum keystream runs on from packet to
+     * packet inside this process; a successor could not continue it, and the
+     * server would take its first packet for a forgery.
+     */
+    private void refuseUnderNativeEncryption() throws SQLException {
+        if (channel.nativeEncryption() != null) {
+            throw new SQLException("this session runs under Oracle native network encryption "
+                    + "(" + channel.nativeEncryption() + "), whose keystream cannot be handed to "
+                    + "another session - use TCPS on seclume's own TLS stack for a session that "
+                    + "moves", "0A000");
+        }
+    }
+
+    /**
      * Hands the authenticated stream over and finishes this session object.
      *
      * <p>The fourth of four, and the two usual refusals - not mid-call, and
@@ -222,6 +251,7 @@ public final class OracleSession implements AutoCloseable {
                     + "handed to another session. Open it on seclume's own TLS stack, or "
                     + "terminate TLS where the login happens", "0A000");
         }
+        refuseUnderNativeEncryption();
         if (openCursor != 0 || !cursors.isEmpty()) {
             throw new SQLException("cursors are open on this session - close them before "
                     + "handing the stream over, or the server keeps them until it ends",
@@ -254,6 +284,7 @@ public final class OracleSession implements AutoCloseable {
             throw new SQLException("this session is encrypted on the JDK's TLS, whose keys "
                     + "cannot leave the SSLEngine that holds them", "0A000");
         }
+        refuseUnderNativeEncryption();
         if (openCursor != 0 || !cursors.isEmpty()) {
             throw new SQLException("cursors are open on this session - close them first",
                     "25000");
@@ -599,6 +630,10 @@ public final class OracleSession implements AutoCloseable {
             }
         }
         try {
+            OracleOsLogin osLogin = OracleOsLogin.of(settings.secret());
+            if (osLogin != null || settings.nativeEncryption().offered()) {
+                channel.offerNegotiation();
+            }
             int type = channel.sendConnect(settings.connectString());
             if (type == NsPacket.TYPE_RESEND) {
                 // Over TCPS this is the ordinary course of events, not a
@@ -629,6 +664,21 @@ public final class OracleSession implements AutoCloseable {
                         + " instead of ACCEPT", "08001");
             }
             channel.readAccept();
+            try {
+                channel.negotiate(settings.nativeEncryption(),
+                        osLogin == null ? null : osLogin.service());
+            } catch (IOException e) {
+                channel.close();
+                if (osLogin != null) {
+                    throw new java.sql.SQLInvalidAuthorizationSpecException("the "
+                            + (osLogin == OracleOsLogin.KERBEROS ? "Kerberos" : "Windows (NTS)")
+                            + " login to " + settings.host() + ":" + settings.port() + " failed: "
+                            + e.getMessage(), "28000", e);
+                }
+                throw new SQLNonTransientConnectionException("Oracle native network encryption "
+                        + "with " + settings.host() + ":" + settings.port() + " failed: "
+                        + e.getMessage(), "08001", e);
+            }
 
             // From here on it is the login alone - the listener has accepted
             // and TLS, where there is any, is up. Timed apart from the
@@ -639,18 +689,28 @@ public final class OracleSession implements AutoCloseable {
                     space.seclume.jfr.Observed.beginLogin();
             boolean loggedIn = false;
             try {
-                TtcAuth.Challenge challenge = TtcFastAuth.open(channel, "seclume",
-                        settings.user());
-                channel.nextPacketCarriesTheCredential();
-                TtcLogin.phaseTwo(channel, settings.user(), settings.secret(), challenge,
-                        settings.connectString());
+                if (osLogin != null) {
+                    // The negotiation authenticated already: protocol and data
+                    // types on their own, then the second stage without a user.
+                    new TtcProtocol().negotiate(channel);
+                    new TtcDataTypes().negotiate(channel);
+                    TtcLogin.phaseTwoExternal(channel, settings.connectString());
+                } else {
+                    TtcAuth.Challenge challenge = TtcFastAuth.open(channel, "seclume",
+                            settings.user());
+                    channel.nextPacketCarriesTheCredential();
+                    TtcLogin.phaseTwo(channel, settings.user(), settings.secret(), challenge,
+                            settings.connectString());
+                }
                 OracleSession session = new OracleSession(channel);
                 session.setResultLimit(settings.resultLimit());
                 loggedIn = true;
                 return session;
             } finally {
                 space.seclume.jfr.Observed.endLogin(event, "oracle",
-                        settings.host() + ":" + settings.port(), "o5logon", loggedIn);
+                        settings.host() + ":" + settings.port(),
+                        osLogin == null ? "o5logon" : osLogin.name().toLowerCase(java.util.Locale.ROOT),
+                        loggedIn);
             }
         } catch (space.seclume.internal.WireBuffer.Truncated e) {
             // Before the RuntimeException clause, and that order is the fix:

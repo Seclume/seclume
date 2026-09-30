@@ -178,6 +178,34 @@ public final class TtcLogin {
     }
 
     /**
+     * The second stage for a login the negotiation already authenticated -
+     * Kerberos: no user, no password, no session key; the server knows who
+     * this is from the ticket.
+     */
+    public static void phaseTwoExternal(NsChannel channel, String connectString)
+            throws IOException, SQLException {
+        WireBuffer out = channel.beginData();
+        out.putByte((byte) TtcMessage.TYPE_FUNCTION);
+        out.putByte((byte) TtcMessage.FUNC_AUTH_PHASE_TWO);
+        TtcParameters.putNumberWide(out, 0, 2);            // no user
+        TtcParameters.putNumber(out, 0);
+        TtcParameters.putNumber(out, AUTH_MODE_EXTERNAL);
+        out.putByte((byte) 1);
+        TtcParameters.putNumber(out, 5);
+        TtcParameters.putNumber(out, 1);
+        TtcParameters.putPair(out, "SESSION_CLIENT_CHARSET", CHARSET, 0);
+        TtcParameters.putPair(out, "SESSION_CLIENT_DRIVER_NAME", DRIVER_NAME, 0);
+        TtcParameters.putPair(out, "SESSION_CLIENT_VERSION", DRIVER_VERSION, 0);
+        TtcParameters.putPair(out, "AUTH_ALTER_SESSION", alterTimeZone(), 1);
+        TtcParameters.putPair(out, "AUTH_CONNECT_STRING", connectString, 0);
+        channel.sendData();
+        readAnswer(channel);
+    }
+
+    /** The login mode without a user and password. */
+    private static final int AUTH_MODE_EXTERNAL = 0x0001;
+
+    /**
      * A round count the server asked for, before it reaches a key derivation.
      *
      * <p>Checked here rather than inside the derivation because this is the
