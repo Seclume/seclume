@@ -1,12 +1,25 @@
 import tempfile
 import unittest
 from pathlib import Path
-import xml.etree.ElementTree as ET
+# Only constructs and serializes synthetic test fixtures; never parses input.
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 
-from require_pool_tests import require
+from require_pool_tests import read_report, require
 
 
 class RequiredPoolTestsTest(unittest.TestCase):
+    def test_dtd_and_entity_input_is_rejected_before_parsing(self):
+        for document in (
+            '<!DOCTYPE testsuite [<!ENTITY x SYSTEM "file:///etc/passwd">]><testsuite>&x;</testsuite>',
+            '<!ENTITY x "expansion"><testsuite/>',
+            '<\x00!DOCTYPE testsuite><testsuite/>',
+        ):
+            with self.subTest(document=document), tempfile.TemporaryDirectory() as directory:
+                report = Path(directory) / "report.xml"
+                report.write_text(document, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "DTD/entity"):
+                    read_report(report)
+
     def test_missing_report_is_not_a_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "missing report"):

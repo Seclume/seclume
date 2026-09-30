@@ -1,7 +1,15 @@
 """Fail CI if its database's pool regressions are absent, skipped or failed."""
 import sys
 from pathlib import Path
-import xml.etree.ElementTree as ET
+# UTF-8-only reports, with DTDs/entities rejected before parsing in read_report.
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
+
+
+def read_report(report):
+    document = report.read_text(encoding="utf-8")
+    if "\x00" in document or "<!DOCTYPE" in document.upper() or "<!ENTITY" in document.upper():
+        raise ValueError(f"DTD/entity declarations are not allowed in {report}")
+    return ET.fromstring(document)
 
 
 def require(database, reports):
@@ -29,7 +37,7 @@ def require(database, reports):
         if not report.exists():
             errors.append(f"missing report: {report}")
             continue
-        cases = {case.get("name"): case for case in ET.parse(report).iter("testcase")}
+        cases = {case.get("name"): case for case in read_report(report).iter("testcase")}
         for name in names:
             case = cases.get(name)
             if case is None:
