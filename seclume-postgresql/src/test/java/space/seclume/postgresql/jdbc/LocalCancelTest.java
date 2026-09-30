@@ -49,6 +49,7 @@ import space.seclume.tck.TestHosts;
  * which in a pool under load is worse than the slow query was.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalCancelTest {
 
     /** PostgreSQL's own code for "cancelled because somebody asked". */

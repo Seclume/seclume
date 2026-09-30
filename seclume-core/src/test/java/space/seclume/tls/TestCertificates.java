@@ -153,7 +153,46 @@ public final class TestCertificates implements AutoCloseable {
         }
     }
 
+    /**
+     * The JDK's own keytool, called in this JVM when the build exports it
+     * ({@code --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED}):
+     * the same tool and the same files, without a JVM start per step - some
+     * two hundred of them in this module. Otherwise, a process as before.
+     */
+    private static final java.lang.reflect.Method IN_PROCESS = inProcess();
+
+    private static java.lang.reflect.Method inProcess() {
+        try {
+            Class<?> main = Class.forName("sun.security.tools.keytool.Main");
+            java.lang.reflect.Method run = main.getMethod("run", String[].class,
+                    java.io.PrintStream.class);
+            run.invoke(main.getConstructor().newInstance(), new String[] {"-help"},
+                    new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+            return run;
+        } catch (ReflectiveOperationException | RuntimeException notExported) {
+            return null;
+        }
+    }
+
     private static void run(List<String> command) throws Exception {
+        if (IN_PROCESS != null) {
+            String[] arguments = command.subList(1, command.size()).toArray(String[]::new);
+            int exit;
+            // One at a time: keytool was written as a program, not as a
+            // library, and nothing promises its statics are safe to share.
+            synchronized (IN_PROCESS) {
+                try {
+                    exit = (int) IN_PROCESS.invoke(IN_PROCESS.getDeclaringClass()
+                            .getConstructor().newInstance(), arguments,
+                            new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+                } catch (java.lang.reflect.InvocationTargetException failed) {
+                    throw new AssertionError("keytool failed: " + String.join(" ", command),
+                            failed.getCause());
+                }
+            }
+            assertTrue(exit == 0, "keytool failed with " + exit + ": " + String.join(" ", command));
+            return;
+        }
         Process process = new ProcessBuilder(command)
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)

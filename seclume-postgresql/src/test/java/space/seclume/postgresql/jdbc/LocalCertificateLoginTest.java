@@ -39,6 +39,7 @@ import space.seclume.tls.ClientIdentities;
  * three ways the certificate could be wrong has to be refused.
  */
 @Timeout(60)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalCertificateLoginTest {
 
     private static TestHosts.Server server;

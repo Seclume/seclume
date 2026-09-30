@@ -12,6 +12,33 @@ tables no other module touches, the fake servers take ephemeral ports, and the t
 at sessions look only at their own. `-T 1` restores the serial build for a run that has to be
 read in order.
 
+Inside `seclume-core`, `seclume-postgresql`, `seclume-oracle` and `seclume-diff` the test
+**classes** run side by side as well (`junit-platform.properties`); the methods of one class stay
+in order. A class that touches something global - the `SecretScope` counters, system properties,
+security providers, JFR, the clock, a heap dump - carries `@Isolated` and runs with nothing
+beside it: a heap dump taken while another class holds a control password would find that
+password. In `seclume-oracle` so does every class that calls `OracleTestSchema.clean`, which
+drops the other classes' tables too. A new test of either kind needs the annotation.
+`seclume-pool` keeps its classes in order, because most of them measure time; only
+`IdleLimitTest`, which waits for the servers' idle limits, runs beside them, its two waits at
+once. The test certificates come from the JDK's own keytool called inside the test JVM
+(`TestCertificates`, `--add-exports` in the root POM) instead of a process per step.
+
+Together, 30.09.2026: `seclume-core` 86 -> 26 s, `seclume-postgresql` 54 -> 32 s,
+`seclume-pool` 35 -> 20 s, `seclume-oracle` 34 -> 25 s, `seclume-mail` 88 -> 17 s, with the
+same tests and the same results. The whole build went from 235 to 133-153 s. The rest of it:
+
+- the modules build side by side, so what counts is the longest chain, not the sum - found by
+  timestamping the build (`-Dorg.slf4j.simpleLogger.showDateTime=true`) and reading when each
+  module starts its tests and when it is installed. `seclume-core` runs alone at the start, so
+  it gets twelve classes at a time;
+- `seclume-mail` was on that chain at 88 s, nearly all of it reverse DNS lookups (see the
+  CHANGELOG), and then `seclume-diff`, where `ApiSurfaceTest` made two logins per JDBC method -
+  Oracle's listener takes them one at a time. A Connection method still gets a login of its
+  own; the objects made from a connection share one per driver, handed on only after a check
+  that it is as a login leaves it. 49 -> 9 s, the verdicts on all 656 methods the same;
+- the 3 905 flights of `ServerFlightOrderTest` run side by side.
+
 ## What runs without anything installed
 
 The cryptography against the published vectors, the wire protocols against known answers, the
@@ -800,13 +827,27 @@ podman exec seclume-crdb /cockroach/cockroach sql --certs-dir=/certs --host=loca
       grant all on database seclume_test to seclume_test;"
 ```
 
-YugabyteDB needs one flag, and its YSQL listens on the container's own address rather than on
-loopback — which is what `hostname -i` is for:
+PostgreSQL 17's direct TLS (`LocalDirectTlsTest`) needs a PostgreSQL 17 or later with TLS
+beside the ordinary one, which stays a 16 so the test can also show that a server before 17
+refuses the option. The same certificates and the same password as the TLS fixture:
 
 ```
-podman run -d --name seclume-yb -p 5434:5433 yugabytedb/yugabyte:2024.1.3.0-b105   bin/yugabyted start --daemon=false --ysql_enable_auth=true
-ip=$(podman exec seclume-yb hostname -i)
-podman exec -e PGPASSWORD=yugabyte seclume-yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte   -c "create user seclume_test with password '…'"   -c "create database seclume_test owner seclume_test"
+podman run -d --name seclume-pg17 -p 5438:5432 --env-file <file with POSTGRES_USER=seclume_test,
+  POSTGRES_DB=seclume_test, POSTGRES_PASSWORD> -v <certificate directory>:/certs:ro,z postgres:17 \
+  -c ssl=on -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+```
+
+and `seclume.pg17.host` / `seclume.pg17.port=5438` in `.local-test.properties`.
+
+YugabyteDB needs one flag, and its YSQL listens on the container's own address rather than on
+loopback. Give the container a **fixed address**: yugabyted writes the address into its data
+on the first start, and after a restart with a new one it cannot bind, exits with 137 and says
+so only in its own log (`/root/var/logs/yugabyted.log`). That went unnoticed for a day on
+30.09.2026, while the YugabyteDB tests skipped themselves.
+
+```
+podman run -d --name seclume-yb --ip 10.88.200.50 -p 5434:5433 yugabytedb/yugabyte:2024.1.3.0-b105   bin/yugabyted start --daemon=false --ysql_enable_auth=true
+podman exec -e PGPASSWORD=yugabyte seclume-yb bin/ysqlsh -h 10.88.200.50 -U yugabyte -d yugabyte   -c "create user seclume_test with password '…'"   -c "create database seclume_test owner seclume_test"
 ```
 
 ## CI

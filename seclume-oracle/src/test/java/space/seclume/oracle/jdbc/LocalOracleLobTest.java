@@ -42,6 +42,7 @@ import space.seclume.RoundTrips;
  * <p>Skipped, not failed, when there is no listener: the container is not
  * always up.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class LocalOracleLobTest {
 
     private static final String HOST =

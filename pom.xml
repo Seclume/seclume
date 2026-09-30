@@ -158,7 +158,10 @@
             <!-- Empty until somebody sets it. It passes a system property
                  into the test JVM without touching this POM - for example
                  -Dseclume.test.argLine=-Dseclume.oracle.trace=true -->
-            <argLine>--enable-native-access=ALL-UNNAMED ${seclume.test.argLine}</argLine>
+            <!-- The keytool export lets the test certificates be made by the
+                 JDK's keytool inside the test JVM instead of a process per
+                 step (TestCertificates) - the same tool, the same files. -->
+            <argLine>--enable-native-access=ALL-UNNAMED --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED ${seclume.test.argLine}</argLine>
           </configuration>
         </plugin>
         <plugin>

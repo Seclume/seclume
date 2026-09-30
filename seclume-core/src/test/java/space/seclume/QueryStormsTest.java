@@ -24,6 +24,7 @@ import space.seclume.jfr.StatementListener;
  * finds nothing at all, which is the same outcome as never having written it
  * and costs more.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class QueryStormsTest {
 
     @AfterEach

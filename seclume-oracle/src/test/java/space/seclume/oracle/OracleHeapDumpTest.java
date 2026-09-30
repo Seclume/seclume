@@ -48,6 +48,7 @@ import space.seclume.tck.TestHosts;
  * comparing bytes itself.
  */
 @Timeout(300)
+@org.junit.jupiter.api.parallel.Isolated
 class OracleHeapDumpTest {
 
     @TempDir

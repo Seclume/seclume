@@ -33,6 +33,7 @@ import space.seclume.tck.TestHosts;
 
 /** {@code COPY FROM STDIN} and {@code COPY TO STDOUT} against a real server. */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalCopyTest {
 
     private static final int ROWS = 100_000;

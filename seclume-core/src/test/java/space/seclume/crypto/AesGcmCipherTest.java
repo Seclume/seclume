@@ -19,6 +19,7 @@ import space.seclume.internal.Platform;
  * one, agreeing byte for byte with the constant-time Java version on every
  * shape of input, and with NIST's test vector.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class AesGcmCipherTest {
 
     private static final HexFormat HEX = HexFormat.of();

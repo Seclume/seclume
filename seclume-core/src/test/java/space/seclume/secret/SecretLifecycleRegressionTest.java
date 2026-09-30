@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Timeout;
  * never a password.
  */
 @Timeout(60)
+@org.junit.jupiter.api.parallel.Isolated
 class SecretLifecycleRegressionTest {
 
     private static final String EVENT = "space.seclume.CredentialRotation";

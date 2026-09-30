@@ -43,6 +43,7 @@ import space.seclume.tck.TestHosts;
  * exception messages that used to carry the SQL text.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalFlightRecorderTest {
 
     private static final String DATABASE = "seclume_test";

@@ -68,7 +68,12 @@ class GrpcTest {
             channel.shutdownNow().awaitTermination(10, TimeUnit.SECONDS);
         }
         if (server != null) {
+            // Waited for: on Windows the process holds its log in the
+            // temporary directory open, and that is deleted right after.
             server.destroy();
+            if (!server.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                server.destroyForcibly().waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            }
         }
     }
 

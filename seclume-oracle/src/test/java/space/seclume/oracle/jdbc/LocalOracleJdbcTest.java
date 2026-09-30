@@ -45,6 +45,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The URL carries no password, only where to find one.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class LocalOracleJdbcTest {
 
     private static final String HOST =

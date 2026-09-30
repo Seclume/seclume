@@ -17,6 +17,7 @@ import space.seclume.internal.WireBuffer;
  * replace: the same bytes for every decimal, the same fields for every
  * timestamp.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class BindFastPathTest {
 
     @Test

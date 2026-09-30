@@ -20,6 +20,7 @@ import space.seclume.internal.jdbc.TlsStack;
  * 28.09.2026). JSSE stays available, by name, for a server that cannot do
  * TLS 1.3 with P-256.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class SecretFetchTlsStackTest {
 
     @AfterEach

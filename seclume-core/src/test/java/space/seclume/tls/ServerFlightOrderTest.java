@@ -223,10 +223,12 @@ class ServerFlightOrderTest {
      */
     @Test
     void ofEveryFlightUpToFiveMessagesOnlyTheTwoLegalOnesAreAccepted() {
-        List<List<Step>> accepted = new ArrayList<>();
+        List<List<Step>> accepted = java.util.Collections.synchronizedList(new ArrayList<>());
         List<List<Step>> all = new ArrayList<>();
         sequences(new ArrayList<>(), 5, all);
-        for (List<Step> script : all) {
+        // Side by side: every flight has a server and a connection of its own,
+        // and the certificate and key are only read. 14 s one after the other.
+        all.parallelStream().forEach(script -> {
             ScriptedTlsServer server = new ScriptedTlsServer(script, leaf, key);
             try (TlsConnection connection = connect(server, false)) {
                 assertNotNull(connection.peerCertificate(), script + " connected without a certificate");
@@ -234,7 +236,7 @@ class ServerFlightOrderTest {
             } catch (IOException refused) {
                 // what everything but the two legal flights has to end in
             }
-        }
+        });
         assertEquals(java.util.Set.of(ScriptedTlsServer.COMPLETE,
                 ScriptedTlsServer.COMPLETE_WITH_REQUEST), java.util.Set.copyOf(accepted),
                 "of " + all.size() + " flights");

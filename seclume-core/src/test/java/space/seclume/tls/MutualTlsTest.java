@@ -60,6 +60,7 @@ import space.seclume.secret.SecretScope;
  * Kubernetes secret, or - since it is only a provider - anything else.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class MutualTlsTest {
 
     private static final String HOSTNAME = "db.example.com";

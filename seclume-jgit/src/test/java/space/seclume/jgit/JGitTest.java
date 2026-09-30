@@ -61,12 +61,17 @@ class JGitTest {
     }
 
     @AfterAll
-    static void stop() {
+    static void stop() throws InterruptedException {
         if (previous != null) {
             HttpTransport.setConnectionFactory(previous);
         }
         if (server != null) {
+            // Waited for: on Windows the process holds its log in the
+            // temporary directory open, and that is deleted right after.
             server.destroy();
+            if (!server.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                server.destroyForcibly().waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+            }
         }
     }
 

@@ -54,6 +54,7 @@ import space.seclume.tls.TestCertificates;
  * signing, the request, the parsing, the decoding, and the error messages.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated
 class CloudVaultProvidersTest {
 
     private static TestCertificates certificates;

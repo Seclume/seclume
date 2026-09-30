@@ -30,6 +30,7 @@ import space.seclume.tck.HeapDumpScanner;
  * {@code DriverManager}, and every one of those places would have the
  * opportunity to lift the password into a {@code String}.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class JdbcHeapDumpTest {
 
     @TempDir

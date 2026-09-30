@@ -41,6 +41,9 @@ import space.seclume.tck.TestHosts;
  * never gets the chance to undo it.
  */
 @Timeout(120)
+// Beside the other classes, which run one after the other: this one mostly
+// waits for the server's idle limit, and the waiting costs nobody CPU.
+@org.junit.jupiter.api.parallel.Execution(org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT)
 class IdleLimitTest {
 
     /** Seconds the server gives an idle session in these tests. */
@@ -109,11 +112,13 @@ class IdleLimitTest {
      */
     @ParameterizedTest(name = "{0}")
     @MethodSource("limited")
+    @org.junit.jupiter.api.parallel.Execution(
+            org.junit.jupiter.api.parallel.ExecutionMode.CONCURRENT)   // two waits at once
     void thePoolKeepsItsIdleConnectionAliveBelowTheLimit(Db db) throws Exception {
         Connection control = DriverManager.getConnection(url(db));
         execute(control, db.setLimit());
         PoolSettings settings = new PoolSettings();
-        settings.setName("idle");
+        settings.setName("idle-" + db.name());
         settings.setMaximumPoolSize(1);
         settings.setMinimumIdle(1);
         settings.setValidationTimeout(Duration.ofMillis(500));   // housekeeping every 0.5 s

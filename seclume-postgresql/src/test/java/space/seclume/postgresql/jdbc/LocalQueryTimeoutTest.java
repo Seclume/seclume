@@ -41,6 +41,7 @@ import space.seclume.tck.TestHosts;
  * expired. A retry is written against the JDBC type, not against 57014.
  */
 @Timeout(180)
+@org.junit.jupiter.api.parallel.Isolated
 class LocalQueryTimeoutTest {
 
     private static final String DATABASE = "seclume_test";

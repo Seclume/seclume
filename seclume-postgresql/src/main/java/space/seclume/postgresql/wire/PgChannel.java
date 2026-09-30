@@ -502,9 +502,17 @@ public final class PgChannel implements AutoCloseable {
      */
     private void fill(int needed) throws IOException {
         while (filled - in.position() < needed) {
-            long wanted = Math.min((long) filled + needed,
-                    Math.max((long) in.capacity() * 2, filled + 1L));
-            in.ensureCapacity((int) Math.min(wanted, MAX_MESSAGE + 8L));
+            // Only when the bytes have filled what is there. The version
+            // before doubled on every read, however little it brought: a
+            // server announcing a gigabyte and sending a byte at a time had
+            // the client holding - copying, and wiping - a gigabyte after
+            // some thirty bytes (found by the dribbling sweep's run time,
+            // 9 s where the other drivers take 0.1, 30.09.2026).
+            if (filled >= in.capacity()) {
+                long wanted = Math.min((long) filled + needed, (long) in.capacity() * 2);
+                in.ensureCapacity((int) Math.min(Math.max(wanted, filled + 1L),
+                        MAX_MESSAGE + 8L));
+            }
             ByteBuffer view = in.view();
             view.clear().position(filled).limit(in.capacity());
             int read = tls != null ? tls.read(view) : channel.read(view);

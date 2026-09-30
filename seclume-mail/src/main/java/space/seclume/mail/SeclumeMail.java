@@ -180,6 +180,14 @@ public final class SeclumeMail {
                 props.setProperty(prefix + ".auth.mechanisms", "LOGIN");
             }
         }
+        // Jakarta Mail finds a default sender and each Message-ID's host by a
+        // reverse DNS lookup it does not keep - seconds apiece where nothing
+        // answers. The same name, found once per JVM, unless the caller chose.
+        String canonical = MailSettings.canonicalHostName();
+        if (canonical != null && props.getProperty("mail.host") == null
+                && props.getProperty("mail.from") == null) {
+            props.setProperty("mail.host", canonical);
+        }
         Session session = Session.getInstance(props);
         try {
             for (MailSettings settings : all) {

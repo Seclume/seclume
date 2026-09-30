@@ -89,6 +89,29 @@ All notable changes to seclume are recorded here. Versions follow
   both users log in, a wrong password is refused and the heap is clean
   (`LocalMariaDbEd25519Test`, `proof/ed25519.sh`).
 
+### Mail: this host's name looked up once, not per session and per message
+
+- `SeclumeMail.of` without an `ehlo` option looked this host's name up with a reverse DNS query
+  every time, and Jakarta Mail did the same again for every default sender and Message-ID.
+  Neither keeps the answer; where no PTR record answers, each lookup waits for the resolver's
+  timeout - 4.5 s on a Windows machine. The name is now found once per JVM and kept, and a
+  session built by `SeclumeMail.session` carries it as `mail.host` - the value Jakarta Mail
+  would have looked up itself - unless the caller set `mail.host` or `mail.from`. The mail
+  tests went from 88 to 17 s.
+
+### PostgreSQL: the receive buffer grows with the bytes, and the tests run faster
+
+- **Fixed:** the receive buffer doubled on every read instead of when it was full. A server
+  announcing a message of almost a gigabyte and sending it a byte at a time had the client
+  holding - copying and wiping on the way - a gigabyte of native memory after 69 bytes. It now
+  grows only when the bytes that arrived have filled it (`AnnouncedLengthTest`). Found by the
+  run time of the dribbling fuzz sweep: 9 s, where the other drivers take a tenth of a second,
+  and 0.04 s now.
+- The tests: classes side by side with `@Isolated` on everything global, keytool inside the
+  test JVM, and fixtures that had been silently skipping brought back (YugabyteDB, XA two-phase
+  commit, PostgreSQL 17 direct TLS) - see TESTING.md. Five tests that did not wait for their
+  helper process on Windows fixed.
+
 ### Kerberos on Windows: SSPI
 
 - The Kerberos logins now work on Windows through SSPI (`secur32.dll`, the Kerberos package,

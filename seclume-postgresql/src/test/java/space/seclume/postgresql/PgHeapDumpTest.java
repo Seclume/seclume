@@ -30,6 +30,7 @@ import space.seclume.tck.HeapDumpScanner;
  * here: PBKDF2 over the password, client key, stored key, proof. If any step of
  * that runs across the heap, it shows up here.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class PgHeapDumpTest {
 
     @TempDir

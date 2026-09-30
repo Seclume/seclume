@@ -27,6 +27,7 @@ import org.junit.jupiter.api.io.TempDir;
  * a change: not a second look at the same secret, not a moment in which the
  * source cannot be read.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class SecretWatchTest {
 
     @TempDir
