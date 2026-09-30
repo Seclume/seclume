@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### CI: PgBouncer pinned, and its control on what still leaks
+
+- PgBouncer 1.26.0 resets read-only between clients in transaction mode; the isolation level it
+  still carries over. The control of `PgBouncerTest` asked for the read-only leak and went red
+  when the unpinned `edoburu/pgbouncer:latest` moved from 1.25.2 to 1.26.0 on 30.09.2026. It
+  now asks for the isolation level, which leaks on both - `proxyMode=transaction` is still
+  needed - and the image is pinned by digest.
+
 ### Kerberos on Windows: SSPI
 
 - The Kerberos logins now work on Windows through SSPI (`secur32.dll`, the Kerberos package,

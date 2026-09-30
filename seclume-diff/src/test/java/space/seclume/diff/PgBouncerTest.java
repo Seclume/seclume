@@ -69,18 +69,24 @@ class PgBouncerTest {
         }
     }
 
-    /** The control: without proxyMode the characteristics are the session's, and they leak. */
+    /**
+     * The control: without proxyMode the characteristics are the session's,
+     * and they leak. The isolation level, not read-only: PgBouncer 1.26.0
+     * resets read-only between clients - it went green-to-red in CI on
+     * 30.09.2026 when {@code latest} moved from 1.25.2 - but the isolation
+     * level still leaks on both, which is what proxyMode is still for.
+     */
     @Test
-    void withoutProxyModeReadOnlyReachesTheNextClient() throws Exception {
+    void withoutProxyModeTheIsolationLevelReachesTheNextClient() throws Exception {
         try (Connection a = DriverManager.getConnection(base);
              Connection b = DriverManager.getConnection(base)) {
-            a.setReadOnly(true);
+            a.setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
             one(a, "select 1");
             try {
-                assertEquals("on", one(b, "show transaction_read_only"),
+                assertEquals("serializable", one(b, "show transaction_isolation"),
                         "the leak this mode exists for did not happen - the test proves nothing");
             } finally {
-                a.setReadOnly(false);
+                a.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
                 one(a, "select 1");
             }
         }

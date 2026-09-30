@@ -34,7 +34,7 @@ These produced no error at all, which is worse than any of the above.
 | `SET app.tenant_id = 42` reaching the next request on the same pooled connection, which is how row-level security usually breaks | Session state is reset on return, and with a `SeclumeSessionContext` bean the pool sets the tenant on every borrow itself | `SessionResetTest`, `SessionContextTest` |
 | A commit whose answer was lost, reported as an ordinary failure and retried, so the row exists twice | `TransactionResolutionUnknownException`, SQLState `08007`, never retried | `CommitOutcomeTest` |
 | An index scan on a `varchar` column because every Java driver sends text as `nvarchar` (SQL Server) | ASCII text compared with a `varchar` column goes as `varchar`, and the plan shows a seek | `VarcharParametersTest`, which reads the cached plan |
-| `setReadOnly(true)` behind PgBouncer in transaction mode making *another* client's session read-only | With `proxyMode=transaction`, read-only and isolation travel in each transaction's own `BEGIN` | `PgBouncerTest`, with a control that shows the leak |
+| `setReadOnly(true)` or `setTransactionIsolation(...)` behind PgBouncer in transaction mode reaching *another* client's session (read-only up to PgBouncer 1.25; the isolation level also with 1.26) | With `proxyMode=transaction`, read-only and isolation travel in each transaction's own `BEGIN` | `PgBouncerTest`, with a control that shows the leak |
 | A killed MySQL statement that returns a partial answer as success | `setQueryTimeout` turns it into `SQLTimeoutException` | `LocalQueryTimeoutTest` (MySQL) |
 
 ## Warned about before it happens
