@@ -135,62 +135,56 @@ class PoolWithPostgresTest {
         }
     }
 
-    /**
-     * A cached statement survives the borrow - and the server keeps its plan.
-     *
-     * <p>Proven by asking the server: {@code pg_prepared_statements} lists what
-     * this session has prepared. Without the cache the entry is gone as soon as
-     * the statement is closed, and the next call makes the server parse the
-     * same text again.
-     */
+    /** Cached statements work during a borrow; DISCARD ALL clears them on return. */
     @Test
-    void aCachedStatementStaysPreparedOnTheServer() throws Exception {
+    void cachedStatementsAreRepreparedAfterTheBorrowBoundary() throws Exception {
         PoolSettings settings = settings(1);
         settings.setStatementCacheSize(8);
         try (SeclumePool pool = new SeclumePool(dataSource(), settings)) {
             String sql = "select 1 where 1 = ?";
-            try (Connection connection = pool.getConnection();
-                 PreparedStatement query = connection.prepareStatement(sql)) {
-                query.setInt(1, 1);
-                try (ResultSet rows = query.executeQuery()) {
-                    assertTrue(rows.next());
-                }
-            }
-            // The connection went back to the pool, and so did the statement.
-            try (Connection connection = pool.getConnection()) {
-                assertEquals(1, preparedOnServer(connection),
-                        "the server should still hold the plan");
-                try (PreparedStatement again = connection.prepareStatement(sql)) {
-                    again.setInt(1, 1);
-                    try (ResultSet rows = again.executeQuery()) {
-                        assertTrue(rows.next());
+            for (int borrow = 0; borrow < 2; borrow++) {
+                try (Connection connection = pool.getConnection()) {
+                    assertEquals(0, preparedOnServer(connection),
+                            "a previous borrow's plans survived the reset");
+                    for (int use = 0; use < 2; use++) {
+                        try (PreparedStatement query = connection.prepareStatement(sql)) {
+                            query.setInt(1, 1);
+                            try (ResultSet rows = query.executeQuery()) {
+                                assertTrue(rows.next());
+                                assertEquals(1, rows.getInt(1));
+                            }
+                        }
+                        assertEquals(1, preparedOnServer(connection),
+                                "the plan should be reused within the same borrow");
                     }
-                    assertEquals(1, preparedOnServer(connection),
-                            "the second prepare must not make a second plan");
                 }
             }
         }
     }
 
-    /**
-     * There are two caches, and switching off the pool's leaves the driver's.
-     *
-     * <p>This test used to assert that nothing at all is kept once the pool's
-     * cache is off, and that was true while the driver had no cache of its own.
-     * It has one now, so the two are worth keeping apart: the pool reuses the
-     * <b>JDBC statement object</b> across borrows, the driver keeps the
-     * <b>server-side plan</b> on the connection. Turning off the pool's saves
-     * the wrapper; the plan survives, which is the whole point of the driver's.
-     */
+    /** The driver's plan cache must also be invalidated when the pool cache is off. */
     @Test
-    void withoutThePoolsCacheTheDriverStillKeepsThePlan() throws Exception {
+    void driverPlansAreAlsoRepreparedAfterTheBorrowBoundary() throws Exception {
         PoolSettings off = settings(1);
         off.setStatementCacheSize(0);
         try (SeclumePool pool = new SeclumePool(dataSource(), off)) {
-            runOnce(pool, "select 2 where 2 = ?");
-            try (Connection connection = pool.getConnection()) {
-                assertEquals(1, preparedOnServer(connection),
-                        "the driver keeps the plan even when the pool keeps nothing");
+            String sql = "select 2 where 2 = ?";
+            for (int borrow = 0; borrow < 2; borrow++) {
+                try (Connection connection = pool.getConnection()) {
+                    assertEquals(0, preparedOnServer(connection),
+                            "the driver's cached plan survived the reset");
+                    for (int use = 0; use < 2; use++) {
+                        try (PreparedStatement query = connection.prepareStatement(sql)) {
+                            query.setInt(1, 2);
+                            try (ResultSet rows = query.executeQuery()) {
+                                assertTrue(rows.next());
+                                assertEquals(2, rows.getInt(1));
+                            }
+                        }
+                        assertEquals(1, preparedOnServer(connection),
+                                "the driver should reuse its plan within the same borrow");
+                    }
+                }
             }
         }
     }
