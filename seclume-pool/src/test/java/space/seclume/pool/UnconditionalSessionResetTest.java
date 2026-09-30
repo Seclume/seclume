@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
@@ -64,7 +65,9 @@ class UnconditionalSessionResetTest {
             Connection first = pool.getConnection();
             StubDataSource.StubConnection physical = source.handedOut().getFirst();
             physical.sessionReset = reset;
-            first.createStatement().close();
+            try (Statement statement = first.createStatement()) {
+                assertFalse(statement.isClosed());
+            }
             reset.tenant = "tenant-a";
             first.close();
             first.close();
@@ -86,7 +89,9 @@ class UnconditionalSessionResetTest {
             Connection first = pool.getConnection();
             StubDataSource.StubConnection physical = source.handedOut().getFirst();
             physical.sessionReset = reset;
-            first.createStatement().close();
+            try (Statement statement = first.createStatement()) {
+                assertFalse(statement.isClosed());
+            }
             first.close();
             assertEquals(1, reset.calls);
             assertTrue(physical.closed.get());

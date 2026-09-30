@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### SEC-01: every used pooled session is reset
+
+- The pool resets each used Seclume connection on return, whatever the SQL tracker
+  noted: stored procedures and functions can set state it never sees. Unwrapping
+  counts as use; a failed reset retires the connection.
+- PostgreSQL now resets with `DISCARD ALL`, so prepared statements no longer survive
+  a borrow. MySQL and SQL Server reset on every used return.
+- Oracle sessions are retired after a used borrow; the next borrow logs in anew.
+- `detach()` / `adopt()` keep session and transaction; the reset happens when the
+  adopted borrow is returned.
+
 ### SEC-02: asynchronous secret cleanup
 
 - Owned `SecretScope` allocations now use shared arenas so timeout threads can
