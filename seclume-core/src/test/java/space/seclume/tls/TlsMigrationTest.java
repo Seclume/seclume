@@ -35,6 +35,39 @@ class TlsMigrationTest {
     private static final byte[] PLAINTEXT = "a record that both must produce alike"
             .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
+    /** Owned secret scopes can carry record state to a different worker thread. */
+    @Test
+    void frozenRecordStateCanBeThawedOnAnotherThread() throws Exception {
+        for (HashAlgorithm hash : new HashAlgorithm[] {HashAlgorithm.SHA_256, HashAlgorithm.SHA_384}) {
+            int keyLength = hash == HashAlgorithm.SHA_384 ? 32 : 16;
+            try (Arena arena = Arena.ofConfined();
+                 RecordProtection reading = RecordProtection.fromSecret(hash,
+                         secret(arena, hash.digestLength(), 0x11), keyLength);
+                 RecordProtection writing = RecordProtection.fromSecret(hash,
+                         secret(arena, hash.digestLength(), 0x22), keyLength);
+                 space.seclume.secret.SecretScope carried =
+                         space.seclume.secret.SecretScope.allocate(TlsMigration.encodedLength(hash))) {
+                reading.sequence(7);
+                writing.sequence(12);
+                carried.length(TlsMigration.encode(carried.segment(), 0, reading, writing));
+                byte[] expected = seal(arena, writing);
+                java.util.concurrent.FutureTask<byte[]> worker = new java.util.concurrent.FutureTask<>(() -> {
+                    try (Arena receiving = Arena.ofConfined()) {
+                        TlsMigration.Thawed thawed = TlsMigration.decode(carried.secret(), 0, carried.length());
+                        try (RecordProtection restoredRead = thawed.reading();
+                             RecordProtection restoredWrite = thawed.writing()) {
+                            assertEquals(7, restoredRead.sequence());
+                            assertEquals(12, restoredWrite.sequence());
+                            return seal(receiving, restoredWrite);
+                        }
+                    }
+                });
+                Thread.ofVirtual().start(worker);
+                assertArrayEquals(expected, worker.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            }
+        }
+    }
+
     @Test
     void aThawedConnectionSealsExactlyWhatTheOriginalWouldHave() {
         for (HashAlgorithm hash : new HashAlgorithm[] {HashAlgorithm.SHA_256, HashAlgorithm.SHA_384}) {

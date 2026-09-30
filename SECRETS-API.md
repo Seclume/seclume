@@ -72,3 +72,16 @@ From 1.0 on, these follow semantic versioning:
 
 `mvn -Papicheck verify` checks each release against the last one. `space.seclume.internal` is
 not part of that promise.
+
+## Secret scope lifetime and cancellation
+
+`SecretScope.allocate(...)` and `fromProvider(...)` own shared arenas. A timeout
+or cancellation thread may close them; `allocateShared(...)` remains an equivalent
+explicit spelling. Concurrent `close()` calls are serialized and return after the
+wipe and release finish. This also permits a safely published scope to carry TLS
+record state to another worker without changing its keys or sequence numbers.
+
+Shared allocation does not make concurrent secret mutation safe. Stop writers
+before cleanup, and do not use segment views after close. `SecretScope.in(arena, ...)`
+retains the supplied arena's lifetime and thread restrictions: keep it alive until
+the scope closes, and use a shared arena if another thread must perform cleanup.
