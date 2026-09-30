@@ -110,6 +110,7 @@ public final class RecordProtection implements AutoCloseable {
             throw new IllegalArgumentException("a record holds at most " + MAX_PLAINTEXT
                     + " bytes, not " + length);
         }
+        refuseTheLastNumber();
         int inner = length + 1;
         int body = inner + AesGcm.TAG;
         writeHeader(out, outOffset, body);
@@ -144,6 +145,7 @@ public final class RecordProtection implements AutoCloseable {
         if (body <= AesGcm.TAG) {
             return null;                    // not even room for the inner type
         }
+        refuseTheLastNumber();
         int inner = body - AesGcm.TAG;
         if (inner > MAX_INNER) {
             throw new IllegalArgumentException("a record holds at most " + MAX_INNER
@@ -206,6 +208,23 @@ public final class RecordProtection implements AutoCloseable {
     /** The number of records processed in this direction so far. */
     public long sequence() {
         return sequence;
+    }
+
+    /**
+     * Whether this key has come to its last sequence number. RFC 8446 section
+     * 5.3: sequence numbers do not wrap - the connection rekeys or ends. The
+     * last number is given up rather than used, so that no path can go from
+     * it to 0 and repeat a nonce under the same key.
+     */
+    public boolean usedUp() {
+        return sequence == -1L;
+    }
+
+    private void refuseTheLastNumber() {
+        if (usedUp()) {
+            throw new IllegalStateException("the record sequence number would wrap round to 0 "
+                    + "and repeat a nonce - this key is used up, and the connection has to end");
+        }
     }
 
     // ---- what writing a connection down needs, and nothing more -----------

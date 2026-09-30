@@ -145,6 +145,13 @@ final class TlsMigration {
         at += 8;
         long writeSequence = getLong(in, offset + at);
         at += 8;
+        if (readSequence < 0 || writeSequence < 0) {
+            // No connection has sent 2^63 records; a number up there is
+            // damage, and at the very top it would wrap into a repeated nonce.
+            throw new IllegalArgumentException("a sequence number of 2^63 or more belongs to no "
+                    + "real connection: " + Long.toUnsignedString(readSequence) + " / "
+                    + Long.toUnsignedString(writeSequence));
+        }
         if (length != encodedLength(hash)) {
             throw new IllegalArgumentException("the frozen connection is " + length
                     + " bytes, and a " + hash + " connection is " + encodedLength(hash));

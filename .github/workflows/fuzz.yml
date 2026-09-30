@@ -50,8 +50,11 @@ jobs:
           echo "reproduces from the log alone with no corpus file to fetch."
 
   # Coverage-guided search, as opposed to replaying a corpus: Jazzer mutates
-  # toward inputs that reach new code. Fifteen minutes per wire decoder a
-  # night. A finding fails the job; the input that caused it is kept as an
+  # toward inputs that reach new code. Fifteen minutes per target a night:
+  # the four wire decoders and seclume's own TLS client - before the key
+  # (ServerHello, alerts), behind it (the encrypted flight), after the
+  # handshake (records under the application key) and a connection's
+  # written-down state. A finding fails the job; the input that caused it is kept as an
   # artefact and belongs in src/test/resources as a regression case.
   coverage-guided:
     runs-on: ubuntu-latest
@@ -60,10 +63,14 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - { module: seclume-postgresql, test: PgDecoderFuzzTest }
-          - { module: seclume-mysql, test: MyDecoderFuzzTest }
-          - { module: seclume-sqlserver, test: TdsDecoderFuzzTest }
-          - { module: seclume-oracle, test: OracleDecoderFuzzTest }
+          - { module: seclume-postgresql, test: PgDecoderFuzzTest, method: coverageGuided }
+          - { module: seclume-mysql, test: MyDecoderFuzzTest, method: coverageGuided }
+          - { module: seclume-sqlserver, test: TdsDecoderFuzzTest, method: coverageGuided }
+          - { module: seclume-oracle, test: OracleDecoderFuzzTest, method: coverageGuided }
+          - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileServerHelloFailsWithAnIoException }
+          - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileEncryptedFlightNeverConnectsUnauthenticated }
+          - { module: seclume-core, test: TlsRecordFuzzTest, method: recordsAfterTheHandshake }
+          - { module: seclume-core, test: TlsRecordFuzzTest, method: aFrozenConnection }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -77,12 +84,12 @@ jobs:
           JAZZER_FUZZ: '1'
         run: >
           ./mvnw -B test -pl ${{ matrix.target.module }}
-          -Dtest='${{ matrix.target.test }}#coverageGuided'
+          -Dtest='${{ matrix.target.test }}#${{ matrix.target.method }}'
           -Djazzer.max_duration=15m -Dsurefire.failIfNoSpecifiedTests=false
       - if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: finding-${{ matrix.target.test }}
+          name: finding-${{ matrix.target.test }}-${{ matrix.target.method }}
           # Jazzer keeps a finding in src/test/resources only where that
           # directory exists, and none of the four modules has one - so it
           # writes crash-* into the module's working directory. The first

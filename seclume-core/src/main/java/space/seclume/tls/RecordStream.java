@@ -158,6 +158,10 @@ final class RecordStream implements AutoCloseable {
                         "an encrypted record holds " + (length - 16) + " bytes of content and "
                                 + "padding, more than 2^14 + 1");
             }
+            if (reading.usedUp()) {
+                throw new IOException("the peer's record sequence number would wrap round - "
+                        + "RFC 8446 section 5.3 ends the connection here");
+            }
             RecordProtection.Opened result =
                     reading.open(incoming, 0, RecordProtection.HEADER + length, opened, 0);
             if (result == null) {
@@ -194,6 +198,10 @@ final class RecordStream implements AutoCloseable {
             MemorySegment.copy(data, offset, outgoing, RecordProtection.HEADER, length);
             total = RecordProtection.HEADER + length;
         } else {
+            if (writing.usedUp()) {
+                throw new IOException("this side's record sequence number would wrap round - "
+                        + "RFC 8446 section 5.3 ends the connection here");
+            }
             total = writing.seal(contentType, data, offset, length, outgoing, 0);
         }
         firstRecord = false;
