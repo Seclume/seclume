@@ -294,6 +294,23 @@ that comes back as 28000 carrying the server's own words.
 
 No database and no password are needed for any of it.
 
+**seclume's own TLS client is searched the same way**, coverage-guided every night with the
+four decoders, in four places:
+
+| Target | What the input controls | What must hold |
+|---|---|---|
+| `ServerHelloFuzzTest#aHostileServerHello…` | everything before the key: records, ServerHello or HelloRetryRequest, alerts | an `IOException`, nothing else |
+| `ServerHelloFuzzTest#aHostileEncryptedFlight…` | the encrypted flight, by a server that holds the key (`EncryptedFlight`) | no connection to a server nobody authenticated |
+| `TlsRecordFuzzTest#recordsAfterTheHandshake` | the records after it, sealed under the application key: data, alerts, KeyUpdate, NewSessionTicket, unknown types, a key rotated without a KeyUpdate (`PostHandshakeRecords`) | an `IOException` or the end of the stream, no spinning - and what the application receives is exactly a prefix of the data records, never a byte of anything else |
+| `TlsRecordFuzzTest#aFrozenConnection` | a connection's written-down state with a right checksum and every field chosen (`FrozenConnections`) | an `IllegalArgumentException`, and a rebuilt key never wraps its sequence number |
+
+The last one found a defect on its first run, 30.09.2026: a frozen connection could carry
+the last sequence number, 2^64 - 1, and after one record the key went on at 0 - a repeated
+nonce under the same AES-GCM key. `decode` now refuses sequence numbers of 2^63 and more, and
+a key refuses its last number rather than use it (RFC 8446 section 5.3: rekey or close, never
+wrap). The deterministic samples of all four run in every build (`EncryptedFlightSampleTest`,
+`TlsRecordFuzzSampleTest`), each with a control that shows the harness reaches what it is for.
+
 ## The caller in the wrong order
 
 The corpus above asks what happens when the server is wrong. `MisuseContract`

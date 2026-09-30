@@ -120,7 +120,31 @@ final class EncryptedFlight {
             }
             if (script != null && !script.equals(ScriptedTlsServer.COMPLETE)
                     && !script.equals(ScriptedTlsServer.COMPLETE_WITH_REQUEST)) {
-                throw new AssertionError("connected after a flight out of order: " + script);
+                // One case is allowed to connect: a legal flight with more
+                // messages after Finished, each in a record of its own (found
+                // by the coverage-guided search, 30.09.2026). The server has
+                // authenticated itself by then, and the client, already on the
+                // application key, cannot tell before it reads - but that
+                // first read must fail. See AfterServerFinishedTest.
+                int finished = script.indexOf(Step.FINISHED);
+                List<Step> legal = finished < 0 ? script : script.subList(0, finished + 1);
+                boolean trailing = (input[0] & 4) != 0 && finished >= 0
+                        && finished < script.size() - 1
+                        && (legal.equals(ScriptedTlsServer.COMPLETE)
+                                || legal.equals(ScriptedTlsServer.COMPLETE_WITH_REQUEST));
+                if (!trailing) {
+                    throw new AssertionError("connected after a flight out of order: " + script);
+                }
+                try {
+                    connection.read(java.nio.ByteBuffer.allocate(64));
+                } catch (IOException expected) {
+                    return true;
+                } catch (RuntimeException | Error wrong) {
+                    throw new AssertionError("reading after a message past Finished ended in "
+                            + wrong + " rather than an IOException", wrong);
+                }
+                throw new AssertionError("data was read after a message past Finished: "
+                        + script);
             }
         }
         return true;

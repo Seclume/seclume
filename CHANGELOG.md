@@ -112,6 +112,18 @@ All notable changes to seclume are recorded here. Versions follow
   commit, PostgreSQL 17 direct TLS) - see TESTING.md. Five tests that did not wait for their
   helper process on Windows fixed.
 
+### TLS: no sequence number wraps round, and the record layer is fuzzed
+
+- **Fixed:** a frozen TLS connection (`TlsConnection.thaw`) could carry the last sequence
+  number, 2^64 - 1; after one more record the key went on at 0 and repeated a nonce under the
+  same AES-GCM key. `TlsMigration.decode` now refuses sequence numbers of 2^63 and more, and a
+  record key refuses its last number in both directions (RFC 8446 section 5.3). In ordinary
+  traffic the number is out of reach; a written-down state from another node was the way in.
+- Coverage-guided fuzzing of the TLS client, nightly with the four decoders: before the key,
+  the encrypted flight, the records after the handshake (`PostHandshakeRecords`: what reaches
+  the application must be exactly a prefix of the data records) and the frozen state
+  (`FrozenConnections`). Deterministic samples in every build (`TlsRecordFuzzSampleTest`).
+
 ### Kerberos on Windows: SSPI
 
 - The Kerberos logins now work on Windows through SSPI (`secur32.dll`, the Kerberos package,
