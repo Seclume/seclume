@@ -197,23 +197,26 @@ insists that rows arrived first, and getting them to arrive turned up the findin
 ### What a fetch size does, and where
 
 `FetchSizeProbe` measures how many bytes cross the wire before the tenth row of a
-twenty-thousand-row result, with `setFetchSize(50)` and autocommit off:
+twenty-thousand-row result, with `setFetchSize(50)` and autocommit off. The following
+measurements describe the earlier implementation, before plain statements supported
+fetching in blocks; they are not measurements of the current driver:
 
 | | seclume | pgjdbc |
 |---|---|---|
 | `PreparedStatement` | 2 990 bytes | 2 957 bytes |
 | `Statement` | **1 188 987 bytes** | 2 957 bytes |
 
-seclume streams on a prepared statement and reads the whole result on a plain one. That is
-deliberate and `PgStatement` says why: PostgreSQL has a row limit only in the extended
-protocol, and a portal only inside a transaction. The reasoning is right about the protocol —
-what it leaves out is that pgjdbc reaches the same place by quietly routing a `Statement`
-through the extended protocol once a fetch size is set.
+The current PostgreSQL driver fetches rows in blocks for both `Statement` and
+`PreparedStatement` when the fetch size is positive and autocommit is off. PostgreSQL
+provides a row limit through the extended protocol, so `PgStatement` routes a plain
+statement through that protocol under these conditions. It uses an unnamed statement
+and portal and the same block-fetching code as a prepared statement, without keeping
+a named prepared plan for reuse.
 
-It is recorded rather than changed: an application reading a large table with
-`createStatement()` and a fetch size gets bounded memory from every vendor driver and the whole
-table from this one, and whether to follow them is a decision about plan caching and round
-trips, not a bug fix.
+With a fetch size of zero or autocommit on, a plain statement continues to use the
+simple protocol and collects the whole result. The portal needed for block fetching
+must remain inside a transaction. The earlier difference from pgjdbc shown above
+has therefore been addressed; updated byte counts require a new probe run.
 
 ## Servers that misbehave
 
