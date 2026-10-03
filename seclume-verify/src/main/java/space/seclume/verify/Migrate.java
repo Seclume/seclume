@@ -263,7 +263,7 @@ public final class Migrate {
         move(in, "sslrootcert", out, "tlsRootCert");
         move(in, "sslnegotiation", out, "tlsNegotiation");
         move(in, "ApplicationName", out, "applicationName");
-        seconds(in, "connectTimeout", out);
+        seconds(in, "connectTimeout", out, 1000, findings);
         target(in, out, findings);
         clientCertificate(in, "sslcert", "sslkey", out, findings);
         for (String ignored : List.of("prepareThreshold", "preparedStatementCacheQueries",
@@ -306,7 +306,7 @@ public final class Migrate {
             }
         }
         move(in, "connectionAttributes", out, null);
-        seconds(in, "connectTimeout", out, 1);  // Connector/J counts milliseconds already
+        seconds(in, "connectTimeout", out, 1, findings);  // Connector/J counts milliseconds already
         // Multi-row inserts change what a failing batch leaves behind, so
         // they stay what the configuration asked for: on only when it was on.
         if ("true".equalsIgnoreCase(in.remove("rewriteBatchedStatements"))) {
@@ -345,7 +345,7 @@ public final class Migrate {
                     + "(seclume-verify --print-pin) keep the check instead"));
         }
         move(in, "applicationName", out, "applicationName");
-        seconds(in, "loginTimeout", out);
+        seconds(in, "loginTimeout", out, 1000, findings);
         if ("false".equals(lower(in.remove("sendStringParametersAsUnicode")))) {
             findings.add(new Finding(Level.CHANGED, "sendStringParametersAsUnicode=false - "
                     + "seclume decides per parameter instead (varchar where the column is, "
@@ -657,16 +657,25 @@ public final class Migrate {
         }
     }
 
-    private static void seconds(Map<String, String> in, String key, Map<String, String> out) {
-        seconds(in, key, out, 1000);
-    }
-
     /** A timeout in the vendor's unit, as seclume's connectTimeout in milliseconds. */
     private static void seconds(Map<String, String> in, String key, Map<String, String> out,
-                                int factor) {
+                                int factor, List<Finding> findings) {
         String value = in.remove(key);
-        if (value != null && value.trim().matches("\\d+") && !value.trim().equals("0")) {
-            out.put("connectTimeout", String.valueOf(Long.parseLong(value.trim()) * factor));
+        if (value == null) {
+            return;
+        }
+        try {
+            String digits = value.trim();
+            if (!digits.matches("\\d+")) {
+                throw new NumberFormatException("timeout must be nonnegative digits");
+            }
+            long milliseconds = Math.multiplyExact(Long.parseLong(digits), factor);
+            if (milliseconds > 0) {
+                out.put("connectTimeout", String.valueOf(milliseconds));
+            }
+        } catch (NumberFormatException | ArithmeticException invalidTimeout) {
+            findings.add(new Finding(Level.NOT_TRANSLATED, key
+                    + " is invalid or too large to express in milliseconds - dropped"));
         }
     }
 

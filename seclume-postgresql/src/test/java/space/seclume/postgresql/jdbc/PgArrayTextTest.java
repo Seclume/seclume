@@ -123,6 +123,18 @@ class PgArrayTextTest {
     }
 
     @Test
+    void malformedHexElementsAreRefusedInsteadOfTruncated() throws Exception {
+        for (String value : List.of("abc", "0g", "+1", "-1")) {
+            SQLException error = assertThrows(SQLException.class,
+                    () -> new PgArray(PgOids.BYTEA_ARRAY, "{" + value + "}").getArray());
+            assertEquals("22018", error.getSQLState());
+        }
+        byte[][] decoded = (byte[][]) new PgArray(PgOids.BYTEA_ARRAY, "{aBcD,00}").getArray();
+        assertArrayEquals(new byte[] {(byte) 0xab, (byte) 0xcd}, decoded[0]);
+        assertArrayEquals(new byte[] {0}, decoded[1]);
+    }
+
+    @Test
     void slicesCountFromOne() throws Exception {
         PgArray array = new PgArray(PgOids.INT4_ARRAY, "{10,20,30,40}");
         assertArrayEquals(new Integer[] {10, 20}, (Integer[]) array.getArray(1, 2));

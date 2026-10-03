@@ -37,6 +37,14 @@ class ListenerRefusalTest {
     }
 
     @Test
+    void anOversizedErrorCodeStillReturnsAConnectionException() {
+        SQLException refused = OracleSession.refused("(ERR=999999999999999999999999)");
+        assertInstanceOf(SQLNonTransientConnectionException.class, refused);
+        assertEquals("08001", refused.getSQLState());
+        assertInstanceOf(NumberFormatException.class, refused.getCause());
+    }
+
+    @Test
     void aRefusalWithoutANumberStillSaysWhatItGot() {
         SQLException bare = OracleSession.refused("something else");
         assertInstanceOf(SQLNonTransientConnectionException.class, bare);
