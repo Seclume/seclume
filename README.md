@@ -88,6 +88,9 @@ Java 25, Spring Boot 4.x / Spring Framework 7.x. No runtime dependency beyond th
 [Features at a glance](#features-at-a-glance) · [Not yet](#what-it-does-not-do-yet) ·
 [Speed](#speed) · [Building](#building-and-testing) · [Support](#support-and-what-you-may-rely-on)
 
+OpenSSF best practices assessment:
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15186/badge)](https://www.bestpractices.dev/en/projects/15186)
+
 ---
 
 ## Quick start
@@ -348,6 +351,10 @@ decompiled: [PROVENANCE.md](PROVENANCE.md).
 - Test results are reported with their output. "Should work" does not count.
 
 ## Support, and what you may rely on
+
+For bug reports, feature requests and pull requests, see
+[CONTRIBUTING.md](CONTRIBUTING.md). Report suspected vulnerabilities privately
+through the process in [SECURITY.md](SECURITY.md).
 
 seclume is written and maintained by one person, in the time that person has. It is used in
 earnest, it is kept working, and issues do get read. But there is **no company behind it, no
