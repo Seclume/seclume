@@ -51,9 +51,9 @@
     </dependency>
     <!-- Lets the test's SSHD server verify Ed25519 signatures. -->
     <dependency>
-      <groupId>net.i2p.crypto</groupId>
-      <artifactId>eddsa</artifactId>
-      <version>0.3.0</version>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk18on</artifactId>
+      <version>1.86</version>
       <scope>test</scope>
     </dependency>
     <dependency>

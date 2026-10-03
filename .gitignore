@@ -1,4 +1,6 @@
 target/
+node_modules/
+.mvn/wrapper/maven-wrapper.jar
 *.hprof
 
 # Everything that describes one machine rather than the project: where its
