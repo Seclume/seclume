@@ -27,7 +27,7 @@ on:
     branches: [main]
     paths-ignore: ['**.md', 'docs/**', 'test-reports/**', 'LICENSE', 'NOTICE']
   pull_request:
-    paths-ignore: ['**.md', 'docs/**', 'test-reports/**', 'LICENSE', 'NOTICE']
+    # Required checks must also exist for documentation-only pull requests.
 
 # The free plan runs 20 jobs at a time across the whole account. A newer push
 # to the same pull request replaces the older run instead of queueing behind
@@ -61,6 +61,8 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # Azure's storage emulator, for seclume-azure's end-to-end test.
       - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: .github/ci-tools
+      - run: npm audit --audit-level=moderate
         working-directory: .github/ci-tools
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
