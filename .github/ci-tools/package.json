@@ -1,0 +1,8 @@
+{
+  "name": "seclume-ci-tools",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "azurite": "3.37.0"
+  }
+}

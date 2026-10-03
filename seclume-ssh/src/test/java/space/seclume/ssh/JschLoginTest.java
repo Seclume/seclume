@@ -39,7 +39,7 @@ import space.seclume.tck.NoSecretInHeap;
 
 /**
  * JSch against SSHD's SFTP server, with keys as ssh-keygen writes them - Ed25519
- * among them, which the server verifies with net.i2p's EdDSA.
+ * among them, which the server verifies with its configured Ed25519 provider.
  */
 class JschLoginTest {
 

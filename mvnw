@@ -241,17 +241,17 @@ else
     log "Found wget ... using wget"
     [ "$MVNW_VERBOSE" = true ] && QUIET="" || QUIET="--quiet"
     if [ -z "$MVNW_USERNAME" ] || [ -z "$MVNW_PASSWORD" ]; then
-      wget ${QUIET:+"$QUIET"} "$wrapperUrl" -O "$wrapperJarPath" || rm -f "$wrapperJarPath"
+      wget ${QUIET:+"$QUIET"} --tries=3 --waitretry=2 "$wrapperUrl" -O "$wrapperJarPath" || rm -f "$wrapperJarPath"
     else
-      wget ${QUIET:+"$QUIET"} --http-user="$MVNW_USERNAME" --http-password="$MVNW_PASSWORD" "$wrapperUrl" -O "$wrapperJarPath" || rm -f "$wrapperJarPath"
+      wget ${QUIET:+"$QUIET"} --tries=3 --waitretry=2 --http-user="$MVNW_USERNAME" --http-password="$MVNW_PASSWORD" "$wrapperUrl" -O "$wrapperJarPath" || rm -f "$wrapperJarPath"
     fi
   elif command -v curl >/dev/null; then
     log "Found curl ... using curl"
     [ "$MVNW_VERBOSE" = true ] && QUIET="" || QUIET="--silent"
     if [ -z "$MVNW_USERNAME" ] || [ -z "$MVNW_PASSWORD" ]; then
-      curl ${QUIET:+"$QUIET"} -o "$wrapperJarPath" "$wrapperUrl" -f -L || rm -f "$wrapperJarPath"
+      curl ${QUIET:+"$QUIET"} --retry 3 --retry-delay 2 -o "$wrapperJarPath" "$wrapperUrl" -f -L || rm -f "$wrapperJarPath"
     else
-      curl ${QUIET:+"$QUIET"} --user "$MVNW_USERNAME:$MVNW_PASSWORD" -o "$wrapperJarPath" "$wrapperUrl" -f -L || rm -f "$wrapperJarPath"
+      curl ${QUIET:+"$QUIET"} --retry 3 --retry-delay 2 --user "$MVNW_USERNAME:$MVNW_PASSWORD" -o "$wrapperJarPath" "$wrapperUrl" -f -L || rm -f "$wrapperJarPath"
     fi
   else
     log "Falling back to using Java to download"
@@ -279,6 +279,10 @@ fi
 ##########################################################################################
 
 # If specified, validate the SHA-256 sum of the Maven wrapper jar file
+if [ ! -s "$wrapperJarPath" ]; then
+  echo "Error: Maven wrapper download failed; no wrapper jar is available." >&2
+  exit 1
+fi
 wrapperSha256Sum=""
 while IFS="=" read -r key value; do
   case "$key" in wrapperSha256Sum)

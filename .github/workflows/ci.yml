@@ -60,10 +60,13 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       # Azure's storage emulator, for seclume-azure's end-to-end test.
-      - run: npm install -g azurite@3
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: .github/ci-tools
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
       - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+        env:
+          SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # A red run names its failing tests as annotations, so that they can be
       # read on the pull request without opening the log.
       - if: failure()
@@ -121,6 +124,8 @@ jobs:
           make install_sw >/dev/null
       - name: Handshake with X25519MLKEM768
         run: |
+          # Bootstrap the verified wrapper before selecting the test's OpenSSL libraries.
+          ./mvnw -v
           export SECLUME_OPENSSL35="$HOME/openssl35/bin/openssl"
           export LD_LIBRARY_PATH="$HOME/openssl35/lib"
           "$SECLUME_OPENSSL35" version
