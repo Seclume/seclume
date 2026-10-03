@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed: TLS wildcards cannot cover public suffixes
+
+- Certificate hostname checks now reject wildcards such as `*.co.uk` and
+  `*.com.au`, using the ICANN section of a bundled Public Suffix List with exact rules,
+  wildcard rules and exceptions. Exact names and wildcards below a
+  registrable domain remain supported, including internal DNS names.
+- The data is loaded locally, with no new runtime dependency or network
+  request. Missing or unreadable data refuses wildcard matches.
+- PRIVATE hosting entries are not used as certificate issuance boundaries,
+  preserving cloud-provider wildcard certificates such as those used by RDS.
+
 ### Fixed: `getInt` on text threw `NumberFormatException` instead of `SQLException`
 
 - `getInt`, `getLong`, `getDouble`, `getBigDecimal` (and the narrower getters) on a column

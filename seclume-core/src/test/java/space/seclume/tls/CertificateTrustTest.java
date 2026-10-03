@@ -143,6 +143,20 @@ class CertificateTrustTest {
     }
 
     @Test
+    void aTrustedCertificateCannotWildcardIndependentRegistrants() throws Exception {
+        X509Certificate broad = certificates.issue("public-suffix-wildcards",
+                "san=dns:*.co.uk,dns:*.com.au,dns:*.example.co.uk,dns:*.abc.eu-central-1.rds.amazonaws.com",
+                "ku:c=digitalSignature").certificate();
+        CertificateTrust trust = CertificateTrust.of(trustStore);
+        assertThrows(CertificateException.class,
+                () -> trust.checkServer(List.of(broad), "tenant.co.uk"));
+        assertThrows(CertificateException.class,
+                () -> trust.checkServer(List.of(broad), "tenant.com.au"));
+        assertDoesNotThrow(() -> trust.checkServer(List.of(broad), "db.example.co.uk"));
+        assertDoesNotThrow(() -> trust.checkServer(List.of(broad), "db.abc.eu-central-1.rds.amazonaws.com"));
+    }
+
+    @Test
     void anAddressMatchesOnlyTheAddressInTheCertificate() throws Exception {
         CertificateTrust trust = CertificateTrust.of(trustStore);
         assertDoesNotThrow(() -> trust.checkServer(List.of(leaf), "10.1.2.3"));

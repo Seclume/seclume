@@ -36,9 +36,11 @@ import java.util.Locale;
  *       Partial labels ({@code db*.example.com}) are not honoured even though
  *       RFC 6125 tolerates them: no public CA issues them any more, and a
  *       prefix match is a wide door for a name nobody intended;
- *   <li><b>a wildcard needs three labels below it.</b> {@code *.com} is
- *       refused. Without that rule one certificate covers a whole top-level
- *       domain;
+ *   <li><b>a wildcard cannot cover a public suffix.</b> {@code *.com},
+ *       {@code *.co.uk} and {@code *.com.au} are refused using the ICANN
+ *       section of the bundled Public Suffix List. Private hosting entries
+ *       are not certificate issuance boundaries: cloud providers may use
+ *       valid wildcard certificates there;
  *   <li><b>a literal IP address matches only an iPAddress entry</b>, never a
  *       DNS name and never a wildcard - {@code *.1.2.3} is not a thing, and
  *       treating an address as a name is how it would become one.
@@ -106,8 +108,8 @@ public final class HostnameMatch {
             return pattern.equals(host);  // an asterisk anywhere else is not honoured
         }
         String suffix = pattern.substring(1);                 // ".example.com"
-        if (countLabels(pattern) < 3) {
-            return false;                                     // "*.com" covers too much
+        if (countLabels(pattern) < 3 || PublicSuffixes.isPublicSuffix(pattern.substring(2))) {
+            return false;                                     // the wildcard must stay inside one domain
         }
         if (!host.endsWith(suffix)) {
             return false;                                     // also rules out the bare domain

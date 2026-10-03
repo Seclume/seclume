@@ -27,10 +27,42 @@ tracker's flag. CI now executes and requires these pool regressions in each
 database job, including MySQL and MariaDB; PostgreSQL also requires handoff tests.
 CI results must be checked on the PR before declaring this finding complete.
 
+## SEC-02 — secret cleanup checked against current code
+
+Owned SecretScope allocations use shared arenas and can be wiped by a timeout
+thread. Concurrent close calls wait for the complete wipe. Caller-owned arenas
+remain owned by the caller: their lifetime and thread restrictions still apply,
+and writers must stop before cleanup.
+
+The focused checks on 2026-10-03 passed 39 tests with one Linux-specific check
+skipped on Windows: AsyncSecretScopeTest, SecretScopeTest,
+SecretLifecycleRegressionTest, WipeOnFailureTest, MemoryLockPagesTest and
+MemoryLockRegressionTest. Coverage includes complete-capacity wipes, provider
+errors, interrupted workers, concurrent closes and refusal of wrong-thread
+cleanup without preventing the owner from subsequently wiping.
+
+No new lifecycle defect was reproduced in these cases. This is not a proof
+against callers violating the documented arena lifetime or writer contract.
+
+## SEC-03 — public suffix boundaries for TLS wildcards
+
+Implemented for review: HostnameMatch now checks an offline, pinned Public Suffix
+List, using its ICANN entries with wildcard rules and exceptions.
+Certificate patterns such as `*.co.uk` and `*.com.au` are refused; exact
+names and wildcards below registrable domains remain supported. Missing or
+unreadable list data refuses wildcards. PRIVATE hosting entries remain eligible
+for provider certificates, with explicit RDS compatibility checks.
+
+Seven new negative hostname cases failed before the fix. With the fix, 75 TLS
+hostname, suffix and certificate-trust checks passed, including a generated
+trusted certificate that must not cover independently controlled domains.
+The source, SHA-256, license and update procedure accompany the bundled data.
+Loading uses bounded bytes and strict UTF-8 decoding, with no reader exceptions
+to the production-source credential-safety check. Native-image metadata includes
+the resource; a native-image build was not run in this local verification.
+
 ## Remaining audit work, in sequence
 
-1. SEC-02: asynchronous zeroization and caller-owned arena semantics.
-2. SEC-03: public suffix handling for TLS wildcards.
 3. SEC-04: TLS and memory-lock defaults, compatibility and migration coverage.
 4. Security policy and vulnerability reporting process.
 5. SEC-05: bounded MySQL split-packet reassembly.
