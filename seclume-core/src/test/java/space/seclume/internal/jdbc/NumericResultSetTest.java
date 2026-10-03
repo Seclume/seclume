@@ -47,14 +47,14 @@ class NumericResultSetTest {
         @Override protected int columnCount() { return 2; }
         @Override protected void moveTo(int row) { current = values[row]; }
         @Override protected boolean isNullAt(int column) { return current == null; }
-        @Override protected String stringAt(int column) {
+        @Override protected String stringAt(int column) throws NumberFormatException {
             return column == 1 ? current : Double.toString(Double.parseDouble(current));
         }
-        @Override protected long longAt(int column) { return Long.parseLong(current); }
-        @Override protected double doubleAt(int column) { return Double.parseDouble(current); }
+        @Override protected long longAt(int column) throws NumberFormatException { return Long.parseLong(current); }
+        @Override protected double doubleAt(int column) throws NumberFormatException { return Double.parseDouble(current); }
         @Override protected byte[] bytesAt(int column) { throw new UnsupportedOperationException(); }
         @Override protected boolean booleanAt(int column) { return Boolean.parseBoolean(current); }
-        @Override protected Object objectAt(int column) {
+        @Override protected Object objectAt(int column) throws NumberFormatException {
             return column == 1 ? current : Double.valueOf(current);
         }
         @Override protected int columnIndexOf(String label) {
