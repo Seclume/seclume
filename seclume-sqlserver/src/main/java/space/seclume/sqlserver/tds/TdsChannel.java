@@ -20,6 +20,10 @@ public final class TdsChannel implements AutoCloseable {
     private space.seclume.internal.Transport channel;
     private final WireBuffer out = new WireBuffer(16 * 1024);
     private final WireBuffer in = new WireBuffer(32 * 1024);
+    /** Read-ahead is bounded by a packet, independently of accumulated results. */
+    private final WireBuffer packets = new WireBuffer(32 * 1024);
+    private int packetPosition;
+    private int packetLimit;
 
     private int packetSize = Tds.DEFAULT_PACKET_SIZE;
     private int packetId = 1;
@@ -194,6 +198,7 @@ public final class TdsChannel implements AutoCloseable {
         }
         out.close();
         in.close();
+        packets.close();
     }
 
     private boolean released;
@@ -501,47 +506,9 @@ public final class TdsChannel implements AutoCloseable {
      * @return the message type; the buffer then stands at the content
      */
     public int receive() throws IOException {
-        // The previous answer is still lying here: rewinding moves the
-        // pointers and not the memory, so a long result followed by a short
-        // one left most of the long one in native memory indefinitely. It is
-        // rows rather than credentials, which is precisely what one does not
-        // want in a core dump - and the heap dump harness cannot see this
-        // buffer at all, so nothing else would have caught it.
-        if (filled > 0) {
-            in.segment().asSlice(0, Math.min(filled, in.capacity())).fill((byte) 0);
-        }
-        in.rewind();
-        // TDS is strictly alternating: one request, one answer. That is why the
-        // receive buffer may start at zero for each message - nothing unread
-        // from an earlier answer can be sitting in it.
-        filled = 0;
-        messageLength = 0;
-        boolean last = false;
-        while (!last) {
-            int headerAt = messageLength;
-            fillTo(headerAt + Tds.HEADER_SIZE);
-            messageType = in.getByte(headerAt) & 0xff;
-            int status = in.getByte(headerAt + 1) & 0xff;
-            int length = ((in.getByte(headerAt + 2) & 0xff) << 8)
-                    | (in.getByte(headerAt + 3) & 0xff);
-            if (length < Tds.HEADER_SIZE) {
-                throw new IOException("the server announced a packet of " + length + " bytes");
-            }
-            fillTo(headerAt + length);
-            last = (status & Tds.STATUS_END_OF_MESSAGE) != 0;
-
-            // Cut the header out of the reassembled message. Everything behind
-            // it moves too, not just this packet's payload: the socket may
-            // already have delivered part of the next packet, and if that were
-            // left where it is, the next header would be read eight bytes off.
-            // A message that fits into one packet never notices - which is why
-            // this only showed up against a real server.
-            int payload = length - Tds.HEADER_SIZE;
-            int behind = filled - (headerAt + Tds.HEADER_SIZE);
-            java.lang.foreign.MemorySegment.copy(in.segment(), headerAt + Tds.HEADER_SIZE,
-                    in.segment(), headerAt, behind);
-            filled -= Tds.HEADER_SIZE;
-            messageLength = headerAt + payload;
+        startStreaming();
+        while (!lastSeen) {
+            readPacket();
         }
         in.position(0);
         in.limit(messageLength);
@@ -611,36 +578,20 @@ public final class TdsChannel implements AutoCloseable {
     public boolean pump(Consumer consumer, java.util.function.BooleanSupplier pause)
             throws IOException, java.sql.SQLException {
         while (!lastSeen) {
-            int headerAt = messageLength;
-            fillTo(headerAt + Tds.HEADER_SIZE);
-            messageType = in.getByte(headerAt) & 0xff;
-            int status = in.getByte(headerAt + 1) & 0xff;
-            int length = ((in.getByte(headerAt + 2) & 0xff) << 8)
-                    | (in.getByte(headerAt + 3) & 0xff);
-            if (length < Tds.HEADER_SIZE) {
-                throw new IOException("the server announced a packet of " + length + " bytes");
-            }
-            fillTo(headerAt + length);
-            lastSeen = (status & Tds.STATUS_END_OF_MESSAGE) != 0;
-            int payload = length - Tds.HEADER_SIZE;
-            int behind = filled - (headerAt + Tds.HEADER_SIZE);
-            java.lang.foreign.MemorySegment.copy(in.segment(), headerAt + Tds.HEADER_SIZE,
-                    in.segment(), headerAt, behind);
-            filled -= Tds.HEADER_SIZE;
-            messageLength = headerAt + payload;
+            readPacket();
 
             in.position(0);
             in.limit(messageLength);
             int used = consumer.take(in, messageLength);
+            if (used < 0 || used > messageLength) {
+                throw new IOException("the consumer used bytes outside the message: " + used);
+            }
             if (lastSeen && used != messageLength) {
                 throw new IOException("the answer ends in the middle of a token, "
                         + (messageLength - used) + " bytes before its end");
             }
             if (used > 0) {
-                // What was used goes: the rest of the message, and whatever of
-                // the next packet the socket already delivered, moves to the
-                // front, and the bytes it leaves behind are cleared - they
-                // were rows.
+                // Keep only the unfinished token; read-ahead stays in packets.
                 java.lang.foreign.MemorySegment.copy(in.segment(), used, in.segment(), 0,
                         filled - used);
                 in.segment().asSlice(filled - used, used).fill((byte) 0);
@@ -648,6 +599,8 @@ public final class TdsChannel implements AutoCloseable {
                 messageLength -= used;
                 streamed += used;
             }
+            in.position(0);
+            in.limit(messageLength);
             if (!lastSeen && pause != null && pause.getAsBoolean()) {
                 return false;
             }
@@ -675,23 +628,55 @@ public final class TdsChannel implements AutoCloseable {
         return in;
     }
 
-    private void fillTo(int needed) throws IOException {
-        // Everything received counts, not only the message so far: growing
-        // the buffer copies up to the limit, and the pump sets the limit to
-        // the end of the message - the bytes of the next packet behind it
-        // were lost with the first answer that needed a larger buffer.
-        in.limit(filled);
-        while (filled < needed) {
-            in.ensureCapacity(Math.max(needed, in.capacity()));
-            ByteBuffer view = in.view();
-            view.clear().position(filled).limit(in.capacity());
+    /** Append one payload without shifting the packets already read after it. */
+    private void readPacket() throws IOException {
+        fillPacket(Tds.HEADER_SIZE);
+        messageType = packets.getByte(packetPosition) & 0xff;
+        int status = packets.getByte(packetPosition + 1) & 0xff;
+        int length = ((packets.getByte(packetPosition + 2) & 0xff) << 8)
+                | (packets.getByte(packetPosition + 3) & 0xff);
+        if (length < Tds.HEADER_SIZE) {
+            throw new IOException("the server announced a packet of " + length + " bytes");
+        }
+        fillPacket(length);
+        in.position(messageLength);
+        in.putBytes(packets.segment(), packetPosition + Tds.HEADER_SIZE,
+                length - Tds.HEADER_SIZE);
+        messageLength = in.position();
+        filled = messageLength;
+        // No extra copy of decoded rows remains in the packet buffer.
+        packets.segment().asSlice(packetPosition, length).fill((byte) 0);
+        packetPosition += length;
+        lastSeen = (status & Tds.STATUS_END_OF_MESSAGE) != 0;
+    }
+
+    private void fillPacket(int needed) throws IOException {
+        if (packetLimit - packetPosition >= needed) {
+            return;
+        }
+        // Compact only an incomplete packet, when another read is necessary.
+        // The two-byte wire length bounds this buffer at 64 KiB even if a
+        // previous result made the message buffer much larger.
+        int remaining = packetLimit - packetPosition;
+        if (packetPosition > 0) {
+            java.lang.foreign.MemorySegment.copy(packets.segment(), packetPosition,
+                    packets.segment(), 0, remaining);
+            packets.segment().asSlice(remaining, packetLimit - remaining).fill((byte) 0);
+        }
+        packetPosition = 0;
+        packetLimit = remaining;
+        packets.limit(remaining);
+        packets.ensureCapacity(needed);
+        while (packetLimit < needed) {
+            ByteBuffer view = packets.view();
+            view.clear().position(packetLimit).limit(packets.capacity());
             int read = tls != null ? tls.read(view) : channel.read(view);
             if (read < 0) {
                 throw new IOException("the server closed the connection");
             }
-            filled += read;
+            packetLimit += read;
         }
-        in.limit(filled);
+        packets.limit(packetLimit);
     }
 
     /** The packet size the server has settled on. */
@@ -726,5 +711,6 @@ public final class TdsChannel implements AutoCloseable {
         channel.close();
         out.close();
         in.close();
+        packets.close();
     }
 }
