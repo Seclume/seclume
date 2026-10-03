@@ -183,7 +183,13 @@ class PoolHandOnSeamTest {
             Connection handle = sender.getConnection();
             String backend = ask(handle, "select pg_backend_pid()");
             ask(handle, "select set_config('app.tenant_id', 'moving-tenant', false)");
+            try (Statement statement = handle.createStatement()) {
+                statement.execute("create temporary table handoff_pending (n int) on commit preserve rows");
+            }
             handle.setAutoCommit(false);
+            try (Statement statement = handle.createStatement()) {
+                statement.executeUpdate("insert into handoff_pending values (42)");
+            }
             String transaction = ask(handle, "select txid_current()");
             Connection physical = sender.detach(handle);
             handle.close();
@@ -192,7 +198,11 @@ class PoolHandOnSeamTest {
                 assertEquals(transaction, ask(resumed, "select txid_current()"));
                 assertEquals("moving-tenant", ask(resumed, "select current_setting('app.tenant_id')"));
                 assertFalse(resumed.getAutoCommit());
+                assertEquals("42", ask(resumed, "select n from handoff_pending"),
+                        "uncommitted writes and the temporary table must survive handoff");
                 resumed.commit();
+                assertEquals("42", ask(resumed, "select n from handoff_pending"),
+                        "the migrated transaction must remain committable");
             }
             try (Connection next = receiver.getConnection()) {
                 assertEquals(backend, ask(next, "select pg_backend_pid()"));

@@ -122,6 +122,37 @@ class DetachSeamTest {
         }
     }
 
+    @Test
+    void pendingWritesAndSessionStateSurviveDetachAndResume() throws Exception {
+        try (Connection original = DriverManager.getConnection(url)) {
+            String backend = ask(original, "select pg_backend_pid()");
+            ask(original, "select set_config('app.tenant_id', 'stream-tenant', false)");
+            try (Statement statement = original.createStatement()) {
+                statement.execute("create temporary table stream_pending (n int) on commit preserve rows");
+            }
+            original.setAutoCommit(false);
+            try (Statement statement = original.createStatement()) {
+                statement.executeUpdate("insert into stream_pending values (73)");
+            }
+            String transaction = ask(original, "select txid_current()");
+            ConnectionFacts facts = original.unwrap(PgConnection.class).facts();
+            PgSession.Detached detached = original.unwrap(PgSession.class).detach();
+            try (var stream = detached.stream();
+                 Connection resumed = PgConnection.resume(PgSession.resume(stream,
+                         detached.parameters(), detached.backendProcessId(),
+                         detached.backendSecretKey()), facts)) {
+                assertTrue(original.isClosed());
+                assertFalse(resumed.getAutoCommit());
+                assertEquals(backend, ask(resumed, "select pg_backend_pid()"));
+                assertEquals(transaction, ask(resumed, "select txid_current()"));
+                assertEquals("stream-tenant", ask(resumed, "select current_setting('app.tenant_id')"));
+                assertEquals("73", ask(resumed, "select n from stream_pending"));
+                resumed.commit();
+                assertEquals("73", ask(resumed, "select n from stream_pending"));
+            }
+        }
+    }
+
     private static String ask(Connection connection, String sql) throws SQLException {
         try (Statement statement = connection.createStatement();
              ResultSet rows = statement.executeQuery(sql)) {

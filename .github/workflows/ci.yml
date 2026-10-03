@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 # What this file is actually worth: here the tests run against *real*
 # databases. A development machine rarely has more than one, and a test server
 # somebody built themselves only confirms their own assumptions. This is where
