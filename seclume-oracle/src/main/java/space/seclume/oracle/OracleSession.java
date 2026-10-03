@@ -788,7 +788,7 @@ public final class OracleSession implements AutoCloseable {
      *
      * @param cursorId   the cursor of this statement, or 0 for a fresh parse
      * @param iterations how many sets of values follow
-     * @param rows       supplies the values of row {@code i}, or {@code null}
+     * @param batch      supplies the values of row {@code i}, or {@code null}
      */
     public TtcResult query(String sql, space.seclume.oracle.net.TtcBinds binds,
                            TtcResult.RowHandler handler, int cursorId, int iterations,

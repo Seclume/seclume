@@ -474,7 +474,8 @@ public final class TtcBinds {
             case OracleColumn.TYPE_DATE -> DATE_SIZE;
             case OracleColumn.TYPE_TIMESTAMP -> TIMESTAMP_SIZE;
             case OracleColumn.TYPE_TIMESTAMP_ZONE -> TIMESTAMP_ZONE_SIZE;
-            case OracleColumn.TYPE_RAW -> Math.max(((byte[]) value).length, 1);
+            case OracleColumn.TYPE_RAW -> value == null ? NULL_SIZE
+                    : Math.max(((byte[]) value).length, 1);
             default -> value == null ? NULL_SIZE
                     : Math.max(((String) value).length() * BYTES_PER_CHARACTER, 1);
         };

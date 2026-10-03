@@ -265,7 +265,7 @@ public final class TtcResult {
         if (bytes > 0) {
             p++;                                       // the length once more
             unchanged = new byte[(int) bytes]; // seclume-allow: a bit vector of the protocol, not a secret
-            for (int i = 0; i < bytes; i++) {
+            for (int i = 0; i < unchanged.length; i++) {
                 unchanged[i] = in.getByte(p + i);
             }
             p += (int) bytes;
@@ -292,7 +292,7 @@ public final class TtcResult {
         int p = at;
         long count = number(in, p);
         p = skipNumber(in, p);
-        for (int i = 0; i < count; i++) {
+        for (long i = 0; i < count; i++) {
             p = skipNumber(in, p);
         }
         long bytes = number(in, p);
@@ -300,7 +300,7 @@ public final class TtcResult {
         p += (int) bytes;
         long pairs = number(in, p);
         p = skipNumber(in, p);
-        for (int i = 0; i < pairs; i++) {
+        for (long i = 0; i < pairs; i++) {
             p = skipBlock(in, p);                      // key
             p = skipBlock(in, p);                      // value
             p = skipNumber(in, p);                     // flags

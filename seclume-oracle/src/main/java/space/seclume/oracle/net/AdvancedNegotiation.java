@@ -246,7 +246,7 @@ public final class AdvancedNegotiation {
                         : "the server agreed to checksums but not to encryption, and "
                                 + "nativeEncryption=required");
             }
-            if (encrypted && prime == null) {
+            if (encrypted && (prime == null || generator == null || serverPublic == null)) {
                 throw new IOException("the server chose encryption but sent no Diffie-Hellman "
                         + "group to key it with");
             }
