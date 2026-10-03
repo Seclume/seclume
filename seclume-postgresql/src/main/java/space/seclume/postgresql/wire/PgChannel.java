@@ -617,6 +617,16 @@ public final class PgChannel implements AutoCloseable {
     }
 
     /**
+     * Whether an asynchronous notification poll can run without flushing a
+     * pending command or consuming rows still owned by a result. Unread
+     * asynchronous messages may follow the last ReadyForQuery in the buffer.
+     */
+    public boolean canPollNotifications() {
+        return out.position() == 0 && !awaitingAnswer && outstandingReady == 0
+                && !keeping && in.position() == messageEnd;
+    }
+
+    /**
      * Puts a different transport underneath, keeping every buffer as it is.
      *
      * <p>That is the whole trick of a move within one process: the protocol
