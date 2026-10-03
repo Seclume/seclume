@@ -62,6 +62,8 @@ jobs:
       # Azure's storage emulator, for seclume-azure's end-to-end test.
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: .github/ci-tools
+      - run: npm audit --audit-level=moderate
+        working-directory: .github/ci-tools
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
       - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
