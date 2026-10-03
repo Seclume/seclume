@@ -190,7 +190,7 @@ final class NativeEncryption implements AutoCloseable {
         }
         int total = length - 1;                                          // the folding key
         if (key != null) {
-            if (total < 1 || (total - 1) % Aes.BLOCK != 0) {           // no blocks: empty data
+            if ((total - 1) % Aes.BLOCK != 0) {                        // no blocks: empty data
                 throw new IOException("an encrypted packet of " + total + " bytes cannot be "
                         + "whole blocks and a padding byte");
             }

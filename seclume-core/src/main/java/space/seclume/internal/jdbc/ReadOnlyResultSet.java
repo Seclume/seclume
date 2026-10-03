@@ -440,7 +440,11 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     @Override
     public final long getLong(int columnIndex) throws SQLException {
         int column = check(columnIndex);
-        return lastWasNull ? 0 : longAt(column);
+        try {
+            return lastWasNull ? 0 : longAt(column);
+        } catch (NumberFormatException notANumber) {
+            throw notANumber(columnIndex, "an integer", notANumber);
+        }
     }
 
     @Override
@@ -451,13 +455,34 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     @Override
     public final double getDouble(int columnIndex) throws SQLException {
         int column = check(columnIndex);
-        return lastWasNull ? 0 : doubleAt(column);
+        try {
+            return lastWasNull ? 0 : doubleAt(column);
+        } catch (NumberFormatException notANumber) {
+            throw notANumber(columnIndex, "a number", notANumber);
+        }
     }
 
     @Override
     public final BigDecimal getBigDecimal(int columnIndex) throws SQLException {
         int column = check(columnIndex);
-        return lastWasNull ? null : decimalAt(column);
+        try {
+            return lastWasNull ? null : decimalAt(column);
+        } catch (NumberFormatException notANumber) {
+            throw notANumber(columnIndex, "a number", notANumber);
+        }
+    }
+
+    /**
+     * {@code getInt} on a column holding {@code 'abc'}: JDBC owes the caller an
+     * {@code SQLException} with SQLState 22018 (invalid character value for
+     * cast), not the {@code NumberFormatException} the parsers below raise.
+     * Caught here once, for every driver and every parser, rather than at each
+     * {@code parseLong} - the value itself is left out, it may be anything.
+     */
+    private static SQLException notANumber(int columnIndex, String what,
+            NumberFormatException cause) {
+        return new java.sql.SQLDataException("column " + columnIndex + " cannot be read as "
+                + what, "22018", cause);
     }
 
     /**

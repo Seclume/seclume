@@ -130,8 +130,16 @@ public final class ProcessSecretProvider implements SecretProvider {
         }
     }
 
+    /**
+     * mkfifo by its absolute path where it is found: the pipe the secret
+     * travels through is not made by whatever a PATH entry calls mkfifo.
+     */
+    private static final String MKFIFO = Files.isExecutable(Path.of("/usr/bin/mkfifo"))
+            ? "/usr/bin/mkfifo"
+            : Files.isExecutable(Path.of("/bin/mkfifo")) ? "/bin/mkfifo" : "mkfifo";
+
     private static void makeFifo(Path fifo) throws IOException, InterruptedException {
-        Process mkfifo = new ProcessBuilder("mkfifo", "-m", "600", fifo.toString())
+        Process mkfifo = new ProcessBuilder(MKFIFO, "-m", "600", fifo.toString())
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start();

@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed: `getInt` on text threw `NumberFormatException` instead of `SQLException`
+
+- `getInt`, `getLong`, `getDouble`, `getBigDecimal` (and the narrower getters) on a column
+  holding text that is not a number - `select 'abc'` - let the parser's
+  `NumberFormatException` escape on all four drivers. A caller catching `SQLException` did
+  not see it. It is now an `SQLDataException` with SQLState 22018, and the row stays readable
+  (`TextIsNotANumberTest`, with all four servers, failing without the fix). Found through
+  CodeQL's `java/uncaught-number-format-exception`.
+- Smaller code-scanning findings: a null RAW bind on Oracle no longer risks a
+  `NullPointerException` in sizing its buffer; the Oracle wire decoders count with `long` where
+  the server sends a 64-bit count; `mkfifo` for `ProcessSecretProvider` is run by absolute path.
+
 ### SEC-04: seclume's own TLS is the default, JSSE only where a server needs it
 
 - `tlsStack` has a third value, `auto`, and it is the default for all four drivers. A
