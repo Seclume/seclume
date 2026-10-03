@@ -24,6 +24,9 @@ class HostnameMatchTest {
             "*.sub.example.com,    db.sub.example.com",
             "*.example.co.uk,      db.example.co.uk",
             "*.tenant.github.io,   db.tenant.github.io",
+            "*.github.io,          tenant.github.io",      // private PSL entries allow provider certificates
+            "*.appspot.com,        tenant.appspot.com",
+            "*.abc.eu-central-1.rds.amazonaws.com, db.abc.eu-central-1.rds.amazonaws.com",
             "*.www.ck,             db.www.ck",            // PSL exception to *.ck
             "*.city.kawasaki.jp,   db.city.kawasaki.jp",   // PSL exception
             "*.internal.test,      db.internal.test",      // private names remain usable
@@ -45,8 +48,8 @@ class HostnameMatchTest {
             "*.com,                example.com",          // too broad to be allowed at all
             "*.co.uk,              example.co.uk",        // multi-label public suffix
             "*.com.au,             example.com.au",
-            "*.github.io,          tenant.github.io",     // independently controlled tenants
-            "*.appspot.com,        tenant.appspot.com",
+            "*.co.jp,              tenant.co.jp",
+            "*.org.uk,             tenant.org.uk",
             "*.foo.ck,             db.foo.ck",            // PSL wildcard rule
             "*.foo.kawasaki.jp,    db.foo.kawasaki.jp",
             "*.xn--55qx5d.cn,      example.xn--55qx5d.cn", // internationalized public suffix

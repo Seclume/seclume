@@ -47,15 +47,19 @@ against callers violating the documented arena lifetime or writer contract.
 ## SEC-03 — public suffix boundaries for TLS wildcards
 
 Implemented for review: HostnameMatch now checks an offline, pinned Public Suffix
-List with ICANN and PRIVATE entries, including wildcard rules and exceptions.
-Certificate patterns such as `*.co.uk` and `*.github.io` are refused; exact
+List, using its ICANN entries with wildcard rules and exceptions.
+Certificate patterns such as `*.co.uk` and `*.com.au` are refused; exact
 names and wildcards below registrable domains remain supported. Missing or
-unreadable list data refuses wildcards.
+unreadable list data refuses wildcards. PRIVATE hosting entries remain eligible
+for provider certificates, with explicit RDS compatibility checks.
 
-Seven new negative hostname cases failed before the fix. With the fix, 65 TLS
+Seven new negative hostname cases failed before the fix. With the fix, 75 TLS
 hostname, suffix and certificate-trust checks passed, including a generated
 trusted certificate that must not cover independently controlled domains.
 The source, SHA-256, license and update procedure accompany the bundled data.
+Loading uses bounded bytes and strict UTF-8 decoding, with no reader exceptions
+to the production-source credential-safety check. Native-image metadata includes
+the resource; a native-image build was not run in this local verification.
 
 ## Remaining audit work, in sequence
 

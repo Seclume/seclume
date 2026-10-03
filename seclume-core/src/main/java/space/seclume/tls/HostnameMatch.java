@@ -37,8 +37,10 @@ import java.util.Locale;
  *       RFC 6125 tolerates them: no public CA issues them any more, and a
  *       prefix match is a wide door for a name nobody intended;
  *   <li><b>a wildcard cannot cover a public suffix.</b> {@code *.com},
- *       {@code *.co.uk} and {@code *.github.io} are refused using the bundled
- *       Public Suffix List, including its private hosting boundaries;
+ *       {@code *.co.uk} and {@code *.com.au} are refused using the ICANN
+ *       section of the bundled Public Suffix List. Private hosting entries
+ *       are not certificate issuance boundaries: cloud providers may use
+ *       valid wildcard certificates there;
  *   <li><b>a literal IP address matches only an iPAddress entry</b>, never a
  *       DNS name and never a wildcard - {@code *.1.2.3} is not a thing, and
  *       treating an address as a name is how it would become one.

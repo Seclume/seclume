@@ -1,17 +1,20 @@
 package space.seclume.tls;
 
-import java.io.BufferedReader; // seclume-allow: only the bundled public suffix data is read
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader; // seclume-allow: only the bundled public suffix data is read
 import java.net.IDN;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 
-/** Public suffix boundaries for certificate wildcards, including private hosting domains. */
+/** ICANN public suffix boundaries for certificate wildcards. */
 final class PublicSuffixes {
+    /** The pinned list is about 330 KiB; refuse unexpectedly large replacement resources. */
+    private static final int MAX_LIST_BYTES = 1024 * 1024;
+
     private PublicSuffixes() {
     }
 
@@ -67,11 +70,29 @@ final class PublicSuffixes {
         Set<String> exact = new HashSet<>();
         Set<String> wildcards = new HashSet<>();
         Set<String> exceptions = new HashSet<>();
-        // seclume-allow: this stream is the bundled public suffix data, never credentials
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-            for (String line; (line = reader.readLine()) != null; ) {
-                String rule = line.strip();
-                if (rule.isEmpty() || rule.startsWith("//")) {
+        boolean inIcann = false;
+        boolean complete = false;
+        try (stream) {
+            byte[] bytes = stream.readNBytes(MAX_LIST_BYTES + 1);
+            if (bytes.length > MAX_LIST_BYTES) {
+                return null;
+            }
+            // Only the fixed public resource is decoded. Invalid UTF-8 cannot silently lose rules.
+            String data = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+            for (var lines = data.lines().iterator(); lines.hasNext(); ) {
+                String rule = lines.next().strip();
+                if (rule.equals("// ===BEGIN ICANN DOMAINS===")) {
+                    inIcann = true;
+                    continue;
+                }
+                if (rule.equals("// ===END ICANN DOMAINS===")) {
+                    complete = inIcann;
+                    break;
+                }
+                if (!inIcann || rule.isEmpty() || rule.startsWith("//")) {
                     continue;
                 }
                 // The PSL format permits a comment after whitespace following a rule.
@@ -92,7 +113,7 @@ final class PublicSuffixes {
         } catch (IOException | IllegalArgumentException unreadable) {
             return null;
         }
-        if (exact.isEmpty()) {
+        if (!complete || exact.isEmpty()) {
             return null;
         }
         return new Rules(Set.copyOf(exact), Set.copyOf(wildcards), Set.copyOf(exceptions));
