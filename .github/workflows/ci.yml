@@ -124,6 +124,8 @@ jobs:
           make install_sw >/dev/null
       - name: Handshake with X25519MLKEM768
         run: |
+          # Bootstrap the verified wrapper before selecting the test's OpenSSL libraries.
+          ./mvnw -v
           export SECLUME_OPENSSL35="$HOME/openssl35/bin/openssl"
           export LD_LIBRARY_PATH="$HOME/openssl35/lib"
           "$SECLUME_OPENSSL35" version
