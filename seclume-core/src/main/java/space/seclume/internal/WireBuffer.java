@@ -94,6 +94,9 @@ public final class WireBuffer implements AutoCloseable {
     }
 
     public void position(int newPosition) {
+        if (newPosition < 0 || newPosition > capacity()) {
+            throw malformed("buffer position outside capacity: " + newPosition);
+        }
         this.position = newPosition;
     }
 
@@ -150,13 +153,24 @@ public final class WireBuffer implements AutoCloseable {
         // The check alone, small enough to be inlined into every put: the
         // growing below made this too large for that, and a call per byte
         // written was the largest single cost of encoding a batch.
+        if (needed < 0) {
+            throw malformed("negative or overflowed buffer capacity: " + needed);
+        }
         if (needed > segment.byteSize()) {
             grow(needed);
         }
     }
 
+    /** Check before adding or narrowing a caller-supplied length. */
+    private void ensureWritable(long bytes) {
+        if (bytes < 0 || bytes > Integer.MAX_VALUE - position) {
+            throw malformed("buffer write length out of range: " + bytes);
+        }
+        ensureCapacity(position + (int) bytes);
+    }
+
     private void grow(int needed) {
-        int size = Math.max(capacity() * 2, needed);
+        int size = (int) Math.min(Integer.MAX_VALUE, Math.max(2L * capacity(), needed));
         MemorySegment bigger = arena.allocate(size);
         MemorySegment.copy(segment, 0, bigger, 0, Math.max(position, limit));
         // The old buffer may have held the password.
@@ -168,20 +182,21 @@ public final class WireBuffer implements AutoCloseable {
     // ---- writing ---------------------------------------------------------
 
     public WireBuffer putByte(byte value) {
-        ensureCapacity(position + 1);
-        segment.set(ValueLayout.JAVA_BYTE, position++, value);
+        ensureWritable(1);
+        segment.set(ValueLayout.JAVA_BYTE, position, value);
+        position++;
         return this;
     }
 
     public WireBuffer putShort(short value) {
-        ensureCapacity(position + 2);
+        ensureWritable(2);
         segment.set(BE_SHORT, position, value);
         position += 2;
         return this;
     }
 
     public WireBuffer putInt(int value) {
-        ensureCapacity(position + 4);
+        ensureWritable(4);
         segment.set(BE_INT, position, value);
         position += 4;
         return this;
@@ -193,7 +208,12 @@ public final class WireBuffer implements AutoCloseable {
     }
 
     public WireBuffer putBytes(MemorySegment source, long offset, long length) {
-        ensureCapacity(position + (int) length);
+        // Refuse invalid source ranges before allocating or wiping old memory.
+        if (offset < 0 || length < 0 || length > source.byteSize()
+                || offset > source.byteSize() - length) {
+            throw malformed("buffer copy source range out of bounds");
+        }
+        ensureWritable(length);
         MemorySegment.copy(source, offset, segment, position, length);
         position += (int) length;
         return this;
@@ -217,7 +237,7 @@ public final class WireBuffer implements AutoCloseable {
         // including a zero-length one for "". Three of those per execution
         // showed up in the allocation profile of a prepared statement.
         int length = text.length();
-        ensureCapacity(position + length);
+        ensureWritable(length);
         for (int i = 0; i < length; i++) {
             char c = text.charAt(i);
             if (c >= 0x80) {
@@ -237,7 +257,7 @@ public final class WireBuffer implements AutoCloseable {
      */
     private WireBuffer putTextUtf8(String text) {
         byte[] bytes = text.getBytes(StandardCharsets.UTF_8); // seclume-allow: protocol text and identifiers, never a secret
-        ensureCapacity(position + bytes.length);
+        ensureWritable(bytes.length);
         MemorySegment.copy(MemorySegment.ofArray(bytes), 0, segment, position, bytes.length);
         position += bytes.length;
         return this;
@@ -253,14 +273,14 @@ public final class WireBuffer implements AutoCloseable {
     // ---- little-endian, the way MySQL writes it --------------------------
 
     public WireBuffer putShortLe(short value) {
-        ensureCapacity(position + 2);
+        ensureWritable(2);
         segment.set(LE_SHORT, position, value);
         position += 2;
         return this;
     }
 
     public WireBuffer putIntLe(int value) {
-        ensureCapacity(position + 4);
+        ensureWritable(4);
         segment.set(LE_INT, position, value);
         position += 4;
         return this;
@@ -272,7 +292,7 @@ public final class WireBuffer implements AutoCloseable {
     }
 
     public WireBuffer putLongLe(long value) {
-        ensureCapacity(position + 8);
+        ensureWritable(8);
         segment.set(LE_LONG, position, value);
         position += 8;
         return this;
@@ -289,6 +309,10 @@ public final class WireBuffer implements AutoCloseable {
      * length is inserted after its content has been written.
      */
     public WireBuffer putUnsignedLeAt(int at, long value, int length) {
+        requireIntegerWidth(length);
+        if (at < 0 || at > capacity() - length) {
+            throw malformed("buffer integer write outside capacity: " + at);
+        }
         for (int i = 0; i < length; i++) {
             segment.set(ValueLayout.JAVA_BYTE, at + i, (byte) (value >>> (8 * i)));
         }
@@ -297,7 +321,7 @@ public final class WireBuffer implements AutoCloseable {
 
     /** {@code count} zero bytes - filler, as the protocols require in several places. */
     public WireBuffer putZeroes(int count) {
-        ensureCapacity(position + count);
+        ensureWritable(count);
         zero(position, count);
         position += count;
         return this;
@@ -368,6 +392,7 @@ public final class WireBuffer implements AutoCloseable {
 
     /** An unsigned number from {@code length} bytes, least significant first. */
     public long getUnsignedLe(int length) {
+        requireIntegerWidth(length);
         require(length);
         long value = 0;
         for (int i = 0; i < length; i++) {
@@ -379,12 +404,19 @@ public final class WireBuffer implements AutoCloseable {
 
     /** Writes an unsigned number into {@code length} bytes, least significant first. */
     public WireBuffer putUnsignedLe(long value, int length) {
-        ensureCapacity(position + length);
+        requireIntegerWidth(length);
+        ensureWritable(length);
         for (int i = 0; i < length; i++) {
             segment.set(ValueLayout.JAVA_BYTE, position + i, (byte) (value >>> (8 * i)));
         }
         position += length;
         return this;
+    }
+
+    private static void requireIntegerWidth(int length) {
+        if (length < 0 || length > Long.BYTES) {
+            throw malformed("buffer integer width out of range: " + length);
+        }
     }
 
     // ---- reading ---------------------------------------------------------
@@ -483,6 +515,7 @@ public final class WireBuffer implements AutoCloseable {
      */
     public String readCString() {
         int length = cStringLength();
+        require(length + 1); // Include the terminator before allocating or advancing.
         String value = readString(length);
         position++;   // Abschlussbyte
         return value;
