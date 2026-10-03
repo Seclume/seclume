@@ -1,5 +1,6 @@
 package space.seclume.tls;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -94,15 +95,18 @@ class TlsVersionRefusedTest {
     @Test
     void aServerThatHangsUpRefusesTheVersion() throws Exception {
         try (ServerSocket listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            java.util.concurrent.atomic.AtomicInteger firstByte =
+                    new java.util.concurrent.atomic.AtomicInteger(-2);
             Thread server = Thread.ofVirtual().start(() -> {
                 try (Socket accepted = listener.accept()) {
-                    accepted.getInputStream().read(new byte[512]);
+                    firstByte.set(accepted.getInputStream().read());
                 } catch (IOException ignored) {
                     // the client's view is what is tested
                 }
             });
             assertInstanceOf(TlsVersionRefused.class, ownStack(listener.getLocalPort(), false));
             server.join();
+            assertEquals(22, firstByte.get(), "the server hung up on something else than a ClientHello");
         }
     }
 
