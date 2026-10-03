@@ -366,6 +366,10 @@
     {
       "module": "seclume.core",
       "glob": "space/seclume/internal/aws-rds-global-bundle.pem"
+    },
+    {
+      "module": "seclume.core",
+      "glob": "space/seclume/tls/public_suffix_list.dat"
     }
   ]
 }

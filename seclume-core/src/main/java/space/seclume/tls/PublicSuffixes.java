@@ -1,9 +1,9 @@
 package space.seclume.tls;
 
-import java.io.BufferedReader;
+import java.io.BufferedReader; // seclume-allow: only the bundled public suffix data is read
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.InputStreamReader; // seclume-allow: only the bundled public suffix data is read
 import java.net.IDN;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
@@ -67,6 +67,7 @@ final class PublicSuffixes {
         Set<String> exact = new HashSet<>();
         Set<String> wildcards = new HashSet<>();
         Set<String> exceptions = new HashSet<>();
+        // seclume-allow: this stream is the bundled public suffix data, never credentials
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             for (String line; (line = reader.readLine()) != null; ) {
                 String rule = line.strip();
