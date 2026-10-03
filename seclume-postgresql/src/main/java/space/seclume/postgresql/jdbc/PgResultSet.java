@@ -443,8 +443,10 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
      * lc_monetary, without the currency sign and the thousands separators,
      * negative in parentheses or with a minus. A locale that writes the
      * decimal point as a comma defeats this as it defeats pgjdbc.
+     * @throws NumberFormatException if the stripped value is not a number;
+     *         JDBC getters translate this to a SQL exception
      */
-    static Double money(String text) {
+    static Double money(String text) throws NumberFormatException {
         boolean negative = text.indexOf('-') >= 0 || text.indexOf('(') >= 0;
         StringBuilder digits = new StringBuilder(text.length());
         for (int i = 0; i < text.length(); i++) {

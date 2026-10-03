@@ -19,8 +19,12 @@ public final class BinaryValues {
     private BinaryValues() {
     }
 
-    /** An integer from the raw bytes, according to the type. */
-    public static long toLong(ValueCells row, int column) {
+    /**
+     * An integer from the raw bytes, according to the type.
+     * @throws NumberFormatException if a textual value is not an integer;
+     *         JDBC getters translate this to a SQL exception
+     */
+    public static long toLong(ValueCells row, int column) throws NumberFormatException {
         MySession.Field field = row.fields().get(column);
         int at = row.offset(column);
         int length = row.length(column);
@@ -67,8 +71,12 @@ public final class BinaryValues {
         return value;
     }
 
-    /** The floating-point number from the raw bytes. */
-    public static double toDouble(ValueCells row, int column) {
+    /**
+     * The floating-point number from the raw bytes.
+     * @throws NumberFormatException if a textual value is not a number;
+     *         JDBC getters translate this to a SQL exception
+     */
+    public static double toDouble(ValueCells row, int column) throws NumberFormatException {
         MySession.Field field = row.fields().get(column);
         int at = row.offset(column);
         return switch (field.type()) {
