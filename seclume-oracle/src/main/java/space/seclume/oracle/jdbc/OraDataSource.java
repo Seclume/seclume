@@ -226,7 +226,7 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
      * {@link space.seclume.internal.jdbc.TlsStack}.
      */
     private space.seclume.internal.jdbc.TlsStack tlsStack =
-            space.seclume.internal.jdbc.TlsStack.JSSE;
+            space.seclume.internal.jdbc.TlsStack.AUTO;
 
     public void setTlsStack(String stack) throws SQLException {
         this.tlsStack = space.seclume.internal.jdbc.TlsStack.of(stack);

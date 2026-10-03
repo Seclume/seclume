@@ -112,7 +112,7 @@ class LocalOracleTlsTest {
     /** And the JDK's TLS reaches the same listener. */
     @Test
     void theJdkStackAlsoSpeaksIt() throws Exception {
-        try (Connection connection = DriverManager.getConnection(url("&tls=require"));
+        try (Connection connection = DriverManager.getConnection(url("&tls=require&tlsStack=jsse"));
                 Statement statement = connection.createStatement();
                 ResultSet rows = statement.executeQuery("select 1 from dual")) {
             String tls = describe(connection);

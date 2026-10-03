@@ -55,8 +55,21 @@ jdbc:seclume:postgresql://db:5432/app?tls=require&tlsStack=seclume
 
 | `tlsStack` | What provides the encryption |
 |---|---|
-| `jsse` | the JDK's `SSLEngine` — the default, and what every JDBC driver does |
-| `seclume` | this project's own TLS 1.3 client |
+| `auto` | the default: `seclume`, and `jsse` for a server that cannot speak it |
+| `seclume` | this project's own TLS 1.3 client, and nothing else |
+| `jsse` | the JDK's `SSLEngine`, what every JDBC driver does |
+
+**`auto`** connects with the own stack first. A server that refuses it before its ServerHello -
+TLS 1.2 only, no group in common, or hanging up on the ClientHello - is connected to again
+through JSSE, and a warning names the server: from then on its password passes through the heap.
+The server is remembered for an hour, so a pool does not try twice per connection, and is then
+tried on the own stack again. Nothing else changes stack: an untrusted certificate, a wrong host
+name or a refused login fails as before. With a client certificate there is no fallback, since
+its key is reachable only from the own stack. The fallback can be provoked by anyone on the path
+who answers the ClientHello with an alert; what that gains them is JSSE's TLS with the
+certificate still checked, the password on this process's heap rather than on the wire.
+`tlsStack=seclume` closes that too, and refuses servers without TLS 1.3. SQL Server reaches
+the own stack only with `tds=8.0`; TDS 7.4 nests TLS 1.2 in its pre-login and always uses JSSE.
 
 Every mode above works on either stack, so this is a capability setting, not a security one.
 The own stack gives up resumption, TLS 1.2 and every key exchange group but two. It offers P-256
@@ -70,7 +83,8 @@ switches the hybrid off. A CI job proves the hybrid end to end against OpenSSL 3
 classical, as everywhere in TLS today. In return
 it gains two things JSSE cannot offer at any price: **the traffic secrets never become Java
 objects**, and the encryption state can be frozen and taken up elsewhere, which is what a
-connection that survives moving host needs. The safe, boring one stays the default.
+connection that survives moving host needs. Since the external audit of 30.09.2026 (SEC-04)
+that is why it is tried first.
 
 **All four drivers are proven on it against real servers**: PostgreSQL and MySQL with channel
 binding, Oracle over a TCPS listener, and SQL Server with `tds=8.0` (see below).
