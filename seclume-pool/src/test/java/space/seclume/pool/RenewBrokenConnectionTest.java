@@ -1,6 +1,7 @@
 package space.seclume.pool;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -95,7 +96,9 @@ class RenewBrokenConnectionTest {
         try (SeclumePool pool = new SeclumePool(source, settings());
              Connection connection = pool.getConnection()) {
             connection.setAutoCommit(false);
-            connection.createStatement().close();      // work, and it is done with
+            try (Statement work = connection.createStatement()) {   // work, and it is done with
+                assertFalse(work.isClosed());
+            }
             source.handedOut().get(0).broken = true;
 
             SQLException thrown = assertThrows(SQLException.class, connection::createStatement);
@@ -144,7 +147,9 @@ class RenewBrokenConnectionTest {
         try (SeclumePool pool = new SeclumePool(source, settings());
              Connection connection = pool.getConnection()) {
             source.handedOut().get(0).broken = true;
-            connection.createStatement().close();
+            try (Statement renewed = connection.createStatement()) {
+                assertFalse(renewed.isClosed());
+            }
             assertEquals(2, source.openedCount());
 
             source.handedOut().get(1).broken = true;

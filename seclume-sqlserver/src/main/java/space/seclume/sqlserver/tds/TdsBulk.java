@@ -138,24 +138,24 @@ public final class TdsBulk {
 
     private static Kind kindOf(Object value, String name) throws SQLException {
         return switch (value) {
-            case Integer ignored -> Kind.INT;
-            case Short ignored -> Kind.INT;
-            case Byte ignored -> Kind.INT;
-            case Long ignored -> Kind.BIGINT;
-            case Boolean ignored -> Kind.BIT;
-            case Double ignored -> Kind.FLOAT;
-            case Float ignored -> Kind.REAL;
-            case BigDecimal ignored -> Kind.DECIMAL;
-            case String ignored -> Kind.NVARCHAR;
-            case byte[] ignored -> Kind.VARBINARY;
-            case LocalDate ignored -> Kind.DATE;
-            case java.sql.Date ignored -> Kind.DATE;
-            case LocalTime ignored -> Kind.TIME;
-            case java.sql.Time ignored -> Kind.TIME;
-            case LocalDateTime ignored -> Kind.DATETIME2;
-            case java.sql.Timestamp ignored -> Kind.DATETIME2;
-            case OffsetDateTime ignored -> Kind.DATETIMEOFFSET;
-            case UUID ignored -> Kind.GUID;
+            case Integer _ -> Kind.INT;
+            case Short _ -> Kind.INT;
+            case Byte _ -> Kind.INT;
+            case Long _ -> Kind.BIGINT;
+            case Boolean _ -> Kind.BIT;
+            case Double _ -> Kind.FLOAT;
+            case Float _ -> Kind.REAL;
+            case BigDecimal _ -> Kind.DECIMAL;
+            case String _ -> Kind.NVARCHAR;
+            case byte[] _ -> Kind.VARBINARY;
+            case LocalDate _ -> Kind.DATE;
+            case java.sql.Date _ -> Kind.DATE;
+            case LocalTime _ -> Kind.TIME;
+            case java.sql.Time _ -> Kind.TIME;
+            case LocalDateTime _ -> Kind.DATETIME2;
+            case java.sql.Timestamp _ -> Kind.DATETIME2;
+            case OffsetDateTime _ -> Kind.DATETIMEOFFSET;
+            case UUID _ -> Kind.GUID;
             default -> throw new SQLException("column " + name + ": seclume does not bulk-load a "
                     + value.getClass().getName(), "22005");
         };

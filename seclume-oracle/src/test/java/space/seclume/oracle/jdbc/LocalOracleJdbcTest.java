@@ -455,7 +455,7 @@ class LocalOracleJdbcTest {
                     insert.setInt(1, 1);
                     insert.executeUpdate();              // auto-commit is on
                 }
-                assertEquals(1, countOver(1), "auto-commit did not commit");
+                assertEquals(1, countVisible(), "auto-commit did not commit");
 
                 writer.setAutoCommit(false);
                 try (PreparedStatement insert = writer.prepareStatement(
@@ -463,10 +463,10 @@ class LocalOracleJdbcTest {
                     insert.setInt(1, 2);
                     insert.executeUpdate();
                 }
-                assertEquals(1, countOver(2),
+                assertEquals(1, countVisible(),
                         "a row appeared although the transaction was still open");
                 writer.commit();
-                assertEquals(2, countOver(2), "commit did not commit");
+                assertEquals(2, countVisible(), "commit did not commit");
 
                 try (PreparedStatement insert = writer.prepareStatement(
                         "insert into zl_commit values (?)")) {
@@ -474,7 +474,7 @@ class LocalOracleJdbcTest {
                     insert.executeUpdate();
                 }
                 writer.rollback();
-                assertEquals(2, countOver(3), "rollback did not roll back");
+                assertEquals(2, countVisible(), "rollback did not roll back");
             } finally {
                 writer.setAutoCommit(true);
                 try (Statement statement = writer.createStatement()) {
@@ -485,7 +485,7 @@ class LocalOracleJdbcTest {
     }
 
     /** How many rows a <b>different</b> connection can see. */
-    private static int countOver(int ignored) throws SQLException {
+    private static int countVisible() throws SQLException {
         try (Connection reader = connect();
              Statement statement = reader.createStatement();
              ResultSet found = statement.executeQuery("select count(*) from zl_commit")) {

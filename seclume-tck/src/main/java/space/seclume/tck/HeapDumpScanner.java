@@ -61,7 +61,7 @@ public final class HeapDumpScanner {
             if (findings.size() <= 50 && type == HprofParser.PrimitiveType.BYTE) {
                 for (Map.Entry<String, byte[]> needle : needles.entrySet()) {
                     check(findings, data, needle.getValue(), "byte[] " + objectId,
-                            needle.getKey(), objectId);
+                            needle.getKey());
                 }
             }
         });
@@ -114,11 +114,11 @@ public final class HeapDumpScanner {
             }
             switch (type) {
                 case BYTE -> {
-                    check(findings, data, utf8, "byte[] " + objectId, "UTF-8", objectId);
-                    check(findings, data, base64, "byte[] " + objectId, "Base64", objectId);
+                    check(findings, data, utf8, "byte[] " + objectId, "UTF-8");
+                    check(findings, data, base64, "byte[] " + objectId, "Base64");
                 }
                 case CHAR -> check(findings, data, utf16be, "char[] " + objectId,
-                        "UTF-16BE", objectId);
+                        "UTF-16BE");
                 default -> {
                     // The other types cannot carry a password.
                 }
@@ -128,7 +128,7 @@ public final class HeapDumpScanner {
     }
 
     private static void check(List<Finding> findings, ByteBuffer data, byte[] needle,
-                              String source, String encoding, long objectId) {
+                              String source, String encoding) {
         long position = indexOf(data, needle, 0);
         if (position >= 0) {
             findings.add(new Finding(source, encoding, position, needle.length));

@@ -27,6 +27,9 @@ import java.security.SecureRandom;
  */
 public final class Entropy {
 
+    /** One for the process: seeding a new one per call costs, and gains nothing. */
+    private static final SecureRandom FALLBACK = new SecureRandom();
+
     private static final MethodHandle BCRYPT_GEN_RANDOM = lookupBCryptGenRandom();
     /** BCRYPT_USE_SYSTEM_PREFERRED_RNG - then hAlgorithm may be null. */
     private static final int USE_SYSTEM_PREFERRED_RNG = 0x00000002;
@@ -97,7 +100,7 @@ public final class Entropy {
     private static void fillFromSecureRandom(MemorySegment target) {
         byte[] scratch = new byte[(int) target.byteSize()];
         try {
-            new SecureRandom().nextBytes(scratch);
+            FALLBACK.nextBytes(scratch);
             MemorySegment.copy(MemorySegment.ofArray(scratch), 0, target, 0, scratch.length);
         } finally {
             java.util.Arrays.fill(scratch, (byte) 0);

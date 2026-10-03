@@ -426,28 +426,28 @@ public final class TtcBinds {
     private static int typeOf(Object value) throws SQLException {
         return switch (value) {
             case null -> OracleColumn.TYPE_VARCHAR;
-            case Boolean ignored -> OracleColumn.TYPE_NUMBER;
-            case Byte ignored -> OracleColumn.TYPE_NUMBER;
-            case Short ignored -> OracleColumn.TYPE_NUMBER;
-            case Integer ignored -> OracleColumn.TYPE_NUMBER;
-            case Long ignored -> OracleColumn.TYPE_NUMBER;
-            case Float ignored -> OracleColumn.TYPE_NUMBER;
-            case Double ignored -> OracleColumn.TYPE_NUMBER;
-            case BigDecimal ignored -> OracleColumn.TYPE_NUMBER;
+            case Boolean _ -> OracleColumn.TYPE_NUMBER;
+            case Byte _ -> OracleColumn.TYPE_NUMBER;
+            case Short _ -> OracleColumn.TYPE_NUMBER;
+            case Integer _ -> OracleColumn.TYPE_NUMBER;
+            case Long _ -> OracleColumn.TYPE_NUMBER;
+            case Float _ -> OracleColumn.TYPE_NUMBER;
+            case Double _ -> OracleColumn.TYPE_NUMBER;
+            case BigDecimal _ -> OracleColumn.TYPE_NUMBER;
             case Locator lob -> lob.character()
                     ? OracleColumn.TYPE_CLOB : OracleColumn.TYPE_BLOB;
-            case space.seclume.internal.jdbc.NativeValue ignored -> OracleColumn.TYPE_VARCHAR;
-            case String ignored -> OracleColumn.TYPE_VARCHAR;
-            case byte[] ignored -> OracleColumn.TYPE_RAW;
-            case LocalDate ignored -> OracleColumn.TYPE_DATE;
-            case LocalTime ignored -> OracleColumn.TYPE_TIMESTAMP;
-            case java.sql.Time ignored -> OracleColumn.TYPE_TIMESTAMP;
-            case LocalDateTime ignored -> OracleColumn.TYPE_TIMESTAMP;
-            case java.sql.Date ignored -> OracleColumn.TYPE_DATE;
-            case java.sql.Timestamp ignored -> OracleColumn.TYPE_TIMESTAMP;
-            case java.time.OffsetDateTime ignored -> OracleColumn.TYPE_TIMESTAMP_ZONE;
-            case java.time.Instant ignored -> OracleColumn.TYPE_TIMESTAMP_ZONE;
-            case java.util.UUID ignored -> OracleColumn.TYPE_RAW;
+            case space.seclume.internal.jdbc.NativeValue _ -> OracleColumn.TYPE_VARCHAR;
+            case String _ -> OracleColumn.TYPE_VARCHAR;
+            case byte[] _ -> OracleColumn.TYPE_RAW;
+            case LocalDate _ -> OracleColumn.TYPE_DATE;
+            case LocalTime _ -> OracleColumn.TYPE_TIMESTAMP;
+            case java.sql.Time _ -> OracleColumn.TYPE_TIMESTAMP;
+            case LocalDateTime _ -> OracleColumn.TYPE_TIMESTAMP;
+            case java.sql.Date _ -> OracleColumn.TYPE_DATE;
+            case java.sql.Timestamp _ -> OracleColumn.TYPE_TIMESTAMP;
+            case java.time.OffsetDateTime _ -> OracleColumn.TYPE_TIMESTAMP_ZONE;
+            case java.time.Instant _ -> OracleColumn.TYPE_TIMESTAMP_ZONE;
+            case java.util.UUID _ -> OracleColumn.TYPE_RAW;
             default -> throw new SQLException("seclume cannot send a "
                     + value.getClass().getName() + " to Oracle as a bind variable");
         };

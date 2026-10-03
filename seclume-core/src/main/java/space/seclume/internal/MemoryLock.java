@@ -208,7 +208,7 @@ public final class MemoryLock {
     private static void releaseLocked(MemorySegment segment) {
         if (Platform.isWindows() && INCLUDE != null && ENABLED) {
             try {
-                int ignored = (int) INCLUDE.invokeExact(segment);   // exact, per block
+                int _ = (int) INCLUDE.invokeExact(segment);   // exact, per block
             } catch (Throwable t) {
                 LOG.log(Level.DEBUG, "including the block in dumps again failed", t);
             }
@@ -245,7 +245,7 @@ public final class MemoryLock {
         MemorySegment pages = MemorySegment.ofAddress(start).reinterpret(length);
         if (!Platform.isWindows() && ENABLED && INCLUDE != null) {
             try {
-                int ignored = (int) INCLUDE.invokeExact(MemorySegment.ofAddress(start), length,
+                int _ = (int) INCLUDE.invokeExact(MemorySegment.ofAddress(start), length,
                         MADV_DODUMP);
             } catch (Throwable t) {
                 LOG.log(Level.DEBUG, "including the pages in dumps again failed", t);
@@ -255,7 +255,7 @@ public final class MemoryLock {
             return;
         }
         try {
-            int ignored = (int) UNLOCK.invokeExact(pages, length);
+            int _ = (int) UNLOCK.invokeExact(pages, length);
         } catch (Throwable t) {
             LOG.log(Level.DEBUG, "munlock failed", t);
         }

@@ -823,7 +823,7 @@ public final class OracleSession implements AutoCloseable {
                            space.seclume.oracle.net.TtcQuery.Rows batch,
                            java.util.List<space.seclume.oracle.net.OracleColumn> known,
                            boolean oneBlock) throws SQLException {
-        beginReadOnlyIfAsked(sql);
+        beginReadOnlyIfAsked();
         try {
             rows = 0;
             releaseCarried();
@@ -1388,7 +1388,7 @@ public final class OracleSession implements AutoCloseable {
      * the transaction, so a following {@code commit} ends it and the next
      * transaction is primed again.
      */
-    private void beginReadOnlyIfAsked(String sql) throws SQLException {
+    private void beginReadOnlyIfAsked() throws SQLException {
         if (!readOnlyTransactions || autoCommit || inTransaction) {
             return;
         }
@@ -1734,7 +1734,7 @@ public final class OracleSession implements AutoCloseable {
      */
     public long pipelineExecute(String sql, space.seclume.oracle.net.TtcBinds binds)
             throws SQLException {
-        beginReadOnlyIfAsked(sql);
+        beginReadOnlyIfAsked();
         try {
             releaseCarried();
             if (!autoCommit) {

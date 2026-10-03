@@ -100,7 +100,9 @@ class DetachSeamTest {
         connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
         connection.setReadOnly(true);
         connection.setAutoCommit(false);
-        connection.prepareStatement("select 1").close();
+        try (java.sql.PreparedStatement prepared = connection.prepareStatement("select 1")) {
+            assertFalse(prepared.isClosed());
+        }
         ConnectionFacts facts = connection.unwrap(PgConnection.class).facts();
         assertFalse(facts.autoCommit());
         assertTrue(facts.readOnly());
