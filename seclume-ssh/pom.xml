@@ -51,9 +51,9 @@
     </dependency>
     <!-- Lets the test's SSHD server verify Ed25519 signatures. -->
     <dependency>
-      <groupId>org.bouncycastle</groupId>
-      <artifactId>bcprov-jdk18on</artifactId>
-      <version>1.86</version>
+      <groupId>com.bloxbean.cardano</groupId>
+      <artifactId>net-i2p-crypto-eddsa</artifactId>
+      <version>0.3.1</version>
       <scope>test</scope>
     </dependency>
     <dependency>

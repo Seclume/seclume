@@ -22,6 +22,9 @@ class Ed25519ProviderTest {
         verifier.initVerifier(null, key);
         verifier.update(null, new byte[0]);
         assertTrue(verifier.verify(null, signature), "RFC 8032 test vector 1");
+        var providerVerifier = new net.i2p.crypto.eddsa.EdDSAEngine();
+        providerVerifier.initVerify(key);
+        assertTrue(providerVerifier.verify(signature), "provider accepts the RFC signature");
 
         // Adding the group order to S must not create another accepted signature.
         byte[] order = HexFormat.of().parseHex(
@@ -36,5 +39,7 @@ class Ed25519ProviderTest {
         verifier.initVerifier(null, key);
         verifier.update(null, new byte[0]);
         assertFalse(verifier.verify(null, signature), "S + group order is noncanonical");
+        providerVerifier.initVerify(key);
+        assertFalse(providerVerifier.verify(signature), "provider rejects noncanonical S directly");
     }
 }
