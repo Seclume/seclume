@@ -37,8 +37,10 @@ public final class TdsValues {
      * @param type   the column type
      * @param at     start of the value in the buffer
      * @param length its length, as the row framing found it
+     * @throws NumberFormatException if a textual value is not an integer
      */
-    public static long asLong(WireBuffer in, int type, int at, int length) {
+    public static long asLong(WireBuffer in, int type, int at, int length)
+            throws NumberFormatException {
         if (type == TdsTypes.SQLVARIANT) {
             Variant inner = unwrap(in, at, length);
             return asLong(in, inner.type(), inner.at(), inner.length());
@@ -61,8 +63,12 @@ public final class TdsValues {
         };
     }
 
-    /** The value as a floating-point number. */
-    public static double asDouble(WireBuffer in, int type, int at, int length) {
+    /**
+     * The value as a floating-point number.
+     * @throws NumberFormatException if a textual value is not a number
+     */
+    public static double asDouble(WireBuffer in, int type, int at, int length)
+            throws NumberFormatException {
         if (type == TdsTypes.SQLVARIANT) {
             Variant inner = unwrap(in, at, length);
             return asDouble(in, inner.type(), inner.at(), inner.length());

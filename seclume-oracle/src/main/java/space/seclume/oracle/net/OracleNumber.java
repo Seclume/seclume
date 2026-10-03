@@ -297,8 +297,13 @@ public final class OracleNumber {
         return positive ? text : "-" + text;
     }
 
-    /** The value as a floating-point number - for {@code getDouble}. */
-    public static double toDouble(MemorySegment in, long at, int length) {
+    /**
+     * The value as a floating-point number - for {@code getDouble}.
+     * @throws NumberFormatException if the decoded text is not a number;
+     *         JDBC getters translate this to a SQL exception
+     */
+    public static double toDouble(MemorySegment in, long at, int length)
+            throws NumberFormatException {
         return Double.parseDouble(toText(in, at, length));
     }
 

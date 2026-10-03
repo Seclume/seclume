@@ -112,8 +112,10 @@ public final class TextNumber {
      * <p>Measured over a hundred thousand money-shaped values
      * ({@code space.seclume.bench.NumberProbe}): 5.11 ms through a
      * {@code String}, <b>1.00 ms</b> this way.
+     * @throws NumberFormatException if the text is not a floating-point number
      */
-    public static double decimalDouble(WireBuffer buffer, int offset, int length) {
+    public static double decimalDouble(WireBuffer buffer, int offset, int length)
+            throws NumberFormatException {
         long mantissa = 0;
         int digits = 0;
         int fraction = -1;

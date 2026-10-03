@@ -64,7 +64,16 @@ public final class MyResultSet extends ReadOnlyResultSet implements space.seclum
     }
 
     @Override
-    protected String stringAt(int column) {
+    protected String stringAt(int column) throws SQLException {
+        try {
+            return stringValueAt(column);
+        } catch (NumberFormatException invalidValue) {
+            throw new java.sql.SQLDataException("column " + (column + 1)
+                    + " cannot be read as text", "22018", invalidValue);
+        }
+    }
+
+    private String stringValueAt(int column) throws NumberFormatException {
         int type = block.fields().get(column).type();
         if (type == MyTypes.YEAR) {
             // As a date, the way Connector/J writes it: 2024-01-01.
