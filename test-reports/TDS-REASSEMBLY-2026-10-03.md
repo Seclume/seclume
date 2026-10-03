@@ -55,6 +55,8 @@ The full local core, TCK and SQL Server run reported 3,283 tests with zero
 failures or errors and 19 skips, including the opt-in probe and checks requiring
 external services or Linux. Live SQL Server validation is left to PR CI.
 
-The additional receive storage costs 32 KiB initially (64 KiB after a maximum
-packet). This change does not cap complete result sizes or unfinished tokens;
+The additional receive storage starts at 32 KiB. After growth its active
+capacity is 64 KiB; WireBuffer also retains the zeroed original allocation
+until close, making the total allocation 96 KiB in that case. This change
+does not cap complete result sizes or unfinished tokens;
 those remain separate resource-policy questions.
