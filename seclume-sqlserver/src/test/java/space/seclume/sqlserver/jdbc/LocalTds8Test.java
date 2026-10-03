@@ -167,7 +167,7 @@ class LocalTds8Test {
     @Test
     void theJdkStackAlsoSpeaksIt() throws Exception {
         requireStrictEncryption();
-        try (Connection connection = DriverManager.getConnection(url("&tds=8.0"));
+        try (Connection connection = DriverManager.getConnection(url("&tds=8.0&tlsStack=jsse"));
                 Statement statement = connection.createStatement();
                 ResultSet rows = statement.executeQuery("select 1")) {
             String tls = describe(connection);

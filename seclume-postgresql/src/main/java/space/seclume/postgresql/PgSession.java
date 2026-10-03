@@ -84,7 +84,7 @@ public final class PgSession implements AutoCloseable {
                         int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
                         TlsMode tls) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    hosts, resultLimit, tls, space.seclume.internal.jdbc.TlsStack.JSSE, null);
+                    hosts, resultLimit, tls, space.seclume.internal.jdbc.TlsStack.AUTO, null);
         }
 
         /** Without a result limit - what a URL without the option means. */
@@ -126,6 +126,13 @@ public final class PgSession implements AutoCloseable {
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, hosts, resultLimit, tls, tlsStack,
+                    identity, directTls);
+        }
+
+        /** The same settings on another TLS stack - see TlsFallback. */
+        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
+            return new Settings(host, port, database, user, secret,
+                    applicationName, connectTimeoutMillis, hosts, resultLimit, tls, stack,
                     identity, directTls);
         }
     }
@@ -387,7 +394,9 @@ public final class PgSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         PgSession opened = null;
         try {
-            opened = connectAndLogIn(settings);
+            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
+                    settings.identity() != null, settings.host(), settings.port(),
+                    stack -> connectAndLogIn(settings.withTlsStack(stack)));
             space.seclume.internal.Transports.loggedIn(opened.transport());
             return opened;
         } finally {

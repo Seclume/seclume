@@ -129,7 +129,7 @@ public final class MySession implements AutoCloseable {
                         HostList hosts, ResultLimit resultLimit, TlsMode tls) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
                     allowPublicKeyRetrieval, hosts, resultLimit, tls,
-                    space.seclume.internal.jdbc.TlsStack.JSSE, null);
+                    space.seclume.internal.jdbc.TlsStack.AUTO, null);
         }
 
         /** Without a result limit - what a URL without the option means. */
@@ -172,6 +172,13 @@ public final class MySession implements AutoCloseable {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
                     resultLimit, tls, tlsStack, identity, tinyInt1isBit);
+        }
+
+        /** The same settings on another TLS stack - see TlsFallback. */
+        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
+            return new Settings(host, port, database, user, secret,
+                    applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
+                    resultLimit, tls, stack, identity, tinyInt1isBit);
         }
     }
 
@@ -501,13 +508,16 @@ public final class MySession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         MySession opened = null;
         try {
-            opened = connectAndLogIn(settings);
+            Settings[] used = {settings};
+            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
+                    settings.identity() != null, settings.host(), settings.port(),
+                    stack -> connectAndLogIn(used[0] = settings.withTlsStack(stack)));
             space.seclume.internal.Transports.loggedIn(opened.transport());
             opened.tinyInt1isBit = settings.tinyInt1isBit();
             // The settings of this server, not of the list: cancellation has
             // to reach the same instance, and on a host list the one that
             // answered is not necessarily the first.
-            opened.settings = settings;
+            opened.settings = used[0];
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "mysql",

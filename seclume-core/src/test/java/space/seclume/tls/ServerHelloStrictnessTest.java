@@ -239,11 +239,19 @@ class ServerHelloStrictnessTest {
         }
     }
 
-    /** Without supported_versions the header decides nothing, and TLS 1.3 was not chosen. */
+    /**
+     * Without supported_versions the header decides nothing, and TLS 1.3 was
+     * not chosen - refused with protocol_version, and reported as the one
+     * refusal tlsStack=auto answers with the JDK's stack.
+     */
     @Test
     void withoutSupportedVersionsTheServerDidNotChooseThirteen() {
         Peer peer = new Peer(id -> serverHello(id, p256Share(), false));
-        assertEquals(TlsAlertException.PROTOCOL_VERSION, refused(peer).alert());
+        TlsVersionRefused refused = assertThrows(TlsVersionRefused.class,
+                () -> ClientHandshake.connectWithoutAuthenticating(peer, "db.example.com"));
+        assertEquals(TlsAlertException.PROTOCOL_VERSION,
+                ((TlsProtocolException) refused.getCause()).alert());
+        assertEquals(TlsAlertException.PROTOCOL_VERSION, peer.alertSent());
     }
 
     @Test

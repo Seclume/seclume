@@ -5,6 +5,21 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### SEC-04: seclume's own TLS is the default, JSSE only where a server needs it
+
+- `tlsStack` has a third value, `auto`, and it is the default for all four drivers. A
+  connection starts on seclume's own TLS 1.3; a server that refuses it before its ServerHello
+  (TLS 1.2 only, no group in common, or hanging up on the ClientHello) is connected to again on
+  the JDK's TLS, with a warning naming the server. That server is remembered for an hour.
+- Until now the default was JSSE, whose AES-GCM copies decrypted plaintext through
+  short-lived heap arrays, so a login sent in clear text inside TLS reached the heap.
+- `tlsStack=seclume` refuses servers without TLS 1.3 and allows no fallback; `tlsStack=jsse`
+  keeps the previous behaviour. SQL Server reaches the own stack only with `tds=8.0`.
+- The handshake reports such refusals as `TlsVersionRefused`; a certificate the client refuses
+  never is one. Proven against JDK servers held to TLS 1.2 or to a foreign group, a listener
+  that hangs up, and a PostgreSQL limited by `ssl_max_protocol_version=TLSv1.2`
+  (`TlsVersionRefusedTest`, `TlsFallbackTest`, `LocalTlsStackAutoTest`).
+
 ### SEC-01: every used pooled session is reset
 
 - The pool resets each used Seclume connection on return, whatever the SQL tracker

@@ -111,7 +111,7 @@ public final class OracleSession implements AutoCloseable {
                         SecretProvider secret, int connectTimeoutMillis, HostList hosts,
                         ResultLimit resultLimit, TlsMode tls) {
             this(host, port, service, user, secret, connectTimeoutMillis, hosts,
-                    resultLimit, tls, space.seclume.internal.jdbc.TlsStack.JSSE, null);
+                    resultLimit, tls, space.seclume.internal.jdbc.TlsStack.AUTO, null);
         }
 
         /** Without a result limit - what a URL without the option means. */
@@ -145,6 +145,13 @@ public final class OracleSession implements AutoCloseable {
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), service, user, secret,
                     connectTimeoutMillis, hosts, resultLimit, tls, tlsStack, identity,
+                    nativeEncryption);
+        }
+
+        /** The same settings on another TLS stack - see TlsFallback. */
+        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
+            return new Settings(host, port, service, user, secret,
+                    connectTimeoutMillis, hosts, resultLimit, tls, stack, identity,
                     nativeEncryption);
         }
 
@@ -576,7 +583,9 @@ public final class OracleSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         OracleSession opened = null;
         try {
-            opened = connectAndLogIn(settings);
+            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
+                    settings.identity() != null, settings.host(), settings.port(),
+                    stack -> connectAndLogIn(settings.withTlsStack(stack)));
             space.seclume.internal.Transports.loggedIn(opened.transport());
             return opened;
         } finally {

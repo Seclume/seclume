@@ -57,7 +57,7 @@ public final class TdsDataSource implements DataSource, ExpiringCredentials {
      * see {@link space.seclume.internal.jdbc.TlsStack}.
      */
     private space.seclume.internal.jdbc.TlsStack tlsStack =
-            space.seclume.internal.jdbc.TlsStack.JSSE;
+            space.seclume.internal.jdbc.TlsStack.AUTO;
     private PrintWriter logWriter;
     private HostList hosts;
     private long maxResultBytes;

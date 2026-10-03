@@ -40,7 +40,7 @@ final class JavaAesGcm implements AesGcmCipher {
         if (WARNED.compareAndSet(false, true)) {
             LOG.log(System.Logger.Level.WARNING, "AES-GCM runs in Java here, constant time "
                     + "but hundreds of times slower than native for bulk data: " + reason
-                    + " (tlsStack=jsse, the default, does not use it)", cause);
+                    + " (tlsStack=jsse does not use it)", cause);
         }
     }
 

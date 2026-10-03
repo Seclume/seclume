@@ -118,8 +118,10 @@ public final class TdsSession implements AutoCloseable {
         /**
          * With everything but the TDS version, which almost nobody sets.
          *
-         * <p>7.4 and the JDK's TLS: what every SQL Server in service speaks,
-         * and what this driver did before 8.0 existed here.
+         * <p>7.4: what every SQL Server in service speaks, and what this
+         * driver did before 8.0 existed here. Its TLS, nested in the
+         * pre-login, is the JDK's whatever the stack says - TLS 1.2 by
+         * construction.
          */
         public Settings(String host, int port, String database, String user,
                         SecretProvider secret, String applicationName,
@@ -127,7 +129,7 @@ public final class TdsSession implements AutoCloseable {
                         HostList hosts, ResultLimit resultLimit) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
                     trustServerCertificate, hosts, resultLimit, TdsVersion.TDS_7_4,
-                    space.seclume.internal.jdbc.TlsStack.JSSE, null);
+                    space.seclume.internal.jdbc.TlsStack.AUTO, null);
         }
 
         /** Without a result limit - what a URL without the option means. */
@@ -164,6 +166,13 @@ public final class TdsSession implements AutoCloseable {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, trustServerCertificate, hosts,
                     resultLimit, tdsVersion, tlsStack, identity);
+        }
+
+        /** The same settings on another TLS stack - see TlsFallback. */
+        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
+            return new Settings(host, port, database, user, secret,
+                    applicationName, connectTimeoutMillis, trustServerCertificate, hosts,
+                    resultLimit, tdsVersion, stack, identity);
         }
     }
 
@@ -441,7 +450,9 @@ public final class TdsSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         TdsSession opened = null;
         try {
-            opened = connectAndLogIn(settings);
+            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
+                    settings.identity() != null, settings.host(), settings.port(),
+                    stack -> connectAndLogIn(settings.withTlsStack(stack)));
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "sqlserver",

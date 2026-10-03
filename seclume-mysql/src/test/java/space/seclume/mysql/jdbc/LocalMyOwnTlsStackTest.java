@@ -122,7 +122,8 @@ class LocalMyOwnTlsStackTest {
                 String tls = session.tlsDescription();
                 System.err.println("[" + stack + "] " + tls);
                 assertNotNull(tls, stack + " did not encrypt");
-                assertEquals(stack == TlsStack.SECLUME, tls.endsWith(" (seclume)"),
+                // AUTO is seclume's on a server that speaks TLS 1.3, as this one does.
+                assertEquals(stack != TlsStack.JSSE, tls.endsWith(" (seclume)"),
                         stack + " was asked for and " + tls + " answered");
                 session.execute("select 1");
             }

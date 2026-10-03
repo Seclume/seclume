@@ -150,6 +150,7 @@ public final class ClientHandshake {
         List<X509Certificate> serverChain = new ArrayList<>();
         boolean done = false;
         boolean presented = false;
+        boolean helloAccepted = false;
         try (Arena arena = Arena.ofConfined();
                 NativeP256 keyExchange = NativeP256.generate();
                 space.seclume.crypto.HybridMlKem hybrid = postQuantum()
@@ -195,6 +196,7 @@ public final class ClientHandshake {
             MemorySegment serverHello = arena.allocate(serverHelloLength);
             MemorySegment.copy(first.data(), first.offset(), serverHello, 0, serverHelloLength);
             ServerHelloFacts facts = readServerHello(serverHello, sessionId, hybrid != null);
+            helloAccepted = true;
 
             // ---- the handshake keys -----------------------------------------
             MemorySegment serverShare = serverHello.asSlice(facts.keyShareAt(), facts.keyShareLength());
@@ -316,7 +318,21 @@ public final class ClientHandshake {
         } catch (TlsProtocolException refused) {
             // Say why before hanging up; the server otherwise sees a reset.
             records.abort(refused.alert());
+            if (!helloAccepted && (refused.alert() == TlsAlertException.PROTOCOL_VERSION
+                    || refused.alert() == TlsAlertException.HANDSHAKE_FAILURE)) {
+                throw new TlsVersionRefused(refused);    // TLS 1.2 chosen, or a HelloRetryRequest
+            }
             throw refused;
+        } catch (TlsAlertException | java.io.EOFException | java.net.SocketException gone) {
+            // Before a ServerHello the server has judged nothing but the
+            // ClientHello: no certificate has gone either way. Whatever it
+            // answers - handshake_failure from OpenSSL and the JDK,
+            // protocol_version, unexpected_message from the JDK without a
+            // common group, or Schannel's silent close - means "not this TLS".
+            if (!helloAccepted) {
+                throw new TlsVersionRefused(gone);
+            }
+            throw gone;
         } catch (IndexOutOfBoundsException truncated) {
             // A length field that points past the message it is in. The
             // segment's bounds check stopped the read; what is left is to

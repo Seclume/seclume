@@ -439,6 +439,14 @@ the same query and the same certificate refusal over `tlsStack=seclume` instead 
 `SSLEngine`. Both need the TLS server on the address the properties above name — PostgreSQL on
 its TLS port, MySQL on the certificate it generates for itself at first start.
 
+`tlsStack=auto`, the default, is checked twice over. `TlsVersionRefusedTest` in the core runs
+the own stack against JDK servers that refuse it (TLS 1.2 only, a foreign group, a listener that
+hangs up) and against one whose certificate is untrusted, which must not count as a refusal.
+`LocalTlsStackAutoTest` connects to the usual TLS server and to a PostgreSQL started with
+`-c ssl_max_protocol_version=TLSv1.2` (`seclume.pgtls12.host` / `.port`, default 5439): the
+first stays on the own stack, the second is reached through JSSE, and `tlsStack=seclume` is
+refused by it. Without that server those tests are skipped.
+
 Two details in there are worth knowing before changing them.
 
 **The stack has to be named in what it reports.** Both stacks negotiate TLS 1.3 with the same

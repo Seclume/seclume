@@ -69,6 +69,19 @@ final class EchoServer implements AutoCloseable {
         return new EchoServer(socket);
     }
 
+    /**
+     * The same, with whatever else a test wants of the server socket - the
+     * protocol versions or the groups it accepts.
+     */
+    static EchoServer start(SSLContext context,
+            java.util.function.Consumer<SSLServerSocket> configure) throws IOException {
+        SSLServerSocket socket = (SSLServerSocket) context.getServerSocketFactory()
+                .createServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        socket.setSoTimeout(60_000);
+        configure.accept(socket);
+        return new EchoServer(socket);
+    }
+
     int port() {
         return socket.getLocalPort();
     }

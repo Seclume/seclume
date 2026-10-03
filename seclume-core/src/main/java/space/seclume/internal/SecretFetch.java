@@ -74,7 +74,8 @@ public final class SecretFetch {
      */
     private static TlsLayer startTls(Transport socket, String host, int port, boolean verify)
             throws IOException {
-        if (stack() == space.seclume.internal.jdbc.TlsStack.SECLUME) {
+        // AUTO as well: no fallback for a secret manager, whose answer is the secret.
+        if (stack() != space.seclume.internal.jdbc.TlsStack.JSSE) {
             return SeclumeTls.start(socket, host, verify, null);
         }
         TlsChannel jsse = TlsChannel.create(socket, host, port, verify);

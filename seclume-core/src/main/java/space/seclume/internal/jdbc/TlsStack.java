@@ -17,34 +17,47 @@ import java.util.Locale;
  * resumes sessions, speaks TLS 1.2, and takes whatever key exchange the JDK
  * offers. {@link #SECLUME} gives up all of that for two things JSSE cannot
  * offer at any price: the traffic secrets never become Java objects, and the
- * encryption state can be written down and taken up again. Only a
- * caller knows which of those matters more for their connection, so only a
- * caller decides - and the safe, boring one is the default.
+ * encryption state can be written down and taken up again.
+ *
+ * <p><b>The default is {@link #AUTO}</b>: this project's own stack, and JSSE
+ * only for a server that cannot speak it. JSSE's AES-GCM copies the
+ * plaintext - the password among it - through short-lived {@code byte[]} on
+ * the heap (external audit SEC-04, 30.09.2026), so the stack that keeps it
+ * off the heap is the one to try first. See {@link TlsFallback}.
  */
 public enum TlsStack {
 
-    /** The JDK's {@code SSLEngine}. The default, and what everybody else does. */
+    /** The JDK's {@code SSLEngine} - what everybody else does. */
     JSSE,
 
     /**
      * This project's own TLS 1.3 client.
      *
      * <p>One key exchange group (P-256), two cipher suites, no resumption and
-     * no TLS 1.2. A server that needs any of those belongs on {@link #JSSE},
-     * and says so with a handshake failure rather than a silent downgrade.
+     * no TLS 1.2. Chosen explicitly, a server that needs any of those is
+     * refused with a handshake failure rather than a silent change of stack.
      */
-    SECLUME;
+    SECLUME,
+
+    /**
+     * The default: {@link #SECLUME}, and {@link #JSSE} for a server that
+     * refuses it for want of TLS 1.3 - SQL Server before TDS 8.0, Oracle 19c,
+     * MySQL 5.7. That change of stack is logged as a warning, once per server,
+     * because from then on the password passes through the heap there.
+     */
+    AUTO;
 
     /** Parses the value of a URL option or a property. */
     public static TlsStack of(String value) throws SQLException {
         if (value == null || value.isEmpty()) {
-            return JSSE;
+            return AUTO;
         }
         return switch (value.toLowerCase(Locale.ROOT).replace('_', '-')) {
-            case "jsse", "jdk", "default" -> JSSE;
+            case "auto", "default" -> AUTO;
+            case "jsse", "jdk" -> JSSE;
             case "seclume", "own" -> SECLUME;
             default -> throw new SQLException("unknown tls stack \"" + value
-                    + "\" - use jsse or seclume", "08001");
+                    + "\" - use auto, seclume or jsse", "08001");
         };
     }
 }
