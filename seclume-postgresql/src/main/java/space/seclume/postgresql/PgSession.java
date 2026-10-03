@@ -2746,7 +2746,7 @@ public final class PgSession implements AutoCloseable {
      *            even begin the transaction a pending {@code BEGIN} would
      */
     public java.util.List<PgNotification> takeNotifications(boolean ask) throws SQLException {
-        if (ask && notifications.isEmpty() && channel.isIdle()) {
+        if (ask && notifications.isEmpty() && channel.canPollNotifications()) {
             try {
                 channel.begin(PgProtocol.SYNC);
                 channel.end();

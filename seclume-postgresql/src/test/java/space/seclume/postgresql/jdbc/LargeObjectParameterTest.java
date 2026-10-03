@@ -36,6 +36,9 @@ import space.seclume.tck.TestHosts;
  * driver can decide is that the object and the row commit or roll back
  * together, so it binds one only inside a transaction.
  */
+// These assertions count database-wide objects; other test classes must not
+// create or unlink their objects between the before and after queries.
+@org.junit.jupiter.api.parallel.Isolated
 class LargeObjectParameterTest {
 
     private static String url;
