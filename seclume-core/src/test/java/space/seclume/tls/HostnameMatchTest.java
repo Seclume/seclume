@@ -22,6 +22,13 @@ class HostnameMatchTest {
             "*.example.com,        db.example.com",
             "*.example.com,        x.example.com",
             "*.sub.example.com,    db.sub.example.com",
+            "*.example.co.uk,      db.example.co.uk",
+            "*.tenant.github.io,   db.tenant.github.io",
+            "*.www.ck,             db.www.ck",            // PSL exception to *.ck
+            "*.city.kawasaki.jp,   db.city.kawasaki.jp",   // PSL exception
+            "*.internal.test,      db.internal.test",      // private names remain usable
+            "db.co.uk,             db.co.uk",              // exact SANs are unaffected
+            "*.example.xn--55qx5d.cn, db.example.xn--55qx5d.cn",
     })
     void matches(String pattern, String host) {
         assertTrue(HostnameMatch.matchesPattern(pattern.trim().toLowerCase(java.util.Locale.ROOT),
@@ -36,6 +43,13 @@ class HostnameMatchTest {
             "*.example.com,        example.com",          // and not the bare domain
             "*.example.com,        .example.com",         // the label has to be a real one
             "*.com,                example.com",          // too broad to be allowed at all
+            "*.co.uk,              example.co.uk",        // multi-label public suffix
+            "*.com.au,             example.com.au",
+            "*.github.io,          tenant.github.io",     // independently controlled tenants
+            "*.appspot.com,        tenant.appspot.com",
+            "*.foo.ck,             db.foo.ck",            // PSL wildcard rule
+            "*.foo.kawasaki.jp,    db.foo.kawasaki.jp",
+            "*.xn--55qx5d.cn,      example.xn--55qx5d.cn", // internationalized public suffix
             "*,                    example",
             "db*.example.com,      dbone.example.com",    // partial labels are not honoured
             "*b.example.com,       db.example.com",

@@ -1,0 +1,3 @@
+# Preserve the exact upstream bytes of the bundled, separately licensed PSL data.
+seclume-core/src/main/resources/space/seclume/tls/public_suffix_list.dat -text
+seclume-core/src/main/resources/space/seclume/tls/public-suffix-LICENSE.txt -text
