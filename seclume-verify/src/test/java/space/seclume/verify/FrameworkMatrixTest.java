@@ -1,11 +1,17 @@
 package space.seclume.verify;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * The control for a generated table, and the reason the table is worth
@@ -22,6 +28,22 @@ import org.junit.jupiter.api.Test;
  * control cannot go red is decoration.</b>
  */
 class FrameworkMatrixTest {
+
+    @Test
+    void oversizedReportCountsCannotProduceAVerifiedPage(@TempDir Path root) throws Exception {
+        Path reports = Files.createDirectories(root.resolve("surefire-reports"));
+        Path report = reports.resolve("oversized.txt");
+        Path page = root.resolve("frameworks.md");
+        for (String counts : new String[] {
+                "999999999999999999999, Failures: 0, Errors: 0, Skipped: 0",
+                "2147483647, Failures: 2147483647, Errors: 1, Skipped: 0"}) {
+            Files.writeString(report, "Test set: example.SpringDataOnPostgresTest\nTests run: "
+                    + counts + ", Time elapsed: 0 s\n");
+            assertThrows(UncheckedIOException.class,
+                    () -> FrameworkMatrix.main(new String[] {page.toString(), root.toString()}));
+            assertTrue(Files.notExists(page));
+        }
+    }
 
     private static Map<String, FrameworkMatrix.Outcome> reports() {
         Map<String, FrameworkMatrix.Outcome> reports = new LinkedHashMap<>();

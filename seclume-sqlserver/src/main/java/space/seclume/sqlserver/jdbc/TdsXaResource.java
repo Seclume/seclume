@@ -189,9 +189,15 @@ final class TdsXaResource extends AbstractXaResource {
     }
 
     /** The return code, and the server's own words when it is not XA_OK. */
-    private static void check(String what, String[] answer) throws SQLException {
-        int code = answer[0] == null || answer[0].isEmpty() ? XA_OK
-                : Integer.parseInt(answer[0].trim());
+    static void check(String what, String[] answer) throws SQLException {
+        int code;
+        try {
+            code = answer[0] == null || answer[0].isEmpty() ? XA_OK
+                    : Integer.parseInt(answer[0].trim());
+        } catch (NumberFormatException invalidCode) {
+            throw new SQLException(what + " answered with an invalid return code",
+                    "25000", invalidCode);
+        }
         if (code == XA_OK || code == XA_RDONLY) {
             return;
         }

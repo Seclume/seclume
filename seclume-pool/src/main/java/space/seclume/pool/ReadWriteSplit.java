@@ -600,12 +600,28 @@ public final class ReadWriteSplit implements DataSource {
         }
     }
 
-    static long parseLsn(String lsn) {
+    static long parseLsn(String lsn) throws SQLException {
         if (lsn == null) {
             return 0;
         }
         int slash = lsn.indexOf('/');
-        return (Long.parseLong(lsn.substring(0, slash), 16) << 32)
-                | Long.parseLong(lsn.substring(slash + 1), 16);
+        if (slash < 1 || slash > 8 || lsn.length() - slash - 1 < 1
+                || lsn.length() - slash - 1 > 8) {
+            throw new SQLException("the server returned an invalid WAL position", "22018");
+        }
+        for (int i = 0; i < lsn.length(); i++) {
+            char digit = lsn.charAt(i);
+            if (i != slash && !((digit >= '0' && digit <= '9')
+                    || (digit >= 'a' && digit <= 'f') || (digit >= 'A' && digit <= 'F'))) {
+                throw new SQLException("the server returned an invalid WAL position", "22018");
+            }
+        }
+        try {
+            return (Long.parseLong(lsn.substring(0, slash), 16) << 32)
+                    | Long.parseLong(lsn.substring(slash + 1), 16);
+        } catch (NumberFormatException invalidPosition) {
+            throw new SQLException("the server returned an invalid WAL position", "22018",
+                    invalidPosition);
+        }
     }
 }
