@@ -549,7 +549,14 @@ public final class OracleSession implements AutoCloseable {
             return new SQLNonTransientConnectionException("the listener refused the connection"
                     + (reason == null || reason.isBlank() ? "" : ": " + reason), "08001");
         }
-        int code = Integer.parseInt(err.group(1));
+        int code;
+        try {
+            code = Integer.parseInt(err.group(1));
+        } catch (NumberFormatException invalidCode) {
+            return new SQLNonTransientConnectionException(
+                    "the listener refused the connection with an invalid error code",
+                    "08001", invalidCode);
+        }
         String message = String.format("ORA-%05d: the listener refused the connection%s", code,
                 switch (code) {
                     case 12514 -> " - it does not know this service";

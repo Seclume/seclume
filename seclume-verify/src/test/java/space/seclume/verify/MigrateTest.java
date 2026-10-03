@@ -22,6 +22,19 @@ import space.seclume.verify.Migrate.Result;
 class MigrateTest {
 
     @Test
+    void oversizedTimeoutsAreReportedWithoutOverflowOrCrashing() {
+        for (String value : List.of("999999999999999999999999", "9223372036854776", "-1", "abc")) {
+            Result result = Migrate.translateUrl("jdbc:postgresql://db/app?sslmode=verify-full"
+                    + "&connectTimeout=" + value);
+            assertFalse(result.properties().get(0).contains("connectTimeout="));
+            assertTrue(has(result, Level.NOT_TRANSLATED, "connectTimeout"));
+        }
+        Result maximum = Migrate.translateUrl("jdbc:mysql://db/app?sslMode=VERIFY_IDENTITY"
+                + "&connectTimeout=9223372036854775807");
+        assertTrue(maximum.properties().get(0).contains("connectTimeout=9223372036854775807"));
+    }
+
+    @Test
     void pgjdbcWithRequireBecomesRequireAndIsCalledUnsafe() {
         Result result = Migrate.translateUrl("jdbc:postgresql://db1:5433,db2/app"
                 + "?sslmode=require&user=app&password=geheim&ApplicationName=orders"

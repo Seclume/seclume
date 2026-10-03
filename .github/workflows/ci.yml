@@ -64,7 +64,7 @@ jobs:
         working-directory: .github/ci-tools
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # A red run names its failing tests as annotations, so that they can be

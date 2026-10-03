@@ -173,10 +173,13 @@ public final class FrameworkMatrix {
                             String name = set.group(1);
                             found.put(name.substring(name.lastIndexOf('.') + 1), new Outcome(
                                     Integer.parseInt(counts.group(1)),
-                                    Integer.parseInt(counts.group(2))
-                                            + Integer.parseInt(counts.group(3)),
+                                    Math.addExact(Integer.parseInt(counts.group(2)),
+                                            Integer.parseInt(counts.group(3))),
                                     Integer.parseInt(counts.group(4))));
                         }
+                    } catch (NumberFormatException | ArithmeticException invalidCounts) {
+                        throw new UncheckedIOException(new IOException(
+                                "invalid test counts in " + path, invalidCounts));
                     } catch (IOException unreadable) {
                         throw new UncheckedIOException(unreadable);
                     }

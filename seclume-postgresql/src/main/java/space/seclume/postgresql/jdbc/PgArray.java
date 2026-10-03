@@ -258,13 +258,31 @@ final class PgArray implements java.sql.Array {
     }
 
     /** {@code bytea} inside an array, in the same {@code \x...} form as outside one. */
-    private static byte[] decodeHex(String value) {
+    private static byte[] decodeHex(String value) throws SQLException {
         String digits = value.startsWith("\\x") ? value.substring(2) : value;
+        if ((digits.length() & 1) != 0) {
+            throw new SQLException("bytea array element has an odd number of hex digits", "22018");
+        }
         byte[] out = new byte[digits.length() / 2]; // seclume-allow: user payload, not a secret
         for (int i = 0; i < out.length; i++) {
-            out[i] = (byte) Integer.parseInt(digits.substring(i * 2, i * 2 + 2), 16);
+            int high = hexDigit(digits.charAt(i * 2));
+            int low = hexDigit(digits.charAt(i * 2 + 1));
+            if (high < 0 || low < 0) {
+                throw new SQLException("bytea array element contains an invalid hex digit", "22018");
+            }
+            out[i] = (byte) ((high << 4) | low);
         }
         return out;
+    }
+
+    private static int hexDigit(char digit) {
+        if (digit >= '0' && digit <= '9') {
+            return digit - '0';
+        }
+        if (digit >= 'a' && digit <= 'f') {
+            return digit - 'a' + 10;
+        }
+        return digit >= 'A' && digit <= 'F' ? digit - 'A' + 10 : -1;
     }
 
     private static int checkedStart(long index, int size) throws SQLException {

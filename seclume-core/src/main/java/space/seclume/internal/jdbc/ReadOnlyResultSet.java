@@ -411,9 +411,13 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         if (lastWasNull) {
             return null;
         }
-        String value = stringAt(column);
-        return maxFieldSize > 0 && value.length() > maxFieldSize && truncatable(column)
-                ? value.substring(0, maxFieldSize) : value;
+        try {
+            String value = stringAt(column);
+            return maxFieldSize > 0 && value.length() > maxFieldSize && truncatable(column)
+                    ? value.substring(0, maxFieldSize) : value;
+        } catch (NumberFormatException notANumber) {
+            throw notANumber(columnIndex, "text", notANumber);
+        }
     }
 
     @Override
@@ -522,12 +526,16 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         if (lastWasNull) {
             return null;
         }
-        if (maxFieldSize > 0 && truncatable(column)) {
-            Object value = objectAt(column);
-            return value instanceof String ? getString(columnIndex)
-                    : value instanceof byte[] ? getBytes(columnIndex) : value;
+        try {
+            if (maxFieldSize > 0 && truncatable(column)) {
+                Object value = objectAt(column);
+                return value instanceof String ? getString(columnIndex)
+                        : value instanceof byte[] ? getBytes(columnIndex) : value;
+            }
+            return objectAt(column);
+        } catch (NumberFormatException notANumber) {
+            throw notANumber(columnIndex, "its declared type", notANumber);
         }
-        return objectAt(column);
     }
 
     @Override
