@@ -43,6 +43,14 @@ updates:
         versions: ["3.9.16"]
       - dependency-name: "org.apache.maven.wrapper:maven-wrapper"
         versions: ["3.3.4"]
+      # Pinned ahead of a vendor SDK only to pull in security fixes within the
+      # SDK's own line (Azure: Netty 4.1, Jackson 2.18; JasperReports: Jackson
+      # 2.18; client-java: Jackson 2.22). Patch releases only; a new line
+      # moves when the SDK moves.
+      - dependency-name: "io.netty:netty-bom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "com.fasterxml.jackson:jackson-bom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
