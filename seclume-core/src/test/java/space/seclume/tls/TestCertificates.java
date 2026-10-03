@@ -153,6 +153,10 @@ public final class TestCertificates implements AutoCloseable {
         }
     }
 
+    /** Where keytool's own output goes: nowhere, and never closed. */
+    private static final java.io.PrintStream SILENT =
+            new java.io.PrintStream(java.io.OutputStream.nullOutputStream());
+
     /**
      * The JDK's own keytool, called in this JVM when the build exports it
      * ({@code --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED}):
@@ -167,7 +171,7 @@ public final class TestCertificates implements AutoCloseable {
             java.lang.reflect.Method run = main.getMethod("run", String[].class,
                     java.io.PrintStream.class);
             run.invoke(main.getConstructor().newInstance(), new String[] {"-help"},
-                    new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+                    SILENT);
             return run;
         } catch (ReflectiveOperationException | RuntimeException notExported) {
             return null;
@@ -184,7 +188,7 @@ public final class TestCertificates implements AutoCloseable {
                 try {
                     exit = (int) IN_PROCESS.invoke(IN_PROCESS.getDeclaringClass()
                             .getConstructor().newInstance(), arguments,
-                            new java.io.PrintStream(java.io.OutputStream.nullOutputStream()));
+                            SILENT);
                 } catch (java.lang.reflect.InvocationTargetException failed) {
                     throw new AssertionError("keytool failed: " + String.join(" ", command),
                             failed.getCause());

@@ -185,7 +185,7 @@ class MutualTlsTest {
      * covers for passwords, checked here for the other kind of secret.
      */
     @Test
-    void abrokenKeyFileLeavesNothingOpen(@TempDir Path dir) throws Exception {
+    void abrokenKeyFileLeavesNothingOpen() throws Exception {
         long open = SecretScope.open();
 
         assertThrows(RuntimeException.class, () -> new P256ClientIdentity(
@@ -198,7 +198,7 @@ class MutualTlsTest {
 
     /** An RSA client certificate is refused with a reason, not silently downgraded. */
     @Test
-    void anRsaClientCertificateIsRefusedClearly(@TempDir Path dir) throws Exception {
+    void anRsaClientCertificateIsRefusedClearly() throws Exception {
         TestCertificates.Issued rsa = certificates.issue("rsa-client",
                 "ku:c=digitalSignature", "eku=clientAuth");
 

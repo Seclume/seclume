@@ -134,10 +134,10 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
                     this.key = MemorySegment.ofAddress(handle.get(JAVA_LONG, 0));
                     this.freeKey = callerFrees.get(JAVA_INT, 0) != 0;
                 } finally {
-                    int ignored = (int) n.freeCertificate.invokeExact(context);
+                    int _ = (int) n.freeCertificate.invokeExact(context);
                 }
             } finally {
-                int ignored = (int) n.closeStore.invokeExact(store, 0);
+                int _ = (int) n.closeStore.invokeExact(store, 0);
             }
         } catch (RuntimeException | Error failure) {
             throw failure;
@@ -197,7 +197,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         closed = true;
         if (freeKey) {
             try {
-                int ignored = (int) Native.get().freeObject.invokeExact(key);
+                int _ = (int) Native.get().freeObject.invokeExact(key);
             } catch (Throwable impossible) {
                 throw new IllegalStateException(impossible);
             }

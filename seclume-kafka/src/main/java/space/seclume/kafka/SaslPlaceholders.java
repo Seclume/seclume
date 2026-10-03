@@ -21,6 +21,8 @@ import space.seclume.secret.SecretScope;
  */
 final class SaslPlaceholders {
 
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     static final byte[] PREFIX = "seclume-kafka-".getBytes(StandardCharsets.US_ASCII); // seclume-allow: the placeholder prefix, no secret
     private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce - public
     private static final AtomicLong NEXT = new AtomicLong();
@@ -49,7 +51,7 @@ final class SaslPlaceholders {
 
     private static byte[] nonce() {
         byte[] bytes = new byte[12];
-        new SecureRandom().nextBytes(bytes);
+        RANDOM.nextBytes(bytes);
         return bytes;
     }
 }

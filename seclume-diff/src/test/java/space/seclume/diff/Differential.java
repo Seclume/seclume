@@ -273,8 +273,8 @@ final class Differential {
                 }));
 
         for (Probe probe : probes) {
-            String a = call(mine, index, probe.read());
-            String b = call(theirs, index, probe.read());
+            String a = call(mine, probe.read());
+            String b = call(theirs, probe.read());
             if (!equal(a, b) && !isAllowed(column.name(), probe.what())) {
                 report(new Finding(column.name() + "[" + row + "]", probe.what(),
                         wrote, "both", a, b));
@@ -363,7 +363,7 @@ final class Differential {
     }
 
     /** A getter that throws is itself an answer, and a comparable one. */
-    private static String call(ResultSet rows, int index, Read read) {
+    private static String call(ResultSet rows, Read read) {
         try {
             return read.apply(rows);
         } catch (SQLException | RuntimeException e) {
@@ -441,19 +441,19 @@ final class Differential {
                 continue;
             }
             return switch (value) {
-                case byte[] ignored -> java.sql.Types.VARBINARY;
-                case String ignored -> java.sql.Types.VARCHAR;
-                case Integer ignored -> java.sql.Types.INTEGER;
-                case Long ignored -> java.sql.Types.BIGINT;
-                case Short ignored -> java.sql.Types.SMALLINT;
-                case Byte ignored -> java.sql.Types.TINYINT;
-                case Double ignored -> java.sql.Types.DOUBLE;
-                case Float ignored -> java.sql.Types.REAL;
-                case BigDecimal ignored -> java.sql.Types.DECIMAL;
-                case Boolean ignored -> java.sql.Types.BOOLEAN;
-                case java.sql.Date ignored -> java.sql.Types.DATE;
-                case java.sql.Timestamp ignored -> java.sql.Types.TIMESTAMP;
-                case java.sql.Time ignored -> java.sql.Types.TIME;
+                case byte[] _ -> java.sql.Types.VARBINARY;
+                case String _ -> java.sql.Types.VARCHAR;
+                case Integer _ -> java.sql.Types.INTEGER;
+                case Long _ -> java.sql.Types.BIGINT;
+                case Short _ -> java.sql.Types.SMALLINT;
+                case Byte _ -> java.sql.Types.TINYINT;
+                case Double _ -> java.sql.Types.DOUBLE;
+                case Float _ -> java.sql.Types.REAL;
+                case BigDecimal _ -> java.sql.Types.DECIMAL;
+                case Boolean _ -> java.sql.Types.BOOLEAN;
+                case java.sql.Date _ -> java.sql.Types.DATE;
+                case java.sql.Timestamp _ -> java.sql.Types.TIMESTAMP;
+                case java.sql.Time _ -> java.sql.Types.TIME;
                 default -> java.sql.Types.OTHER;
             };
         }

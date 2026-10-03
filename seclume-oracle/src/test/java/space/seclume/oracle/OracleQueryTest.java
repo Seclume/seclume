@@ -102,7 +102,7 @@ class OracleQueryTest {
         try (OracleSession session = open()) {
             List<String> ids = new ArrayList<>();
             List<String> constant = new ArrayList<>();
-            TtcResult result = session.query("""
+            session.query("""
                     select level as n, 'same' as unchanged
                     from dual connect by level <= 20""", row -> {
                         ids.add(row.text(0));

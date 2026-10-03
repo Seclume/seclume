@@ -196,7 +196,7 @@ public final class DpapiSecretProvider implements SecretProvider {
             // this library exists to prevent.
             plain.fill((byte) 0);
             lastBufferWasZeroed = isAllZero(plain);
-            MemorySegment ignored = (MemorySegment) LOCAL_FREE.invokeExact(plain);
+            MemorySegment _ = (MemorySegment) LOCAL_FREE.invokeExact(plain);
         }
     }
 

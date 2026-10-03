@@ -26,6 +26,8 @@ import space.seclume.secret.SecretScope;
  */
 final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
 
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     private static final int MAX_DIGITS = 10;
 
     private final byte[] placeholder;
@@ -39,7 +41,7 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
     /** A new random placeholder. */
     static String newPlaceholder() {
         byte[] random = new byte[16];
-        new SecureRandom().nextBytes(random);
+        RANDOM.nextBytes(random);
         return "seclume-redis-" + HexFormat.of().formatHex(random); // seclume-allow: a random placeholder - public
     }
 

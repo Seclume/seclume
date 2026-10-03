@@ -278,13 +278,13 @@ public final class TdsParameters {
             case TypedNull typed -> typed.declaration();
             case space.seclume.sqlserver.jdbc.TableValue table ->
                     space.seclume.sqlserver.jdbc.TableValue.Wire.declaration(table);
-            case Boolean ignored -> "bit";
-            case Byte ignored -> "int";
-            case Short ignored -> "int";
-            case Integer ignored -> "int";
-            case Long ignored -> "bigint";
-            case Float ignored -> "real";
-            case Double ignored -> "float";
+            case Boolean _ -> "bit";
+            case Byte _ -> "int";
+            case Short _ -> "int";
+            case Integer _ -> "int";
+            case Long _ -> "bigint";
+            case Float _ -> "real";
+            case Double _ -> "float";
             case BigDecimal number -> "decimal(" + MAX_PRECISION + ","
                     + bucket(scaleOf(number), SCALES) + ")";
             // The full width, not the value's: a parameter is declared once
@@ -304,14 +304,14 @@ public final class TdsParameters {
                     ? "nvarchar(max)" : "nvarchar(" + MAX_NVARCHAR_CHARS + ")";
             case byte[] bytes -> bytes.length > MAX_VARBINARY_BYTES
                     ? "varbinary(max)" : "varbinary(" + MAX_VARBINARY_BYTES + ")";
-            case java.sql.Date ignored -> "date";
-            case LocalDate ignored -> "date";
-            case java.sql.Time ignored -> "time(" + TIME_SCALE + ")";
-            case LocalTime ignored -> "time(" + TIME_SCALE + ")";
-            case java.sql.Timestamp ignored -> "datetime2(" + TIME_SCALE + ")";
-            case LocalDateTime ignored -> "datetime2(" + TIME_SCALE + ")";
-            case OffsetDateTime ignored -> "datetimeoffset(" + TIME_SCALE + ")";
-            case java.util.UUID ignored -> "uniqueidentifier";
+            case java.sql.Date _ -> "date";
+            case LocalDate _ -> "date";
+            case java.sql.Time _ -> "time(" + TIME_SCALE + ")";
+            case LocalTime _ -> "time(" + TIME_SCALE + ")";
+            case java.sql.Timestamp _ -> "datetime2(" + TIME_SCALE + ")";
+            case LocalDateTime _ -> "datetime2(" + TIME_SCALE + ")";
+            case OffsetDateTime _ -> "datetimeoffset(" + TIME_SCALE + ")";
+            case java.util.UUID _ -> "uniqueidentifier";
             default -> throw unsupported(value);
         };
     }

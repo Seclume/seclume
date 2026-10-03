@@ -37,7 +37,7 @@ final class Values {
     }
 
     /** Fills a list to {@code count} with boundaries first, then draws. */
-    private static List<Object> corpus(List<Object> boundaries, int count, Random random,
+    private static List<Object> corpus(List<Object> boundaries, int count,
             java.util.function.Supplier<Object> draw) {
         List<Object> values = new ArrayList<>(boundaries);
         while (values.size() < count) {
@@ -54,13 +54,13 @@ final class Values {
     static List<Object> int32(int count, Random random) {
         return corpus(List.of(0, 1, -1, Integer.MIN_VALUE, Integer.MAX_VALUE,
                         Integer.MIN_VALUE + 1, Integer.MAX_VALUE - 1),
-                count, random, random::nextInt);
+                count, random::nextInt);
     }
 
     static List<Object> int64(int count, Random random) {
         return corpus(List.of(0L, 1L, -1L, Long.MIN_VALUE, Long.MAX_VALUE,
                         (long) Integer.MAX_VALUE, (long) Integer.MAX_VALUE + 1),
-                count, random, random::nextLong);
+                count, random::nextLong);
     }
 
     /**
@@ -95,7 +95,7 @@ final class Values {
         }
         int maxExponent = limit >= Double.MAX_VALUE ? 20
                 : (int) Math.floor(Math.log10(limit));
-        return corpus(List.copyOf(boundaries), count, random, () -> {
+        return corpus(List.copyOf(boundaries), count, () -> {
             double value = random.nextDouble()
                     * Math.pow(10, random.nextInt(2 * maxExponent + 1) - maxExponent);
             return random.nextBoolean() ? value : -value;
@@ -123,7 +123,7 @@ final class Values {
                 max.negate(),
                 BigDecimal.ONE.movePointLeft(scale),            // the smallest step
                 BigDecimal.ONE.movePointLeft(scale).negate());
-        return corpus(boundaries, count, random, () -> {
+        return corpus(boundaries, count, () -> {
             BigInteger unscaled = new BigInteger(precision * 3, random)
                     .mod(BigInteger.TEN.pow(precision));
             BigDecimal value = new BigDecimal(unscaled, scale);
@@ -154,7 +154,7 @@ final class Values {
                 "äöüß",
                 "中文测试"));
         boundaries.removeIf(v -> ((String) v).length() > maxLength);
-        return corpus(List.copyOf(boundaries), count, random,
+        return corpus(List.copyOf(boundaries), count,
                 () -> randomString(random, maxLength));
     }
 
@@ -193,7 +193,7 @@ final class Values {
                 new byte[] {(byte) 0xff},
                 new byte[] {0x27, 0x5c, 0x00, 0x0a},              // quote, backslash, nul, LF
                 new byte[] {(byte) 0xc3, (byte) 0x28});           // invalid UTF-8 on purpose
-        return corpus(boundaries, count, random, () -> {
+        return corpus(boundaries, count, () -> {
             byte[] value = new byte[random.nextInt(Math.min(maxLength, 32) + 1)];
             random.nextBytes(value);
             return value;
@@ -216,7 +216,7 @@ final class Values {
                 Date.valueOf("1900-01-01"),
                 Date.valueOf("2038-01-19"),                       // the 32-bit seam
                 Date.valueOf("9999-12-31"));
-        return corpus(boundaries, count, random, () -> Date.valueOf(
+        return corpus(boundaries, count, () -> Date.valueOf(
                 LocalDate.ofEpochDay(random.nextInt(365 * 200) - 365 * 50)));
     }
 
@@ -235,7 +235,7 @@ final class Values {
                 Timestamp.valueOf("2000-01-01 00:00:00"),
                 Timestamp.valueOf("2024-02-29 12:00:00.500000"),
                 Timestamp.valueOf("2038-01-19 03:14:07"));
-        return corpus(boundaries, count, random, () -> {
+        return corpus(boundaries, count, () -> {
             Timestamp value = new Timestamp(
                     (long) (random.nextInt(365 * 60) - 365 * 10) * 86_400_000L
                             + random.nextInt(86_400_000));

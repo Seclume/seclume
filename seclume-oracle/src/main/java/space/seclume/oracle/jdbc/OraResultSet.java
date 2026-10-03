@@ -246,7 +246,7 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
         }
         if (description.type() == OracleColumn.TYPE_TIMESTAMP_ZONE) {
             java.time.ZonedDateTime value = zonedAt(column);
-            return ojdbcText(value.toLocalDateTime()) + " " + zoneText(column, value);
+            return ojdbcText(value.toLocalDateTime()) + " " + zoneText(value);
         }
         if (description.type() == OracleColumn.TYPE_TIMESTAMP_LOCAL) {
             return ojdbcText(localAt(column)) + " " + lobSession().zones()[0].getId();
@@ -302,7 +302,7 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
     }
 
     /** The zone as ojdbc writes it: the region's name, or "+2:00". */
-    private String zoneText(int column, java.time.ZonedDateTime value) {
+    private String zoneText(java.time.ZonedDateTime value) {
         if (!(value.getZone() instanceof java.time.ZoneOffset offset)) {
             return value.getZone().getId();
         }

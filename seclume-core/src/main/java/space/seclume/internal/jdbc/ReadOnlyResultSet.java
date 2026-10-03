@@ -1837,7 +1837,7 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     @Override
     public final NClob getNClob(int columnIndex) throws SQLException {
         Clob clob = getClob(columnIndex);
-        if (clob == null || clob instanceof NClob national) {
+        if (clob == null || clob instanceof NClob) {
             return (NClob) clob;
         }
         throw new SQLException("this driver's large text values are not national-character "

@@ -93,7 +93,7 @@ class BinaryResultsTest {
             bind(statement);
             try (ResultSet rows = statement.executeQuery()) {
                 assertTrue(rows.next());
-                List<String> formats = formats(connection, rows);
+                List<String> formats = formats(connection);
                 assertEquals(List.of("a=binary", "b=binary", "c=binary", "d=binary",
                                 "e=binary", "f=binary", "g=text", "h=text"), formats,
                         "either nothing was asked in binary, or something was asked for "
@@ -130,7 +130,7 @@ class BinaryResultsTest {
                 bind(statement);
                 try (ResultSet rows = statement.executeQuery()) {
                     assertTrue(rows.next());
-                    for (String one : formats(connection, rows)) {
+                    for (String one : formats(connection)) {
                         assertTrue(one.endsWith("=text"),
                                 "a column came back binary with the switch off: " + one);
                     }
@@ -184,7 +184,7 @@ class BinaryResultsTest {
     }
 
     /** Each column as {@code name=binary} or {@code name=text}. */
-    private static List<String> formats(Connection connection, ResultSet rows) throws Exception {
+    private static List<String> formats(Connection connection) throws Exception {
         List<space.seclume.postgresql.PgSession.Field> fields =
                 connection.unwrap(space.seclume.postgresql.PgSession.class).fields();
         List<String> out = new ArrayList<>();
