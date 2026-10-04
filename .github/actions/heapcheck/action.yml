@@ -1,0 +1,70 @@
+name: Seclume heapcheck
+description: Scan an existing JVM heap dump, retain reports and fail on any credential leak
+outputs:
+  status:
+    description: Scanner/comparison exit code (0 clean, 1 findings, 2 error)
+    value: ${{ steps.scan.outputs.status }}
+inputs:
+  jar:
+    description: Path to the built seclume-heapcheck executable JAR
+    required: true
+  dump:
+    description: Path to the existing heap dump (never uploaded)
+    required: true
+  secret-directory:
+    description: Directory of secret files (never uploaded)
+    required: true
+  baseline:
+    description: Optional previous heapcheck JSON report; source paths must be stable
+    default: ''
+  artifact-name:
+    description: Unique report artifact name when calling this action more than once in a job
+    default: heapcheck
+runs:
+  using: composite
+  steps:
+    - name: Scan heap
+      id: scan
+      shell: bash
+      env:
+        HEAPCHECK_JAR: ${{ inputs.jar }}
+        HEAPCHECK_DUMP: ${{ inputs.dump }}
+        HEAPCHECK_SECRETS: ${{ inputs.secret-directory }}
+        HEAPCHECK_BASELINE: ${{ inputs.baseline }}
+        HEAPCHECK_ACTION: ${{ github.action_path }}
+      run: |
+        report_dir=$(mktemp -d "$RUNNER_TEMP/heapcheck-reports.XXXXXX")
+        echo "reports=$report_dir" >> "$GITHUB_OUTPUT"
+        set +e
+        java --enable-native-access=ALL-UNNAMED -jar "$HEAPCHECK_JAR" \
+          --dump "$HEAPCHECK_DUMP" --secret-dir "$HEAPCHECK_SECRETS" \
+          --report "$report_dir/heapcheck.json" --report "$report_dir/heapcheck.sarif" \
+          --report "$report_dir/heapcheck.md"
+        status=$?
+        if [ "$status" -le 1 ] && [ -n "$HEAPCHECK_BASELINE" ]; then
+          python3 "$HEAPCHECK_ACTION/../../../seclume-heapcheck/ci/compare.py" \
+            "$HEAPCHECK_BASELINE" "$report_dir/heapcheck.json" > "$report_dir/comparison.json"
+          comparison=$?
+          if [ "$comparison" -gt "$status" ]; then status=$comparison; fi
+        fi
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+        if [ -f "$report_dir/heapcheck.md" ]; then cat "$report_dir/heapcheck.md" >> "$GITHUB_STEP_SUMMARY"; fi
+    - name: Retain reports
+      if: always() && steps.scan.outputs.reports != ''
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: ${{ inputs.artifact-name }}-${{ github.job }}-${{ github.run_attempt }}
+        path: ${{ steps.scan.outputs.reports }}
+        if-no-files-found: warn
+        retention-days: 7
+    - name: Enforce result
+      if: always()
+      shell: bash
+      env:
+        HEAPCHECK_STATUS: ${{ steps.scan.outputs.status }}
+      run: |
+        case "$HEAPCHECK_STATUS" in
+          0) exit 0 ;;
+          1) echo '::error::Heapcheck found credentials or the comparison has incomplete scan coverage.'; exit 1 ;;
+          *) echo '::error::Heapcheck could not complete.'; exit 2 ;;
+        esac

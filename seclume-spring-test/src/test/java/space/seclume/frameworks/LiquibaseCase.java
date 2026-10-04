@@ -6,6 +6,16 @@ import org.junit.jupiter.api.Test;
 abstract class LiquibaseCase extends FrameworksTest {
 
     @Test
+    void repeatedDeploymentDoesNotRepeatChanges() throws Exception {
+        checkLiquibaseRepeatedDeployment();
+    }
+
+    @Test
+    void failedDataMigrationRollsBackAndReleasesLock() throws Exception {
+        checkLiquibaseFailedMigration();
+    }
+
+    @Test
     void liquibaseUpdatesRollsBackAndUpdatesAgain() throws Exception {
         checkLiquibaseUpdatesRollsBackAndUpdatesAgain();
     }

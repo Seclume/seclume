@@ -6,6 +6,16 @@ import org.junit.jupiter.api.Test;
 abstract class MyBatisCase extends FrameworksTest {
 
     @Test
+    void failedBatchRollsBackEarlierWrites() throws Exception {
+        checkMyBatisFailedBatchRollback();
+    }
+
+    @Test
+    void earlyCursorCloseAllowsAnotherQuery() throws Exception {
+        checkMyBatisEarlyCursorClose();
+    }
+
+    @Test
     void myBatisGeneratedKeysDynamicSqlBatchAndNull() {
         checkMyBatisGeneratedKeysDynamicSqlBatchAndNull();
     }

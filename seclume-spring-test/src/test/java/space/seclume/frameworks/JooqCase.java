@@ -6,6 +6,16 @@ import org.junit.jupiter.api.Test;
 abstract class JooqCase extends FrameworksTest {
 
     @Test
+    void earlyCursorCloseLeavesTheConnectionUsable() throws Exception {
+        checkJooqEarlyCursorClose();
+    }
+
+    @Test
+    void databaseErrorRollsBackEarlierWrites() {
+        checkJooqDatabaseErrorRollback();
+    }
+
+    @Test
     void jooqInsertsQueriesBatchesAndRollsBack() {
         checkJooqInsertsQueriesBatchesAndRollsBack();
     }

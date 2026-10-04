@@ -46,6 +46,10 @@ public final class Verify {
     }
 
     public static void main(String[] arguments) {
+        if (java.util.Arrays.asList(arguments).contains("--doctor")) {
+            System.exit(Doctor.mainRun(arguments, System.out, System.err));
+            return;
+        }
         if (arguments.length == 2 && arguments[0].strip().equals("--migrate")) {
             System.exit(Migrate.run(arguments[1].strip(), System.out, System.err));
             return;
@@ -71,6 +75,7 @@ public final class Verify {
                     usage: java -jar seclume-verify.jar [--json] "<jdbc url>"
                            java -jar seclume-verify.jar --print-pin "<jdbc url>"
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
+                           java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
 
                     The URL is the one the application uses, password included -
                     which is to say: not included. It names where the secret comes

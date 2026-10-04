@@ -37,6 +37,63 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  heapcheck-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - run: ./mvnw -B -pl seclume-heapcheck -am package -DskipTests
+      - name: Create clean and leaking test dumps
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/heapcheck-fixtures/secrets"
+          openssl rand -hex 32 > "$RUNNER_TEMP/heapcheck-fixtures/secrets/credential"
+          for mode in clean leak; do
+            java seclume-heapcheck/ci/Probe.java "$mode" "$RUNNER_TEMP/heapcheck-fixtures/secrets/credential" > "$RUNNER_TEMP/heapcheck-fixtures/$mode.log" &
+            pid=$!
+            trap 'kill "$pid" 2>/dev/null || true' EXIT
+            for attempt in $(seq 1 30); do
+              if grep -q ready "$RUNNER_TEMP/heapcheck-fixtures/$mode.log"; then break; fi
+              sleep 1
+            done
+            grep -q ready "$RUNNER_TEMP/heapcheck-fixtures/$mode.log"
+            jcmd "$pid" GC.heap_dump -all "$RUNNER_TEMP/heapcheck-fixtures/$mode.hprof"
+            kill "$pid"
+            wait "$pid" || true
+            trap - EXIT
+          done
+          jar=$(find seclume-heapcheck/target -maxdepth 1 -name 'seclume-heapcheck-*.jar' | head -1)
+          test -n "$jar"
+          echo "HEAPCHECK_JAR=$jar" >> "$GITHUB_ENV"
+      - name: Clean heap must pass
+        uses: ./.github/actions/heapcheck
+        with:
+          jar: ${{ env.HEAPCHECK_JAR }}
+          dump: ${{ runner.temp }}/heapcheck-fixtures/clean.hprof
+          secret-directory: ${{ runner.temp }}/heapcheck-fixtures/secrets
+          artifact-name: heapcheck-clean
+      - name: Leaking heap must fail
+        id: negative
+        continue-on-error: true
+        uses: ./.github/actions/heapcheck
+        with:
+          jar: ${{ env.HEAPCHECK_JAR }}
+          dump: ${{ runner.temp }}/heapcheck-fixtures/leak.hprof
+          secret-directory: ${{ runner.temp }}/heapcheck-fixtures/secrets
+          artifact-name: heapcheck-negative-control
+      - name: Require the negative control
+        env:
+          NEGATIVE_OUTCOME: ${{ steps.negative.outcome }}
+          NEGATIVE_STATUS: ${{ steps.negative.outputs.status }}
+        run: test "$NEGATIVE_OUTCOME" = failure && test "$NEGATIVE_STATUS" = 1
+      - name: Remove test dumps and credential
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/heapcheck-fixtures"
   # Everything provable without a database: the cryptography against the
   # published vectors, the heap-dump proof with its negative control, the pool
   # mechanics, and the rule that no forbidden API call slips in.
@@ -46,6 +103,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test required database coverage gate
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Test heapcheck report comparison
+        run: python3 -m unittest discover -s seclume-heapcheck/ci -p 'test_*.py'
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: '25'
@@ -66,7 +125,7 @@ jobs:
         working-directory: .github/ci-tools
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-heapcheck,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # A red run names its failing tests as annotations, so that they can be
@@ -247,6 +306,11 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
       - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
+      - name: Verify framework edge cases
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Require executed framework tests
+        if: always()
+        run: python3 .github/scripts/require_framework_tests.py Postgres
       - name: Verify pool isolation against PostgreSQL
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest,PoolHandOnSeamTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests
@@ -383,6 +447,11 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
       - run: ./mvnw -B -pl seclume-mysql -am test
+      - name: Verify framework edge cases
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
+      - name: Require executed framework tests
+        if: always()
+        run: python3 .github/scripts/require_framework_tests.py MySql
       - name: Verify pool isolation against MySQL
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
       - name: Require executed database regression tests
@@ -437,6 +506,11 @@ jobs:
           exit 1
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
       - run: ./mvnw -B -pl seclume-sqlserver -am test
+      - name: Verify framework edge cases
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
+      - name: Require executed framework tests
+        if: always()
+        run: python3 .github/scripts/require_framework_tests.py SqlServer
       - name: Verify pool isolation against SQL Server
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests
@@ -492,6 +566,11 @@ jobs:
           exit 1
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
       - run: ./mvnw -B -pl seclume-oracle -am test
+      - name: Verify framework edge cases
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Require executed framework tests
+        if: always()
+        run: python3 .github/scripts/require_framework_tests.py Oracle
       - name: Verify pool isolation against Oracle
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests

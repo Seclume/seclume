@@ -2,6 +2,7 @@ target/
 node_modules/
 .mvn/wrapper/maven-wrapper.jar
 *.hprof
+__pycache__/
 
 # Everything that describes one machine rather than the project: where its
 # test databases are, and the passwords to reach them. One rule rather than a

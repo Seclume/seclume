@@ -47,14 +47,15 @@ final class FrameworksServers {
     }
 
     static String mysqlUrl() {
-        return "jdbc:seclume:mysql://" + reachable(TestHosts.database(), 3307)
+        return "jdbc:seclume:mysql://" + reachable(TestHosts.database(), Integer.getInteger("seclume.mysql.port", 3307))
                 + "/seclume_test?user=seclume_test&tls=off&allowPublicKeyRetrieval=true"
                 + secret(".local-mysql-password");
     }
 
     static String sqlServerUrl() {
         return "jdbc:seclume:sqlserver://" + reachable(TestHosts.database(), 1433)
-                + "/seclume_spring?user=sa&trustServerCertificate=true"
+                + "/" + System.getProperty("seclume.frameworks.sqlserver.database", "seclume_spring")
+                + "?user=sa&trustServerCertificate=true"
                 + secret(".local-mssql-password");
     }
 
