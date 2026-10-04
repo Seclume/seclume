@@ -172,6 +172,90 @@ abstract class FrameworksTest {
 
     // ===================================================================== jOOQ
 
+    final void checkLiquibaseRepeatedDeployment() throws Exception {
+        checkLiquibaseUpdatesRollsBackAndUpdatesAgain();
+        liquibase("update", Map.of());
+        liquibase("update", Map.of());
+        try (Connection connection = source.getConnection();
+             Statement statement = connection.createStatement()) {
+            assertEquals(2, count(connection, "lb_customer"));
+            assertEquals(3, count(connection, "DATABASECHANGELOG"));
+            try (ResultSet rows = statement.executeQuery("select name from lb_customer order by id")) {
+                assertTrue(rows.next());
+                assertEquals("Ada", rows.getString(1));
+                assertTrue(rows.next());
+                assertEquals("Gr\u00fc\u00dfe", rows.getString(1));
+                assertFalse(rows.next());
+            }
+        }
+    }
+
+    final void checkLiquibaseFailedMigration() throws Exception {
+        try (Connection connection = source.getConnection(); Statement statement = connection.createStatement()) {
+            for (String table : List.of("lb_edge", "DATABASECHANGELOG", "DATABASECHANGELOGLOCK")) {
+                drop(statement, table);
+            }
+        }
+        // Repeat the failed deployment: the history must not mark it as applied and
+        // the lock must be released so that the next deployment can try again.
+        for (int attempt = 0; attempt < 2; attempt++) {
+            assertThrows(Exception.class, () -> {
+                try (Connection connection = source.getConnection()) {
+                    Database database = DatabaseFactory.getInstance()
+                            .findCorrectDatabaseImplementation(new JdbcConnection(connection));
+                    liquibase("update", database,
+                            Map.of("changelogFile", "frameworks/liquibase/failure.yaml"));
+                }
+            });
+            try (Connection connection = source.getConnection(); Statement statement = connection.createStatement()) {
+                assertEquals(1, count(connection, "DATABASECHANGELOG"));
+                assertEquals(1, count(connection, "lb_edge"), "partial DML escaped the failed changeset");
+                try (ResultSet lock = statement.executeQuery("select LOCKED from DATABASECHANGELOGLOCK")) {
+                    assertTrue(lock.next());
+                    assertFalse(lock.getBoolean(1), "failed migration kept the deployment lock");
+                }
+            }
+        }
+    }
+
+    final void checkJooqEarlyCursorClose() throws Exception {
+        try (Connection connection = source.getConnection()) {
+            DSLContext jooq = DSL.using(connection, jooqDialect());
+            var table = DSL.table(DSL.unquotedName("fw_item"));
+            var name = DSL.field(DSL.unquotedName("name"), String.class);
+            var batch = jooq.batch(jooq.insertInto(table, name).values((String) null));
+            for (int i = 0; i < 257; i++) batch.bind(String.format(Locale.ROOT, "row-%03d", i));
+            batch.execute();
+            connection.setAutoCommit(false);
+            try {
+                try (var cursor = jooq.select(name).from(table).orderBy(name).fetchSize(7).fetchLazy()) {
+                    assertEquals("row-000", cursor.fetchNext().get(name));
+                    assertEquals("row-001", cursor.fetchNext().get(name));
+                    // Close before the rest has been consumed, on the same connection.
+                }
+                assertEquals(257, jooq.fetchCount(table));
+                connection.commit();
+            } finally {
+                connection.rollback();
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    final void checkJooqDatabaseErrorRollback() {
+        DSLContext jooq = DSL.using(source, jooqDialect());
+        var table = DSL.table(DSL.unquotedName("fw_item"));
+        var name = DSL.field(DSL.unquotedName("name"), String.class);
+        assertThrows(org.jooq.exception.DataAccessException.class, () -> jooq.transaction(configuration -> {
+            DSLContext transaction = DSL.using(configuration);
+            transaction.insertInto(table, name).values("must-rollback").execute();
+            transaction.insertInto(table, name).values((String) null).execute(); // NOT NULL violation
+        }));
+        assertEquals(0, jooq.fetchCount(table));
+        assertEquals(1, jooq.insertInto(table, name).values("after-failure").execute());
+        assertEquals(List.of("after-failure"), jooq.select(name).from(table).fetch(name));
+    }
+
     final void checkJooqInsertsQueriesBatchesAndRollsBack() {
         DSLContext jooq = DSL.using(source, jooqDialect());
         var item = DSL.table(DSL.unquotedName("fw_item"));
@@ -232,6 +316,10 @@ abstract class FrameworksTest {
 
     /** A mapper interface - annotations, not XML, so the whole case is in this file. */
     public interface ItemMapper {
+
+        @org.apache.ibatis.annotations.Select("select id, name, price, created from fw_item order by name")
+        @org.apache.ibatis.annotations.Options(fetchSize = 7)
+        org.apache.ibatis.cursor.Cursor<Item> scan();
 
         @org.apache.ibatis.annotations.Insert(
                 "insert into fw_item (name, price, created) values (#{name}, #{price}, #{created})")
@@ -356,6 +444,63 @@ abstract class FrameworksTest {
 
     // ======================================================= Spring Data JDBC
 
+    private SqlSessionFactory myBatisFactory() {
+        var configuration = new org.apache.ibatis.session.Configuration(
+                new Environment("seclume", new JdbcTransactionFactory(), source));
+        configuration.addMapper(ItemMapper.class);
+        return new SqlSessionFactoryBuilder().build(configuration);
+    }
+
+    final void checkMyBatisFailedBatchRollback() throws Exception {
+        SqlSessionFactory factory = myBatisFactory();
+        try (SqlSession session = factory.openSession(ExecutorType.BATCH)) {
+            ItemMapper mapper = session.getMapper(ItemMapper.class);
+            LocalDateTime now = LocalDateTime.of(2026, 10, 4, 12, 0);
+            mapper.insertPlain(new Item("must-rollback", BigDecimal.ONE, now));
+            session.flushStatements(); // an actual write before the failing batch
+            mapper.insertPlain(new Item("also-rollback", BigDecimal.ONE, now));
+            mapper.insertPlain(new Item(null, BigDecimal.ONE, now));
+            assertThrows(org.apache.ibatis.exceptions.PersistenceException.class, session::flushStatements);
+            session.rollback();
+        }
+        try (Connection connection = source.getConnection()) {
+            assertEquals(0, count(connection, "fw_item"));
+        }
+        try (SqlSession session = factory.openSession()) {
+            session.getMapper(ItemMapper.class).insertPlain(new Item("after-failure", BigDecimal.TEN,
+                    LocalDateTime.of(2026, 10, 4, 12, 0)));
+            session.commit();
+        }
+        try (SqlSession session = factory.openSession()) {
+            assertEquals(1, session.getMapper(ItemMapper.class).findByNames(List.of("after-failure")).size());
+        }
+    }
+
+    final void checkMyBatisEarlyCursorClose() throws Exception {
+        SqlSessionFactory factory = myBatisFactory();
+        try (SqlSession session = factory.openSession(ExecutorType.BATCH)) {
+            for (int i = 0; i < 257; i++) {
+                session.getMapper(ItemMapper.class).insertPlain(new Item(
+                        String.format(Locale.ROOT, "row-%03d", i), BigDecimal.ONE,
+                        LocalDateTime.of(2026, 10, 4, 12, 0)));
+            }
+            session.commit();
+        }
+        try (SqlSession session = factory.openSession()) {
+            ItemMapper mapper = session.getMapper(ItemMapper.class);
+            var cursor = mapper.scan();
+            try (cursor) {
+                var rows = cursor.iterator();
+                assertEquals("row-000", rows.next().getName());
+                assertEquals("row-001", rows.next().getName());
+                assertFalse(cursor.isConsumed());
+            }
+            assertFalse(cursor.isOpen());
+            assertEquals("row-256", mapper.findByNames(List.of("row-256")).getFirst().getName());
+            session.commit();
+        }
+    }
+
     final void checkSpringDataJdbcSavesAnAggregateAcrossTwoTables() {
         DjOrderRepository orders = spring().getBean(DjOrderRepository.class);
 
@@ -406,17 +551,25 @@ abstract class FrameworksTest {
         if (product.contains("postgres")) {
             return SQLDialect.POSTGRES;
         }
+        if (product.contains("mariadb")) {
+            return SQLDialect.MARIADB;
+        }
         if (product.contains("mysql")) {
             return SQLDialect.MYSQL;
         }
         return SQLDialect.DEFAULT;     // SQL Server, Oracle: commercial editions only
     }
 
+    /** MySQL or MariaDB - the same driver, but MariaDB names itself. */
+    private boolean isMySql() {
+        return product.contains("mysql") || product.contains("mariadb");
+    }
+
     private String identity() {
         if (product.contains("postgres")) {
             return "bigint generated by default as identity";
         }
-        if (product.contains("mysql")) {
+        if (isMySql()) {
             return "bigint auto_increment";
         }
         if (product.contains("microsoft")) {
@@ -483,7 +636,7 @@ abstract class FrameworksTest {
 
     private String timestamp() {
         return product.contains("microsoft") ? "datetime2"
-                : product.contains("mysql") ? "datetime(6)" : "timestamp";
+                : isMySql() ? "datetime(6)" : "timestamp";
     }
 
     private void drop(Statement statement, String table) throws Exception {

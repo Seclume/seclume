@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Installation diagnostics, heapcheck CI and framework edge cases
+
+- `seclume-verify --doctor` diagnoses native memory protection, secret-file access,
+  negotiated TLS, certificate settings/validity and optional pool capacity. Text
+  and JSON reports omit URLs, provider values and exception messages.
+- Heapcheck writes SARIF 2.1.0 with `.sarif` or `.sarif.json` report names. A
+  composite CI action preserves reports and enforces the scan result; a Python
+  comparator distinguishes new/persistent/resolved leaks and missing scan scope
+  without letting a baseline waive leaks. See [DIAGNOSTICS.md](DIAGNOSTICS.md).
+- jOOQ and MyBatis tests close cursors early and exercise database errors and
+  rollback. Liquibase tests repeated deployment and failed transactional data
+  migrations, including history and lock release. CI requires all nine cases
+  for each database instead of accepting skipped tests as coverage.
+
 ### Changed: seclume's own TLS for every server - TLS 1.2 included, no silent JSSE
 
 - **A TLS 1.2 profile in the own stack**, for servers without TLS 1.3: ECDHE on X25519, P-256

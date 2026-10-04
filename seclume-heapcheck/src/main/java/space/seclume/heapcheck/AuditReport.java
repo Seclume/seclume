@@ -52,6 +52,36 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
         return secrets.stream().noneMatch(SecretResult::found);
     }
 
+    /** One logical result per secret, independent of unstable heap addresses. */
+    String sarif() {
+        StringBuilder out = new StringBuilder("""
+                {
+                  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                  "version": "2.1.0",
+                  "runs": [{
+                    "tool": {"driver": {"name": "seclume-heapcheck", "rules": [{
+                      "id": "SECLUME-HEAP-001",
+                      "shortDescription": {"text": "Credential found in a JVM heap dump"},
+                      "help": {"text": "Keep credentials in native memory throughout their lifecycle. Repeat the check after login, rotation and under load."},
+                      "defaultConfiguration": {"level": "error"}
+                    }]}},
+                    "invocations": [{"executionSuccessful": true}],
+                    "results": [
+                """);
+        boolean first = true;
+        for (SecretResult secret : secrets) {
+            if (!secret.found()) continue;
+            if (!first) out.append(",\n");
+            first = false;
+            out.append("      {\"ruleId\": \"SECLUME-HEAP-001\", \"level\": \"error\",")
+                    .append("\"message\": {\"text\": ")
+                    .append(quote("Credential from " + secret.source() + " was found in the heap dump."))
+                    .append("}, \"locations\": [{\"logicalLocations\": [{\"fullyQualifiedName\": ")
+                    .append(quote(secret.source())).append("}]}]}");
+        }
+        return out.append("\n    ]\n  }]\n}\n").toString();
+    }
+
     // ---- JSON ------------------------------------------------------------------------
 
     String json() {

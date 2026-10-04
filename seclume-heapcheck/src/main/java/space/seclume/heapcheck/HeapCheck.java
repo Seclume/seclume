@@ -44,8 +44,8 @@ import space.seclume.tck.HeapDumpScanner;
  * again and again, or {@code --secret-dir} for a mounted Kubernetes secret -
  * in a dump it takes itself or one that exists already ({@code --dump}, say
  * the one {@code -XX:+HeapDumpOnOutOfMemoryError} wrote), and writes what it
- * found as a report ({@code --report}: JSON if the name ends in {@code .json},
- * Markdown otherwise) that names secrets only by their files.
+ * found as a report ({@code --report}: SARIF for {@code .sarif} or {@code .sarif.json},
+ * JSON for {@code .json}, Markdown otherwise) that names secrets only by their files.
  *
  * <p><b>The secret is never a command-line argument.</b> Arguments are visible
  * to every process on the machine - {@code ps} shows them, and on Linux so does
@@ -162,8 +162,10 @@ public final class HeapCheck {
                             || options.keep() != null), results);
             print(report);
             for (Path file : options.reports()) {
-                Files.writeString(file, file.getFileName().toString().endsWith(".json")
-                        ? report.json() : report.markdown(), StandardCharsets.UTF_8);
+                String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+                Files.writeString(file, name.endsWith(".sarif") || name.endsWith(".sarif.json")
+                        ? report.sarif() : name.endsWith(".json") ? report.json() : report.markdown(),
+                        StandardCharsets.UTF_8);
                 System.out.println("report written to " + file);
             }
             return report.clean() ? 0 : 1;
@@ -326,8 +328,8 @@ public final class HeapCheck {
                                  every process on this machine; may be given again
                   --secret-dir   every file in this directory is a secret - a mounted
                                  Kubernetes secret, say
-                  --report       write what was found to this file: JSON if it ends in
-                                 .json, Markdown otherwise; may be given again. It names
+                  --report       SARIF for .sarif or .sarif.json, JSON for .json,
+                                 Markdown otherwise; may be given again. It names
                                  secrets by their files and holds none of them
                   --keep-dump    with --pid: write the dump here and keep it
 

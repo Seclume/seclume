@@ -68,8 +68,10 @@ class HeapCheckTest {
 
         Path markdown = directory.resolve("report.md");
         Path json = directory.resolve("report.json");
+        Path sarif = directory.resolve("report.sarif");
+        Path sarifJson = directory.resolve("report.sarif.json");
         int exit = HeapCheck.run(new HeapCheck.Options(null, dump,
-                List.of(other, held, binary), List.of(markdown, json), null));
+                List.of(other, held, binary), List.of(markdown, json, sarif, sarifJson), null));
         assertEquals(1, exit, "one of the three secrets was in the heap");
         assertTrue(Files.exists(dump), "a dump that was given must not be deleted");
 
@@ -82,7 +84,13 @@ class HeapCheckTest {
         assertTrue(js.contains("\"verdict\": \"FOUND\""), js);
         assertTrue(js.contains("\"source\": " + AuditReport.quote(held.toString())
                 + ",\n      \"kind\": \"text\",\n      \"result\": \"FOUND\""), js);
-        for (String report : List.of(md, js)) {
+        String sa = Files.readString(sarif);
+        assertEquals(sa, Files.readString(sarifJson));
+        assertTrue(sa.contains("\"version\": \"2.1.0\""));
+        assertTrue(sa.contains("\"fullyQualifiedName\": " + AuditReport.quote(held.toString())));
+        assertTrue(!sa.contains(AuditReport.quote(other.toString())));
+        assertTrue(!sa.contains("\"position\"") && !sa.contains("\"length\""));
+        for (String report : List.of(md, js, sa)) {
             assertTrue(!report.contains(SECRET) && !report.contains(otherSecret),
                     "a report holds a secret");
         }
@@ -93,8 +101,10 @@ class HeapCheckTest {
         Path secretFile = directory.resolve("secret");
         Files.writeString(secretFile, SECRET, StandardCharsets.UTF_8);
         Path json = directory.resolve("clean.json");
+        Path sarif = directory.resolve("clean.sarif");
         withProbe(secretFile, Empty.class, pid -> assertEquals(0, HeapCheck.run(
-                new HeapCheck.Options(pid, null, List.of(secretFile), List.of(json), null))));
+                new HeapCheck.Options(pid, null, List.of(secretFile), List.of(json, sarif), null))));
+        assertTrue(Files.readString(sarif).contains("\"results\": [\n\n    ]"));
         String report = Files.readString(json);
         assertTrue(report.contains("\"verdict\": \"NOT_FOUND\"")
                 && report.contains("\"pid\"") && report.contains("\"main\": "

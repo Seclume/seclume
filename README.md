@@ -66,6 +66,12 @@ could be in, and deletes the dump again. The secret comes from a file, never fro
 line. For audits it also checks existing dumps and several secrets at once, and writes a
 Markdown or JSON report: `--dump`, `--secret-dir`, `--report`.
 
+For CI, `--report heapcheck.sarif` adds SARIF output. A ready-to-use GitHub Action
+and a comparison of successive JSON reports are in [DIAGNOSTICS.md](DIAGNOSTICS.md).
+`seclume-verify --doctor [--pool-size N] "<jdbc url>"` checks native memory protection,
+the actual TLS connection, certificate settings and database capacity, with advice
+for each finding; add `--json` for automation.
+
 ### How
 
 A password or token never becomes a `String`, a `char[]` or a `byte[]`. It goes from its

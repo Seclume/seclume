@@ -1,0 +1,30 @@
+databaseChangeLog:
+  - changeSet:
+      id: edge-create
+      author: seclume
+      changes:
+        - createTable:
+            tableName: lb_edge
+            columns:
+              - column:
+                  name: id
+                  type: int
+                  constraints:
+                    primaryKey: true
+        - insert:
+            tableName: lb_edge
+            columns:
+              - column: {name: id, valueNumeric: 1}
+  - changeSet:
+      id: edge-failing-data
+      author: seclume
+      runInTransaction: true
+      changes:
+        - insert:
+            tableName: lb_edge
+            columns:
+              - column: {name: id, valueNumeric: 2}
+        - insert:
+            tableName: lb_edge
+            columns:
+              - column: {name: id, valueNumeric: 1}

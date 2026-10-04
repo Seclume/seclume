@@ -28,4 +28,9 @@ Produced by `space.seclume.verify.FrameworkMatrix` on 2026-09-24 by reading the 
 
 ## What this table does not say
 
+The test suite now also includes early cursor close and reuse, rollback after
+database errors (jOOQ and MyBatis), and repeated/failed Liquibase deployments.
+The generated counts above describe the dated run, not these newer tests; CI
+requires all three cases per framework per database before accepting a run.
+
 That a verified cell covers everything the framework can do. It covers what its test class asks of it, which is written down beside each row above and is less than the whole of any of these libraries.
