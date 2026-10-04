@@ -45,9 +45,20 @@ public final class AnvilClient {
     }
 
     public static void main(String[] args) throws IOException {
-        int triggerPort = Integer.parseInt(args[0]);
+        if (args.length < 3) {
+            usage();
+            return;
+        }
+        int triggerPort;
+        int anvilPort;
+        try {
+            triggerPort = Integer.parseInt(args[0]);
+            anvilPort = Integer.parseInt(args[2]);
+        } catch (NumberFormatException notAPort) {
+            usage();
+            return;
+        }
         String anvilHost = args[1];
-        int anvilPort = Integer.parseInt(args[2]);
         ClientHello.Offer offer = args.length > 3 && "tls12".equals(args[3])
                 ? ClientHello.Offer.TLS12 : ClientHello.Offer.TLS13_AND_12;
         System.out.println("offering " + offer);
@@ -64,6 +75,11 @@ public final class AnvilClient {
                 connections.submit(() -> connectOnce(anvilHost, anvilPort, offer));
             }
         }
+    }
+
+    private static void usage() {
+        System.err.println("usage: AnvilClient triggerPort anvilHost anvilPort [tls12]");
+        System.exit(2);
     }
 
     private static void connectOnce(String host, int port, ClientHello.Offer offer) {
