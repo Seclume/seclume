@@ -79,13 +79,18 @@ jobs:
           done
           cat anvil-client.log
 
+      # One handshake at a time: the client starts one connection per trigger,
+      # all on the same port, and with two tests running at once a connection
+      # could meet the other test's server - a case then failed with "no
+      # messages received" while the client had answered correctly (04.10.2026,
+      # a different case in each run).
       - name: Run TLS-Anvil against it
         run: |
           mkdir -p anvil-out
           docker run --rm --network host \
             -v "$PWD/anvil-out:/output" -v "$PWD/tls-anvil:/seclume:ro" \
             seclume-tls-anvil:pinned \
-            -disableTcpDump -strength 1 -parallelHandshakes 2 -identifier seclume-client \
+            -disableTcpDump -strength 1 -parallelHandshakes 1 -identifier seclume-client \
             client -port 8443 -triggerScript /seclume/trigger.sh
 
       - name: Results
