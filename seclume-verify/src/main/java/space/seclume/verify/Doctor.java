@@ -29,6 +29,9 @@ final class Doctor {
                     case "--doctor" -> { }
                     case "--json" -> json = true;
                     case "--pool-size" -> {
+                        if (i + 1 >= args.length) {
+                            throw new IllegalArgumentException("--pool-size needs a value");
+                        }
                         poolSize = Integer.valueOf(args[++i]);
                         if (poolSize <= 0) throw new IllegalArgumentException("pool size must be positive");
                     }
