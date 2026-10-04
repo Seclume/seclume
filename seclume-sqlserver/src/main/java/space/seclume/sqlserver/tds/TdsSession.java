@@ -647,9 +647,26 @@ public final class TdsSession implements AutoCloseable {
                     "the server refuses encryption - seclume does not log in unencrypted",
                     "08001");
         }
-        TdsTls tls = TdsTls.create(channel.raw(), settings.host(), settings.port(),
-                settings.trustServerCertificate());
-        tls.handshake();
+        if (settings.tlsStack() == space.seclume.internal.jdbc.TlsStack.JSSE) {
+            TdsTls tls = TdsTls.create(channel.raw(), settings.host(), settings.port(),
+                    settings.trustServerCertificate());
+            tls.handshake();
+            channel.useTls(tls);
+            return preLogin;
+        }
+        // The own stack's TLS 1.2: the handshake inside the pre-login packets,
+        // then the records straight on the socket.
+        PreLoginRecords packets = new PreLoginRecords(channel.raw());
+        space.seclume.internal.TlsLayer tls = space.seclume.internal.TlsLayers.startTls12(
+                packets, settings.host(), settings.port(), !settings.trustServerCertificate(),
+                settings.identity());
+        try {
+            packets.finished();
+        } catch (IOException e) {
+            tls.close();
+            throw e;
+        }
+        tls.replaceTransport(channel.raw());
         channel.useTls(tls);
         return preLogin;
     }

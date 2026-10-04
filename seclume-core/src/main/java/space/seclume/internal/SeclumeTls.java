@@ -72,6 +72,19 @@ public final class SeclumeTls implements TlsLayer {
         return new SeclumeTls(ClientHandshake.connect(transport, host, trust, identity, alpn));
     }
 
+    /**
+     * The handshake offering exactly the versions given - {@code TLS12} for
+     * SQL Server's TDS 7.4, whose handshake runs inside the pre-login packets
+     * and cannot be TLS 1.3.
+     */
+    public static SeclumeTls startOffering(Transport transport, String host, boolean verify,
+            ClientIdentity identity, space.seclume.tls.ClientHello.Offer offer)
+            throws IOException {
+        CertificateTrust trust = verify ? defaultTrust() : null;
+        return new SeclumeTls(ClientHandshake.connect(transport, host, trust, identity, null,
+                offer));
+    }
+
     /** The JVM's trust store - or the CA file this connection named, see {@link TrustChoice}. */
     private static CertificateTrust defaultTrust() throws IOException {
         return TrustChoice.certificateTrust();
