@@ -136,6 +136,9 @@ public final class JsonOff {
         private int at;
 
         Cursor(MemorySegment data, int length) {
+            if (length < 0 || length > data.byteSize()) {
+                throw new NotFound("the document length is outside the supplied memory");
+            }
             this.data = data;
             this.end = length;
         }

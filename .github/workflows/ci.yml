@@ -86,6 +86,39 @@ jobs:
           print('failing tests:', found)
           PY
 
+  # Short coverage-guided JSON searches on every PR; the nightly fuzz
+  # workflow runs the same targets for fifteen minutes each.
+  json-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        method: [arbitraryDocumentsStayWithinBounds, generatedValuesRoundTrip]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Search JSON reader inputs
+        env:
+          JAZZER_FUZZ: '1'
+        run: >
+          ./mvnw -B -pl seclume-core -am test
+          -Dtest='JsonOffFuzzTest#${{ matrix.method }}'
+          -Djazzer.max_duration=60s -Dsurefire.failIfNoSpecifiedTests=false
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: json-finding-${{ matrix.method }}
+          path: seclume-core/**/crash-*
+
   # The post-quantum key exchange, end to end. The own TLS stack offers
   # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,
   # so every other job runs with the hybrid off and would not notice it
