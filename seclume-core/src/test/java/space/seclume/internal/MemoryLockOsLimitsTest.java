@@ -42,7 +42,7 @@ class MemoryLockOsLimitsTest {
         Path output = temporary.resolve(mode + "-" + required + ".log");
         String classpath = System.getProperty("surefire.test.class.path",
                 System.getProperty("java.class.path"));
-        Process child = new ProcessBuilder("prlimit", "--memlock=" + limit + ":" + limit,
+        Process child = new ProcessBuilder(prlimit(), "--memlock=" + limit + ":" + limit,
                 "--", Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "--enable-native-access=ALL-UNNAMED", "-Dseclume.mlock=true",
                 "-Dseclume.mlock.required=" + required, "-cp", classpath,
@@ -249,8 +249,23 @@ class MemoryLockOsLimitsTest {
         assertTrue(flags.contains("lo"), "live page became unlocked");
     }
 
+    /** By absolute path, so the child cannot come from a directory on {@code PATH}. */
+    private static String prlimit() {
+        for (String executable : List.of("/usr/bin/prlimit", "/bin/prlimit")) {
+            if (Files.isExecutable(Path.of(executable))) {
+                return executable;
+            }
+        }
+        throw new AssertionError("prlimit not found in /usr/bin or /bin");
+    }
+
     private static long lockedBytes() throws IOException {
-        return Long.parseLong(status("VmLck:").split("\\s+")[0]) * 1024;
+        String kilobytes = status("VmLck:").split("\\s+")[0];
+        try {
+            return Long.parseLong(kilobytes) * 1024;
+        } catch (NumberFormatException unexpected) {
+            throw new AssertionError("VmLck is not a number: " + kilobytes, unexpected);
+        }
     }
 
     private static String status(String key) throws IOException {
