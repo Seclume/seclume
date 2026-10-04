@@ -16,7 +16,7 @@ import space.seclume.internal.Transport;
  * collected bytes go out on the first read after them.
  *
  * <p>Only for the handshake. Once it is done the records travel on the socket
- * itself and the TDS packets inside them: the layer is moved onto the raw
+ * itself and the TDS packets inside them: the layer is switched to the raw
  * transport with {@code replaceTransport}, after {@link #finished} has checked
  * that nothing the server sent is still unread here.
  *
