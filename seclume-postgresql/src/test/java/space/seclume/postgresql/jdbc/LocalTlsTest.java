@@ -217,6 +217,7 @@ class LocalTlsTest {
             }
         }
         Assumptions.assumeTrue(secret != null, "no TLS server configured");
+        requireReachable(space.seclume.tck.TestHosts.database(), 5433);
         String url = "jdbc:seclume:postgresql://" + space.seclume.tck.TestHosts.database() + ":5433/seclume_test"
                 + "?user=seclume_test&provider=file&path="
                 + secret.toString().replace(java.io.File.separatorChar, '/')

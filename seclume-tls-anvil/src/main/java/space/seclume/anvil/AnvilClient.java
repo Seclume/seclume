@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import space.seclume.internal.SocketTransport;
 import space.seclume.tls.ClientHandshake;
+import space.seclume.tls.ClientHello;
 import space.seclume.tls.TlsConnection;
 
 /**
@@ -30,7 +31,10 @@ import space.seclume.tls.TlsConnection;
  * handled, not how trust is decided - that part is the JDK's PKIX and has
  * tests of its own.
  *
- * <p>Arguments: {@code triggerPort anvilHost anvilPort}.
+ * <p>Arguments: {@code triggerPort anvilHost anvilPort [tls12]}. With
+ * {@code tls12} the client offers the TLS 1.2 profile alone - what it offers
+ * SQL Server on TDS 7.4 - so that TLS-Anvil's TLS 1.2 tests apply; without it,
+ * what the drivers offer every other server.
  */
 public final class AnvilClient {
 
@@ -44,6 +48,9 @@ public final class AnvilClient {
         int triggerPort = Integer.parseInt(args[0]);
         String anvilHost = args[1];
         int anvilPort = Integer.parseInt(args[2]);
+        ClientHello.Offer offer = args.length > 3 && "tls12".equals(args[3])
+                ? ClientHello.Offer.TLS12 : ClientHello.Offer.TLS13_AND_12;
+        System.out.println("offering " + offer);
 
         ExecutorService connections = Executors.newVirtualThreadPerTaskExecutor();
         // Plain TCP on loopback on purpose: the trigger carries no data at all.
@@ -54,20 +61,20 @@ public final class AnvilClient {
                 // The trigger's connection itself carries nothing: that it
                 // arrived is the request.
                 asked.close();
-                connections.submit(() -> connectOnce(anvilHost, anvilPort));
+                connections.submit(() -> connectOnce(anvilHost, anvilPort, offer));
             }
         }
     }
 
-    private static void connectOnce(String host, int port) {
+    private static void connectOnce(String host, int port, ClientHello.Offer offer) {
         long number = HANDSHAKES.incrementAndGet();
         String outcome;
         try (SocketTransport socket = SocketTransport.connect(host, port, 5_000)) {
             // A test that makes the server go quiet must not hang the client:
             // no read or write waits longer than this.
             socket.networkTimeout(10_000);
-            try (TlsConnection tls = ClientHandshake.connectWithoutAuthenticating(socket,
-                    "localhost")) {
+            try (TlsConnection tls = ClientHandshake.connect(socket, "localhost", null, null,
+                    null, offer)) {
                 CONNECTED.incrementAndGet();
                 ByteBuffer ping = ByteBuffer.allocateDirect(5).put(new byte[] {'p', 'i', 'n', 'g', '\n'});
                 tls.write(ping.flip());

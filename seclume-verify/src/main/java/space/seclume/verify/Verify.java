@@ -564,7 +564,20 @@ public final class Verify {
         for (Throwable link = failure; link != null && link.getCause() != link;
                 link = link.getCause()) {
             if (link instanceof javax.net.ssl.SSLException
-                    || link instanceof java.security.cert.CertificateException) {
+                    || link instanceof java.security.cert.CertificateException
+                    || link instanceof space.seclume.tls.TlsAlertException
+                    || link instanceof space.seclume.tls.TlsProtocolException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether the server answered TLS, but not with a version or suite the own stack offers. */
+    static boolean isTlsVersionRefusal(Throwable failure) {
+        for (Throwable link = failure; link != null && link.getCause() != link;
+                link = link.getCause()) {
+            if (link instanceof space.seclume.tls.TlsVersionRefused) {
                 return true;
             }
         }
@@ -597,6 +610,12 @@ public final class Verify {
         // a connection failure - state 08 - and the advice for that one sends
         // the reader to check host, port and firewall, none of which is wrong.
         // The server was reached; it was the certificate that was not accepted.
+        if (isTlsVersionRefusal(failure)) {
+            return "The server was reached and speaks TLS, but neither TLS 1.3 nor TLS 1.2 with "
+                    + "ECDHE and AES-GCM - see the cause above. Enable one of them on the "
+                    + "server; tlsStack=jsse reaches it as it is, with the password passing "
+                    + "through the heap.";
+        }
         if (isTlsFailure(failure)) {
             return "The server was reached and TLS failed - see the cause above. Either the "
                     + "certificate is not signed by anything this JVM trusts (a container's "

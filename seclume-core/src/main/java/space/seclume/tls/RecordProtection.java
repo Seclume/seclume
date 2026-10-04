@@ -37,6 +37,14 @@ import space.seclume.crypto.Hkdf;
  *
  * <p>Keys and IV stay in native memory for their whole life. That is the reason
  * this class exists instead of an {@code SSLEngine}.
+ *
+ * <p><b>TLS 1.2</b> ({@link #forTls12}) is the same AES-GCM in a different
+ * frame (RFC 5288): the content type stays in the clear header, the nonce is a
+ * four-byte salt from the key block followed by an eight-byte explicit part
+ * sent in front of each record, and the additional data is sequence number,
+ * type, version and plaintext length. The explicit part written here is the
+ * sequence number - unique for the life of the key, which is all GCM needs.
+ * There is no traffic secret and no KeyUpdate.
  */
 public final class RecordProtection implements AutoCloseable {
 
@@ -48,7 +56,17 @@ public final class RecordProtection implements AutoCloseable {
     /** RFC 8446 section 5.2: at most 2^14 + 256 bytes of ciphertext, the tag included. */
     private static final int MAX_INNER = MAX_PLAINTEXT + 256 - AesGcm.TAG;
 
+    /** TLS 1.2: the salt in front of the explicit nonce. */
+    private static final int SALT = 4;
+    /** TLS 1.2: the explicit nonce in front of every record's ciphertext. */
+    private static final int EXPLICIT = 8;
+    /** TLS 1.2: sequence number, type, version and length. */
+    private static final int ADDITIONAL = 13;
+
     private final Arena arena = Arena.ofShared();
+    private final boolean tls12;
+    /** TLS 1.2 only: the additional data of the record in hand. */
+    private final MemorySegment additional;
     private final AesGcmCipher key;
     private final MemorySegment iv;
     private final HashAlgorithm hash;
@@ -65,6 +83,8 @@ public final class RecordProtection implements AutoCloseable {
     private long sequence;
 
     private RecordProtection(HashAlgorithm hash, MemorySegment trafficSecret, int keyLength) {
+        this.tls12 = false;
+        this.additional = null;
         this.hash = hash;
         this.keyLength = keyLength;
         this.secret = arena.allocate(hash.digestLength());
@@ -78,6 +98,43 @@ public final class RecordProtection implements AutoCloseable {
         this.iv = arena.allocate(AesGcm.NONCE);
         Hkdf.expandLabel(hash, secret, "iv", null, iv, 0, AesGcm.NONCE);
         this.nonce = arena.allocate(AesGcm.NONCE);
+    }
+
+    private RecordProtection(HashAlgorithm hash, MemorySegment keyBlock, long keyAt,
+            int keyLength, long saltAt) {
+        this.tls12 = true;
+        this.hash = hash;
+        this.keyLength = keyLength;
+        // No traffic secret in TLS 1.2: the key and the salt are what is kept.
+        this.secret = arena.allocate(keyLength + SALT);
+        MemorySegment.copy(keyBlock, keyAt, secret, 0, keyLength);
+        MemorySegment.copy(keyBlock, saltAt, secret, keyLength, SALT);
+        this.key = AesGcmCipher.of(secret, 0, keyLength);
+        this.iv = secret.asSlice(keyLength, SALT);
+        this.nonce = arena.allocate(AesGcm.NONCE);
+        this.additional = arena.allocate(ADDITIONAL);
+    }
+
+    /**
+     * TLS 1.2 AES-GCM keys, taken from the key block (RFC 5246 section 6.3).
+     *
+     * @param keyAt  where this direction's write key starts in {@code keyBlock}
+     * @param saltAt where its four-byte {@code write_IV} starts
+     * @param hash   the suite's PRF hash, kept to name the suite when the
+     *               connection is written down
+     */
+    public static RecordProtection forTls12(HashAlgorithm hash, MemorySegment keyBlock,
+            long keyAt, int keyLength, long saltAt) {
+        if (keyLength != 16 && keyLength != 32) {
+            throw new IllegalArgumentException("AES-GCM takes a 16 or 32 byte key, not "
+                    + keyLength);
+        }
+        return new RecordProtection(hash, keyBlock, keyAt, keyLength, saltAt);
+    }
+
+    /** Whether this is a TLS 1.2 record layer rather than TLS 1.3's. */
+    public boolean isTls12() {
+        return tls12;
     }
 
     /**
@@ -106,6 +163,9 @@ public final class RecordProtection implements AutoCloseable {
      */
     public int seal(byte contentType, MemorySegment plain, long offset, int length,
             MemorySegment out, long outOffset) {
+        if (tls12) {
+            return seal12(contentType, plain, offset, length, out, outOffset);
+        }
         if (length > MAX_PLAINTEXT) {
             throw new IllegalArgumentException("a record holds at most " + MAX_PLAINTEXT
                     + " bytes, not " + length);
@@ -141,6 +201,9 @@ public final class RecordProtection implements AutoCloseable {
      */
     public Opened open(MemorySegment record, long offset, int recordLength,
             MemorySegment out, long outOffset) {
+        if (tls12) {
+            return open12(record, offset, recordLength, out, outOffset);
+        }
         int body = recordLength - HEADER;
         if (body <= AesGcm.TAG) {
             return null;                    // not even room for the inner type
@@ -198,6 +261,9 @@ public final class RecordProtection implements AutoCloseable {
      * record after it.
      */
     public RecordProtection next() {
+        if (tls12) {
+            throw new IllegalStateException("TLS 1.2 has no KeyUpdate");
+        }
         try (Arena scratch = Arena.ofConfined()) {
             MemorySegment updated = scratch.allocate(hash.digestLength());
             Hkdf.expandLabel(hash, secret, "traffic upd", null, updated, 0, hash.digestLength());
@@ -244,9 +310,17 @@ public final class RecordProtection implements AutoCloseable {
         return keyLength;
     }
 
-    /** Copies the current traffic secret out - {@code hash().digestLength()} bytes. */
+    /**
+     * Copies the current traffic secret out - {@link #secretLength()} bytes. For
+     * TLS 1.2 that is the key followed by the four-byte salt.
+     */
     void copySecretInto(MemorySegment out, long offset) {
-        MemorySegment.copy(secret, 0, out, offset, hash.digestLength());
+        MemorySegment.copy(secret, 0, out, offset, secretLength());
+    }
+
+    /** How many bytes {@link #copySecretInto} writes. */
+    int secretLength() {
+        return tls12 ? keyLength + SALT : hash.digestLength();
     }
 
     /** Which AES-GCM this protection runs on: {@code openssl}, {@code cng} or {@code java}. */
@@ -278,6 +352,90 @@ public final class RecordProtection implements AutoCloseable {
         }
     }
 
+    // ---- TLS 1.2 (RFC 5288) -------------------------------------------------
+
+    private int seal12(byte contentType, MemorySegment plain, long offset, int length,
+            MemorySegment out, long outOffset) {
+        if (length > MAX_PLAINTEXT) {
+            throw new IllegalArgumentException("a record holds at most " + MAX_PLAINTEXT
+                    + " bytes, not " + length);
+        }
+        refuseTheLastNumber();
+        int body = EXPLICIT + length + AesGcm.TAG;
+        out.set(ValueLayout.JAVA_BYTE, outOffset, contentType);
+        out.set(ValueLayout.JAVA_BYTE, outOffset + 1, (byte) 0x03);
+        out.set(ValueLayout.JAVA_BYTE, outOffset + 2, (byte) 0x03);
+        out.set(ValueLayout.JAVA_BYTE, outOffset + 3, (byte) (body >>> 8));
+        out.set(ValueLayout.JAVA_BYTE, outOffset + 4, (byte) body);
+        for (int i = 0; i < EXPLICIT; i++) {
+            out.set(ValueLayout.JAVA_BYTE, outOffset + HEADER + i,
+                    (byte) (sequence >>> (8 * (EXPLICIT - 1 - i))));
+        }
+        nonce12(out, outOffset + HEADER);
+        additional12(contentType, length);
+        // Through the native content buffer, as for TLS 1.3: the caller's
+        // plaintext may be an application's heap buffer, and the copy here is
+        // wiped once the record is sealed.
+        MemorySegment content = content();
+        if (length > 0) {
+            MemorySegment.copy(plain, offset, content, 0, length);
+        }
+        try {
+            key.encrypt(nonce, 0, additional, 0, ADDITIONAL, content, 0, length,
+                    out, outOffset + HEADER + EXPLICIT);
+        } finally {
+            content.asSlice(0, length).fill((byte) 0);
+        }
+        sequence++;
+        return HEADER + body;
+    }
+
+    private Opened open12(MemorySegment record, long offset, int recordLength,
+            MemorySegment out, long outOffset) {
+        int length = recordLength - HEADER - EXPLICIT - AesGcm.TAG;
+        if (length < 0) {
+            return null;                    // not even room for nonce and tag
+        }
+        if (length > MAX_PLAINTEXT) {
+            throw new IllegalArgumentException("a record holds at most " + MAX_PLAINTEXT
+                    + " bytes, not " + length);
+        }
+        if (out.byteSize() - outOffset < length) {
+            throw new IllegalArgumentException("no room for " + length + " bytes");
+        }
+        refuseTheLastNumber();
+        byte contentType = record.get(ValueLayout.JAVA_BYTE, offset);
+        // The peer's explicit nonce is whatever it chose to send; the
+        // sequence number in the additional data is the one both sides count.
+        nonce12(record, offset + HEADER);
+        additional12(contentType, length);
+        boolean ok = key.decrypt(nonce, 0, additional, 0, ADDITIONAL,
+                record, offset + HEADER + EXPLICIT, length, out, outOffset);
+        if (!ok) {
+            return null;
+        }
+        sequence++;
+        return new Opened(contentType, length);
+    }
+
+    /** Salt, then the eight explicit bytes at {@code at}. */
+    private void nonce12(MemorySegment explicit, long at) {
+        MemorySegment.copy(iv, 0, nonce, 0, SALT);
+        MemorySegment.copy(explicit, at, nonce, SALT, EXPLICIT);
+    }
+
+    /** RFC 5246 section 6.2.3.3: seq_num + type + version + length. */
+    private void additional12(byte contentType, int length) {
+        for (int i = 0; i < 8; i++) {
+            additional.set(ValueLayout.JAVA_BYTE, i, (byte) (sequence >>> (8 * (7 - i))));
+        }
+        additional.set(ValueLayout.JAVA_BYTE, 8, contentType);
+        additional.set(ValueLayout.JAVA_BYTE, 9, (byte) 0x03);
+        additional.set(ValueLayout.JAVA_BYTE, 10, (byte) 0x03);
+        additional.set(ValueLayout.JAVA_BYTE, 11, (byte) (length >>> 8));
+        additional.set(ValueLayout.JAVA_BYTE, 12, (byte) length);
+    }
+
     private MemorySegment content() {
         if (content == null) {
             content = arena.allocate(MAX_INNER);
@@ -304,8 +462,13 @@ public final class RecordProtection implements AutoCloseable {
             key.close();
         } finally {
             secret.fill((byte) 0);
-            iv.fill((byte) 0);
             nonce.fill((byte) 0);
+            if (!tls12) {
+                iv.fill((byte) 0);
+            }
+            if (additional != null) {
+                additional.fill((byte) 0);
+            }
             if (content != null) {
                 content.fill((byte) 0);
             }

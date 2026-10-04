@@ -82,6 +82,46 @@ public final class HandshakeSignature {
     }
 
     /**
+     * Verifies a TLS 1.2 ServerKeyExchange signature (RFC 5246 section
+     * 7.4.3): over {@code client_random + server_random + params}, with no
+     * prefix and no context string - which is exactly why a TLS 1.3 signature
+     * can never be mistaken for one of these, and why the 1.3 path does not
+     * call this.
+     *
+     * <p>RSA PKCS#1 v1.5 is accepted here and only here: TLS 1.2 servers sign
+     * with it as a matter of course, and RFC 8446 forbids it in TLS 1.3. The
+     * certificate's key has to be of the kind the scheme names, which the JCA
+     * enforces by refusing to initialise with the wrong one.
+     *
+     * @return false for a scheme not offered, a key it cannot use, or a
+     *         signature that does not verify
+     */
+    public static boolean verifyTls12(PublicKey leafKey, int signatureScheme, byte[] signed,
+            byte[] signature) {
+        try {
+            Signature verifier = switch (signatureScheme) {
+                case RSA_PKCS1_SHA256 -> Signature.getInstance("SHA256withRSA");
+                case RSA_PKCS1_SHA384 -> Signature.getInstance("SHA384withRSA");
+                case RSA_PKCS1_SHA512 -> Signature.getInstance("SHA512withRSA");
+                default -> verifierFor(signatureScheme);
+            };
+            if (verifier == null) {
+                return false;
+            }
+            verifier.initVerify(leafKey);
+            verifier.update(signed);
+            return verifier.verify(signature);
+        } catch (GeneralSecurityException e) {
+            return false;
+        }
+    }
+
+    /** RSA PKCS#1 v1.5 - TLS 1.2 ServerKeyExchange only, never TLS 1.3. */
+    public static final int RSA_PKCS1_SHA256 = 0x0401;
+    public static final int RSA_PKCS1_SHA384 = 0x0501;
+    public static final int RSA_PKCS1_SHA512 = 0x0601;
+
+    /**
      * A verifier for one {@code SignatureScheme}, or null for one this client
      * never offered.
      *

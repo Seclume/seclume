@@ -110,6 +110,43 @@ class TlsFreezeThawTest {
     }
 
     /**
+     * The same for a TLS 1.2 connection: written down as key and salt rather
+     * than a traffic secret, and taken up with TLS 1.2's record rules.
+     */
+    @Test
+    void aTls12ConnectionSurvivesBeingWrittenDownAndPickedUpAgain() throws Exception {
+        try (EchoServer server = EchoServer.start(serverContext,
+                s -> s.setEnabledProtocols(new String[] {"TLSv1.2"}));
+                Transport socket = connectTo(server);
+                SecretScope frozen = SecretScope.allocate(512)) {
+            int length;
+            TlsConnection before = ClientHandshake.connect(socket, HOSTNAME,
+                    CertificateTrust.of(trustStore));
+            try {
+                assertTrue(before.description().startsWith("TLSv1.2 / "), before.description());
+                for (int i = 0; i < 5; i++) {
+                    echo(before, "round " + i);
+                }
+                assertEquals(before.frozenLength(), length = before.freeze(frozen.segment(), 0));
+            } finally {
+                before.close();
+            }
+            TlsConnection after = TlsConnection.thaw(socket, frozen.segment(), 0, length);
+            try {
+                assertTrue(after.description().startsWith("TLSv1.2"), after.description());
+                echo(after, "after thawing");
+                echo(after, "and again");
+            } finally {
+                after.close();
+            }
+            assertTrue(server.failure() == null || server.failure() instanceof java.io.EOFException
+                            || server.failure().getMessage() == null
+                            || !server.failure().getMessage().contains("bad_record_mac"),
+                    "the server rejected a record: " + server.failure());
+        }
+    }
+
+    /**
      * Freezing is not closing: the peer is told nothing, so the socket has to
      * survive it. Shown by the connection continuing to work afterwards, and
      * by the frozen object itself refusing to be used.

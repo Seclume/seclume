@@ -156,7 +156,7 @@ class TlsMigrationTest {
     void aNewerVersionIsRefusedRatherThanHalfUnderstood() {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment blob = valid(arena);
-            blob.set(ValueLayout.JAVA_BYTE, 7, (byte) (TlsMigration.VERSION + 1));
+            blob.set(ValueLayout.JAVA_BYTE, 7, (byte) (TlsMigration.VERSION_TLS12 + 1));
             IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
                     () -> TlsMigration.decode(blob, 0, TlsMigration.encodedLength(HashAlgorithm.SHA_256)));
             org.junit.jupiter.api.Assertions.assertTrue(refused.getMessage().contains("version"),

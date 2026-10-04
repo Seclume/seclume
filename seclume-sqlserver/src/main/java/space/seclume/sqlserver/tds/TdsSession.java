@@ -168,12 +168,6 @@ public final class TdsSession implements AutoCloseable {
                     resultLimit, tdsVersion, tlsStack, identity);
         }
 
-        /** The same settings on another TLS stack - see TlsFallback. */
-        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
-            return new Settings(host, port, database, user, secret,
-                    applicationName, connectTimeoutMillis, trustServerCertificate, hosts,
-                    resultLimit, tdsVersion, stack, identity);
-        }
     }
 
     private ResultLimit resultLimit = ResultLimit.NONE;
@@ -450,9 +444,7 @@ public final class TdsSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         TdsSession opened = null;
         try {
-            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
-                    settings.identity() != null, settings.host(), settings.port(),
-                    stack -> connectAndLogIn(settings.withTlsStack(stack)));
+            opened = connectAndLogIn(settings);
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "sqlserver",
@@ -647,9 +639,26 @@ public final class TdsSession implements AutoCloseable {
                     "the server refuses encryption - seclume does not log in unencrypted",
                     "08001");
         }
-        TdsTls tls = TdsTls.create(channel.raw(), settings.host(), settings.port(),
-                settings.trustServerCertificate());
-        tls.handshake();
+        if (settings.tlsStack() == space.seclume.internal.jdbc.TlsStack.JSSE) {
+            TdsTls tls = TdsTls.create(channel.raw(), settings.host(), settings.port(),
+                    settings.trustServerCertificate());
+            tls.handshake();
+            channel.useTls(tls);
+            return preLogin;
+        }
+        // The own stack's TLS 1.2: the handshake inside the pre-login packets,
+        // then the records straight on the socket.
+        PreLoginRecords packets = new PreLoginRecords(channel.raw());
+        space.seclume.internal.TlsLayer tls = space.seclume.internal.TlsLayers.startTls12(
+                packets, settings.host(), settings.port(), !settings.trustServerCertificate(),
+                settings.identity());
+        try {
+            packets.finished();
+        } catch (IOException e) {
+            tls.close();
+            throw e;
+        }
+        tls.replaceTransport(channel.raw());
         channel.useTls(tls);
         return preLogin;
     }

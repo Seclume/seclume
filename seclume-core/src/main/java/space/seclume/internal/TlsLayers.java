@@ -14,11 +14,10 @@ import space.seclume.tls.ClientIdentity;
  * change rather than three, and so that the choice is visibly the same choice
  * in all three drivers.
  *
- * <p>SQL Server is not here. Its handshake runs <em>inside</em> TDS packets
- * and is TLS 1.2 by construction - TDS 7.4 has no other shape - so it cannot
- * use a TLS 1.3 client at all. Moving it needs TDS 8.0, where TLS wraps the
- * whole connection from the first byte, and that is a protocol change rather
- * than a substitution. See {@code TdsTls}.
+ * <p>SQL Server's TDS 7.4 runs its handshake <em>inside</em> TDS packets, and
+ * that nesting is TLS 1.2 by construction: {@link #startTls12} offers the own
+ * stack's TLS 1.2 profile alone, over a transport the driver provides for the
+ * packets.
  */
 public final class TlsLayers {
 
@@ -63,8 +62,8 @@ public final class TlsLayers {
      */
     public static TlsLayer start(TlsStack stack, Transport transport, String host, int port,
             boolean verify, ClientIdentity identity, String alpn) throws IOException {
-        // AUTO is the own stack here: the change to JSSE is a new connection,
-        // which only the driver around this handshake can make - TlsFallback.
+        // AUTO is the default and means the own stack: TLS 1.3, and the TLS 1.2
+        // profile for a server without it. JSSE only when asked for by name.
         if (stack == TlsStack.AUTO) {
             stack = TlsStack.SECLUME;
         }
@@ -105,6 +104,40 @@ public final class TlsLayers {
         } finally {
             space.seclume.jfr.Observed.endHandshake(event, host + ":" + port,
                     stack.name().toLowerCase(java.util.Locale.ROOT),
+                    layer == null ? null : layer.description());
+        }
+    }
+
+    /**
+     * The own stack offering TLS 1.2 alone - for a handshake that cannot be
+     * TLS 1.3, which today is SQL Server's TDS 7.4. Pins and the trust choice
+     * apply exactly as in {@link #start}.
+     */
+    public static TlsLayer startTls12(Transport transport, String host, int port, boolean verify,
+            ClientIdentity identity) throws IOException {
+        space.seclume.jfr.SeclumeEvents.TlsHandshake event =
+                space.seclume.jfr.Observed.beginHandshake();
+        TlsLayer layer = null;
+        boolean pinned = TrustChoice.pinned();
+        try {
+            layer = SeclumeTls.startOffering(transport, host, verify && !pinned, identity,
+                    space.seclume.tls.ClientHello.Offer.TLS12);
+            if (pinned) {
+                try {
+                    TrustChoice.checkPin(layer);
+                } catch (IOException wrongKey) {
+                    try {
+                        layer.close();
+                    } catch (Exception ignored) {
+                        // refused either way
+                    }
+                    layer = null;
+                    throw wrongKey;
+                }
+            }
+            return layer;
+        } finally {
+            space.seclume.jfr.Observed.endHandshake(event, host + ":" + port, "seclume",
                     layer == null ? null : layer.description());
         }
     }

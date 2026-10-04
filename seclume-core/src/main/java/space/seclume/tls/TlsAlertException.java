@@ -28,6 +28,11 @@ public class TlsAlertException extends IOException {
     public static final int RECORD_OVERFLOW = 22;
     public static final int PROTOCOL_VERSION = 70;
     public static final int UNSUPPORTED_EXTENSION = 110;
+    public static final int BAD_CERTIFICATE = 42;
+    public static final int DECRYPT_ERROR = 51;
+    public static final int INSUFFICIENT_SECURITY = 71;
+    /** RFC 5246: a renegotiation was asked for, and this client never renegotiates. */
+    public static final int NO_RENEGOTIATION = 100;
 
     private final int level;
     private final int description;

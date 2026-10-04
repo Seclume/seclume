@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
  * out of dumps for the second. munlock and madvise work on whole pages and
  * count nothing, so MemoryLock counts for them.
  */
+@org.junit.jupiter.api.parallel.Isolated // reads the process-wide page count
 class MemoryLockPagesTest {
 
     @Test
