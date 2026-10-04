@@ -55,24 +55,32 @@ jdbc:seclume:postgresql://db:5432/app?tls=require&tlsStack=seclume
 
 | `tlsStack` | What provides the encryption |
 |---|---|
-| `auto` | the default: `seclume`, and `jsse` for a server that cannot speak it |
-| `seclume` | this project's own TLS 1.3 client, and nothing else |
-| `jsse` | the JDK's `SSLEngine`, what every JDBC driver does |
+| `auto` | the default, and the same as `seclume` |
+| `seclume` | this project's own TLS client: TLS 1.3, and a small TLS 1.2 profile for a server without it |
+| `jsse` | the JDK's `SSLEngine`, what every JDBC driver does - only when asked for by name |
 
-**`auto`** connects with the own stack first. A server that refuses it before its ServerHello -
-TLS 1.2 only, no group in common, or hanging up on the ClientHello - is connected to again
-through JSSE, and a warning names the server: from then on its password passes through the heap.
-The server is remembered for an hour, so a pool does not try twice per connection, and is then
-tried on the own stack again. Nothing else changes stack: an untrusted certificate, a wrong host
-name or a refused login fails as before. With a client certificate there is no fallback, since
-its key is reachable only from the own stack. The fallback can be provoked by anyone on the path
-who answers the ClientHello with an alert; what that gains them is JSSE's TLS with the
-certificate still checked, the password on this process's heap rather than on the wire.
-`tlsStack=seclume` closes that too, and refuses servers without TLS 1.3. SQL Server reaches
-the own stack only with `tds=8.0`; TDS 7.4 nests TLS 1.2 in its pre-login and always uses JSSE.
+**The own stack is used for every server**, and nothing changes stack behind the caller's back.
+A server with TLS 1.3 gets TLS 1.3. A server limited to TLS 1.2 - SQL Server on TDS 7.4 or on
+Windows Server 2019, Oracle 19c, MySQL 5.7, a PostgreSQL with `ssl_max_protocol_version` - gets a
+deliberately small TLS 1.2 profile:
+
+| Part | TLS 1.2 profile |
+|---|---|
+| key exchange | ECDHE on P-256 - no static RSA key exchange, so forward secrecy always |
+| records | AES-128-GCM or AES-256-GCM - no CBC, no MAC-then-encrypt |
+| master secret | the extended master secret (RFC 7627), required |
+| renegotiation | secure renegotiation (RFC 5746) required of the server; this client never renegotiates |
+| downgrade | a TLS 1.3 server's downgrade marker (RFC 8446 section 4.1.3) is refused |
+| left out | resumption, session tickets, compression, CBC, RC4, 3DES, static RSA |
+
+Those left out are the parts of TLS 1.2 whose history is padding oracles and Lucky13; what is
+left has the same record protection and the same key exchange group as TLS 1.3. A server that
+speaks neither - CBC or static RSA only - is refused with a message that names `tlsStack=jsse`,
+the one way to reach it, at the cost of the password passing through the heap.
+`-Dseclume.tls.tls12=false` keeps the own stack to TLS 1.3.
 
 Every mode above works on either stack, so this is a capability setting, not a security one.
-The own stack gives up resumption, TLS 1.2 and every key exchange group but two. It offers P-256
+The own stack gives up resumption and every key exchange group but two. It offers P-256
 and, where the operating system has ML-KEM, the post-quantum hybrid
 **X25519MLKEM768** beside it: OpenSSL 3.5 or later on 64-bit Linux, CNG on Windows 11 with
 the post-quantum update (tested on build 26200.9457), against traffic recorded now and decrypted
@@ -86,8 +94,9 @@ objects**, and the encryption state can be frozen and taken up elsewhere, which 
 connection that survives moving host needs. Since the external audit of 30.09.2026 (SEC-04)
 that is why it is tried first.
 
-**All four drivers are proven on it against real servers**: PostgreSQL and MySQL with channel
-binding, Oracle over a TCPS listener, and SQL Server with `tds=8.0` (see below).
+**All four drivers are proven on it against real servers**, with TLS 1.3 and with servers held
+to TLS 1.2: PostgreSQL and MySQL, Oracle over a TCPS listener, and SQL Server on both `tds=7.4`
+and `tds=8.0` (see below).
 
 **What the own stack is, and what it is not.** It is new code, and it has not been through an
 independent review. That is why it is not the default. It keeps the risky parts small:
@@ -100,24 +109,28 @@ independent review. That is why it is not the default. It keeps the risky parts 
   hardware-accelerated. A platform without them falls back to a constant-time Java AES,
   which is much slower.
 
-Written here, in Java, are the handshake state machine, the HKDF key schedule, the record
-framing and the transcript. Everything a server can send before a key exists is fuzzed
+Written here, in Java, are the handshake state machines, the HKDF key schedule and the TLS 1.2
+PRF, the record framing and the transcript. Everything a server can send before a key exists is fuzzed
 (`ServerHelloFuzzTest`).
 
-## SQL Server: `tds=8.0`
+## SQL Server: `tds=7.4` and `tds=8.0`
 
-**SQL Server needs `tds=8.0` as well**, and that is not a detail. Its ordinary handshake runs
-*inside* TDS packets and is TLS 1.2 by construction. TLS 1.3 moves handshake messages past the
-point where that nesting would have to invert. TDS 8.0 (Microsoft calls it strict encryption)
-puts TLS around the whole connection from the first byte instead:
+SQL Server's ordinary handshake (`tds=7.4`, the default) runs *inside* TDS packets and is
+TLS 1.2 by construction: TLS 1.3 moves handshake messages past the point where that nesting
+would have to invert. The own stack carries it with its TLS 1.2 profile - the handshake inside
+the pre-login packets, the records on the socket afterwards - so SQL Server 2016 to 2022 log in
+without the password touching the heap.
+
+TDS 8.0 (Microsoft calls it strict encryption) puts TLS around the whole connection from the
+first byte instead, and with it TLS 1.3:
 
 ```properties
-jdbc:seclume:sqlserver://db:1433/app?tds=8.0&tlsStack=seclume
+jdbc:seclume:sqlserver://db:1433/app?tds=8.0
 ```
 
 Proven against SQL Server 2025. **SQL Server 2022 on Linux does not accept strict encryption
 at all**, and Microsoft's own driver fails against it the same way. So `tds=7.4` stays the
-default and nothing changes for anybody who does not ask.
+default.
 
 ## PostgreSQL 17: direct TLS, one round trip fewer
 
@@ -189,5 +202,5 @@ Two things are refused rather than worked around:
   saying so, instead of connecting quietly without the certificate the configuration asked
   for.
 
-All four drivers can present a client certificate with the key off the heap. SQL Server needs
-`tds=8.0` for it, and Oracle a TCPS listener, for the reasons above.
+All four drivers can present a client certificate with the key off the heap - over TLS 1.3 and
+over the TLS 1.2 profile alike. Oracle needs a TCPS listener for it, for the reasons above.

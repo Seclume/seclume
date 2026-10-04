@@ -73,8 +73,9 @@ source (a file, Vault, a cloud secret manager, a managed identity) into native m
 there for the login, and is wiped. All four database wire protocols, the SMTP, IMAP and POP3
 logins and the HTTP client are
 written from scratch for this; no vendor driver is used, wrapped or delegated to. Redis, mail
-and HTTP always encrypt with seclume's own TLS 1.3, and so do the databases wherever the server
-speaks TLS 1.3 (`tlsStack=auto`, the default), so the session keys stay off the heap as well. The test suite holds the same line by taking
+and HTTP always encrypt with seclume's own TLS 1.3, and the databases with seclume's own TLS -
+1.3, or a small TLS 1.2 profile for a server without it - so the session keys stay off the heap
+as well. The test suite holds the same line by taking
 real heap dumps and searching them, with a negative control that must fail.
 
 Beyond that it is a complete driver set for everyday use: a pool, a Spring Boot starter,
@@ -248,14 +249,15 @@ It does **not** make the process a vault:
 - **Your data is still on the heap.** Rows you read and parameters you bind are Java objects,
   as with any driver. Columns that hold secrets can be read and bound off the heap
   (`Sensitive`, `SensitiveParameters`), but that is opt-in, per column.
-- **A server without TLS 1.3 gets the JDK's TLS, and with it the heap.** The default,
-  `tlsStack=auto`, uses seclume's own TLS 1.3 and falls back to JSSE only for a server that
-  refuses it (SQL Server's TDS 7.4, Oracle 19c, MySQL 5.7), with a warning per server. On JSSE
-  the session keys are on the heap, and so, briefly, is what it decrypts: the JDK's AES-GCM
-  passes direct buffers through short-lived heap arrays, which matters for a login that goes in
-  clear text inside TLS (PostgreSQL `password`, MySQL's full `caching_sha2_password`, SQL
-  Server's Login7). `tlsStack=seclume` refuses such servers instead. The own stack is newer and
-  has had less scrutiny than JSSE. See [TLS.md](TLS.md#which-tls-carries-it-a-separate-question).
+- **Every server gets seclume's own TLS, never the JDK's by surprise.** TLS 1.3 where the
+  server has it, and a small TLS 1.2 profile (ECDHE, AES-GCM, extended master secret) where it
+  does not - SQL Server's TDS 7.4, Oracle 19c, MySQL 5.7. A server that speaks neither is
+  refused; `tlsStack=jsse` reaches it, and then the session keys are on the heap, and so,
+  briefly, is what JSSE decrypts: the JDK's AES-GCM passes direct buffers through short-lived
+  heap arrays, which matters for a login that goes in clear text inside TLS (PostgreSQL
+  `password`, MySQL's full `caching_sha2_password`, SQL Server's Login7). The own stack is
+  newer and has had less scrutiny than JSSE. See
+  [TLS.md](TLS.md#which-tls-carries-it-a-separate-question).
 - **Other secrets in your application are yours.** An API key in `application.yml` is on the
   heap whatever driver you use. The starter warns about plaintext passwords it can see, and
   `seclume-heapcheck` finds any secret you name in a running process.
