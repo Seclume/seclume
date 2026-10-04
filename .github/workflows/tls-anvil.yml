@@ -9,7 +9,7 @@ name: TLS-Anvil
 #
 # Slow (the better part of an hour), so not on every push: weekly, by hand,
 # and on pull requests that touch the TLS stack or the cryptography under it.
-# The first run reports only. Once tls-anvil/expected-results.json exists, a
+# The first run reports only. Once tls-anvil/expected-results-<offer>.json exists, a
 # test that passed there and fails now - or a new test that fails - turns the
 # run red.
 
@@ -34,6 +34,14 @@ concurrency:
 
 jobs:
   client:
+    name: client (${{ matrix.offer }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # What the drivers offer every server (TLS 1.3, and the TLS 1.2 profile
+        # for a server without it), and the TLS 1.2 profile alone - the only
+        # way TLS-Anvil's TLS 1.2 tests reach the TLS 1.2 code.
+        offer: [default, tls12]
     runs-on: ubuntu-latest
     timeout-minutes: 240
     permissions:
@@ -72,7 +80,8 @@ jobs:
         run: |
           nohup java --enable-native-access=ALL-UNNAMED \
             -cp "seclume-tls-anvil/target/classes:$(cat anvil-classpath.txt)" \
-            space.seclume.anvil.AnvilClient 8090 127.0.0.1 8443 > anvil-client.log 2>&1 &
+            space.seclume.anvil.AnvilClient 8090 127.0.0.1 8443 ${{ matrix.offer }} \
+            > anvil-client.log 2>&1 &
           for i in $(seq 1 30); do
             grep -q "waiting for TLS-Anvil" anvil-client.log && break
             sleep 1
@@ -90,7 +99,8 @@ jobs:
           docker run --rm --network host \
             -v "$PWD/anvil-out:/output" -v "$PWD/tls-anvil:/seclume:ro" \
             seclume-tls-anvil:pinned \
-            -disableTcpDump -strength 1 -parallelHandshakes 1 -identifier seclume-client \
+            -disableTcpDump -strength 1 -parallelHandshakes 1 \
+            -identifier seclume-client-${{ matrix.offer }} \
             client -port 8443 -triggerScript /seclume/trigger.sh
 
       - name: Results
@@ -98,7 +108,7 @@ jobs:
         run: |
           set +e
           python3 tls-anvil/summarize.py anvil-out \
-            --baseline tls-anvil/expected-results.json \
+            --baseline tls-anvil/expected-results-${{ matrix.offer }}.json \
             --write-expected anvil-out/actual-results.json > anvil-summary.md
           status=$?
           cat anvil-summary.md >> "$GITHUB_STEP_SUMMARY"
@@ -118,7 +128,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: tls-anvil-results
+          name: tls-anvil-results-${{ matrix.offer }}
           path: |
             anvil-out
             anvil-client.log

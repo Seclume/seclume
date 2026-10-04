@@ -34,8 +34,6 @@ public final class ClientHello {
     public static final int ECDHE_RSA_AES_256_GCM_SHA384 = 0xC030;
     public static final int ECDHE_ECDSA_AES_128_GCM_SHA256 = 0xC02B;
     public static final int ECDHE_RSA_AES_128_GCM_SHA256 = 0xC02F;
-    /** RFC 5746: no renegotiation was ever done on this connection, because none ever is. */
-    private static final int EMPTY_RENEGOTIATION_INFO_SCSV = 0x00FF;
     /** RFC 4492: ec_point_formats, uncompressed only. */
     public static final int EXTENSION_EC_POINT_FORMATS = 11;
     /** RFC 7627: extended_master_secret. */
@@ -200,15 +198,16 @@ public final class ClientHello {
         int alpnLength = alpn == null ? 0 : 4 + 2 + 1 + alpn.length();
         // supported_versions with one or two versions, and the key shares, only
         // where TLS 1.3 is offered; ec_point_formats (6), extended_master_secret
-        // (4) and three more signature schemes (6) only where TLS 1.2 is.
+        // (4), an empty renegotiation_info (5) and three more signature schemes
+        // (6) only where TLS 1.2 is.
         int versionsLength = offers13 ? (offers12 ? 9 : 7) : 0;
         int signaturesLength = 18 + (offers12 ? 6 : 0);
         int cookieLength = cookie == null ? 0 : 4 + 2 + (int) cookie.byteSize();
         int extensions = versionsLength + 6 + 2 * supportedGroups.length + signaturesLength + 24
                 + (offers13 ? 6 + sharesLength : 0)
-                + (offers12 ? 6 + 4 : 0)
+                + (offers12 ? 6 + 4 + 5 : 0)
                 + (name == null ? 0 : 9 + name.length()) + alpnLength + cookieLength;
-        int suites = (offers13 ? 4 : 0) + (offers12 ? 10 : 0);
+        int suites = (offers13 ? 4 : 0) + (offers12 ? 8 : 0);
         int body = 2 + 32 + 1 + sessionLength + 2 + suites + 1 + 1 + 2 + extensions;
         int length = Handshake.HEADER + body;
         // Validate the entire output range before writing anything.
@@ -226,8 +225,7 @@ public final class ClientHello {
             buffer.putShort((short) ECDHE_ECDSA_AES_256_GCM_SHA384)
                     .putShort((short) ECDHE_RSA_AES_256_GCM_SHA384)
                     .putShort((short) ECDHE_ECDSA_AES_128_GCM_SHA256)
-                    .putShort((short) ECDHE_RSA_AES_128_GCM_SHA256)
-                    .putShort((short) EMPTY_RENEGOTIATION_INFO_SCSV);
+                    .putShort((short) ECDHE_RSA_AES_128_GCM_SHA256);
         }
         buffer.put((byte) 1).put((byte) 0); // only null legacy compression
         buffer.putShort((short) extensions);
@@ -282,6 +280,11 @@ public final class ClientHello {
             extension(buffer, EXTENSION_EC_POINT_FORMATS, 2);
             buffer.put((byte) 1).put((byte) 0);              // uncompressed
             extension(buffer, EXTENSION_EXTENDED_MASTER_SECRET, 0);
+            // RFC 5746, as the extension rather than the signalling suite: an
+            // initial handshake, so renegotiated_connection is empty. Some
+            // servers answer only the extension; every one answers it.
+            extension(buffer, EXTENSION_RENEGOTIATION_INFO, 1);
+            buffer.put((byte) 0);
         }
         if (cookie != null) {
             extension(buffer, EXTENSION_COOKIE, 2 + (int) cookie.byteSize());
