@@ -77,6 +77,33 @@ class VerifyTest {
                 "that advice belongs to a server nobody reached: " + advice);
     }
 
+    /**
+     * The own stack's refusal of the version: the server was reached and speaks
+     * TLS, only not one this client offers. Seen against an Oracle listener
+     * held to TLS 1.2 before the TLS 1.2 profile existed, where the advice was
+     * to check the firewall.
+     */
+    @Test
+    void aRefusedVersionSaysWhatTheServerLacks() {
+        SQLException failure = new SQLException("TLS to db.example:2484 failed", "08001",
+                new space.seclume.tls.TlsVersionRefused(new space.seclume.tls.TlsAlertException(
+                        space.seclume.tls.TlsAlertException.FATAL,
+                        space.seclume.tls.TlsAlertException.PROTOCOL_VERSION)));
+        String advice = Verify.advice(failure);
+        assertTrue(advice.contains("TLS 1.3 nor TLS 1.2"), advice);
+        assertFalse(advice.contains("firewall"), advice);
+    }
+
+    /** An alert from the own stack is a TLS failure, not an unreachable server. */
+    @Test
+    void anAlertFromTheOwnStackIsATlsFailure() {
+        SQLException failure = new SQLException("the login failed", "08001",
+                new space.seclume.tls.TlsAlertException(space.seclume.tls.TlsAlertException.FATAL,
+                        space.seclume.tls.TlsAlertException.BAD_CERTIFICATE));
+        assertTrue(Verify.isTlsFailure(failure));
+        assertFalse(Verify.advice(failure).contains("firewall"), Verify.advice(failure));
+    }
+
     /** And the other way round: a plain connection failure keeps its own advice. */
     @Test
     void aConnectionFailureWithoutTlsKeepsTheNetworkAdvice() {

@@ -66,7 +66,7 @@ deliberately small TLS 1.2 profile:
 
 | Part | TLS 1.2 profile |
 |---|---|
-| key exchange | ECDHE on P-256 - no static RSA key exchange, so forward secrecy always |
+| key exchange | ECDHE on X25519, P-256 or P-384 - no static RSA key exchange, so forward secrecy always |
 | records | AES-128-GCM or AES-256-GCM - no CBC, no MAC-then-encrypt |
 | master secret | the extended master secret (RFC 7627), required |
 | renegotiation | secure renegotiation (RFC 5746) required of the server; this client never renegotiates |
@@ -80,12 +80,15 @@ the one way to reach it, at the cost of the password passing through the heap.
 `-Dseclume.tls.tls12=false` keeps the own stack to TLS 1.3.
 
 Every mode above works on either stack, so this is a capability setting, not a security one.
-The own stack gives up resumption and every key exchange group but two. It offers P-256
-and, where the operating system has ML-KEM, the post-quantum hybrid
-**X25519MLKEM768** beside it: OpenSSL 3.5 or later on 64-bit Linux, CNG on Windows 11 with
-the post-quantum update (tested on build 26200.9457), against traffic recorded now and decrypted
-later. A server without the hybrid picks P-256 at once, and `-Dseclume.tls.postQuantum=false`
-switches the hybrid off. A CI job proves the hybrid end to end against OpenSSL 3.5's `s_server`
+The own stack gives up resumption. Its key exchange groups are X25519, P-256 and P-384, all
+in the operating system's crypto library, and, where the operating system has ML-KEM, the
+post-quantum hybrid **X25519MLKEM768** in front of them: OpenSSL 3.5 or later on 64-bit Linux,
+CNG on Windows 11 with the post-quantum update (tested on build 26200.9457), against traffic
+recorded now and decrypted later. Key shares go with the hybrid, X25519 and P-256, so nearly
+every server answers at once; a server limited to P-384 - FIPS and CNSA configurations - asks
+for it with a HelloRetryRequest, which is followed once and checked strictly (a group that was
+offered without a share, the suite kept). `-Dseclume.tls.postQuantum=false` switches the hybrid
+off. A CI job proves the hybrid end to end against OpenSSL 3.5's `s_server`
 (`HybridHandshakeTest`); the CNG path is checked against the JDK's own ML-KEM and X25519
 (`HybridMlKemTest`). Only the key exchange is post-quantum; certificates and signatures are
 classical, as everywhere in TLS today. In return
