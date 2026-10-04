@@ -558,8 +558,8 @@ public final class ClientHandshake {
             throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
                     "the ServerHello names a compression method; none was offered");
         }
-        Tls12Handshake.readServerHelloExtensions(serverHello, compression + 1,
-                serverNameFor(host) != null, alpn);
+        Tls12Handshake.HelloExtensions extensions = Tls12Handshake.readServerHelloExtensions(
+                serverHello, compression + 1, serverNameFor(host) != null, alpn);
         MemorySegment serverRandom = serverHello.asSlice(Handshake.randomOffset(body), 32);
         java.io.ByteArrayOutputStream log = null;
         if (identity != null) {
@@ -573,7 +573,8 @@ public final class ClientHandshake {
             transcript.update(hello, 0, helloLength);
             transcript.update(serverHello, 0, (int) serverHello.byteSize());
             outcome = Tls12Handshake.finish(records, plainFlight, transcript, suite, clientRandom,
-                    serverRandom, host, trust, identity, serverChain, log, arena);
+                    serverRandom, host, trust, identity, serverChain, log,
+                    extensions.extendedMasterSecret(), arena);
         }
         records.established();
         TlsConnection connection = new TlsConnection(records.transport(), records);

@@ -69,6 +69,23 @@ final class Tls12Handshake {
     record Suite(int id, HashAlgorithm hash, int keyLength, boolean ecdsa, String name) {
     }
 
+    /**
+     * Whether a TLS 1.2 server has to support the extended master secret: yes,
+     * unless {@code -Dseclume.tls.requireExtendedMasterSecret=false} says
+     * otherwise - for a server too old to have it. Without it the master
+     * secret is derived from the two randoms as RFC 5246 does; what RFC 7627
+     * closes is the triple handshake, which needs resumption or renegotiation,
+     * and this client does neither.
+     */
+    static boolean requireExtendedMasterSecret() {
+        return !"false".equalsIgnoreCase(
+                System.getProperty("seclume.tls.requireExtendedMasterSecret"));
+    }
+
+    /** What a TLS 1.2 ServerHello's extensions settled. */
+    record HelloExtensions(String alpn, boolean extendedMasterSecret) {
+    }
+
     /** What the handshake leaves behind for {@link TlsConnection#describe}. */
     record Outcome(String cipherSuite, boolean presented) {
     }
@@ -94,10 +111,11 @@ final class Tls12Handshake {
      * Checks a TLS 1.2 ServerHello's extensions: the extended master secret
      * and secure renegotiation present, nothing unasked for.
      *
-     * @return the protocol the server selected by ALPN, or null
+     * @return the protocol the server selected by ALPN, or null, and whether the
+     *         extended master secret is in force
      */
-    static String readServerHelloExtensions(MemorySegment serverHello, long extensionsField,
-            boolean sentServerName, String alpn) throws IOException {
+    static HelloExtensions readServerHelloExtensions(MemorySegment serverHello,
+            long extensionsField, boolean sentServerName, String alpn) throws IOException {
         boolean[] seen = {false, false};             // extended master secret, renegotiation_info
         String[] selected = {null};
         if (extensionsField == serverHello.byteSize()) {
@@ -148,11 +166,12 @@ final class Tls12Handshake {
                         throw StrictExtensions.unsolicited("the ServerHello", type);
                     }
                 });
-        if (!seen[0]) {
+        if (!seen[0] && requireExtendedMasterSecret()) {
             throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
                     "the TLS 1.2 server does not support the extended master secret (RFC 7627); "
                             + "without it the master secret is not bound to this handshake, "
-                            + "and this client refuses to derive one");
+                            + "and this client refuses to derive one "
+                            + "(-Dseclume.tls.requireExtendedMasterSecret=false allows it)");
         }
         if (!seen[1]) {
             throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
@@ -164,7 +183,7 @@ final class Tls12Handshake {
                     + (selected[0] == null ? "none" : "\"" + selected[0] + "\"")
                     + " - carrying on would mean speaking a protocol it never agreed to");
         }
-        return selected[0];
+        return new HelloExtensions(selected[0], seen[0]);
     }
 
     private static String alpnName(MemorySegment message, long at, int size)
@@ -216,7 +235,8 @@ final class Tls12Handshake {
             TranscriptHash transcript, Suite suite, MemorySegment clientRandom,
             MemorySegment serverRandom, String host,
             CertificateTrust trust, ClientIdentity identity, List<X509Certificate> chain,
-            ByteArrayOutputStream handshakeLog, Arena arena) throws IOException {
+            ByteArrayOutputStream handshakeLog, boolean extendedMasterSecret, Arena arena)
+            throws IOException {
         HashAlgorithm hash = suite.hash();
         MemorySegment[] serverPoint = {null};
         Expect[] expect = {Expect.CERTIFICATE};
@@ -330,11 +350,19 @@ final class Tls12Handshake {
             }
             sendClientKeyExchange(records, transcript, handshakeLog, keyExchange, arena);
 
-            // RFC 7627: the master secret from the hash of everything up to and
-            // including ClientKeyExchange - not from the two randoms.
-            transcript.current(hashed, 0);
-            Tls12Prf.derive(hash, premaster, "extended master secret", hashed,
-                    masterSecret, 0, MASTER_SECRET);
+            if (extendedMasterSecret) {
+                // RFC 7627: the master secret from the hash of everything up to
+                // and including ClientKeyExchange - not from the two randoms.
+                transcript.current(hashed, 0);
+                Tls12Prf.derive(hash, premaster, "extended master secret", hashed,
+                        masterSecret, 0, MASTER_SECRET);
+            } else {
+                // RFC 5246 section 8.1, allowed only by name - see
+                // requireExtendedMasterSecret.
+                Tls12Prf.derive(hash, premaster, "master secret",
+                        new MemorySegment[] {clientRandom, serverRandom}, masterSecret, 0,
+                        MASTER_SECRET);
+            }
             premaster.fill((byte) 0);
 
             if (signer != null) {

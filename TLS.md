@@ -78,6 +78,9 @@ left has the same record protection and the same key exchange group as TLS 1.3. 
 speaks neither - CBC or static RSA only - is refused with a message that names `tlsStack=jsse`,
 the one way to reach it, at the cost of the password passing through the heap.
 `-Dseclume.tls.tls12=false` keeps the own stack to TLS 1.3.
+`-Dseclume.tls.requireExtendedMasterSecret=false` lets a TLS 1.2 server without the extended
+master secret through, for one too old to have it; what RFC 7627 closes is the triple
+handshake, which needs resumption or renegotiation, and the own stack does neither.
 
 Every mode above works on either stack, so this is a capability setting, not a security one.
 The own stack gives up resumption. Its key exchange groups are X25519, P-256 and P-384, all

@@ -78,7 +78,11 @@ jobs:
 
       - name: Start the client
         run: |
+          # TLS-Attacker's TLS 1.2 server has no extended master secret, which
+          # the client requires by default; allowed here so that TLS-Anvil's
+          # TLS 1.2 tests reach the handshake and the records at all.
           nohup java --enable-native-access=ALL-UNNAMED \
+            -Dseclume.tls.requireExtendedMasterSecret=${{ matrix.offer == 'tls12' && 'false' || 'true' }} \
             -cp "seclume-tls-anvil/target/classes:$(cat anvil-classpath.txt)" \
             space.seclume.anvil.AnvilClient 8090 127.0.0.1 8443 ${{ matrix.offer }} \
             > anvil-client.log 2>&1 &

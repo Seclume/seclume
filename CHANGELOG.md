@@ -20,7 +20,9 @@ All notable changes to seclume are recorded here. Versions follow
 - **No fallback to JSSE.** `tlsStack=auto` (the default) is the own stack for every server; the
   fallback added for SEC-04 is removed. A server that speaks neither TLS 1.3 nor the TLS 1.2
   profile is refused with a message naming `tlsStack=jsse`, which still reaches it.
-  `-Dseclume.tls.tls12=false` keeps the own stack to TLS 1.3.
+  `-Dseclume.tls.tls12=false` keeps the own stack to TLS 1.3, and
+  `-Dseclume.tls.requireExtendedMasterSecret=false` lets a TLS 1.2 server without the extended
+  master secret through.
 - **X25519 and P-384, and HelloRetryRequest.** X25519 is offered with a share beside P-256 and
   P-384 without one; a TLS 1.3 server limited to P-384 asks for it with a HelloRetryRequest,
   which is followed once and checked strictly (`HelloRetryRequestTest`, `TlsGroupsTest`
