@@ -80,6 +80,13 @@ final class RecordStream implements AutoCloseable {
 
     /** Whether the records follow TLS 1.2's rules rather than TLS 1.3's. */
     private boolean tls12;
+    /** A HelloRetryRequest came: the server may send a second compatibility ChangeCipherSpec. */
+    private boolean helloRetried;
+
+    /** The server sent a HelloRetryRequest - see {@link #helloRetried}. */
+    void helloRetried() {
+        helloRetried = true;
+    }
 
     /** The server chose TLS 1.2: ChangeCipherSpec matters, the type is in the clear. */
     void tls12() {
@@ -163,9 +170,10 @@ final class RecordStream implements AutoCloseable {
                 // ChangeCipherSpec: legacy noise, never in the transcript - but
                 // RFC 8446 section 5 allows exactly the one-byte 0x01 during the
                 // handshake and nothing else. Skipped without a limit, a peer
-                // could keep a reader looping on them for as long as it liked.
+                // could keep a reader looping on them for as long as it liked:
+                // one per server hello, so a second only after a HelloRetryRequest.
                 if (established || length != 1 || byteAt(incoming, RecordProtection.HEADER) != 1
-                        || ++changeCipherSpecs > 1) {
+                        || ++changeCipherSpecs > (helloRetried ? 2 : 1)) {
                     throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
                             "a ChangeCipherSpec record where TLS 1.3 allows none");
                 }

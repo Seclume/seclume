@@ -14,7 +14,7 @@ import java.util.List;
 
 import space.seclume.crypto.ConstantTime;
 import space.seclume.crypto.HashAlgorithm;
-import space.seclume.crypto.NativeP256;
+import space.seclume.crypto.NativeEcdh;
 import space.seclume.secret.SecretScope;
 
 /**
@@ -24,9 +24,9 @@ import space.seclume.secret.SecretScope;
  * <p>A deliberately small profile, and the smallness is the security argument:
  *
  * <ul>
- *   <li><b>ECDHE on P-256</b>, with the same native key pair the TLS 1.3 key
- *       share used - no static RSA key exchange, so no Bleichenbacher oracle
- *       and forward secrecy always;</li>
+ *   <li><b>ECDHE</b> on X25519, P-256 or P-384, with a native key made for
+ *       the curve the server chose - no static RSA key exchange, so no
+ *       Bleichenbacher oracle and forward secrecy always;</li>
  *   <li><b>AES-GCM</b> records ({@link RecordProtection#forTls12}) - no CBC, no
  *       MAC-then-encrypt, so no padding oracle and no Lucky13;</li>
  *   <li><b>the extended master secret</b> (RFC 7627) is required, and a server
@@ -209,17 +209,16 @@ final class Tls12Handshake {
      * @param transcript   holding ClientHello and ServerHello
      * @param clientRandom our random
      * @param serverRandom the server's
-     * @param keyExchange  our P-256 key pair - the one the ClientHello offered
      * @param handshakeLog every handshake message so far in order, when a
      *                     client certificate may have to be proved; else null
      */
     static Outcome finish(RecordStream records, HandshakeReassembler flight,
             TranscriptHash transcript, Suite suite, MemorySegment clientRandom,
-            MemorySegment serverRandom, NativeP256 keyExchange, String host,
+            MemorySegment serverRandom, String host,
             CertificateTrust trust, ClientIdentity identity, List<X509Certificate> chain,
             ByteArrayOutputStream handshakeLog, Arena arena) throws IOException {
         HashAlgorithm hash = suite.hash();
-        MemorySegment serverPoint = arena.allocate(NativeP256.PUBLIC_SIZE);
+        MemorySegment[] serverPoint = {null};
         Expect[] expect = {Expect.CERTIFICATE};
         CertificateRequest[] request = {null};
         boolean[] signed = {false};
@@ -246,8 +245,8 @@ final class Tls12Handshake {
                         }
                         case SERVER_KEY_EXCHANGE -> {
                             due(now == Expect.SERVER_KEY_EXCHANGE, type, now);
-                            readServerKeyExchange(message, at, length, clientRandom, serverRandom,
-                                    chain.get(0), serverPoint);
+                            serverPoint[0] = readServerKeyExchange(message, at, length,
+                                    clientRandom, serverRandom, chain.get(0), arena);
                             signed[0] = true;
                             expect[0] = Expect.REQUEST_OR_DONE;
                         }
@@ -311,15 +310,17 @@ final class Tls12Handshake {
             sendCertificate(records, transcript, handshakeLog, signer, arena);
         }
 
-        try (SecretScope shared = SecretScope.allocate(NativeP256.SECRET_SIZE);
+        NativeEcdh.Group curve = NativeEcdh.Group.of(curveOf(serverPoint[0]));
+        try (NativeEcdh keyExchange = NativeEcdh.generate(curve);
+                SecretScope shared = SecretScope.allocate(curve.secretSize());
                 SecretScope master = SecretScope.allocate(MASTER_SECRET);
                 SecretScope digest = SecretScope.allocate(hash.digestLength())) {
             // A scope may be larger than asked for; every use takes exactly its length.
-            MemorySegment premaster = shared.segment().asSlice(0, NativeP256.SECRET_SIZE);
+            MemorySegment premaster = shared.segment().asSlice(0, curve.secretSize());
             MemorySegment masterSecret = master.segment().asSlice(0, MASTER_SECRET);
             MemorySegment hashed = digest.segment().asSlice(0, hash.digestLength());
             try {
-                keyExchange.derive(serverPoint, premaster);
+                keyExchange.derive(serverPoint[0].asSlice(2), premaster);
             } catch (IllegalArgumentException | IllegalStateException badPoint) {
                 TlsProtocolException refused = new TlsProtocolException(
                         TlsAlertException.ILLEGAL_PARAMETER,
@@ -494,31 +495,36 @@ final class Tls12Handshake {
 
     /**
      * ServerKeyExchange for ECDHE (RFC 4492 section 5.4, RFC 8422): a named
-     * curve, which has to be P-256, the server's point, and a signature over
-     * both randoms and those parameters - verified here against the
-     * certificate's key, so that the point is the server's and not someone's
-     * in between.
+     * curve - X25519, P-256 or P-384 - the server's key, and a signature over
+     * both randoms and those parameters, verified here against the
+     * certificate's key, so that the key is the server's and not someone's in
+     * between.
+     *
+     * @return the curve's id in the first two bytes, then the server's public
+     *         key - in native memory, for the key exchange
      */
-    private static void readServerKeyExchange(MemorySegment message, long body, int length,
-            MemorySegment clientRandom, MemorySegment serverRandom, X509Certificate leaf,
-            MemorySegment serverPoint) throws IOException {
+    private static MemorySegment readServerKeyExchange(MemorySegment message, long body,
+            int length, MemorySegment clientRandom, MemorySegment serverRandom,
+            X509Certificate leaf, Arena arena) throws IOException {
         if (length < 4 + 1 + 4) {
             throw StrictExtensions.decodeError("a ServerKeyExchange of " + length + " bytes");
         }
         int curveType = message.get(ValueLayout.JAVA_BYTE, body) & 0xff;
         int curve = Handshake.u16(message, body + 1);
-        if (curveType != NAMED_CURVE || curve != ClientHello.SECP256R1) {
+        NativeEcdh.Group group = NativeEcdh.Group.of(curve);
+        if (curveType != NAMED_CURVE || group == null) {
             throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
                     "the server's ServerKeyExchange names "
                             + (curveType != NAMED_CURVE ? "explicit curve parameters"
                                     : "curve 0x" + Integer.toHexString(curve))
-                            + "; this client's TLS 1.2 speaks P-256 only");
+                            + "; this client offered X25519, P-256 and P-384");
         }
         int pointLength = message.get(ValueLayout.JAVA_BYTE, body + 3) & 0xff;
-        if (pointLength != NativeP256.PUBLIC_SIZE
-                || message.get(ValueLayout.JAVA_BYTE, body + 4) != 4) {
+        if (pointLength != group.publicSize() || group != NativeEcdh.Group.X25519
+                && message.get(ValueLayout.JAVA_BYTE, body + 4) != 4) {
             throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
-                    "the server's P-256 point is not an uncompressed point of 65 bytes");
+                    "the server's " + group + " key is not " + group.publicSize() + " bytes"
+                            + (group == NativeEcdh.Group.X25519 ? "" : " in uncompressed form"));
         }
         int paramsLength = 4 + pointLength;
         long signatureAt = body + paramsLength;
@@ -542,7 +548,16 @@ final class Tls12Handshake {
                     "the server's ServerKeyExchange does not verify against its own "
                             + "certificate (scheme 0x" + Integer.toHexString(scheme) + ")");
         }
-        MemorySegment.copy(message, body + 4, serverPoint, 0, NativeP256.PUBLIC_SIZE);
+        MemorySegment point = arena.allocate(2L + group.publicSize());
+        point.set(ValueLayout.JAVA_BYTE, 0, (byte) (curve >>> 8));
+        point.set(ValueLayout.JAVA_BYTE, 1, (byte) curve);
+        MemorySegment.copy(message, body + 4, point, 2, group.publicSize());
+        return point;
+    }
+
+    /** The curve id {@link #readServerKeyExchange} put in front of the key. */
+    private static int curveOf(MemorySegment point) {
+        return Handshake.u16(point, 0);
     }
 
     /** A TLS 1.2 CertificateRequest (RFC 5246 section 7.4.4), read strictly. */
@@ -608,12 +623,13 @@ final class Tls12Handshake {
     }
 
     private static void sendClientKeyExchange(RecordStream records, TranscriptHash transcript,
-            ByteArrayOutputStream log, NativeP256 keyExchange, Arena arena) throws IOException {
-        int length = Handshake.HEADER + 1 + NativeP256.PUBLIC_SIZE;
+            ByteArrayOutputStream log, NativeEcdh keyExchange, Arena arena) throws IOException {
+        int size = keyExchange.group().publicSize();
+        int length = Handshake.HEADER + 1 + size;
         MemorySegment message = arena.allocate(length);
-        header(message, CLIENT_KEY_EXCHANGE, 1 + NativeP256.PUBLIC_SIZE);
-        message.set(ValueLayout.JAVA_BYTE, Handshake.HEADER, (byte) NativeP256.PUBLIC_SIZE);
-        keyExchange.publicKey(message.asSlice(Handshake.HEADER + 1, NativeP256.PUBLIC_SIZE));
+        header(message, CLIENT_KEY_EXCHANGE, 1 + size);
+        message.set(ValueLayout.JAVA_BYTE, Handshake.HEADER, (byte) size);
+        keyExchange.publicKey(message.asSlice(Handshake.HEADER + 1, size));
         records.write((byte) 22, message, 0, length);
         transcript.update(message, 0, length);
         log(log, message, 0, length);

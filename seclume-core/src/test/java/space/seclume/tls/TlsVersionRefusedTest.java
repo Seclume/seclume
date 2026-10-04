@@ -30,15 +30,14 @@ import space.seclume.internal.Transport;
 import space.seclume.internal.jdbc.TlsStack;
 
 /**
- * Which handshake failures say "this server needs the JDK's stack" - the
- * signal {@code tlsStack=auto} falls back on - and which do not.
+ * Which servers the own stack reaches, and which refusals mean "not this TLS"
+ * rather than "something is wrong".
  *
  * <p>The servers are the JDK's own, limited the way real ones are: TLS 1.2
- * only, as SQL Server before TDS 8.0 and Oracle 19c are; no group this client
- * offers; a listener that hangs up on the ClientHello. And one that speaks
- * TLS 1.3 perfectly well but whose certificate is not trusted, which must
- * fail as a certificate failure - falling back there would only fail again,
- * on the other stack, with the password one step closer to the heap.
+ * only, as SQL Server on TDS 7.4 and Oracle 19c are, which is reached; no
+ * group this client offers; a listener that hangs up on the ClientHello. And
+ * one that speaks TLS 1.3 perfectly well but whose certificate is not trusted,
+ * which must fail as a certificate failure, not as a version refusal.
  */
 @Timeout(120)
 class TlsVersionRefusedTest {

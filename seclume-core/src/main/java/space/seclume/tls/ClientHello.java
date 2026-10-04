@@ -22,6 +22,9 @@ public final class ClientHello {
     public static final int AES_256_GCM_SHA384 = 0x1302;
     public static final int X25519 = 0x001d;
     public static final int SECP256R1 = 0x0017;
+    public static final int SECP384R1 = 0x0018;
+    /** RFC 8446: the cookie a HelloRetryRequest may carry, echoed in the second ClientHello. */
+    public static final int EXTENSION_COOKIE = 44;
     private static final int TLS13 = 0x0304;
     private static final int TLS12 = 0x0303;
     private static final int SIGNATURE_ALGORITHMS_CERT = 50;
@@ -140,16 +143,38 @@ public final class ClientHello {
     public static int write(MemorySegment out, long offset, MemorySegment random,
             MemorySegment sessionId, int[] groups, MemorySegment[] publicShares,
             String serverName, String alpn, Offer offer) {
+        return write(out, offset, random, sessionId, groups, groups, publicShares, serverName,
+                alpn, offer, null);
+    }
+
+    /**
+     * The general form: the groups offered in {@code supported_groups}, in order
+     * of preference, apart from the ones a key share goes with - so that a group
+     * can be offered without the cost of a share, and asked for by a
+     * HelloRetryRequest - and the cookie such a request may have sent.
+     *
+     * @param supportedGroups every group offered, in order of preference
+     * @param shareGroups     the groups a key share is sent for, a subset of them;
+     *                        ignored when TLS 1.3 is not offered
+     * @param cookie          the HelloRetryRequest's cookie, or null
+     */
+    public static int write(MemorySegment out, long offset, MemorySegment random,
+            MemorySegment sessionId, int[] supportedGroups, int[] shareGroups,
+            MemorySegment[] publicShares, String serverName, String alpn, Offer offer,
+            MemorySegment cookie) {
         boolean offers13 = offer != Offer.TLS12;
         boolean offers12 = offer != Offer.TLS13;
-        if (groups.length == 0 || groups.length != publicShares.length) {
-            throw new IllegalArgumentException("one public share per group");
+        int[] groups = shareGroups;
+        if (supportedGroups.length == 0 || groups.length != publicShares.length
+                || offers13 && groups.length == 0) {
+            throw new IllegalArgumentException("one public share per group, and a group offered");
         }
         int sharesLength = 0;
         for (int i = 0; i < groups.length; i++) {
             int expected = switch (groups[i]) {
                 case X25519 -> 32;
                 case SECP256R1 -> 65;
+                case SECP384R1 -> 97;
                 case X25519MLKEM768 -> space.seclume.crypto.HybridMlKem.CLIENT_SHARE;
                 default -> throw new IllegalArgumentException("unsupported key share group: "
                         + groups[i]);
@@ -158,9 +183,9 @@ public final class ClientHello {
                 throw new IllegalArgumentException("wrong public share length for group "
                         + groups[i]);
             }
-            if (groups[i] == SECP256R1
+            if ((groups[i] == SECP256R1 || groups[i] == SECP384R1)
                     && publicShares[i].get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0) != 4) {
-                throw new IllegalArgumentException("P-256 needs an uncompressed point");
+                throw new IllegalArgumentException("a NIST curve needs an uncompressed point");
             }
             sharesLength += 4 + expected;
         }
@@ -178,10 +203,11 @@ public final class ClientHello {
         // (4) and three more signature schemes (6) only where TLS 1.2 is.
         int versionsLength = offers13 ? (offers12 ? 9 : 7) : 0;
         int signaturesLength = 18 + (offers12 ? 6 : 0);
-        int extensions = versionsLength + 6 + 2 * groups.length + signaturesLength + 24
+        int cookieLength = cookie == null ? 0 : 4 + 2 + (int) cookie.byteSize();
+        int extensions = versionsLength + 6 + 2 * supportedGroups.length + signaturesLength + 24
                 + (offers13 ? 6 + sharesLength : 0)
                 + (offers12 ? 6 + 4 : 0)
-                + (name == null ? 0 : 9 + name.length()) + alpnLength;
+                + (name == null ? 0 : 9 + name.length()) + alpnLength + cookieLength;
         int suites = (offers13 ? 4 : 0) + (offers12 ? 10 : 0);
         int body = 2 + 32 + 1 + sessionLength + 2 + suites + 1 + 1 + 2 + extensions;
         int length = Handshake.HEADER + body;
@@ -221,9 +247,9 @@ public final class ClientHello {
                 buffer.putShort((short) TLS12);
             }
         }
-        extension(buffer, Handshake.EXTENSION_SUPPORTED_GROUPS, 2 + 2 * groups.length);
-        buffer.putShort((short) (2 * groups.length));
-        for (int group : groups) {
+        extension(buffer, Handshake.EXTENSION_SUPPORTED_GROUPS, 2 + 2 * supportedGroups.length);
+        buffer.putShort((short) (2 * supportedGroups.length));
+        for (int group : supportedGroups) {
             buffer.putShort((short) group);
         }
 
@@ -256,6 +282,11 @@ public final class ClientHello {
             extension(buffer, EXTENSION_EC_POINT_FORMATS, 2);
             buffer.put((byte) 1).put((byte) 0);              // uncompressed
             extension(buffer, EXTENSION_EXTENDED_MASTER_SECRET, 0);
+        }
+        if (cookie != null) {
+            extension(buffer, EXTENSION_COOKIE, 2 + (int) cookie.byteSize());
+            buffer.putShort((short) cookie.byteSize());
+            buffer.put(cookie.asByteBuffer());
         }
 
         if (alpn != null) {

@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import space.seclume.crypto.HashAlgorithm;
-import space.seclume.crypto.NativeP256;
+import space.seclume.crypto.NativeEcdh;
 import space.seclume.internal.Entropy;
 import space.seclume.internal.Transport;
 import space.seclume.secret.SecretScope;
@@ -187,8 +187,10 @@ public final class ClientHandshake {
         boolean done = false;
         boolean presented = false;
         boolean helloAccepted = false;
+        NativeEcdh retryKey = null;
         try (Arena arena = Arena.ofConfined();
-                NativeP256 keyExchange = NativeP256.generate();
+                NativeEcdh p256 = offers13 ? NativeEcdh.generate(NativeEcdh.Group.P256) : null;
+                NativeEcdh x25519 = offers13 ? NativeEcdh.generate(NativeEcdh.Group.X25519) : null;
                 space.seclume.crypto.HybridMlKem hybrid = offers13 && postQuantum()
                         ? space.seclume.crypto.HybridMlKem.generate() : null;
                 SecretScope shared = SecretScope.allocate(space.seclume.crypto.HybridMlKem.SECRET);
@@ -199,48 +201,81 @@ public final class ClientHandshake {
             MemorySegment sessionId = arena.allocate(32);
             Entropy.fill(random);
             Entropy.fill(sessionId);          // 32 bytes: the middlebox-compatibility shape
-            MemorySegment publicShare = arena.allocate(65);
-            keyExchange.publicKey(publicShare);
 
-            MemorySegment hello = arena.allocate(2048);
-            int helloLength;
-            if (hybrid != null) {
-                // The hybrid first, P-256 beside it: a server without the
-                // hybrid picks P-256 at once - this client does not retry.
-                MemorySegment hybridShare = arena.allocate(space.seclume.crypto.HybridMlKem.CLIENT_SHARE);
-                hybrid.publicShare(hybridShare);
-                helloLength = ClientHello.write(hello, 0, random, sessionId,
-                        new int[] {ClientHello.X25519MLKEM768, ClientHello.SECP256R1},
-                        new MemorySegment[] {hybridShare, publicShare}, serverNameFor(host), alpn,
-                        offer);
+            // Offered in this order: the post-quantum hybrid, X25519, P-256 and
+            // P-384. Shares go with the first three, so that nearly every server
+            // answers at once; P-384 costs nothing unless a server asks for it
+            // with a HelloRetryRequest.
+            int[] supportedGroups = hybrid != null
+                    ? new int[] {ClientHello.X25519MLKEM768, ClientHello.X25519,
+                            ClientHello.SECP256R1, ClientHello.SECP384R1}
+                    : new int[] {ClientHello.X25519, ClientHello.SECP256R1, ClientHello.SECP384R1};
+            int[] shareGroups;
+            MemorySegment[] shares;
+            if (!offers13) {
+                shareGroups = new int[0];
+                shares = new MemorySegment[0];
             } else {
-                helloLength = ClientHello.write(hello, 0, random, sessionId,
-                        new int[] {ClientHello.SECP256R1}, new MemorySegment[] {publicShare},
-                        serverNameFor(host), alpn, offer);
+                MemorySegment x25519Share = publicKey(x25519, arena);
+                MemorySegment p256Share = publicKey(p256, arena);
+                if (hybrid != null) {
+                    MemorySegment hybridShare =
+                            arena.allocate(space.seclume.crypto.HybridMlKem.CLIENT_SHARE);
+                    hybrid.publicShare(hybridShare);
+                    shareGroups = new int[] {ClientHello.X25519MLKEM768, ClientHello.X25519,
+                            ClientHello.SECP256R1};
+                    shares = new MemorySegment[] {hybridShare, x25519Share, p256Share};
+                } else {
+                    shareGroups = new int[] {ClientHello.X25519, ClientHello.SECP256R1};
+                    shares = new MemorySegment[] {x25519Share, p256Share};
+                }
             }
+            MemorySegment hello = arena.allocate(4096);
+            int helloLength = ClientHello.write(hello, 0, random, sessionId, supportedGroups,
+                    shareGroups, shares, serverNameFor(host), alpn, offer, null);
             records.write((byte) 22, hello, 0, helloLength);
 
             // ---- ServerHello ------------------------------------------------
-            // Read as a handshake message rather than as a record: a TLS 1.2
-            // server commonly sends ServerHello, Certificate, ServerKeyExchange
-            // and ServerHelloDone in one record, and what follows the
-            // ServerHello stays in the reassembler for the rest of the flight.
-            int serverHelloLength;
-            while ((serverHelloLength = plainFlight.firstComplete()) < 0) {
-                RecordStream.Incoming record = records.next();
-                if (record.contentType() != 22) {
-                    throw new IOException("the server answered the ClientHello with something "
-                            + "that is not a ServerHello");
+            MemorySegment serverHello = readServerHelloMessage(records, plainFlight, arena);
+            int serverHelloLength = (int) serverHello.byteSize();
+
+            // ---- a HelloRetryRequest, at most one ---------------------------
+            MemorySegment firstHello = null;
+            MemorySegment retryRequest = null;
+            int retrySuite = -1;
+            if (offers13 && isHelloRetryRequest(serverHello)) {
+                if (plainFlight.buffered() > 0) {
+                    throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                            "handshake bytes followed the HelloRetryRequest");
                 }
-                plainFlight.append(record.data(), record.offset(), record.length());
+                HelloRetry retry = readHelloRetry(serverHello, sessionId, supportedGroups,
+                        shareGroups);
+                records.helloRetried();
+                retrySuite = retry.suite();
+                firstHello = arena.allocate(helloLength);
+                MemorySegment.copy(hello, 0, firstHello, 0, helloLength);
+                retryRequest = serverHello;
+                if (retry.group() >= 0) {
+                    retryKey = NativeEcdh.generate(NativeEcdh.Group.of(retry.group()));
+                    shareGroups = new int[] {retry.group()};
+                    shares = new MemorySegment[] {publicKey(retryKey, arena)};
+                }
+                hello = arena.allocate(4096 + (retry.cookie() == null ? 0
+                        : retry.cookie().byteSize()));
+                helloLength = ClientHello.write(hello, 0, random, sessionId, supportedGroups,
+                        shareGroups, shares, serverNameFor(host), alpn, offer, retry.cookie());
+                records.write((byte) 22, hello, 0, helloLength);
+                serverHello = readServerHelloMessage(records, plainFlight, arena);
+                serverHelloLength = (int) serverHello.byteSize();
+                if (isHelloRetryRequest(serverHello)) {
+                    throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                            "a second HelloRetryRequest");
+                }
+                if (negotiatedVersion(serverHello, true, false) != 0x0304) {
+                    throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                            "the ServerHello after a HelloRetryRequest is not TLS 1.3");
+                }
             }
-            if (Handshake.type(plainFlight.segment(), 0) != Handshake.SERVER_HELLO) {
-                throw new IOException("the server answered the ClientHello with something that "
-                        + "is not a ServerHello");
-            }
-            MemorySegment serverHello = arena.allocate(serverHelloLength);
-            MemorySegment.copy(plainFlight.segment(), 0, serverHello, 0, serverHelloLength);
-            plainFlight.discard(serverHelloLength);
 
             if (negotiatedVersion(serverHello, offers13, offers12) == 0x0303) {
                 if (offers13) {
@@ -248,8 +283,7 @@ public final class ClientHandshake {
                 }
                 helloAccepted = true;
                 TlsConnection connection = tls12(records, plainFlight, serverHello, hello,
-                        helloLength, random, keyExchange, host, trust, identity, alpn,
-                        serverChain, arena);
+                        helloLength, random, host, trust, identity, alpn, serverChain, arena);
                 done = true;
                 return connection;
             }
@@ -259,26 +293,35 @@ public final class ClientHandshake {
                 throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
                         "handshake bytes followed the TLS 1.3 ServerHello in the clear");
             }
-            ServerHelloFacts facts = readServerHello(serverHello, sessionId, hybrid != null);
+            ServerHelloFacts facts = readServerHello(serverHello, sessionId, shareGroups);
+            if (retrySuite >= 0 && facts.suite() != retrySuite) {
+                throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                        "the ServerHello chose another cipher suite than its HelloRetryRequest");
+            }
             helloAccepted = true;
 
             // ---- the handshake keys -----------------------------------------
             MemorySegment serverShare = serverHello.asSlice(facts.keyShareAt(), facts.keyShareLength());
             MemorySegment secret;
             try {
-                // readServerHello takes the hybrid only when it was offered;
-                // the null check says so here as well.
                 if (facts.group() == ClientHello.X25519MLKEM768 && hybrid != null) {
                     hybrid.derive(serverShare, shared.segment());
                     secret = shared.segment().asSlice(0, space.seclume.crypto.HybridMlKem.SECRET);
                 } else {
-                    secret = shared.segment().asSlice(0, 32);
-                    keyExchange.derive(serverShare, secret);
+                    NativeEcdh key = facts.group() == ClientHello.X25519 && retryKey == null ? x25519
+                            : facts.group() == ClientHello.SECP256R1 && retryKey == null ? p256
+                            : retryKey;
+                    if (key == null || key.group().id() != facts.group()) {
+                        throw new IllegalStateException("no key for group " + facts.group());
+                    }
+                    secret = shared.segment().asSlice(0, key.group().secretSize());
+                    key.derive(serverShare, secret);
                 }
             } catch (IllegalArgumentException | IllegalStateException badShare) {
-                // A point off the curve, an ML-KEM ciphertext that does not
-                // decapsulate: the peer's share is refused as TLS refuses it,
-                // not as an unchecked exception out of the login path.
+                // A point off the curve, a low-order X25519 key, an ML-KEM
+                // ciphertext that does not decapsulate: the peer's share is
+                // refused as TLS refuses it, not as an unchecked exception out
+                // of the login path.
                 TlsProtocolException refused = new TlsProtocolException(
                         TlsAlertException.ILLEGAL_PARAMETER,
                         "the server's key share was refused: " + badShare.getMessage());
@@ -292,6 +335,13 @@ public final class ClientHandshake {
                     KeySchedule schedule = KeySchedule.withoutPsk(hash);
                     SecretScope digest = SecretScope.allocate(hash.digestLength())) {
 
+                if (retryRequest != null) {
+                    // RFC 8446 section 4.4.1: the first ClientHello is replaced by
+                    // its hash, and the HelloRetryRequest follows it.
+                    transcript.update(firstHello, 0, (int) firstHello.byteSize());
+                    transcript.substituteWithMessageHash();
+                    transcript.update(retryRequest, 0, (int) retryRequest.byteSize());
+                }
                 transcript.update(hello, 0, helloLength);
                 transcript.update(serverHello, 0, serverHelloLength);
                 transcript.current(digest.segment(), 0);         // ClientHello..ServerHello
@@ -408,6 +458,9 @@ public final class ClientHandshake {
             refused.initCause(truncated);
             throw refused;
         } finally {
+            if (retryKey != null) {
+                retryKey.close();
+            }
             if (!done) {
                 records.close();
             }
@@ -493,7 +546,7 @@ public final class ClientHandshake {
     /** The TLS 1.2 path, from a checked ServerHello to an established connection. */
     private static TlsConnection tls12(RecordStream records, HandshakeReassembler plainFlight,
             MemorySegment serverHello, MemorySegment hello, int helloLength,
-            MemorySegment clientRandom, NativeP256 keyExchange, String host,
+            MemorySegment clientRandom, String host,
             CertificateTrust trust, ClientIdentity identity, String alpn,
             List<X509Certificate> serverChain, Arena arena) throws IOException {
         records.tls12();
@@ -520,7 +573,7 @@ public final class ClientHandshake {
             transcript.update(hello, 0, helloLength);
             transcript.update(serverHello, 0, (int) serverHello.byteSize());
             outcome = Tls12Handshake.finish(records, plainFlight, transcript, suite, clientRandom,
-                    serverRandom, keyExchange, host, trust, identity, serverChain, log, arena);
+                    serverRandom, host, trust, identity, serverChain, log, arena);
         }
         records.established();
         TlsConnection connection = new TlsConnection(records.transport(), records);
@@ -532,9 +585,129 @@ public final class ClientHandshake {
         return connection;
     }
 
+    /** A key's public half in native memory, sized for its group. */
+    private static MemorySegment publicKey(NativeEcdh key, Arena arena) {
+        MemorySegment out = arena.allocate(key.group().publicSize());
+        key.publicKey(out);
+        return out;
+    }
+
+    /**
+     * The next complete handshake message in the clear, which has to be a
+     * ServerHello - read as a message rather than as a record: a TLS 1.2 server
+     * commonly sends ServerHello, Certificate, ServerKeyExchange and
+     * ServerHelloDone in one record, and what follows the ServerHello stays in
+     * the reassembler for the rest of the flight.
+     */
+    private static MemorySegment readServerHelloMessage(RecordStream records,
+            HandshakeReassembler plainFlight, Arena arena) throws IOException {
+        int length;
+        while ((length = plainFlight.firstComplete()) < 0) {
+            RecordStream.Incoming record = records.next();
+            if (record.contentType() != 22) {
+                throw new IOException("the server answered the ClientHello with something "
+                        + "that is not a ServerHello");
+            }
+            plainFlight.append(record.data(), record.offset(), record.length());
+        }
+        if (Handshake.type(plainFlight.segment(), 0) != Handshake.SERVER_HELLO) {
+            throw new IOException("the server answered the ClientHello with something that "
+                    + "is not a ServerHello");
+        }
+        MemorySegment message = arena.allocate(length);
+        MemorySegment.copy(plainFlight.segment(), 0, message, 0, length);
+        plainFlight.discard(length);
+        return message;
+    }
+
+    private static boolean isHelloRetryRequest(MemorySegment serverHello) {
+        return serverHello.byteSize() >= Handshake.randomOffset(Handshake.HEADER) + 32
+                && serverHello.asSlice(Handshake.randomOffset(Handshake.HEADER), 32)
+                        .mismatch(MemorySegment.ofArray(HELLO_RETRY_REQUEST)) == -1;
+    }
+
+    /** What a HelloRetryRequest asks for: a suite, a group (or -1) and a cookie (or null). */
+    private record HelloRetry(int suite, int group, MemorySegment cookie) {
+    }
+
+    /**
+     * A HelloRetryRequest, read strictly (RFC 8446 section 4.1.4): TLS 1.3, a
+     * suite that was offered, the session id echoed, and either a group that was
+     * offered without a share or a cookie - a request that changes nothing is
+     * refused, and so is one for a group a share was already sent for.
+     */
+    private static HelloRetry readHelloRetry(MemorySegment request, MemorySegment sentSessionId,
+            int[] supportedGroups, int[] shareGroups) throws IOException {
+        long body = Handshake.HEADER;
+        int sessionLength = Handshake.sessionIdLength(request, body);
+        if (sessionLength != sentSessionId.byteSize()
+                || request.asSlice(Handshake.sessionIdOffset(body), sessionLength)
+                        .mismatch(sentSessionId) != -1) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the HelloRetryRequest echoed a different session id");
+        }
+        int suite = Handshake.cipherSuite(request, body);
+        if (suite != ClientHello.AES_128_GCM_SHA256 && suite != ClientHello.AES_256_GCM_SHA384) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the HelloRetryRequest names cipher suite 0x" + Integer.toHexString(suite)
+                            + ", which was not offered");
+        }
+        long compression = Handshake.sessionIdOffset(body) + sessionLength + 2;
+        if (request.get(ValueLayout.JAVA_BYTE, compression) != 0) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the HelloRetryRequest names a compression method");
+        }
+        long extensionsField = compression + 1;
+        int[] group = {-1};
+        boolean[] version = {false};
+        MemorySegment[] cookie = {null};
+        StrictExtensions.list(request, extensionsField,
+                (int) (request.byteSize() - extensionsField), "the HelloRetryRequest",
+                (type, at, length) -> {
+                    if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS) {
+                        if (length != 2) {
+                            throw StrictExtensions.decodeError("a supported_versions of "
+                                    + length + " bytes");
+                        }
+                        version[0] = Handshake.u16(request, at) == 0x0304;
+                    } else if (type == Handshake.EXTENSION_KEY_SHARE) {
+                        if (length != 2) {
+                            throw StrictExtensions.decodeError("a HelloRetryRequest key_share of "
+                                    + length + " bytes; it names one group");
+                        }
+                        group[0] = Handshake.u16(request, at);
+                    } else if (type == ClientHello.EXTENSION_COOKIE) {
+                        if (length < 3 || Handshake.u16(request, at) != length - 2) {
+                            throw StrictExtensions.decodeError("a malformed cookie");
+                        }
+                        cookie[0] = request.asSlice(at + 2, length - 2);
+                    } else {
+                        throw StrictExtensions.unsolicited("the HelloRetryRequest", type);
+                    }
+                });
+        if (!version[0]) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "a HelloRetryRequest that does not select TLS 1.3");
+        }
+        if (group[0] >= 0) {
+            boolean offered = java.util.Arrays.stream(supportedGroups).anyMatch(g -> g == group[0]);
+            boolean shared = java.util.Arrays.stream(shareGroups).anyMatch(g -> g == group[0]);
+            if (!offered || shared || NativeEcdh.Group.of(group[0]) == null) {
+                throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                        "the HelloRetryRequest asks for group 0x" + Integer.toHexString(group[0])
+                                + (shared ? ", which already had a share"
+                                        : ", which was not offered"));
+            }
+        } else if (cookie[0] == null) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "a HelloRetryRequest that asks for nothing");
+        }
+        return new HelloRetry(suite, group[0], cookie[0]);
+    }
+
     /** What a ServerHello has to tell us, once it has been checked. */
     private record ServerHelloFacts(HashAlgorithm hash, int keyLength,
-            long keyShareAt, int keyShareLength, String cipherSuite, int group) {
+            long keyShareAt, int keyShareLength, String cipherSuite, int group, int suite) {
     }
 
     /**
@@ -547,7 +720,7 @@ public final class ClientHandshake {
     }
 
     private static ServerHelloFacts readServerHello(MemorySegment serverHello,
-            MemorySegment sentSessionId, boolean offeredHybrid) throws IOException {
+            MemorySegment sentSessionId, int[] sentShares) throws IOException {
         long body = Handshake.HEADER;
         if (serverHello.asSlice(Handshake.randomOffset(body), 32)
                 .mismatch(MemorySegment.ofArray(HELLO_RETRY_REQUEST)) == -1) {
@@ -607,9 +780,8 @@ public final class ClientHandshake {
                             throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
                                     "the key share does not fill its extension");
                         }
-                        if (group == ClientHello.SECP256R1 && out[1] == 65
-                                || offeredHybrid && group == ClientHello.X25519MLKEM768
-                                        && out[1] == space.seclume.crypto.HybridMlKem.SERVER_SHARE) {
+                        if (shareLength(group) == out[1]
+                                && java.util.Arrays.stream(sentShares).anyMatch(g -> g == group)) {
                             share[0] = out[0];
                             share[1] = out[1];
                             share[2] = group;
@@ -633,16 +805,27 @@ public final class ClientHandshake {
         }
         if (!seen[0]) {
             throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
-                    "the server sent no usable key share for a group that was offered ("
-                            + (offeredHybrid ? "X25519MLKEM768 or P-256" : "P-256") + ")");
+                    "the server sent no usable key share for a group a share was sent "
+                            + "for");
         }
         String name = suite == ClientHello.AES_256_GCM_SHA384
                 ? "TLS_AES_256_GCM_SHA384" : "TLS_AES_128_GCM_SHA256";
         if (share[2] == ClientHello.X25519MLKEM768) {
             name += " with X25519MLKEM768";
+        } else {
+            name += " with " + NativeEcdh.Group.of((int) share[2]);
         }
         return new ServerHelloFacts(hash, keyLength, share[0], (int) share[1], name,
-                (int) share[2]);
+                (int) share[2], suite);
+    }
+
+    /** How long a server's key share is for {@code group}; -1 for one never offered. */
+    private static long shareLength(int group) {
+        if (group == ClientHello.X25519MLKEM768) {
+            return space.seclume.crypto.HybridMlKem.SERVER_SHARE;
+        }
+        NativeEcdh.Group known = NativeEcdh.Group.of(group);
+        return known == null ? -1 : known.publicSize();
     }
 
     /** What the server's flight left behind for the rest of the handshake. */
