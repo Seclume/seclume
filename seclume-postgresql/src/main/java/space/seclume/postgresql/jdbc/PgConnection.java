@@ -180,8 +180,10 @@ public final class PgConnection
         for (PgStatement statement : List.copyOf(open)) {
             statement.close();
         }
-        session.flushPending();
-        session.execute("discard all");
+        // What waits rides along ahead of it; the answer to the reset is read
+        // before the next borrower's first message - not waited for here,
+        // where nobody needs it.
+        session.discardAllLater();
         idlePlans.clear();
         sessionState.clear();
         if (isolation != TRANSACTION_READ_COMMITTED) {

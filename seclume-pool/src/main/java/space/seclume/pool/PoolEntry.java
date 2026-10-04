@@ -154,7 +154,39 @@ final class PoolEntry {
         closeStatements();
         Connection old = connection;
         connection = fresh;
+        frontedKnown = false;
         return old;
+    }
+
+    /**
+     * The driver connection's {@link space.seclume.internal.jdbc.Fronted}
+     * side, or {@code null} when it has none - asked once per connection,
+     * not twice per borrow. {@code isWrapperFor} and {@code unwrap} are two
+     * interface calls on every handout and every return otherwise.
+     *
+     * <p>Plain fields: only whoever holds the entry reads or writes them, and
+     * the free slot's compare-and-set hands the entry on.
+     */
+    private space.seclume.internal.jdbc.Fronted fronted;
+    private boolean frontedKnown;
+
+    space.seclume.internal.jdbc.Fronted fronted() {
+        if (!frontedKnown) {
+            Connection current = connection;
+            space.seclume.internal.jdbc.Fronted found = null;
+            try {
+                if (current instanceof space.seclume.internal.jdbc.Fronted direct) {
+                    found = direct;
+                } else if (current.isWrapperFor(space.seclume.internal.jdbc.Fronted.class)) {
+                    found = current.unwrap(space.seclume.internal.jdbc.Fronted.class);
+                }
+            } catch (java.sql.SQLException | RuntimeException notOffered) {
+                // a driver that does not offer it hands out its own connection
+            }
+            fronted = found;
+            frontedKnown = true;
+        }
+        return fronted;
     }
 
     State state() {
@@ -167,6 +199,17 @@ final class PoolEntry {
 
     void set(State next) {
         state.set(next);
+    }
+
+    /**
+     * {@link #set} without the fence, for the two moves on the hot path:
+     * out of a free slot and back into one. The slot's compare-and-set already
+     * orders everything that matters; the state is read only by housekeeping
+     * and statistics, which can afford to see it a few nanoseconds late. The
+     * full store cost as much as the whole slot exchange.
+     */
+    void setQuietly(State next) {
+        state.lazySet(next);
     }
 
     long ageNanos(long now) {
@@ -230,8 +273,14 @@ final class PoolEntry {
      * @param trace where the borrow happened, or {@code null}
      */
     void markBorrowed(long now, Throwable trace) {
-        this.borrowedAt = now;
-        this.borrowTrace = trace;
+        // Each is a volatile store, and without leak detection both stay
+        // zero for the entry's whole life: written only when they change.
+        if (now != 0 || borrowedAt != 0) {
+            this.borrowedAt = now;
+        }
+        if (trace != null || borrowTrace != null) {
+            this.borrowTrace = trace;
+        }
     }
 
     /** When the pool last kept this connection alive while it sat idle. */
@@ -246,9 +295,12 @@ final class PoolEntry {
         this.keptAliveAt = System.nanoTime();
     }
 
-    void markReturned() {
-        this.lastUsedAt = System.nanoTime();
-        this.borrowTrace = null;
+    /** @param now the caller's reading of the clock - one per return, not one per check */
+    void markReturned(long now) {
+        this.lastUsedAt = now;
+        if (borrowTrace != null) {
+            this.borrowTrace = null;
+        }
     }
 
     /**

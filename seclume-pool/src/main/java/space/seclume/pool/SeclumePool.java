@@ -260,7 +260,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 PoolEvents.endWait(waiting, settings.getName(), borrowed.sum(), timedOut);
             }
         }
-        entry.set(PoolEntry.State.IN_USE);
+        entry.setQuietly(PoolEntry.State.IN_USE);
         boolean withContext = settings.getSessionContext() != null && applySessionContext(entry);
         boolean watched = !settings.getLeakDetectionThreshold().isZero();
         entry.markBorrowed(watched ? now : 0,
@@ -501,7 +501,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      * holds one.
      */
     private void park(PoolEntry entry) {
-        entry.set(PoolEntry.State.IDLE);
+        entry.setQuietly(PoolEntry.State.IDLE);
         int size = slotMask + 1;
         int start = startSlot();
         for (int i = 0; i < size; i++) {
@@ -917,13 +917,16 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         if (entry.state() == PoolEntry.State.CLOSED) {
             return;
         }
-        entry.markReturned();
+        // One reading of the clock for the return - it used to be three, and
+        // with the borrow's one they were most of what a handout cost.
+        long now = System.nanoTime();
+        entry.markReturned(now);
         // The deadline (a margin before the end) is left to prewarm and the
         // return-mark, so that the replacement is opened first. The end itself
         // is not: a connection whose credential has actually expired does not
         // go back into the pool, whatever housekeeping has got round to.
-        if (broken || closed || isPastLifetime(entry) || entry.isRetiringOnReturn()
-                || entry.credentialExpired(System.nanoTime())) {
+        if (broken || closed || isPastLifetime(entry, now) || entry.isRetiringOnReturn()
+                || entry.credentialExpired(now)) {
             retire(entry);
         } else {
             park(entry);
@@ -941,9 +944,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         }
     }
 
-    private boolean isPastLifetime(PoolEntry entry) {
+    private boolean isPastLifetime(PoolEntry entry, long now) {
         return !settings.getMaxLifetime().isZero()
-                && entry.ageNanos(System.nanoTime()) > settings.getMaxLifetime().toNanos();
+                && entry.ageNanos(now) > settings.getMaxLifetime().toNanos();
     }
 
     // ---- handing a connection on ------------------------------------------

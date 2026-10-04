@@ -964,7 +964,7 @@ public final class PgSession implements AutoCloseable {
 
         try {
             int carried = writePending();
-            WireBuffer out = channel.begin(PgProtocol.QUERY);
+            WireBuffer out = command(PgProtocol.QUERY);
             out.putCString(sql);
             channel.end();
             channel.flush();
@@ -1050,7 +1050,7 @@ public final class PgSession implements AutoCloseable {
         java.io.IOException reading = null;
         try {
             int carried = writePending();
-            WireBuffer out = channel.begin(PgProtocol.QUERY);
+            WireBuffer out = command(PgProtocol.QUERY);
             out.putCString(sql);
             channel.end();
             channel.flush();
@@ -1150,7 +1150,7 @@ public final class PgSession implements AutoCloseable {
         java.io.IOException writing = null;
         try {
             int carried = writePending();
-            WireBuffer out = channel.begin(PgProtocol.QUERY);
+            WireBuffer out = command(PgProtocol.QUERY);
             out.putCString(sql);
             channel.end();
             channel.flush();
@@ -1184,7 +1184,7 @@ public final class PgSession implements AutoCloseable {
                     }
                     case PgProtocol.COPY_IN_RESPONSE -> {
                         channel.endMessage();
-                        WireBuffer fail = channel.begin(PgProtocol.COPY_FAIL);
+                        WireBuffer fail = command(PgProtocol.COPY_FAIL);
                         fail.putCString("copyOut was given a COPY ... FROM statement");
                         channel.end();
                         channel.flush();
@@ -1298,20 +1298,20 @@ public final class PgSession implements AutoCloseable {
     }
 
     /** The Parse of the statement about to run - if it is still owed - and no other. */
-    private int writePendingParse(String statement, int carriedBefore) {
+    private int writePendingParse(String statement, int carriedBefore) throws SQLException {
         String pendingSql = pendingParses.remove(statement);
         if (pendingSql == null) {
             return 0;
         }
         unconfirmedParses.add(new InFlightParse(statement, pendingSql,
                 readyCount + carriedBefore + 1));
-        WireBuffer out = channel.begin(PgProtocol.PARSE);
+        WireBuffer out = command(PgProtocol.PARSE);
         out.putCString(statement);
         out.putCString(pendingSql);
         out.putShort((short) 0);              // Typen ueberlaesst der Treiber dem Server
         channel.end();
 
-        out = channel.begin(PgProtocol.DESCRIBE);
+        out = command(PgProtocol.DESCRIBE);
         out.putByte((byte) 'S');
         out.putCString(statement);
         channel.end();
@@ -1346,18 +1346,18 @@ public final class PgSession implements AutoCloseable {
     public List<Field> parse(String name, String sql) throws SQLException {
         pendingParses.remove(name);           // parsed now; nothing is owed any more
         try {
-            WireBuffer out = channel.begin(PgProtocol.PARSE);
+            WireBuffer out = command(PgProtocol.PARSE);
             out.putCString(name);
             out.putCString(sql);
             out.putShort((short) 0);          // Typen ueberlaesst der Treiber dem Server
             channel.end();
 
-            out = channel.begin(PgProtocol.DESCRIBE);
+            out = command(PgProtocol.DESCRIBE);
             out.putByte((byte) 'S');
             out.putCString(name);
             channel.end();
 
-            channel.begin(PgProtocol.SYNC);
+            command(PgProtocol.SYNC);
             channel.end();
             channel.flush();
 
@@ -1400,7 +1400,7 @@ public final class PgSession implements AutoCloseable {
         try {
             int carried = writePending();
             carried += writePendingParse(statement, carried);
-            WireBuffer out = channel.begin(PgProtocol.BIND);
+            WireBuffer out = command(PgProtocol.BIND);
             out.putCString("");                       // the unnamed portal
             out.putCString(statement);
             parameters.write(out);
@@ -1415,18 +1415,18 @@ public final class PgSession implements AutoCloseable {
                 // different one. That guarantee is what makes it safe to stop
                 // asking - and it holds today too, because the plan has been
                 // cached on the server all along.
-                out = channel.begin(PgProtocol.DESCRIBE);
+                out = command(PgProtocol.DESCRIBE);
                 out.putByte((byte) 'P');
                 out.putCString("");
                 channel.end();
             }
 
-            out = channel.begin(PgProtocol.EXECUTE);
+            out = command(PgProtocol.EXECUTE);
             out.putCString("");
             out.putInt(maxRows);
             channel.end();
 
-            channel.begin(PgProtocol.SYNC);
+            command(PgProtocol.SYNC);
             channel.end();
             channel.flush();
 
@@ -1641,7 +1641,7 @@ public final class PgSession implements AutoCloseable {
             if (carried == 0) {
                 // Only Closes went out. They answer with CloseComplete, and
                 // nothing would collect that without a Sync to close the block.
-                channel.begin(PgProtocol.SYNC);
+                command(PgProtocol.SYNC);
                 channel.end();
                 carried = 1;
             }
@@ -1659,10 +1659,10 @@ public final class PgSession implements AutoCloseable {
      *
      * @return how many extra answers have to be read
      */
-    private int writePending() {
+    private int writePending() throws SQLException {
         int carried = pending.size();
         for (String sql : pending) {
-            WireBuffer out = channel.begin(PgProtocol.QUERY);
+            WireBuffer out = command(PgProtocol.QUERY);
             // "BEGIN" is the marker the list is searched for; what goes out is
             // the transaction's own opening - see setBeginStatement.
             out.putCString(sql.equals("BEGIN") ? beginStatement : sql);
@@ -1689,9 +1689,9 @@ public final class PgSession implements AutoCloseable {
      * <p>Close needs no Sync of its own; the CloseComplete travels with
      * whatever answer the block is waiting for anyway.
      */
-    private void writePendingCloses() {
+    private void writePendingCloses() throws SQLException {
         for (String name : pendingCloses) {
-            WireBuffer out = channel.begin(PgProtocol.CLOSE);
+            WireBuffer out = command(PgProtocol.CLOSE);
             out.putByte((byte) 'S');
             out.putCString(name);
             channel.end();
@@ -1785,7 +1785,7 @@ public final class PgSession implements AutoCloseable {
         int group = pipelineGroup;
         pipelineGroup = 0;                        // before reading: a failure ends the group too
         try {
-            channel.begin(PgProtocol.SYNC);
+            command(PgProtocol.SYNC);
             channel.end();
             channel.flush();
             for (int i = 0; i < pipelineCarried; i++) {
@@ -1923,11 +1923,11 @@ public final class PgSession implements AutoCloseable {
     public void executeMore(int rows, RowHandler handler) throws SQLException {
         flushPipeline();
         try {
-            WireBuffer out = channel.begin(PgProtocol.EXECUTE);
+            WireBuffer out = command(PgProtocol.EXECUTE);
             out.putCString("");
             out.putInt(rows);
             channel.end();
-            channel.begin(PgProtocol.SYNC);
+            command(PgProtocol.SYNC);
             channel.end();
             channel.flush();
             runUntilReady(handler);
@@ -1948,11 +1948,11 @@ public final class PgSession implements AutoCloseable {
             return;
         }
         try {
-            WireBuffer out = channel.begin(PgProtocol.CLOSE);
+            WireBuffer out = command(PgProtocol.CLOSE);
             out.putByte((byte) 'P');
             out.putCString("");
             channel.end();
-            channel.begin(PgProtocol.SYNC);
+            command(PgProtocol.SYNC);
             channel.end();
             channel.flush();
             runUntilReady(null);
@@ -2008,7 +2008,7 @@ public final class PgSession implements AutoCloseable {
                     at++;
                     sent++;
                 }
-                channel.begin(PgProtocol.SYNC);
+                command(PgProtocol.SYNC);
                 channel.end();
                 channel.flush();
                 for (int i = 0; i < carried; i++) {
@@ -2026,14 +2026,14 @@ public final class PgSession implements AutoCloseable {
     /** Bind and Execute for one row - without the Sync that would end the group. */
     private void writeBindAndExecute(String statement, PgParameters parameters)
             throws SQLException {
-        WireBuffer out = channel.begin(PgProtocol.BIND);
+        WireBuffer out = command(PgProtocol.BIND);
         out.putCString("");                       // the unnamed portal
         out.putCString(statement);
         parameters.write(out);
         out.putShort((short) 0);                  // the result in text format
         channel.end();
 
-        out = channel.begin(PgProtocol.EXECUTE);
+        out = command(PgProtocol.EXECUTE);
         out.putCString("");
         out.putInt(0);
         channel.end();
@@ -2161,11 +2161,11 @@ public final class PgSession implements AutoCloseable {
     /** Releases a prepared plan in the server again. */
     public void closeStatement(String name) throws SQLException {
         try {
-            WireBuffer out = channel.begin(PgProtocol.CLOSE);
+            WireBuffer out = command(PgProtocol.CLOSE);
             out.putByte((byte) 'S');
             out.putCString(name);
             channel.end();
-            channel.begin(PgProtocol.SYNC);
+            command(PgProtocol.SYNC);
             channel.end();
             channel.flush();
             runUntilReady(null);
@@ -2242,6 +2242,67 @@ public final class PgSession implements AutoCloseable {
                 default -> handleAsynchronous(tag);
             }
         }
+    }
+
+    /**
+     * A {@code DISCARD ALL} sent by {@link #discardAllLater()} whose answer
+     * has not been read yet.
+     */
+    private boolean discardOwed;
+
+    /**
+     * Every message starts here: a reset sent at the last return is answered
+     * <b>before</b> anything of the next borrower goes out. That keeps the
+     * deferred reset exactly as safe as the one that waited - no statement
+     * ever reaches a session whose reset was not confirmed.
+     */
+    private WireBuffer command(byte tag) throws SQLException {
+        settleDiscard();
+        return channel.begin(tag);
+    }
+
+    /**
+     * Reads the answer to a {@code DISCARD ALL} sent at the last return. A
+     * refused one ends the session: whatever the last borrower left in it is
+     * still there, and the next one must not get it.
+     */
+    public void settleDiscard() throws SQLException {
+        if (!discardOwed) {
+            return;
+        }
+        discardOwed = false;
+        try {
+            runUntilReady(null);
+        } catch (IOException | WireBuffer.Truncated e) {
+            throw brokenConnection("the connection broke while resetting the session", e);
+        } catch (SQLException refused) {
+            channel.close();
+            throw new SQLException("the session reset sent when the connection was last "
+                    + "returned failed - the connection is closed", "08006", refused);
+        }
+    }
+
+    /**
+     * {@code DISCARD ALL} sent now, its answer read before the next message -
+     * see {@link #command}. The pool calls this on every return; waiting there
+     * was a full round trip per borrow in which nobody needed the answer, and
+     * the server can do the reset while the connection sits in the pool.
+     */
+    public void discardAllLater() throws SQLException {
+        flushPipeline();
+        try {
+            int carried = writePending();
+            WireBuffer out = command(PgProtocol.QUERY);
+            out.putCString("discard all");
+            channel.end();
+            channel.flush();
+            for (int i = 0; i < carried; i++) {
+                runUntilReady(null);              // what rode along came first
+            }
+        } catch (IOException | WireBuffer.Truncated e) {
+            throw brokenConnection("the connection broke while resetting the session", e);
+        }
+        discardOwed = true;
     }
 
     /** Short form for statements without a result. */
@@ -2675,6 +2736,7 @@ public final class PgSession implements AutoCloseable {
      * closed, and the transport belongs to the caller.
      */
     public Detached detach() throws SQLException {
+        settleDiscard();                         // its answer may still be on the way
         if (!channel.isIdle()) {
             throw new SQLException("this session has work in flight - a stream can only be "
                     + "handed over at a quiescent point", "25000");
@@ -2712,6 +2774,7 @@ public final class PgSession implements AutoCloseable {
      * quiet moment, it is exact until the next statement.
      */
     public Detached snapshot() throws SQLException {
+        settleDiscard();                         // its answer may still be on the way
         if (!channel.isIdle()) {
             throw new SQLException("this session has work in flight - it can only be "
                     + "described at a quiescent point", "25000");
@@ -2748,7 +2811,7 @@ public final class PgSession implements AutoCloseable {
     public java.util.List<PgNotification> takeNotifications(boolean ask) throws SQLException {
         if (ask && notifications.isEmpty() && channel.canPollNotifications()) {
             try {
-                channel.begin(PgProtocol.SYNC);
+                command(PgProtocol.SYNC);
                 channel.end();
                 channel.flush();
                 runUntilReady(null);

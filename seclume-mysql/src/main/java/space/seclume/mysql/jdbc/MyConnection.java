@@ -162,7 +162,12 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
         int wantedIsolation = isolation;
         boolean wantedReadOnly = readOnly;
         session.dropPendingVariables();
-        reset();
+        // Sent now, answered before the next borrower's first command - not
+        // waited for here, where nobody needs the answer.
+        session.resetConnectionLater();
+        sessionState.clear();
+        autoCommit = true;
+        readOnly = false;
         isolation = TRANSACTION_REPEATABLE_READ;
         if (wantedIsolation != isolation) {
             setTransactionIsolation(wantedIsolation);

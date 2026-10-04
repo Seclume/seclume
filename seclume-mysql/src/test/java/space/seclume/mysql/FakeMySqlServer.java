@@ -194,7 +194,14 @@ final class FakeMySqlServer implements AutoCloseable {
         return serverSocket.getLocalPort();
     }
 
-    /** The SQL texts that arrived - so that a test can check them. */
+    /** Answers every COM_RESET_CONNECTION with an error. */
+    private volatile boolean refuseReset;
+
+    void refuseReset() {
+        refuseReset = true;
+    }
+
+    /** The SQL texts that arrived, and {@code <reset>} for each reset - so that a test can check them. */
     List<String> received() {
         return received;
     }
@@ -288,7 +295,14 @@ final class FakeMySqlServer implements AutoCloseable {
                 return true;
             }
             case 0x0e -> sendOk(out, 1, 0, 0);                   // COM_PING
-            case 0x1f -> sendOk(out, 1, 0, 0);                   // COM_RESET_CONNECTION
+            case 0x1f -> {                                      // COM_RESET_CONNECTION
+                received.add("<reset>");
+                if (refuseReset) {
+                    sendError(out, 1, 1041, "HY000", "Out of memory");
+                } else {
+                    sendOk(out, 1, 0, 0);
+                }
+            }
             case 0x03 -> {                                      // COM_QUERY
                 received.add(new String(packet, 1, packet.length - 1, StandardCharsets.UTF_8));
                 if (errorMessage != null) {

@@ -211,6 +211,45 @@ class ProtocolTest {
         }
     }
 
+    /** The pool's reset: sent at the return, answered before the next command goes out. */
+    @Test
+    void aDeferredResetIsAnsweredBeforeTheNextCommand() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.start();
+            try (MySession session = MySession.open(settings(server))) {
+                session.resetConnectionLater();
+                session.execute("select 'next borrower'");
+                session.resetConnectionLater();
+                session.ping();
+            }
+            server.rethrowFailure();
+            assertEquals(List.of("<reset>", "select 'next borrower'", "<reset>"),
+                    server.received());
+        }
+    }
+
+    /**
+     * A refused reset leaves the last borrower's state in the session: the
+     * next borrower's statement must never reach it, and the session is gone.
+     */
+    @Test
+    void aRefusedDeferredResetLetsNothingThrough() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.refuseReset();
+            server.start();
+            try (MySession session = MySession.open(settings(server))) {
+                session.resetConnectionLater();
+                java.sql.SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                        java.sql.SQLException.class,
+                        () -> session.execute("select 'next borrower'"));
+                assertEquals("08006", refused.getSQLState());
+                org.junit.jupiter.api.Assertions.assertFalse(session.isOpen(),
+                        "a session whose reset failed stays usable");
+            }
+            assertEquals(List.of("<reset>"), server.received());
+        }
+    }
+
     // ---- through the JDBC surface ----------------------------------------
 
     @Test
