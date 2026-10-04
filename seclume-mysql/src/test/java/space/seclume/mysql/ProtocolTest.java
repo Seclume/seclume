@@ -229,6 +229,29 @@ class ProtocolTest {
     }
 
     /**
+     * The reset drops the server's prepared statements; the ones the borrow
+     * used are prepared again in the same write, so that the next borrower
+     * finds them ready instead of paying a round trip for each.
+     */
+    @Test
+    void theStatementsOfABorrowArePreparedAgainBehindTheReset() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.start();
+            try (MySession session = MySession.open(settings(server))) {
+                session.prepareCached("select ?");
+                session.resetConnectionLater();
+                session.prepareCached("select ?");
+                session.ping();
+                session.resetConnectionLater();
+                session.ping();
+            }
+            server.rethrowFailure();
+            assertEquals(List.of("select ?", "<reset>", "select ?", "<reset>", "select ?"),
+                    server.received());
+        }
+    }
+
+    /**
      * A refused reset leaves the last borrower's state in the session: the
      * next borrower's statement must never reach it, and the session is gone.
      */

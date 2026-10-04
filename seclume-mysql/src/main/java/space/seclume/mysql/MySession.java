@@ -376,6 +376,16 @@ public final class MySession implements AutoCloseable {
     private final java.util.LinkedHashMap<String, Prepared> plans =
             new java.util.LinkedHashMap<>(16, 0.75f, true);
     /**
+     * The statements prepared or taken from the cache since the last reset -
+     * what the deferred reset prepares again behind itself, see
+     * {@link #resetConnectionLater()}.
+     */
+    private final java.util.LinkedHashSet<String> usedSinceReset = new java.util.LinkedHashSet<>();
+    /** At most this many are prepared again after a reset. */
+    private static final int REPREPARED_AT_MOST = 16;
+    /** Prepared again behind a deferred reset, in the order sent; answered at {@link #settleReset()}. */
+    private final java.util.ArrayList<String> reprepared = new java.util.ArrayList<>();
+    /**
      * Runs a statement that answers one row of one column, and hands back that
      * value as text.
      *
@@ -1318,6 +1328,10 @@ public final class MySession implements AutoCloseable {
      * place it can be, because a plan belongs to a session.
      */
     public Prepared prepareCached(String sql) throws SQLException {
+        settleReset();                           // the plans prepared again behind it
+        if (usedSinceReset.size() < REPREPARED_AT_MOST) {
+            usedSinceReset.add(sql);
+        }
         Prepared cached = plans.get(sql);
         // Recorded by fingerprint, like everything else: a cache report that
         // listed the statements by their text would carry every value in
@@ -1369,29 +1383,34 @@ public final class MySession implements AutoCloseable {
             if (carried) {
                 readCarriedSetting();
             }
-
-            int first = channel.nextPacket();
-            WireBuffer in = channel.packet();
-            if (first == MyPackets.ERR) {
-                SQLException failure = serverError(in, "the server rejected the statement");
-                channel.endPacket();
-                closeIfConnectionFailure(failure);
-                throw failure;
-            }
-            in.skip(1);                              // 0x00
-            int statementId = in.getIntLe();
-            int columnCount = in.getShortLe() & 0xffff;
-            int parameterCount = in.getShortLe() & 0xffff;
-            channel.endPacket();
-
-            // First the parameter descriptions, then the column ones.
-            skipFieldDescriptions(parameterCount);
-            List<Field> columns = readFieldDescriptions(columnCount);
-            this.fields = columns;
-            return new Prepared(statementId, parameterCount, columns);
+            Prepared prepared = readPrepared();
+            this.fields = prepared.fields();
+            return prepared;
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
+    }
+
+    /** The answer to a {@code COM_STMT_PREPARE}. */
+    private Prepared readPrepared() throws SQLException, IOException {
+        int first = channel.nextPacket();
+        WireBuffer in = channel.packet();
+        if (first == MyPackets.ERR) {
+            SQLException failure = serverError(in, "the server rejected the statement");
+            channel.endPacket();
+            closeIfConnectionFailure(failure);
+            throw failure;
+        }
+        in.skip(1);                                  // 0x00
+        int statementId = in.getIntLe();
+        int columnCount = in.getShortLe() & 0xffff;
+        int parameterCount = in.getShortLe() & 0xffff;
+        channel.endPacket();
+
+        // First the parameter descriptions, then the column ones.
+        skipFieldDescriptions(parameterCount);
+        List<Field> columns = readFieldDescriptions(columnCount);
+        return new Prepared(statementId, parameterCount, columns);
     }
 
     /** Runs a prepared statement; the rows arrive in binary. */
@@ -1938,11 +1957,31 @@ public final class MySession implements AutoCloseable {
         try {
             readOkOrError("resetting the connection");
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            reprepared.clear();
             throw brokenConnection(e);
         } catch (SQLException refused) {
+            reprepared.clear();
             channel.close();
             throw new SQLException("the session reset sent when the connection was last "
                     + "returned failed - the connection is closed", "08006", refused);
+        }
+        try {
+            for (String sql : reprepared) {
+                try {
+                    plans.put(sql, readPrepared());
+                } catch (SQLException gone) {
+                    if (!channel.isOpen()) {
+                        throw gone;
+                    }
+                    // A table dropped in the meantime, say: prepared again
+                    // when it is next asked for, and refused then, where
+                    // somebody is asking.
+                }
+            }
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw brokenConnection(e);
+        } finally {
+            reprepared.clear();
         }
     }
 
@@ -1954,16 +1993,29 @@ public final class MySession implements AutoCloseable {
      * connection sits in the pool.
      */
     public void resetConnectionLater() throws SQLException {
+        // The server drops every prepared statement with the rest. The ones
+        // this borrow used go back in right behind the reset, in the same
+        // write: a framework prepares the same few statements on every borrow,
+        // and preparing them again there would be a round trip per borrow that
+        // the server can do while the connection waits in the pool.
         try {
             command(COM_RESET_CONNECTION);
             channel.end();
+            for (String sql : usedSinceReset) {
+                if (plans.containsKey(sql)) {
+                    channel.beginCommand(COM_STMT_PREPARE).putText(sql);
+                    channel.end();
+                    reprepared.add(sql);
+                }
+            }
             channel.flush();
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            reprepared.clear();
             throw brokenConnection(e);
         }
         resetOwed = true;
-        // The server drops every prepared statement with the rest; see
-        // resetConnection. Closing them afterwards would name ids that are gone.
+        usedSinceReset.clear();
+        // Closing the old ones afterwards would name ids that are gone.
         plans.clear();
         pendingClose.clear();
     }
@@ -1979,6 +2031,7 @@ public final class MySession implements AutoCloseable {
             channel.end();
             channel.flush();
             readOkOrError("resetting the connection");
+            usedSinceReset.clear();
             // The server dropped every prepared statement with the rest. A
             // cached plan kept here would name a statement id that no longer
             // exists - "Unknown prepared statement handler" on its next use.
