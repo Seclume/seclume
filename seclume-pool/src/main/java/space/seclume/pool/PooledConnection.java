@@ -93,6 +93,12 @@ final class PooledConnection implements Connection {
     private boolean renewedOnce;
     /** Whether anything at all was asked of the connection while it was out. */
     private boolean used;
+    /**
+     * Whether the driver connection was reached at all - wider than
+     * {@link #used}: a validation or an abort does not make the session need
+     * a reset, but either can leave the driver closed underneath.
+     */
+    private boolean reached;
 
     /**
      * The state to restore comes from the entry, which read it when the
@@ -120,12 +126,9 @@ final class PooledConnection implements Connection {
      * behind the pool's back and the pool lost one connection per stream.
      */
     private void front(Connection handle) {
-        try {
-            if (delegate.isWrapperFor(space.seclume.internal.jdbc.Fronted.class)) {
-                delegate.unwrap(space.seclume.internal.jdbc.Fronted.class).front(handle);
-            }
-        } catch (SQLException | RuntimeException notOffered) {
-            // a driver that does not offer it hands out its own connection
+        space.seclume.internal.jdbc.Fronted fronted = entry.fronted();
+        if (fronted != null) {
+            fronted.front(handle);
         }
     }
 
@@ -192,7 +195,8 @@ final class PooledConnection implements Connection {
                 broken = true;
             }
         }
-        if (!broken && isDelegateGone()) {
+        // Not asked when the driver was never reached: nothing can have closed it.
+        if (!broken && (used || reached) && isDelegateGone()) {
             // The statement that killed it ran on the driver's own object and
             // never came through this class, so nothing marked it - see the
             // note on call(). Asking the driver costs nothing: a seclume
@@ -737,16 +741,19 @@ final class PooledConnection implements Connection {
 
     @Override
     public boolean isValid(int timeout) throws SQLException {
+        reached = true;
         return !closed && delegate.isValid(timeout);
     }
 
     @Override
     public void setClientInfo(String name, String value) throws SQLClientInfoException {
+        reached = true;
         delegate.setClientInfo(name, value);
     }
 
     @Override
     public void setClientInfo(Properties properties) throws SQLClientInfoException {
+        reached = true;
         delegate.setClientInfo(properties);
     }
 
@@ -789,6 +796,7 @@ final class PooledConnection implements Connection {
     @Override
     public void abort(Executor executor) throws SQLException {
         broken = true;
+        reached = true;
         delegate.abort(executor);
         close();
     }
@@ -819,7 +827,11 @@ final class PooledConnection implements Connection {
 
     @Override
     public boolean isWrapperFor(Class<?> iface) throws SQLException {
-        return iface.isInstance(this) || delegate.isWrapperFor(iface);
+        if (iface.isInstance(this)) {
+            return true;
+        }
+        reached = true;
+        return delegate.isWrapperFor(iface);
     }
 
     /**

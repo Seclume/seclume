@@ -45,8 +45,12 @@ public final class PgConnection
         space.seclume.SessionContext,
         space.seclume.OpenStatements {
 
-    /** The handle in front of this connection, while there is one - see {@link space.seclume.internal.jdbc.Fronted}. */
-    private volatile Connection front;
+    /**
+     * The handle in front of this connection, while there is one - see {@link space.seclume.internal.jdbc.Fronted}.
+     * Not volatile: written twice per borrow by the borrowing thread, and the
+     * pool's slot exchange hands the connection - and this - to the next one.
+     */
+    private Connection front;
 
     @Override
     public void front(Connection handle) {
@@ -180,8 +184,10 @@ public final class PgConnection
         for (PgStatement statement : List.copyOf(open)) {
             statement.close();
         }
-        session.flushPending();
-        session.execute("discard all");
+        // What waits rides along ahead of it; the answer to the reset is read
+        // before the next borrower's first message - not waited for here,
+        // where nobody needs it.
+        session.discardAllLater();
         idlePlans.clear();
         sessionState.clear();
         if (isolation != TRANSACTION_READ_COMMITTED) {

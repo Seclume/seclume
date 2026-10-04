@@ -44,8 +44,12 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
         space.seclume.SessionContext,
         space.seclume.OpenStatements {
 
-    /** The handle in front of this connection, while there is one - see {@link space.seclume.internal.jdbc.Fronted}. */
-    private volatile Connection front;
+    /**
+     * The handle in front of this connection, while there is one - see {@link space.seclume.internal.jdbc.Fronted}.
+     * Not volatile: written twice per borrow by the borrowing thread, and the
+     * pool's slot exchange hands the connection - and this - to the next one.
+     */
+    private Connection front;
 
     @Override
     public void front(Connection handle) {
@@ -162,7 +166,12 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
         int wantedIsolation = isolation;
         boolean wantedReadOnly = readOnly;
         session.dropPendingVariables();
-        reset();
+        // Sent now, answered before the next borrower's first command - not
+        // waited for here, where nobody needs the answer.
+        session.resetConnectionLater();
+        sessionState.clear();
+        autoCommit = true;
+        readOnly = false;
         isolation = TRANSACTION_REPEATABLE_READ;
         if (wantedIsolation != isolation) {
             setTransactionIsolation(wantedIsolation);
