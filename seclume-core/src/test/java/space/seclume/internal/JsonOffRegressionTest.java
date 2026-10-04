@@ -1,6 +1,7 @@
 package space.seclume.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.lang.foreign.Arena;
@@ -157,5 +158,18 @@ class JsonOffRegressionTest {
     void aValueLongerThanItsSpaceIsRefused() {
         assertThrows(JsonOff.NotFound.class,
                 () -> string("{\"p\": \"" + "y".repeat(300) + "\"}", "p"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {-1, 2, Integer.MAX_VALUE})
+    void documentLengthMustFitTheSourceSegment(int length) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment document = arena.allocate(1);
+            document.set(ValueLayout.JAVA_BYTE, 0, (byte) '"');
+            assertThrows(JsonOff.NotFound.class,
+                    () -> JsonOff.string(document, length, arena.allocate(8)));
+            assertThrows(JsonOff.NotFound.class, () -> JsonOff.number(document, length));
+            assertFalse(JsonOff.has(document, length));
+        }
     }
 }
