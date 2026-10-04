@@ -30,15 +30,17 @@ final class Doctor {
                     case "--json" -> json = true;
                     case "--pool-size" -> {
                         poolSize = Integer.valueOf(args[++i]);
-                        if (poolSize <= 0) throw new IllegalArgumentException();
+                        if (poolSize <= 0) throw new IllegalArgumentException("pool size must be positive");
                     }
                     default -> {
-                        if (url != null || args[i].startsWith("--")) throw new IllegalArgumentException();
+                        if (url != null || args[i].startsWith("--")) {
+                            throw new IllegalArgumentException("expected one JDBC URL and supported doctor options");
+                        }
                         url = args[i];
                     }
                 }
             }
-            if (url == null) throw new IllegalArgumentException();
+            if (url == null) throw new IllegalArgumentException("doctor requires a JDBC URL");
         } catch (IllegalArgumentException | IndexOutOfBoundsException invalid) {
             err.println("usage: --doctor [--json] [--pool-size positive-integer] <seclume jdbc url>");
             return 2;
@@ -93,7 +95,7 @@ final class Doctor {
                 return JdbcUrl.parse(url, new Properties(), prefix, port);
             }
         }
-        throw new IllegalArgumentException();
+        throw new IllegalArgumentException("doctor requires a supported seclume network JDBC URL");
     }
 
     private static void source(JdbcUrl.Parsed settings, Report report) {
