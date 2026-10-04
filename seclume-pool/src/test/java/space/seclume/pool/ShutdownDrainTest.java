@@ -9,6 +9,8 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -21,6 +23,13 @@ import org.junit.jupiter.api.Timeout;
  */
 @Timeout(30)
 class ShutdownDrainTest {
+
+    /**
+     * A thread per task. The common pool has one worker on a two-core machine,
+     * and a borrower parked in it left the close that should wake it no thread
+     * to run on - seen on a 2-vCPU EC2 instance, never on eight cores.
+     */
+    private static final Executor THREADS = Executors.newVirtualThreadPerTaskExecutor();
 
     @Test
     void aBorrowedConnectionThatComesBackInTimeIsNotCut() throws Exception {
@@ -35,7 +44,7 @@ class ShutdownDrainTest {
             } catch (SQLException e) {
                 throw new IllegalStateException(e);
             }
-        });
+        }, THREADS);
         long start = System.nanoTime();
         pool.close(Duration.ofSeconds(5));
         long took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
@@ -72,10 +81,10 @@ class ShutdownDrainTest {
             } catch (SQLException e) {
                 return e;
             }
-        });
+        }, THREADS);
         sleep(200);                                         // the waiter is parked
         CompletableFuture<Void> closing = CompletableFuture.runAsync(
-                () -> pool.close(Duration.ofSeconds(5)));
+                () -> pool.close(Duration.ofSeconds(5)), THREADS);
         Throwable told = waiter.get(3, TimeUnit.SECONDS);
         assertTrue(told instanceof SQLException && told.getMessage().contains("closed"),
                 "the waiter was not told the pool is closed: " + told);
