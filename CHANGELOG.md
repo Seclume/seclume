@@ -5,6 +5,22 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Faster: the pool's session reset no longer waits for the server
+
+- Since every used session is reset on return, PostgreSQL (`DISCARD ALL`) and MySQL
+  (`COM_RESET_CONNECTION`) waited a full round trip on every return. The reset is now sent on
+  return and its answer read before the next command goes out - no statement ever reaches a
+  session whose reset was not confirmed. A refused reset closes the connection (SQLState
+  08006) and the next borrower's statement is never sent (`DeferredDiscardTest`,
+  `ProtocolTest`). SQL Server already reset with the next request; Oracle is unchanged.
+- MySQL drops its prepared statements with the reset. The ones a borrow used are prepared
+  again in the same write as the reset, so the next borrower finds them ready instead of
+  paying a round trip each.
+- Borrow and return: the clock is read once per return instead of three times, the borrow
+  writes no volatile fields when leak detection is off, and the driver's handle link is
+  looked up once per connection. Bare borrow-and-return over the seclume driver went from
+  0.71 to 0.53 µs (HikariCP 0.55 µs, same machine and run conditions).
+
 ### Fixed: TLS wildcards cannot cover public suffixes
 
 - Certificate hostname checks now reject wildcards such as `*.co.uk` and
