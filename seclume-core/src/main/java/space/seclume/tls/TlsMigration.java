@@ -28,9 +28,7 @@ import space.seclume.secret.SecretScope;
  * <p><b>TLS 1.2</b> has no traffic secret, so a TLS 1.2 connection is
  * written as version {@value #VERSION_TLS12}: the same header and body, and
  * per direction the AES key followed by its four-byte salt instead of a
- * secret. A TLS 1.3 connection is still written as version {@value #VERSION},
- * so that a node that has not learnt version 2 keeps taking up the
- * connections it always could.
+ * secret. A TLS 1.3 connection is still written as version {@value #VERSION}.
  *
  * <p><b>This blob is key material.</b> Whoever reads these bytes can
  * decrypt and forge everything on the connection, in both directions. The
@@ -142,7 +140,7 @@ final class TlsMigration {
         int version = getInt(in, offset + 4);
         if (version != VERSION && version != VERSION_TLS12) {
             throw new IllegalArgumentException("this is a version " + version
-                    + " frozen connection and this node speaks versions " + VERSION + " and "
+                    + " frozen connection and this build reads versions " + VERSION + " and "
                     + VERSION_TLS12 + " - it must be closed rather than half understood");
         }
         boolean tls12 = version == VERSION_TLS12;

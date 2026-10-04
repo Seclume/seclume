@@ -44,8 +44,7 @@ import space.seclume.crypto.Hkdf;
  * sent in front of each record, and the additional data is sequence number,
  * type, version and plaintext length. The explicit part written here is the
  * sequence number - unique for the life of the key, which is all GCM needs.
- * There is no traffic secret and no KeyUpdate; what a moved connection carries
- * is the key and the salt themselves.
+ * There is no traffic secret and no KeyUpdate.
  */
 public final class RecordProtection implements AutoCloseable {
 
@@ -106,8 +105,7 @@ public final class RecordProtection implements AutoCloseable {
         this.tls12 = true;
         this.hash = hash;
         this.keyLength = keyLength;
-        // No traffic secret in TLS 1.2: what a moved connection needs is the
-        // key and the salt themselves, so those are what is kept.
+        // No traffic secret in TLS 1.2: the key and the salt are what is kept.
         this.secret = arena.allocate(keyLength + SALT);
         MemorySegment.copy(keyBlock, keyAt, secret, 0, keyLength);
         MemorySegment.copy(keyBlock, saltAt, secret, keyLength, SALT);

@@ -110,9 +110,8 @@ class TlsFreezeThawTest {
     }
 
     /**
-     * The same move for a TLS 1.2 connection - what a SQL Server on TDS 7.4 or
-     * an Oracle 19c listener gets. Written down as key and salt rather than a
-     * traffic secret, and taken up with TLS 1.2's record rules.
+     * The same for a TLS 1.2 connection: written down as key and salt rather
+     * than a traffic secret, and taken up with TLS 1.2's record rules.
      */
     @Test
     void aTls12ConnectionSurvivesBeingWrittenDownAndPickedUpAgain() throws Exception {
@@ -135,7 +134,7 @@ class TlsFreezeThawTest {
             TlsConnection after = TlsConnection.thaw(socket, frozen.segment(), 0, length);
             try {
                 assertTrue(after.description().startsWith("TLSv1.2"), after.description());
-                echo(after, "after the move");
+                echo(after, "after thawing");
                 echo(after, "and again");
             } finally {
                 after.close();
