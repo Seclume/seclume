@@ -92,11 +92,12 @@ jobs:
           done
           cat anvil-client.log
 
-      # One handshake at a time: the client starts one connection per trigger,
-      # all on the same port, and with two tests running at once a connection
-      # could meet the other test's server - a case then failed with "no
-      # messages received" while the client had answered correctly (04.10.2026,
-      # a different case in each run).
+      # One handshake at a time, so that one client connection cannot meet
+      # another test's server. Not the cause of the occasional
+      # RecordProtocol.invalidCiphertext failure (04.10.2026): that one happens
+      # when the client's Finished and its first application record reach
+      # TLS-Attacker in one TCP read - it logs sending the altered record, and
+      # the client, waiting at a record header, never receives a byte of it.
       - name: Run TLS-Anvil against it
         run: |
           mkdir -p anvil-out

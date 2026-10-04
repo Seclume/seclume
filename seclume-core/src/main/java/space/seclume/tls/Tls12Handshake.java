@@ -408,21 +408,47 @@ final class Tls12Handshake {
                 records.readWith(serverKeys);
                 serverKeys = null;
 
-                RecordStream.Incoming record = records.next();
-                if (record.contentType() != 22 || record.length() != Handshake.HEADER + VERIFY_DATA
-                        || Handshake.type(record.data(), record.offset()) != Handshake.FINISHED
-                        || Handshake.length(record.data(), record.offset()) != VERIFY_DATA) {
-                    throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
-                            "the server's first record under its new keys is not exactly its "
-                                    + "Finished");
+                // The Finished may come in as many records as the server likes
+                // (RFC 5246 section 6.2.1 lets it fragment any handshake message),
+                // but it is the only thing under the new keys, and nothing may
+                // follow it in the handshake protocol.
+                MemorySegment finishedMessage;
+                try (HandshakeReassembler finishedFlight = new HandshakeReassembler(
+                        Handshake.HEADER + VERIFY_DATA)) {
+                    while (finishedFlight.firstComplete() < 0) {
+                        RecordStream.Incoming record = records.next();
+                        if (record.contentType() != 22) {
+                            throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                                    "a record of type " + record.contentType() + " arrived "
+                                            + "where the server's Finished was due");
+                        }
+                        if (finishedFlight.buffered() + record.length()
+                                > Handshake.HEADER + VERIFY_DATA) {
+                            throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                                    "more handshake bytes under the server's new keys than its "
+                                            + "Finished");
+                        }
+                        finishedFlight.append(record.data(), record.offset(), record.length());
+                        if (finishedFlight.buffered() >= Handshake.HEADER
+                                && (Handshake.type(finishedFlight.segment(), 0) != Handshake.FINISHED
+                                        || Handshake.length(finishedFlight.segment(), 0)
+                                                != VERIFY_DATA)) {
+                            throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                                    "the server's first handshake message under its new keys is "
+                                            + "not a Finished of " + VERIFY_DATA + " bytes");
+                        }
+                    }
+                    finishedMessage = arena.allocate(Handshake.HEADER + VERIFY_DATA);
+                    MemorySegment.copy(finishedFlight.segment(), 0, finishedMessage, 0,
+                            Handshake.HEADER + VERIFY_DATA);
                 }
                 transcript.current(hashed, 0);
                 MemorySegment expected = arena.allocate(VERIFY_DATA);
                 try {
                     Tls12Prf.derive(hash, masterSecret, "server finished", hashed, expected, 0,
                             VERIFY_DATA);
-                    if (!ConstantTime.equals(expected, 0, record.data(),
-                            record.offset() + Handshake.HEADER, VERIFY_DATA)) {
+                    if (!ConstantTime.equals(expected, 0, finishedMessage, Handshake.HEADER,
+                            VERIFY_DATA)) {
                         throw new TlsProtocolException(TlsAlertException.DECRYPT_ERROR,
                                 "the server's Finished does not match the handshake we saw - "
                                         + "somebody changed a message in flight");
