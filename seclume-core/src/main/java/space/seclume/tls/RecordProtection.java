@@ -375,8 +375,19 @@ public final class RecordProtection implements AutoCloseable {
         }
         nonce12(out, outOffset + HEADER);
         additional12(contentType, length);
-        key.encrypt(nonce, 0, additional, 0, ADDITIONAL, plain, offset, length,
-                out, outOffset + HEADER + EXPLICIT);
+        // Through the native content buffer, as for TLS 1.3: the caller's
+        // plaintext may be an application's heap buffer, and the copy here is
+        // wiped once the record is sealed.
+        MemorySegment content = content();
+        if (length > 0) {
+            MemorySegment.copy(plain, offset, content, 0, length);
+        }
+        try {
+            key.encrypt(nonce, 0, additional, 0, ADDITIONAL, content, 0, length,
+                    out, outOffset + HEADER + EXPLICIT);
+        } finally {
+            content.asSlice(0, length).fill((byte) 0);
+        }
         sequence++;
         return HEADER + body;
     }

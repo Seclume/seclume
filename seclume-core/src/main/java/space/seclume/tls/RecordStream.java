@@ -37,11 +37,18 @@ import space.seclume.internal.Transport;
  *       remember to check for one will eventually not, and the failure then
  *       looks like a protocol bug instead of the peer's stated reason.
  * </ul>
+ *
+ * <p><b>TLS 1.2</b> ({@link #tls12()}) changes the first two. ChangeCipherSpec
+ * is the signal that the peer's keys change, so the one it may send is handed
+ * to the handshake instead of swallowed; and the content type is the header's,
+ * since TLS 1.2 does not hide it.
  */
 final class RecordStream implements AutoCloseable {
 
     /** A protected record may exceed the plaintext limit by a tag and the inner type. */
     static final int MAX_CIPHERTEXT = (1 << 14) + 256;
+    /** RFC 5246 section 6.2.3: TLS 1.2 allows 2048 bytes of expansion. */
+    static final int MAX_CIPHERTEXT_12 = (1 << 14) + 2048;
     static final int MAX_PLAINTEXT = 1 << 14;
 
     /** What one record turned out to carry. */
@@ -66,9 +73,21 @@ final class RecordStream implements AutoCloseable {
 
     RecordStream(Transport transport) {
         this.transport = transport;
-        this.incoming = arena.allocate(RecordProtection.HEADER + MAX_CIPHERTEXT);
+        this.incoming = arena.allocate(RecordProtection.HEADER + MAX_CIPHERTEXT_12);
         this.opened = arena.allocate(MAX_CIPHERTEXT);
         this.outgoing = arena.allocate(RecordProtection.HEADER + MAX_CIPHERTEXT);
+    }
+
+    /** Whether the records follow TLS 1.2's rules rather than TLS 1.3's. */
+    private boolean tls12;
+
+    /** The server chose TLS 1.2: ChangeCipherSpec matters, the type is in the clear. */
+    void tls12() {
+        tls12 = true;
+    }
+
+    boolean isTls12() {
+        return tls12;
     }
 
     /** Takes over the keys for one direction; the old ones are closed. */
@@ -89,6 +108,11 @@ final class RecordStream implements AutoCloseable {
     /** The handshake is over: from now on a ChangeCipherSpec is a protocol error. */
     void established() {
         established = true;
+    }
+
+    /** The transport the records travel over. */
+    Transport transport() {
+        return transport;
     }
 
     /** Puts a different transport underneath, keeping both keys as they are. */
@@ -116,12 +140,25 @@ final class RecordStream implements AutoCloseable {
             readFully(RecordProtection.HEADER, 0);
             int type = byteAt(incoming, 0);
             int length = (byteAt(incoming, 3) << 8) | byteAt(incoming, 4);
-            if (length > (reading == null ? MAX_PLAINTEXT : MAX_CIPHERTEXT)) {
+            if (length > (reading == null ? MAX_PLAINTEXT
+                    : tls12 ? MAX_CIPHERTEXT_12 : MAX_CIPHERTEXT)) {
                 throw new TlsProtocolException(TlsAlertException.RECORD_OVERFLOW,
                         "a record announced " + length + " bytes, more than TLS allows");
             }
             readFully(length, RecordProtection.HEADER);
 
+            if (type == 20 && tls12) {
+                // TLS 1.2: the peer's keys change after this one-byte record,
+                // once per handshake and never afterwards. The handshake that
+                // has to switch them is the one that gets it.
+                if (established || reading != null || length != 1
+                        || byteAt(incoming, RecordProtection.HEADER) != 1
+                        || ++changeCipherSpecs > 1) {
+                    throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                            "a ChangeCipherSpec where TLS 1.2 allows none");
+                }
+                return new Incoming(type, incoming, RecordProtection.HEADER, length);
+            }
             if (type == 20) {
                 // ChangeCipherSpec: legacy noise, never in the transcript - but
                 // RFC 8446 section 5 allows exactly the one-byte 0x01 during the
@@ -145,6 +182,9 @@ final class RecordStream implements AutoCloseable {
                             "an empty record of type " + type);
                 }
                 return new Incoming(type, incoming, RecordProtection.HEADER, length);
+            }
+            if (tls12) {
+                return openTls12(type, length);
             }
             if (type != 23) {
                 throw new IOException("a record of type " + type + " arrived after encryption "
@@ -178,6 +218,41 @@ final class RecordStream implements AutoCloseable {
             }
             return new Incoming(result.contentType(), opened, 0, result.length());
         }
+    }
+
+    /**
+     * A TLS 1.2 record under keys: the type is the header's, and an empty
+     * record is allowed only for application data (RFC 5246 section 6.2.1).
+     */
+    private Incoming openTls12(int type, int length) throws IOException {
+        if (type != 21 && type != 22 && type != 23) {
+            throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                    "a record of type " + type + " arrived after encryption started");
+        }
+        if (reading.usedUp()) {
+            throw new IOException("the peer's record sequence number would wrap round - "
+                    + "the connection ends here");
+        }
+        RecordProtection.Opened result;
+        try {
+            result = reading.open(incoming, 0, RecordProtection.HEADER + length, opened, 0);
+        } catch (IllegalArgumentException tooLong) {
+            throw new TlsProtocolException(TlsAlertException.RECORD_OVERFLOW,
+                    "an encrypted record holds more than 2^14 bytes of content");
+        }
+        if (result == null) {
+            throw new TlsProtocolException(TlsAlertException.BAD_RECORD_MAC,
+                    "a record did not authenticate - the key, the sequence number or the "
+                            + "bytes themselves are wrong");
+        }
+        if (result.contentType() == 21) {
+            throw alert(opened, 0, result.length());
+        }
+        if (result.length() == 0 && result.contentType() != RecordProtection.APPLICATION_DATA) {
+            throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                    "an empty record of type " + result.contentType());
+        }
+        return new Incoming(result.contentType(), opened, 0, result.length());
     }
 
     /** Writes one record, protected if keys are in force, split by the caller if too long. */

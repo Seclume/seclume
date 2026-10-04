@@ -1,9 +1,11 @@
 package space.seclume.tls;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -70,12 +72,41 @@ class TlsVersionRefusedTest {
         }
     }
 
-    /** SQL Server's TDS 7.x, Oracle 19c, MySQL 5.7: TLS 1.2 and nothing newer. */
+    /**
+     * SQL Server's TDS 7.x, Oracle 19c, MySQL 5.7: TLS 1.2 and nothing newer -
+     * reached on the own stack, with the same data going both ways.
+     */
     @Test
-    void aTls12ServerRefusesTheVersion() throws Exception {
+    void aTls12ServerIsReachedOnTheOwnStack() throws Exception {
         try (EchoServer server = EchoServer.start(serverContext,
-                socket -> socket.setEnabledProtocols(new String[] {"TLSv1.2"}))) {
-            assertInstanceOf(TlsVersionRefused.class, ownStack(server.port(), false));
+                socket -> socket.setEnabledProtocols(new String[] {"TLSv1.2"}));
+                Transport socket = SocketTransport.wrap(java.nio.channels.SocketChannel.open(
+                        new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port())));
+                space.seclume.internal.TlsLayer tls = TlsLayers.start(TlsStack.SECLUME, socket,
+                        HOSTNAME, server.port(), false)) {
+            String description = tls.description();
+            assertTrue(description.startsWith("TLSv1.2 / TLS_ECDHE_")
+                    && description.endsWith(" (seclume)"), description);
+            byte[] sent = "a TLS 1.2 record, there and back".getBytes(
+                    java.nio.charset.StandardCharsets.US_ASCII);
+            tls.write(java.nio.ByteBuffer.wrap(sent));
+            java.nio.ByteBuffer back = java.nio.ByteBuffer.allocate(sent.length);
+            while (back.hasRemaining()) {
+                assertTrue(tls.read(back) >= 0, "the echo ended early");
+            }
+            assertArrayEquals(sent, back.array());
+        }
+    }
+
+    /** Kept to TLS 1.3 ({@code -Dseclume.tls.tls12=false}), the same server refuses the version. */
+    @Test
+    void aTls12ServerRefusesTheVersionWhenOnlyThirteenIsOffered() throws Exception {
+        try (EchoServer server = EchoServer.start(serverContext,
+                socket -> socket.setEnabledProtocols(new String[] {"TLSv1.2"}));
+                Transport socket = SocketTransport.wrap(java.nio.channels.SocketChannel.open(
+                        new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port())))) {
+            assertThrows(TlsVersionRefused.class, () -> ClientHandshake.connect(socket, HOSTNAME,
+                    null, null, null, ClientHello.Offer.TLS13).close());
         }
     }
 

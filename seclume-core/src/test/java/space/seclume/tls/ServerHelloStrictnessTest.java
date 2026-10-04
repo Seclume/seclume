@@ -1,6 +1,7 @@
 package space.seclume.tls;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -240,18 +241,32 @@ class ServerHelloStrictnessTest {
     }
 
     /**
-     * Without supported_versions the header decides nothing, and TLS 1.3 was
-     * not chosen - refused with protocol_version, and reported as the one
-     * refusal tlsStack=auto answers with the JDK's stack.
+     * Offering TLS 1.3 alone, a ServerHello without supported_versions did not
+     * choose it - refused with protocol_version, as a refusal of the version.
      */
     @Test
     void withoutSupportedVersionsTheServerDidNotChooseThirteen() {
         Peer peer = new Peer(id -> serverHello(id, p256Share(), false));
         TlsVersionRefused refused = assertThrows(TlsVersionRefused.class,
-                () -> ClientHandshake.connectWithoutAuthenticating(peer, "db.example.com"));
+                () -> ClientHandshake.connect(peer, "db.example.com", null, null, null,
+                        ClientHello.Offer.TLS13));
         assertEquals(TlsAlertException.PROTOCOL_VERSION,
                 ((TlsProtocolException) refused.getCause()).alert());
         assertEquals(TlsAlertException.PROTOCOL_VERSION, peer.alertSent());
+    }
+
+    /**
+     * With TLS 1.2 on offer, the same ServerHello is a TLS 1.2 one - and its
+     * TLS 1.3 cipher suite was never offered for TLS 1.2. Refused as a protocol
+     * error, not as a version this client lacks: the hello was understood.
+     */
+    @Test
+    void withoutSupportedVersionsATlsThirteenSuiteIsNotATwelveOne() {
+        Peer peer = new Peer(id -> serverHello(id, p256Share(), false));
+        TlsProtocolException refused = assertThrows(TlsProtocolException.class,
+                () -> ClientHandshake.connectWithoutAuthenticating(peer, "db.example.com"));
+        assertEquals(TlsAlertException.ILLEGAL_PARAMETER, refused.alert(), refused.getMessage());
+        assertEquals(TlsAlertException.ILLEGAL_PARAMETER, peer.alertSent());
     }
 
     @Test

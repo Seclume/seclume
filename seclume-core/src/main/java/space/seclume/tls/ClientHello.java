@@ -23,7 +23,44 @@ public final class ClientHello {
     public static final int X25519 = 0x001d;
     public static final int SECP256R1 = 0x0017;
     private static final int TLS13 = 0x0304;
+    private static final int TLS12 = 0x0303;
     private static final int SIGNATURE_ALGORITHMS_CERT = 50;
+
+    /** TLS 1.2 suites: ECDHE and AES-GCM only - see {@link Offer#TLS13_AND_12}. */
+    public static final int ECDHE_ECDSA_AES_256_GCM_SHA384 = 0xC02C;
+    public static final int ECDHE_RSA_AES_256_GCM_SHA384 = 0xC030;
+    public static final int ECDHE_ECDSA_AES_128_GCM_SHA256 = 0xC02B;
+    public static final int ECDHE_RSA_AES_128_GCM_SHA256 = 0xC02F;
+    /** RFC 5746: no renegotiation was ever done on this connection, because none ever is. */
+    private static final int EMPTY_RENEGOTIATION_INFO_SCSV = 0x00FF;
+    /** RFC 4492: ec_point_formats, uncompressed only. */
+    public static final int EXTENSION_EC_POINT_FORMATS = 11;
+    /** RFC 7627: extended_master_secret. */
+    public static final int EXTENSION_EXTENDED_MASTER_SECRET = 23;
+    /** RFC 5746: renegotiation_info. */
+    public static final int EXTENSION_RENEGOTIATION_INFO = 0xff01;
+
+    /**
+     * Which versions a ClientHello offers.
+     *
+     * <p>TLS 1.2 is offered as a deliberately small profile: ECDHE on P-256,
+     * AES-GCM, the extended master secret, and nothing else - no static RSA
+     * key exchange, no CBC, no renegotiation, no resumption. Those are the
+     * parts of TLS 1.2 whose history is padding oracles and Lucky13; leaving
+     * them out leaves a protocol whose record layer is the same AEAD as TLS
+     * 1.3's and whose key exchange is the same group.
+     */
+    public enum Offer {
+        /** TLS 1.3 alone. */
+        TLS13,
+        /** TLS 1.3 first, the TLS 1.2 profile for a server without it. */
+        TLS13_AND_12,
+        /**
+         * The TLS 1.2 profile alone - for TDS 7.4, whose handshake inside the
+         * pre-login packets cannot carry TLS 1.3 at all.
+         */
+        TLS12
+    }
 
     private ClientHello() {
     }
@@ -90,6 +127,21 @@ public final class ClientHello {
     public static int write(MemorySegment out, long offset, MemorySegment random,
             MemorySegment sessionId, int[] groups, MemorySegment[] publicShares,
             String serverName, String alpn) {
+        return write(out, offset, random, sessionId, groups, publicShares, serverName, alpn,
+                Offer.TLS13);
+    }
+
+    /**
+     * As above, saying which versions are offered. With TLS 1.2 in the offer
+     * the groups are still the key shares' groups, and a TLS 1.2 server picks
+     * one of them for its ServerKeyExchange - in practice P-256, the only one
+     * TLS 1.2 can use.
+     */
+    public static int write(MemorySegment out, long offset, MemorySegment random,
+            MemorySegment sessionId, int[] groups, MemorySegment[] publicShares,
+            String serverName, String alpn, Offer offer) {
+        boolean offers13 = offer != Offer.TLS12;
+        boolean offers12 = offer != Offer.TLS13;
         if (groups.length == 0 || groups.length != publicShares.length) {
             throw new IllegalArgumentException("one public share per group");
         }
@@ -121,9 +173,17 @@ public final class ClientHello {
         // certificate signatures (24), key_share (6 + the shares), optional
         // server_name (9 + name).
         int alpnLength = alpn == null ? 0 : 4 + 2 + 1 + alpn.length();
-        int extensions = 7 + 6 + 2 * groups.length + 18 + 24 + 6 + sharesLength
+        // supported_versions with one or two versions, and the key shares, only
+        // where TLS 1.3 is offered; ec_point_formats (6), extended_master_secret
+        // (4) and three more signature schemes (6) only where TLS 1.2 is.
+        int versionsLength = offers13 ? (offers12 ? 9 : 7) : 0;
+        int signaturesLength = 18 + (offers12 ? 6 : 0);
+        int extensions = versionsLength + 6 + 2 * groups.length + signaturesLength + 24
+                + (offers13 ? 6 + sharesLength : 0)
+                + (offers12 ? 6 + 4 : 0)
                 + (name == null ? 0 : 9 + name.length()) + alpnLength;
-        int body = 2 + 32 + 1 + sessionLength + 2 + 4 + 1 + 1 + 2 + extensions;
+        int suites = (offers13 ? 4 : 0) + (offers12 ? 10 : 0);
+        int body = 2 + 32 + 1 + sessionLength + 2 + suites + 1 + 1 + 2 + extensions;
         int length = Handshake.HEADER + body;
         // Validate the entire output range before writing anything.
         ByteBuffer buffer = out.asSlice(offset, length).asByteBuffer();
@@ -132,8 +192,17 @@ public final class ClientHello {
         buffer.putShort((short) Handshake.LEGACY_VERSION);
         buffer.put(random.asByteBuffer());
         buffer.put((byte) sessionLength).put(sessionId.asByteBuffer());
-        buffer.putShort((short) 4);
-        buffer.putShort((short) AES_256_GCM_SHA384).putShort((short) AES_128_GCM_SHA256);
+        buffer.putShort((short) suites);
+        if (offers13) {
+            buffer.putShort((short) AES_256_GCM_SHA384).putShort((short) AES_128_GCM_SHA256);
+        }
+        if (offers12) {
+            buffer.putShort((short) ECDHE_ECDSA_AES_256_GCM_SHA384)
+                    .putShort((short) ECDHE_RSA_AES_256_GCM_SHA384)
+                    .putShort((short) ECDHE_ECDSA_AES_128_GCM_SHA256)
+                    .putShort((short) ECDHE_RSA_AES_128_GCM_SHA256)
+                    .putShort((short) EMPTY_RENEGOTIATION_INFO_SCSV);
+        }
         buffer.put((byte) 1).put((byte) 0); // only null legacy compression
         buffer.putShort((short) extensions);
 
@@ -145,18 +214,29 @@ public final class ClientHello {
                 buffer.put((byte) name.charAt(i));
             }
         }
-        extension(buffer, Handshake.EXTENSION_SUPPORTED_VERSIONS, 3);
-        buffer.put((byte) 2).putShort((short) TLS13);
+        if (offers13) {
+            extension(buffer, Handshake.EXTENSION_SUPPORTED_VERSIONS, offers12 ? 5 : 3);
+            buffer.put((byte) (offers12 ? 4 : 2)).putShort((short) TLS13);
+            if (offers12) {
+                buffer.putShort((short) TLS12);
+            }
+        }
         extension(buffer, Handshake.EXTENSION_SUPPORTED_GROUPS, 2 + 2 * groups.length);
         buffer.putShort((short) (2 * groups.length));
         for (int group : groups) {
             buffer.putShort((short) group);
         }
 
-        // CertificateVerify: RSA-PSS with rsaEncryption keys, or ECDSA.
-        extension(buffer, Handshake.EXTENSION_SIGNATURE_ALGORITHMS, 14);
-        buffer.putShort((short) 12);
+        // CertificateVerify: RSA-PSS with rsaEncryption keys, or ECDSA. With
+        // TLS 1.2 on offer, RSA PKCS#1 v1.5 as well - for its ServerKeyExchange
+        // only: RFC 8446 section 4.2.3 forbids a TLS 1.3 server to use it, and
+        // the TLS 1.3 path does not accept it.
+        extension(buffer, Handshake.EXTENSION_SIGNATURE_ALGORITHMS, signaturesLength - 4);
+        buffer.putShort((short) (signaturesLength - 6));
         signatures(buffer);
+        if (offers12) {
+            buffer.putShort((short) 0x0401).putShort((short) 0x0501).putShort((short) 0x0601);
+        }
         // Certificates may additionally be signed with RSA PKCS#1 v1.5.
         // Those schemes are deliberately absent from CertificateVerify's list.
         extension(buffer, SIGNATURE_ALGORITHMS_CERT, 20);
@@ -164,11 +244,18 @@ public final class ClientHello {
         signatures(buffer);
         buffer.putShort((short) 0x0401).putShort((short) 0x0501).putShort((short) 0x0601);
 
-        extension(buffer, Handshake.EXTENSION_KEY_SHARE, 2 + sharesLength);
-        buffer.putShort((short) sharesLength);
-        for (int i = 0; i < groups.length; i++) {
-            buffer.putShort((short) groups[i]).putShort((short) publicShares[i].byteSize());
-            buffer.put(publicShares[i].asByteBuffer());
+        if (offers13) {
+            extension(buffer, Handshake.EXTENSION_KEY_SHARE, 2 + sharesLength);
+            buffer.putShort((short) sharesLength);
+            for (int i = 0; i < groups.length; i++) {
+                buffer.putShort((short) groups[i]).putShort((short) publicShares[i].byteSize());
+                buffer.put(publicShares[i].asByteBuffer());
+            }
+        }
+        if (offers12) {
+            extension(buffer, EXTENSION_EC_POINT_FORMATS, 2);
+            buffer.put((byte) 1).put((byte) 0);              // uncompressed
+            extension(buffer, EXTENSION_EXTENDED_MASTER_SECRET, 0);
         }
 
         if (alpn != null) {

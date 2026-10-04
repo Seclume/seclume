@@ -18,7 +18,8 @@ import space.seclume.secret.SecretScope;
 /**
  * A complete TLS 1.3 client handshake, from ClientHello to the first
  * application record - the piece that turns everything else in this package
- * into a connection.
+ * into a connection. A server that answers with TLS 1.2 is carried on by
+ * {@link Tls12Handshake}, in a deliberately small profile described there.
  *
  * <p>What it does not do is as much the design as what it does. There is no
  * PSK, no session resumption, no 0-RTT, no client certificate, no
@@ -55,7 +56,34 @@ public final class ClientHandshake {
         (byte) 0x07, (byte) 0x9E, (byte) 0x09, (byte) 0xE2, (byte) 0xC8, (byte) 0xA8,
         (byte) 0x33, (byte) 0x9C};
 
+    /**
+     * RFC 8446 section 4.1.3: a TLS 1.3 server that negotiates TLS 1.2 ends its
+     * random with these eight bytes. Seen while we offered TLS 1.3, it means
+     * somebody in between removed our offer - a downgrade, refused.
+     */
+    private static final byte[] DOWNGRADE_TLS12 = {
+        0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01};
+
     private ClientHandshake() {
+    }
+
+    /**
+     * Which versions this client offers by default: TLS 1.3 and the TLS 1.2
+     * profile, unless {@code -Dseclume.tls.tls12=false} keeps it to TLS 1.3.
+     */
+    static ClientHello.Offer defaultOffer() {
+        return "false".equalsIgnoreCase(System.getProperty("seclume.tls.tls12"))
+                ? ClientHello.Offer.TLS13 : ClientHello.Offer.TLS13_AND_12;
+    }
+
+    /**
+     * Connects offering exactly the versions given - {@link ClientHello.Offer#TLS12}
+     * for TDS 7.4, whose handshake inside the pre-login packets cannot be TLS 1.3.
+     */
+    public static TlsConnection connect(Transport transport, String host,
+            CertificateTrust trust, ClientIdentity identity, String alpn,
+            ClientHello.Offer offer) throws IOException {
+        return handshake(transport, host, trust, identity, alpn, offer);
     }
 
     /**
@@ -146,6 +174,14 @@ public final class ClientHandshake {
 
     private static TlsConnection handshake(Transport transport, String host,
             CertificateTrust trust, ClientIdentity identity, String alpn) throws IOException {
+        return handshake(transport, host, trust, identity, alpn, defaultOffer());
+    }
+
+    private static TlsConnection handshake(Transport transport, String host,
+            CertificateTrust trust, ClientIdentity identity, String alpn,
+            ClientHello.Offer offer) throws IOException {
+        boolean offers13 = offer != ClientHello.Offer.TLS12;
+        boolean offers12 = offer != ClientHello.Offer.TLS13;
         RecordStream records = new RecordStream(transport);
         List<X509Certificate> serverChain = new ArrayList<>();
         boolean done = false;
@@ -153,9 +189,10 @@ public final class ClientHandshake {
         boolean helloAccepted = false;
         try (Arena arena = Arena.ofConfined();
                 NativeP256 keyExchange = NativeP256.generate();
-                space.seclume.crypto.HybridMlKem hybrid = postQuantum()
+                space.seclume.crypto.HybridMlKem hybrid = offers13 && postQuantum()
                         ? space.seclume.crypto.HybridMlKem.generate() : null;
-                SecretScope shared = SecretScope.allocate(space.seclume.crypto.HybridMlKem.SECRET)) {
+                SecretScope shared = SecretScope.allocate(space.seclume.crypto.HybridMlKem.SECRET);
+                HandshakeReassembler plainFlight = new HandshakeReassembler(1 << 20)) {
 
             // ---- ClientHello ------------------------------------------------
             MemorySegment random = arena.allocate(32);
@@ -174,27 +211,54 @@ public final class ClientHandshake {
                 hybrid.publicShare(hybridShare);
                 helloLength = ClientHello.write(hello, 0, random, sessionId,
                         new int[] {ClientHello.X25519MLKEM768, ClientHello.SECP256R1},
-                        new MemorySegment[] {hybridShare, publicShare}, serverNameFor(host), alpn);
+                        new MemorySegment[] {hybridShare, publicShare}, serverNameFor(host), alpn,
+                        offer);
             } else {
                 helloLength = ClientHello.write(hello, 0, random, sessionId,
-                        ClientHello.SECP256R1, publicShare, serverNameFor(host), alpn);
+                        new int[] {ClientHello.SECP256R1}, new MemorySegment[] {publicShare},
+                        serverNameFor(host), alpn, offer);
             }
             records.write((byte) 22, hello, 0, helloLength);
 
             // ---- ServerHello ------------------------------------------------
-            RecordStream.Incoming first = records.next();
-            if (first.contentType() != 22
-                    || Handshake.type(first.data(), first.offset()) != Handshake.SERVER_HELLO) {
+            // Read as a handshake message rather than as a record: a TLS 1.2
+            // server commonly sends ServerHello, Certificate, ServerKeyExchange
+            // and ServerHelloDone in one record, and what follows the
+            // ServerHello stays in the reassembler for the rest of the flight.
+            int serverHelloLength;
+            while ((serverHelloLength = plainFlight.firstComplete()) < 0) {
+                RecordStream.Incoming record = records.next();
+                if (record.contentType() != 22) {
+                    throw new IOException("the server answered the ClientHello with something "
+                            + "that is not a ServerHello");
+                }
+                plainFlight.append(record.data(), record.offset(), record.length());
+            }
+            if (Handshake.type(plainFlight.segment(), 0) != Handshake.SERVER_HELLO) {
                 throw new IOException("the server answered the ClientHello with something that "
                         + "is not a ServerHello");
             }
-            int serverHelloLength = Handshake.totalLength(first.data(), first.offset());
-            if (serverHelloLength != first.length()) {
-                throw new IOException("the ServerHello does not fill its record - this client "
-                        + "does not reassemble a split ServerHello");
-            }
             MemorySegment serverHello = arena.allocate(serverHelloLength);
-            MemorySegment.copy(first.data(), first.offset(), serverHello, 0, serverHelloLength);
+            MemorySegment.copy(plainFlight.segment(), 0, serverHello, 0, serverHelloLength);
+            plainFlight.discard(serverHelloLength);
+
+            if (negotiatedVersion(serverHello, offers13, offers12) == 0x0303) {
+                if (offers13) {
+                    refuseDowngrade(serverHello);
+                }
+                helloAccepted = true;
+                TlsConnection connection = tls12(records, plainFlight, serverHello, hello,
+                        helloLength, random, keyExchange, host, trust, identity, alpn,
+                        serverChain, arena);
+                done = true;
+                return connection;
+            }
+            if (plainFlight.buffered() > 0) {
+                // RFC 8446 section 5.1: no handshake message may span a key
+                // change, and the ServerHello is followed by one.
+                throw new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                        "handshake bytes followed the TLS 1.3 ServerHello in the clear");
+            }
             ServerHelloFacts facts = readServerHello(serverHello, sessionId, hybrid != null);
             helloAccepted = true;
 
@@ -306,7 +370,7 @@ public final class ClientHandshake {
             // after the handshake that checked it - and for the preflight
             // report, which has to be able to say what was actually agreed
             // rather than what was offered.
-            connection.describe(serverChain.isEmpty() ? null : serverChain.get(0),
+            connection.describe(serverChain.isEmpty() ? null : serverChain.get(0), "TLSv1.3",
                     facts.cipherSuite());
             if (presented) {
                 // In TLS 1.3 the server judges our certificate after our
@@ -369,6 +433,103 @@ public final class ClientHandshake {
                 + "sent, which is how a server refuses one: check that it trusts the "
                 + "certificate's issuer, and that the certificate is valid and meant for "
                 + "client authentication", gone);
+    }
+
+    /**
+     * Which version the ServerHello chose: {@code supported_versions} if it is
+     * there, and then it has to say TLS 1.3; the header's {@code legacy_version}
+     * otherwise, and then it has to say TLS 1.2 (RFC 8446 section 4.2.1).
+     */
+    private static int negotiatedVersion(MemorySegment serverHello, boolean offers13,
+            boolean offers12) throws IOException {
+        long body = Handshake.HEADER;
+        int[] selected = {-1};
+        long extensionsField = Handshake.sessionIdOffset(body)
+                + Handshake.sessionIdLength(serverHello, body) + 3;
+        if (extensionsField + 2 <= serverHello.byteSize()) {
+            int extensionsLength = Handshake.u16(serverHello, extensionsField);
+            long at = extensionsField + 2;
+            long end = Math.min(serverHello.byteSize(), at + extensionsLength);
+            while (end - at >= 4) {
+                int type = Handshake.u16(serverHello, at);
+                int length = Handshake.u16(serverHello, at + 2);
+                if (type == Handshake.EXTENSION_SUPPORTED_VERSIONS && length == 2
+                        && at + 6 <= end) {
+                    selected[0] = Handshake.selectedVersion(serverHello, at + 4);
+                }
+                at += 4 + length;
+            }
+        }
+        if (selected[0] == 0x0304 && offers13) {
+            return 0x0304;
+        }
+        if (selected[0] >= 0) {
+            throw new TlsProtocolException(selected[0] == 0x0303
+                            ? TlsAlertException.ILLEGAL_PARAMETER : TlsAlertException.PROTOCOL_VERSION,
+                    "the server's supported_versions says 0x" + Integer.toHexString(selected[0])
+                            + ", which was not offered");
+        }
+        int legacy = Handshake.u16(serverHello, body);
+        if (legacy == 0x0303 && offers12) {
+            return 0x0303;
+        }
+        throw new TlsProtocolException(TlsAlertException.PROTOCOL_VERSION,
+                "the server did not select "
+                        + (offers12 ? (offers13 ? "TLS 1.3 or TLS 1.2" : "TLS 1.2") : "TLS 1.3")
+                        + " - its ServerHello says 0x" + Integer.toHexString(legacy)
+                        + " and no supported_versions");
+    }
+
+    /** The RFC 8446 downgrade sentinel, refused when TLS 1.3 was on offer. */
+    private static void refuseDowngrade(MemorySegment serverHello) throws TlsProtocolException {
+        long tail = Handshake.randomOffset(Handshake.HEADER) + 24;
+        if (serverHello.asSlice(tail, 8).mismatch(MemorySegment.ofArray(DOWNGRADE_TLS12)) == -1) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the server negotiated TLS 1.2 and its random says it supports TLS 1.3 - "
+                            + "somebody between us removed TLS 1.3 from the ClientHello");
+        }
+    }
+
+    /** The TLS 1.2 path, from a checked ServerHello to an established connection. */
+    private static TlsConnection tls12(RecordStream records, HandshakeReassembler plainFlight,
+            MemorySegment serverHello, MemorySegment hello, int helloLength,
+            MemorySegment clientRandom, NativeP256 keyExchange, String host,
+            CertificateTrust trust, ClientIdentity identity, String alpn,
+            List<X509Certificate> serverChain, Arena arena) throws IOException {
+        records.tls12();
+        long body = Handshake.HEADER;
+        Tls12Handshake.Suite suite = Tls12Handshake.suite(Handshake.cipherSuite(serverHello, body));
+        long compression = Handshake.sessionIdOffset(body)
+                + Handshake.sessionIdLength(serverHello, body) + 2;
+        if (serverHello.get(ValueLayout.JAVA_BYTE, compression) != 0) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the ServerHello names a compression method; none was offered");
+        }
+        Tls12Handshake.readServerHelloExtensions(serverHello, compression + 1,
+                serverNameFor(host) != null, alpn);
+        MemorySegment serverRandom = serverHello.asSlice(Handshake.randomOffset(body), 32);
+        java.io.ByteArrayOutputStream log = null;
+        if (identity != null) {
+            // TLS 1.2 signs the handshake messages themselves, not their hash.
+            log = new java.io.ByteArrayOutputStream();
+            log.writeBytes(hello.asSlice(0, helloLength).toArray(ValueLayout.JAVA_BYTE));
+            log.writeBytes(serverHello.toArray(ValueLayout.JAVA_BYTE));
+        }
+        Tls12Handshake.Outcome outcome;
+        try (TranscriptHash transcript = new TranscriptHash(suite.hash())) {
+            transcript.update(hello, 0, helloLength);
+            transcript.update(serverHello, 0, (int) serverHello.byteSize());
+            outcome = Tls12Handshake.finish(records, plainFlight, transcript, suite, clientRandom,
+                    serverRandom, keyExchange, host, trust, identity, serverChain, log, arena);
+        }
+        records.established();
+        TlsConnection connection = new TlsConnection(records.transport(), records);
+        connection.describe(serverChain.isEmpty() ? null : serverChain.get(0), "TLSv1.2",
+                outcome.cipherSuite());
+        if (outcome.presented()) {
+            connection.certificatePresented();
+        }
+        return connection;
     }
 
     /** What a ServerHello has to tell us, once it has been checked. */
@@ -823,7 +984,7 @@ public final class ClientHandshake {
         }
     }
 
-    private static void authenticate(List<X509Certificate> chain, String host,
+    static void authenticate(List<X509Certificate> chain, String host,
             CertificateTrust trust) throws IOException {
         if (trust == null) {
             return;                           // connectWithoutAuthenticating, said out loud there
