@@ -117,9 +117,9 @@ public final class TlsConnection implements Transport {
     }
 
     /** What the handshake settled on - filled in by {@link ClientHandshake}. */
-    void describe(java.security.cert.X509Certificate leaf, String cipherSuite) {
+    void describe(java.security.cert.X509Certificate leaf, String version, String cipherSuite) {
         this.peerCertificate = leaf;
-        this.description = "TLSv1.3 / " + cipherSuite;
+        this.description = version + " / " + cipherSuite;
     }
 
     /**
@@ -273,6 +273,10 @@ public final class TlsConnection implements Transport {
                     "a post-handshake message of more than 64 KiB");
         }
         postHandshake.append(record.data(), record.offset(), record.length());
+        if (records.isTls12()) {
+            handlePostHandshake12();
+            return;
+        }
         int[] updateRequested = {-1};
         TlsProtocolException[] refused = {null};
         postHandshake.drain((type, at, length) -> {
@@ -318,6 +322,44 @@ public final class TlsConnection implements Transport {
                         "a KeyUpdate did not end its record");
             }
             applyKeyUpdate(updateRequested[0] == 1);
+        }
+    }
+
+    /**
+     * TLS 1.2 after its handshake: the only handshake message a server may
+     * send is a HelloRequest, asking to renegotiate. This client never does
+     * (RFC 5746 lets it say so with a warning and carry on); anything else is
+     * refused.
+     */
+    private void handlePostHandshake12() throws IOException {
+        int[] requests = {0};
+        TlsProtocolException[] refused = {null};
+        postHandshake.drain((type, at, length) -> {
+            if (refused[0] != null) {
+                return;
+            }
+            if (Tls12Handshake.isHelloRequest(type) && length == 0) {
+                requests[0]++;
+            } else {
+                refused[0] = new TlsProtocolException(TlsAlertException.UNEXPECTED_MESSAGE,
+                        "handshake message of type " + type + " on an established TLS 1.2 "
+                                + "connection, where only a HelloRequest may arrive");
+            }
+        });
+        if (refused[0] != null) {
+            throw refused[0];
+        }
+        for (int i = 0; i < requests[0]; i++) {
+            writing.lock();
+            try {
+                checkNoCopyOutstanding();
+                MemorySegment alert = scratch.asSlice(0, 2);
+                alert.set(ValueLayout.JAVA_BYTE, 0, (byte) TlsAlertException.WARNING);
+                alert.set(ValueLayout.JAVA_BYTE, 1, (byte) TlsAlertException.NO_RENEGOTIATION);
+                records.write((byte) 21, alert, 0, 2);
+            } finally {
+                writing.unlock();
+            }
         }
     }
 
@@ -387,7 +429,7 @@ public final class TlsConnection implements Transport {
      * rather than an array - what {@code freeze} writes is key material.
      */
     public int frozenLength() {
-        return TlsMigration.encodedLength(records.writeProtection().hash());
+        return TlsMigration.encodedLength(records.writeProtection());
     }
 
     /**
@@ -497,10 +539,17 @@ public final class TlsConnection implements Transport {
             int available) {
         TlsMigration.Thawed state = TlsMigration.decode(in, offset, available);
         RecordStream records = new RecordStream(transport);
+        if (state.tls12()) {
+            records.tls12();
+        }
         records.readWith(state.reading());
         records.writeWith(state.writing());
         records.established();
-        return new TlsConnection(transport, records);
+        TlsConnection connection = new TlsConnection(transport, records);
+        if (state.tls12()) {
+            connection.description = "TLSv1.2";
+        }
+        return connection;
     }
 
     @Override

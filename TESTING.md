@@ -442,13 +442,24 @@ the same query and the same certificate refusal over `tlsStack=seclume` instead 
 `SSLEngine`. Both need the TLS server on the address the properties above name — PostgreSQL on
 its TLS port, MySQL on the certificate it generates for itself at first start.
 
-`tlsStack=auto`, the default, is checked twice over. `TlsVersionRefusedTest` in the core runs
-the own stack against JDK servers that refuse it (TLS 1.2 only, a foreign group, a listener that
-hangs up) and against one whose certificate is untrusted, which must not count as a refusal.
-`LocalTlsStackAutoTest` connects to the usual TLS server and to a PostgreSQL started with
-`-c ssl_max_protocol_version=TLSv1.2` (`seclume.pgtls12.host` / `.port`, default 5439): the
-first stays on the own stack, the second is reached through JSSE, and `tlsStack=seclume` is
-refused by it. Without that server those tests are skipped.
+The default stack is checked twice over. `TlsVersionRefusedTest` in the core reaches a JDK
+server held to TLS 1.2 on the own stack and sends data both ways, shows the same server refusing
+a client kept to TLS 1.3, and runs the own stack against servers that refuse it (a foreign group,
+a listener that hangs up) and against one whose certificate is untrusted, which must not count
+as a refusal. `Tls12ServerHelloTest` holds the TLS 1.2 profile to its rules (extended master
+secret, secure renegotiation, the downgrade marker, the suites).
+
+### Servers held to TLS 1.2
+
+The TLS 1.2 profile is proven against real servers that cannot speak anything newer. Each is
+optional; without it the test skips.
+
+| Server | How it is held to TLS 1.2 | Test |
+|---|---|---|
+| PostgreSQL | `-c ssl=on -c ssl_max_protocol_version=TLSv1.2` (`seclume.pgtls12.host` / `.port`, default 5439, password in `.local-pgtls-password`) | `LocalTlsStackAutoTest` |
+| MySQL 8.4 | `--tls-version=TLSv1.2` (`seclume.mytls12.host` / `.port`, default 127.0.0.1:3310, password in `.local-mytls12-password`) | `LocalMyTls12Test`, with a heap dump: the full `caching_sha2_password` login sends the password inside TLS |
+| SQL Server | the default `tds=7.4` is TLS 1.2 by construction; for `tds=8.0`, `network.tlsprotocols = 1.2` in `mssql.conf` | the ordinary SQL Server suite |
+| Oracle | `SSL_VERSION = 1.2` in `listener.ora` and `sqlnet.ora` of the TCPS listener below | `LocalOracleTlsTest` |
 
 Two details in there are worth knowing before changing them.
 
@@ -587,8 +598,9 @@ rather than the running one. All eight: error 17821.
 it settles whose problem it is. Two of the eight experiments were also outright mistakes worth
 remembering - the key under `/etc/ssl/private`, which is `drwx------ root` and which the
 server (uid 10001) cannot traverse, so it shuts down with error 49940; and `network.tlsprotocols`,
-which only accepts 1.0, 1.1 and 1.2 because it governs the nested 7.4 handshake and says
-nothing about strict.
+which only accepts 1.0, 1.1 and 1.2 - it does not enable strict encryption, but on 2025 it does
+limit it: with `tlsprotocols = 1.2` a strict connection is TLS 1.2, which is how the TLS 1.2
+profile is tested against it.
 
 ### Bringing the second server up
 

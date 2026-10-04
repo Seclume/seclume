@@ -44,6 +44,8 @@ class DoctorTest {
     void nativeTlsWithVerificationIsAcceptedAndPoolShortfallIsActionable() throws Exception {
         Report report = inspect("TLSv1.3 / TLS_AES_256_GCM_SHA384 (seclume)", "&tls=verify-full", 4, 8);
         assertFalse(report.hasProblems(), report.toString());
+        assertFalse(inspect("TLSv1.2 / TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 (seclume)",
+                "&tls=verify-full", 4, 8).hasProblems());
         Report shortfall = inspect("TLSv1.3 (seclume)", "&tls=verify-full", 9, 8);
         assertTrue(shortfall.hasProblems());
         assertTrue(shortfall.toString().contains("Reduce maximum-pool-size"));

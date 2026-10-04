@@ -134,8 +134,8 @@ final class Doctor {
         boolean nativeTls = tls != null && tls.contains("(seclume)");
         report.line("TLS stack", tls == null ? "FAIL - no TLS" : nativeTls
                 ? "PASS - seclume TLS negotiated" : "FAIL - TLS uses a stack without the native-memory guarantee");
-        if (!nativeTls) report.problem("Use tlsStack=seclume with a TLS 1.3 capable server; "
-                + "SQL Server also requires tds=8.0. A successful JSSE connection is not an off-heap TLS proof.");
+        if (!nativeTls) report.problem("Use tlsStack=seclume and a server supporting TLS 1.3 or seclume's TLS 1.2 profile. "
+                + "A successful JSSE connection is not an off-heap TLS proof.");
         boolean verified = settings.option("trustServerCertificate") == null
                 || !settings.flag("trustServerCertificate", false);
         // SQL Server validates by default. Other drivers follow TlsMode.

@@ -25,6 +25,11 @@ import space.seclume.secret.SecretScope;
  * looks entirely healthy until the first record, which the peer then refuses
  * with {@code bad_record_mac} and no further explanation.
  *
+ * <p><b>TLS 1.2</b> has no traffic secret, so a TLS 1.2 connection is
+ * written as version {@value #VERSION_TLS12}: the same header and body, and
+ * per direction the AES key followed by its four-byte salt instead of a
+ * secret. A TLS 1.3 connection is still written as version {@value #VERSION}.
+ *
  * <p><b>This blob is key material.</b> Whoever reads these bytes can
  * decrypt and forge everything on the connection, in both directions. The
  * carrier must therefore be <b>confidential as well as authenticated</b>,
@@ -38,6 +43,9 @@ final class TlsMigration {
     static final int MAGIC = 0x5a4c5453;
     /** Bump whenever a field moves, and never reuse a number. */
     static final int VERSION = 1;
+    /** A TLS 1.2 connection: key and salt per direction instead of a traffic secret. */
+    static final int VERSION_TLS12 = 2;
+    private static final int SALT = 4;
 
     private static final int HEADER = 16;        // magic, version, length, checksum
     private static final int BODY = 24;          // suite, key length, two sequence numbers
@@ -49,9 +57,16 @@ final class TlsMigration {
     private TlsMigration() {
     }
 
-    /** How many bytes {@link #encode} writes for a connection using this hash. */
+    /** How many bytes {@link #encode} writes for a TLS 1.3 connection using this hash. */
     static int encodedLength(HashAlgorithm hash) {
         return HEADER + BODY + 2 * hash.digestLength();
+    }
+
+    /** How many bytes {@link #encode} writes for this connection, of either version. */
+    static int encodedLength(RecordProtection protection) {
+        return protection.isTls12()
+                ? HEADER + BODY + 2 * (protection.keyLength() + SALT)
+                : encodedLength(protection.hash());
     }
 
     /**
@@ -62,15 +77,16 @@ final class TlsMigration {
     static int encode(MemorySegment out, long offset, RecordProtection reading,
             RecordProtection writing) {
         HashAlgorithm hash = reading.hash();
-        if (writing.hash() != hash || writing.keyLength() != reading.keyLength()) {
+        if (writing.hash() != hash || writing.keyLength() != reading.keyLength()
+                || writing.isTls12() != reading.isTls12()) {
             throw new IllegalStateException("the two directions disagree about the cipher "
-                    + "suite, which cannot happen in TLS 1.3 and means something is confused");
+                    + "suite, which cannot happen in TLS and means something is confused");
         }
-        int length = encodedLength(hash);
+        int length = encodedLength(reading);
         int at = 0;
         putInt(out, offset + at, MAGIC);
         at += 4;
-        putInt(out, offset + at, VERSION);
+        putInt(out, offset + at, reading.isTls12() ? VERSION_TLS12 : VERSION);
         at += 4;
         putInt(out, offset + at, length);
         at += 4;
@@ -87,7 +103,7 @@ final class TlsMigration {
         at += 8;
 
         reading.copySecretInto(out, offset + at);
-        at += hash.digestLength();
+        at += reading.secretLength();
         writing.copySecretInto(out, offset + at);
 
         putInt(out, offset + CHECKSUM_AT, checksum(out, offset, length));
@@ -96,6 +112,11 @@ final class TlsMigration {
 
     /** The two directions rebuilt; whoever asked for them closes them. */
     record Thawed(RecordProtection reading, RecordProtection writing) {
+
+        /** Whether the records follow TLS 1.2's rules. */
+        boolean tls12() {
+            return reading.isTls12();
+        }
     }
 
     /**
@@ -117,11 +138,12 @@ final class TlsMigration {
                     + Integer.toHexString(magic) + ", expected 0x" + Integer.toHexString(MAGIC));
         }
         int version = getInt(in, offset + 4);
-        if (version != VERSION) {
+        if (version != VERSION && version != VERSION_TLS12) {
             throw new IllegalArgumentException("this is a version " + version
-                    + " frozen connection and this node speaks version " + VERSION
-                    + " - it must be closed rather than half understood");
+                    + " frozen connection and this build reads versions " + VERSION + " and "
+                    + VERSION_TLS12 + " - it must be closed rather than half understood");
         }
+        boolean tls12 = version == VERSION_TLS12;
         int length = getInt(in, offset + 8);
         if (length < HEADER + BODY || length > available) {
             throw new IllegalArgumentException("the frozen connection claims " + length
@@ -152,9 +174,14 @@ final class TlsMigration {
                     + "real connection: " + Long.toUnsignedString(readSequence) + " / "
                     + Long.toUnsignedString(writeSequence));
         }
-        if (length != encodedLength(hash)) {
+        int expected = tls12 ? HEADER + BODY + 2 * (keyLength + SALT) : encodedLength(hash);
+        if (length != expected) {
             throw new IllegalArgumentException("the frozen connection is " + length
-                    + " bytes, and a " + hash + " connection is " + encodedLength(hash));
+                    + " bytes, and a " + (tls12 ? "TLS 1.2 " : "") + hash + " connection is "
+                    + expected);
+        }
+        if (tls12) {
+            return thawTls12(in, offset + at, hash, keyLength, readSequence, writeSequence);
         }
 
         int digest = hash.digestLength();
@@ -173,6 +200,31 @@ final class TlsMigration {
                 if (writing == null) {
                     reading.close();
                 }
+            }
+            reading.sequence(readSequence);
+            writing.sequence(writeSequence);
+            return new Thawed(reading, writing);
+        }
+    }
+
+    /** Key and salt per direction, taken through memory that is wiped. */
+    private static Thawed thawTls12(MemorySegment in, long at, HashAlgorithm hash, int keyLength,
+            long readSequence, long writeSequence) {
+        int each = keyLength + SALT;
+        try (SecretScope secrets = SecretScope.allocate(2 * each)) {
+            MemorySegment bytes = secrets.segment();
+            MemorySegment.copy(in, at, bytes, 0, 2L * each);
+            RecordProtection reading = RecordProtection.forTls12(hash, bytes, 0, keyLength,
+                    keyLength);
+            RecordProtection writing = null;
+            try {
+                writing = RecordProtection.forTls12(hash, bytes, each, keyLength,
+                        (long) each + keyLength);
+            } finally {
+                if (writing == null) {
+                    reading.close();
+                }
+                bytes.asSlice(0, 2L * each).fill((byte) 0);
             }
             reading.sequence(readSequence);
             writing.sequence(writeSequence);

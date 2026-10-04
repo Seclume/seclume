@@ -97,6 +97,32 @@ public final class HandshakeReassembler implements AutoCloseable {
         length = remaining;
     }
 
+    /**
+     * The length, header included, of the first message if it is complete;
+     * otherwise -1. With {@link #discard} it takes one message off the front
+     * and leaves the rest - for a TLS 1.2 ServerHello, which commonly shares
+     * its record with the messages after it.
+     */
+    public int firstComplete() {
+        if (length < Handshake.HEADER) {
+            return -1;
+        }
+        int total = Handshake.totalLength(buffer, 0);
+        return total > 0 && total <= length ? total : -1;
+    }
+
+    /** Drops {@code count} bytes from the front. */
+    public void discard(int count) {
+        if (count < 0 || count > length) {
+            throw new IllegalArgumentException("cannot discard " + count + " of " + length);
+        }
+        int remaining = length - count;
+        if (remaining > 0) {
+            MemorySegment.copy(buffer, count, buffer, 0, remaining);
+        }
+        length = remaining;
+    }
+
     /** Bytes currently buffered - a complete message not yet drained plus any partial tail. */
     public int buffered() {
         return length;

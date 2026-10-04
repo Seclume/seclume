@@ -19,6 +19,32 @@ All notable changes to seclume are recorded here. Versions follow
   migrations, including history and lock release. CI requires all nine cases
   for each database instead of accepting skipped tests as coverage.
 
+### Changed: seclume's own TLS for every server - TLS 1.2 included, no silent JSSE
+
+- **A TLS 1.2 profile in the own stack**, for servers without TLS 1.3: ECDHE on X25519, P-256
+  or P-384, AES-GCM records, the extended master secret (RFC 7627) and secure renegotiation
+  (RFC 5746) required, the RFC 8446 downgrade marker refused - and no static RSA key exchange,
+  no CBC, no renegotiation, no resumption. The PRF, the master secret, the key block and both
+  Finished values stay in native memory. Proven against servers held to TLS 1.2: PostgreSQL 18,
+  MySQL 8.4 (with a heap dump: the full `caching_sha2_password` login sends the password inside
+  TLS, and it is not on the heap), SQL Server 2025 and Oracle Free 23 over TCPS.
+- **SQL Server's TDS 7.4 on the own stack.** Its handshake inside the pre-login packets is TLS 1.2
+  by construction and always needed the JDK's TLS; now SQL Server 2016 to 2022 log in without
+  the password passing through the heap (`tds=8.0` still gives TLS 1.3).
+- **No fallback to JSSE.** `tlsStack=auto` (the default) is the own stack for every server; the
+  fallback added for SEC-04 is removed. A server that speaks neither TLS 1.3 nor the TLS 1.2
+  profile is refused with a message naming `tlsStack=jsse`, which still reaches it.
+  `-Dseclume.tls.tls12=false` keeps the own stack to TLS 1.3, and
+  `-Dseclume.tls.requireExtendedMasterSecret=false` lets a TLS 1.2 server without the extended
+  master secret through.
+- **X25519 and P-384, and HelloRetryRequest.** X25519 is offered with a share beside P-256 and
+  P-384 without one; a TLS 1.3 server limited to P-384 asks for it with a HelloRetryRequest,
+  which is followed once and checked strictly (`HelloRetryRequestTest`, `TlsGroupsTest`
+  against JDK servers allowing one group each).
+- `seclume-verify` no longer answers a refused TLS version with "check host, port and firewall".
+- TESTING.md: `network.tlsprotocols` does limit SQL Server 2025's strict encryption, which is how
+  the TLS 1.2 profile is tested against it; and how to start each server held to TLS 1.2.
+
 ### Faster: the pool's session reset no longer waits for the server
 
 - Since every used session is reset on return, PostgreSQL (`DISCARD ALL`) and MySQL
