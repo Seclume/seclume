@@ -1,7 +1,6 @@
 package space.seclume.postgresql.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -25,19 +24,18 @@ import space.seclume.internal.jdbc.TlsStack;
 import space.seclume.postgresql.PgSession;
 import space.seclume.secret.SecretProviders;
 import space.seclume.tck.TestHosts;
-import space.seclume.tls.TlsVersionRefused;
 
 /**
- * {@code tlsStack=auto}, the default, against real servers: one with TLS 1.3,
- * which has to stay on seclume's stack, and one held to TLS 1.2 by
- * {@code ssl_max_protocol_version} - what SQL Server before TDS 8.0 and
- * Oracle 19c are - which has to be reached through the JDK's.
+ * The default stack against real servers: one with TLS 1.3, and one held to
+ * TLS 1.2 by {@code ssl_max_protocol_version} - what SQL Server on TDS 7.4 and
+ * Oracle 19c are. Both are reached on seclume's own stack; the JDK's only when
+ * asked for by name.
  *
  * <p>The TLS 1.2 server is {@code seclume.pgtls12.host}/{@code .port}
  * (default port 5439), the TLS 1.3 one the usual {@code seclume.pgtls.*}.
  * Without them the tests are skipped.
  */
-@Isolated // TlsFallback remembers servers process-wide
+@Isolated
 @Timeout(120)
 class LocalTlsStackAutoTest {
 
@@ -96,28 +94,26 @@ class LocalTlsStackAutoTest {
     }
 
     @Test
-    void aTls12ServerIsReachedOnTheJdksStack() throws Exception {
+    void aTls12ServerIsReachedOnSeclumesStack() throws Exception {
         reachable(tls12Host(), TLS12_PORT);
-        for (int connection = 0; connection < 2; connection++) {   // the second one remembered
-            try (PgSession session = PgSession.open(settings(tls12Host(), TLS12_PORT,
-                    TlsStack.AUTO))) {
+        for (TlsStack stack : new TlsStack[] {TlsStack.AUTO, TlsStack.SECLUME}) {
+            try (PgSession session = PgSession.open(settings(tls12Host(), TLS12_PORT, stack))) {
                 String tls = session.tlsDescription();
-                assertTrue(tls.startsWith("TLSv1.2") && !tls.endsWith(" (seclume)"), tls);
+                assertTrue(tls.startsWith("TLSv1.2 / TLS_ECDHE_") && tls.endsWith(" (seclume)"),
+                        stack + ": " + tls);
                 assertEquals("42", session.askOneValue("select 42"));
             }
         }
     }
 
-    /** tlsStack=seclume: the same server refused, and refused for the version. */
+    /** tlsStack=jsse: the JDK's TLS, only because it was asked for. */
     @Test
-    void aTls12ServerIsRefusedWhenSeclumesStackIsDemanded() throws Exception {
+    void theJdksStackOnlyWhenAskedFor() throws Exception {
         reachable(tls12Host(), TLS12_PORT);
-        SQLException refused = assertThrows(SQLException.class,
-                () -> PgSession.open(settings(tls12Host(), TLS12_PORT, TlsStack.SECLUME)).close());
-        Throwable cause = refused;
-        while (cause != null && !(cause instanceof TlsVersionRefused)) {
-            cause = cause.getCause();
+        try (PgSession session = PgSession.open(settings(tls12Host(), TLS12_PORT,
+                TlsStack.JSSE))) {
+            String tls = session.tlsDescription();
+            assertTrue(tls.startsWith("TLSv1.2") && !tls.endsWith(" (seclume)"), tls);
         }
-        assertTrue(cause != null, () -> "not refused for the version: " + refused);
     }
 }

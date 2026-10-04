@@ -148,12 +148,6 @@ public final class OracleSession implements AutoCloseable {
                     nativeEncryption);
         }
 
-        /** The same settings on another TLS stack - see TlsFallback. */
-        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
-            return new Settings(host, port, service, user, secret,
-                    connectTimeoutMillis, hosts, resultLimit, tls, stack, identity,
-                    nativeEncryption);
-        }
 
         /** The {@code (DESCRIPTION=...)} the listener wants. */
         String connectString() {
@@ -590,9 +584,7 @@ public final class OracleSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         OracleSession opened = null;
         try {
-            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
-                    settings.identity() != null, settings.host(), settings.port(),
-                    stack -> connectAndLogIn(settings.withTlsStack(stack)));
+            opened = connectAndLogIn(settings);
             space.seclume.internal.Transports.loggedIn(opened.transport());
             return opened;
         } finally {

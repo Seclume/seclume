@@ -168,12 +168,6 @@ public final class TdsSession implements AutoCloseable {
                     resultLimit, tdsVersion, tlsStack, identity);
         }
 
-        /** The same settings on another TLS stack - see TlsFallback. */
-        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
-            return new Settings(host, port, database, user, secret,
-                    applicationName, connectTimeoutMillis, trustServerCertificate, hosts,
-                    resultLimit, tdsVersion, stack, identity);
-        }
     }
 
     private ResultLimit resultLimit = ResultLimit.NONE;
@@ -450,9 +444,7 @@ public final class TdsSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         TdsSession opened = null;
         try {
-            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
-                    settings.identity() != null, settings.host(), settings.port(),
-                    stack -> connectAndLogIn(settings.withTlsStack(stack)));
+            opened = connectAndLogIn(settings);
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "sqlserver",

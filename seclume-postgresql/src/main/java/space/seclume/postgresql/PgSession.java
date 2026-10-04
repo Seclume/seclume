@@ -129,12 +129,6 @@ public final class PgSession implements AutoCloseable {
                     identity, directTls);
         }
 
-        /** The same settings on another TLS stack - see TlsFallback. */
-        Settings withTlsStack(space.seclume.internal.jdbc.TlsStack stack) {
-            return new Settings(host, port, database, user, secret,
-                    applicationName, connectTimeoutMillis, hosts, resultLimit, tls, stack,
-                    identity, directTls);
-        }
     }
 
     /** Receives the rows of a query - without a copy, straight from the receive buffer. */
@@ -394,9 +388,7 @@ public final class PgSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         PgSession opened = null;
         try {
-            opened = space.seclume.internal.jdbc.TlsFallback.connect(settings.tlsStack(),
-                    settings.identity() != null, settings.host(), settings.port(),
-                    stack -> connectAndLogIn(settings.withTlsStack(stack)));
+            opened = connectAndLogIn(settings);
             space.seclume.internal.Transports.loggedIn(opened.transport());
             return opened;
         } finally {

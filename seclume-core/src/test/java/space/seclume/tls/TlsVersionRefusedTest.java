@@ -147,8 +147,6 @@ class TlsVersionRefusedTest {
         try (EchoServer server = EchoServer.start(serverContext, socket -> { })) {
             IOException refused = ownStack(server.port(), true);
             assertFalse(refused instanceof TlsVersionRefused, refused.toString());
-            assertFalse(space.seclume.internal.jdbc.TlsFallbackProbe.wouldFallBack(refused),
-                    refused.toString());
         }
     }
 

@@ -62,8 +62,8 @@ public final class TlsLayers {
      */
     public static TlsLayer start(TlsStack stack, Transport transport, String host, int port,
             boolean verify, ClientIdentity identity, String alpn) throws IOException {
-        // AUTO is the own stack here: the change to JSSE is a new connection,
-        // which only the driver around this handshake can make - TlsFallback.
+        // AUTO is the default and means the own stack: TLS 1.3, and the TLS 1.2
+        // profile for a server without it. JSSE only when asked for by name.
         if (stack == TlsStack.AUTO) {
             stack = TlsStack.SECLUME;
         }
