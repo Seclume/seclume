@@ -98,6 +98,7 @@ jobs:
       # when the client's Finished and its first application record reach
       # TLS-Attacker in one TCP read - it logs sending the altered record, and
       # the client, waiting at a record header, never receives a byte of it.
+      # AnvilClient therefore pauses 100 ms after the handshake (06.10.2026).
       - name: Run TLS-Anvil against it
         run: |
           mkdir -p anvil-out

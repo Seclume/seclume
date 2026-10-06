@@ -77,6 +77,14 @@ public final class AnvilClient {
         }
     }
 
+    private static void pause(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private static void usage() {
         System.err.println("usage: AnvilClient triggerPort anvilHost anvilPort [tls12]");
         System.exit(2);
@@ -92,6 +100,14 @@ public final class AnvilClient {
             try (TlsConnection tls = ClientHandshake.connect(socket, "localhost", null, null,
                     null, offer)) {
                 CONNECTED.incrementAndGet();
+                // A moment between our Finished and our first record. When
+                // both reach TLS-Attacker in one TCP read, it takes the record
+                // as part of the handshake and what it sends next never
+                // arrives here - RecordProtocol.invalidCiphertext then fails
+                // on a client that was never sent the altered record. A
+                // property of the test server, not of TLS: a real server reads
+                // records, not reads.
+                pause(100);
                 ByteBuffer ping = ByteBuffer.allocateDirect(5).put(new byte[] {'p', 'i', 'n', 'g', '\n'});
                 tls.write(ping.flip());
                 ByteBuffer answer = ByteBuffer.allocateDirect(4096);
