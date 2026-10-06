@@ -357,10 +357,10 @@ public final class TtcRow {
         while (true) {
             int lengthOfLength = in.getByte(p) & 0xff;
             p++;
-            int chunk = 0;
-            for (int i = 0; i < lengthOfLength; i++) {
-                chunk = (chunk << 8) | (in.getByte(p + i) & 0xff);
-            }
+            // Checked as readChunked checks it: a length summed into an int
+            // without a limit turned negative and walked p backwards, round
+            // and round over the same bytes (Jazzer, 06.10.2026).
+            int chunk = chunkLength(p, lengthOfLength);
             p += lengthOfLength;
             if (chunk == 0) {
                 return p;

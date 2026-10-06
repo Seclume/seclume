@@ -1,0 +1,12 @@
+# Advisories accepted for the CI tools, read by osv-scanner and by
+# Scorecard's Vulnerabilities check. Keep in step with ACCEPTED in
+# .github/scripts/npm_audit.py, which applies the same list to npm audit.
+#
+# These packages are test helpers (Azure's storage emulator) and never ship.
+
+[[IgnoredVulns]]
+id = "GHSA-hp3w-g68c-fv3c"
+ignoreUntil = 2027-01-06
+reason = """sprintf-js <= 1.1.3, no patched version. Reached only through tedious, \
+the SQL Server client of Azurite's optional SQL metadata store; the CI leaves \
+AZURITE_DB unset, so tedious is never loaded."""

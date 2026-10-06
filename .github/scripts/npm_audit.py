@@ -12,6 +12,8 @@ import sys
 
 LEVELS = ("info", "low", "moderate", "high", "critical")
 
+# Keep in step with .github/ci-tools/osv-scanner.toml, the same list for
+# osv-scanner and Scorecard.
 ACCEPTED = {
     # sprintf-js <= 1.1.3, no patched version. Reached only through tedious,
     # the SQL Server client of Azurite's optional SQL metadata store. The CI
