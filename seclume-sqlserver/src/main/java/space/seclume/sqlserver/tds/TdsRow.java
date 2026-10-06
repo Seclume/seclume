@@ -140,6 +140,7 @@ public final class TdsRow {
                 set(index, p, -1);
                 return p;
             }
+            checkLength(length, p);
             set(index, p, length);
             return p + length;
         }
@@ -153,6 +154,7 @@ public final class TdsRow {
             p += pointerLength + 8;                  // text pointer and timestamp
             int length = in.getIntLe(p);
             p += 4;
+            checkLength(length, p);
             set(index, p, length);
             return p + length;
         }
@@ -177,6 +179,27 @@ public final class TdsRow {
         }
         set(index, p, length);
         return p + length;
+    }
+
+    /**
+     * A four-byte value length, as {@code sql_variant}, {@code text},
+     * {@code ntext} and {@code image} carry one, before it moves the reader.
+     *
+     * <p>The two- and one-byte lengths cannot be negative; this one is a signed
+     * int off the wire. A negative length moved the reader backwards, and
+     * {@code FB FF FF FF} - minus five - put it back on the {@code ROW} token
+     * it had just read: the session read that row again, for ever, and held
+     * the caller's thread (TdsDecoderFuzzTest, nightly fuzz of 06.10.2026).
+     * A length that runs past the largest int would wrap round the same way.
+     *
+     * <p>A length past the bytes that have arrived is not refused here: the
+     * answer arrives packet by packet, and the token stream waits for the rest.
+     */
+    private static void checkLength(int length, int at) throws IOException {
+        if (length < 0 || length > Integer.MAX_VALUE - at) {
+            throw new IOException("a value of " + Integer.toUnsignedLong(length)
+                    + " bytes at offset " + at + " does not fit into a row");
+        }
     }
 
     /**
