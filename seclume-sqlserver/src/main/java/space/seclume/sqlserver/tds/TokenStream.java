@@ -279,6 +279,14 @@ public final class TokenStream {
                         "unexpected token " + Tds.tokenName(token) + " at offset " + (p - 1));
             }
         }
+        if (p <= at) {
+            // Every token is at least its tag byte, so the next one starts
+            // after this one. A length off the wire that walked the reader
+            // back - a negative row value did, found by the nightly fuzz on
+            // 06.10.2026 - would otherwise read the same bytes for ever.
+            throw new IOException("a token at offset " + at + " ends before it starts, at "
+                    + p + " - a length in it is negative or wrapped round");
+        }
         if (p > end) {
             throw INCOMPLETE;              // a length that points past the answer
         }

@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed: SQL Server - a negative value length could hang the reading thread
+
+A `sql_variant`, `text`, `ntext` or `image` value carries a four-byte length,
+and the row reader added it to its position without looking at it. A negative
+length moved the reader back onto the row it had just read, and it read that
+row again for ever - the same hold on the caller's thread, and a pooled
+connection, as the Oracle case below. Such a length, or one that would wrap
+round, is now refused as a malformed answer, and the token stream refuses any
+token that does not move it forward. Found by the nightly coverage-guided
+fuzzing; the input is kept as a regression case.
+
 ### Fixed: Oracle - a malformed object column could hang the reading thread
 
 A chunked value inside an object column (`XMLType` and other object types)
