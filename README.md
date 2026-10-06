@@ -106,12 +106,12 @@ OpenSSF best practices assessment:
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-spring-boot-starter</artifactId>
-  <version>0.10.0</version>
+  <version>0.11.0</version>
 </dependency>
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-postgresql</artifactId>   <!-- or -mysql, -sqlserver, -oracle -->
-  <version>0.10.0</version>
+  <version>0.11.0</version>
 </dependency>
 ```
 

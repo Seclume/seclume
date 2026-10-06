@@ -1,0 +1,15 @@
+This file holds the OpenPGP key that signs seclume releases. See SECURITY.md.
+
+pub   ed25519/5A49F7C92B09AFF5 2026-10-04 [SC] [expires: 2029-10-03]
+      Key fingerprint = F232 56B6 5A0A 24B7 082A  FEE6 5A49 F7C9 2B09 AFF5
+uid                 seclume <dev@seclume.space>
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mDMEasJ1NBYJKwYBBAHaRw8BAQdAYKxap4R5Ei0P3O2HzpRDLAuv2xkTuEnwwMnD
+RJvuEry0G3NlY2x1bWUgPGRldkBzZWNsdW1lLnNwYWNlPoiZBBMWCgBBFiEE8jJW
+tloKJLcIKv7mWkn3ySsJr/UFAmrCdTQCGwMFCQWjmoAFCwkIBwICIgIGFQoJCAsC
+BBYCAwECHgcCF4AACgkQWkn3ySsJr/XEjQEA9VSnnFfajXnqacMFxSl5VNxrAGME
+48p4291lhNVn/NoA+wVv+T3jAq+n4fmcIXpEtl+JfGfr+X4GRPYxm241PAQM
+=dIEb
+-----END PGP PUBLIC KEY BLOCK-----

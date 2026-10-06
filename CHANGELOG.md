@@ -5,6 +5,32 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-06
+
+seclume's own TLS now serves every server, TLS 1.2 included, and JSSE is used
+only where it is asked for. Every file of this release is signed with the
+release key named in [SECURITY.md](SECURITY.md).
+
+Beyond that, in short:
+- **TLS**: a lean TLS 1.2 profile (ECDHE, AES-GCM, extended master secret) in
+  the own stack, TDS 7.4 for SQL Server 2016-2022 on it, HelloRetryRequest,
+  X25519 and P-384; the TLS 1.3 client as an `SSLEngine`.
+- **Oracle**: Native Network Encryption, Kerberos and Windows-native (NTS)
+  logins. **MariaDB**: `client_ed25519` and `parsec`.
+- **Beyond databases**: HTTP APIs (API keys, OAuth 2.0, JWT), mail, LDAP, SSH
+  and private keys, AWS, Azure Storage, Google Cloud, Kubernetes, JGit, gRPC,
+  RabbitMQ, Kafka PLAIN/OAUTHBEARER and Redis via Lettuce - each with its
+  secret off the heap.
+- **Operations**: rotation without a restart, events and metrics for every
+  module, `seclume-verify --doctor`, heap checks with SARIF for CI.
+- **Security work**: two audits' findings fixed (every used pooled session is
+  reset, asynchronous secret cleanup, no TLS wildcards over public suffixes);
+  `tlsStack=seclume` no longer accepts a server that never authenticated;
+  Project Wycheproof vectors; the TLS record layer fuzzed.
+- **Faster**: the pool's session reset no longer waits for the server,
+  `select 1` level with Connector/J, a TLS record layer up to three times
+  faster, quicker PBKDF2.
+
 ### Installation diagnostics, heapcheck CI and framework edge cases
 
 - `seclume-verify --doctor` diagnoses native memory protection, secret-file access,
@@ -3564,5 +3590,6 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.11.0]: https://github.com/Seclume/seclume/releases/tag/v0.11.0
 [0.10.0]: https://github.com/Seclume/seclume/releases/tag/v0.10.0
 [0.9.0]: https://github.com/Seclume/seclume/releases/tag/v0.9.0

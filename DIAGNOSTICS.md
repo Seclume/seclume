@@ -71,7 +71,7 @@ dump of your application after login or rotation, use the composite action:
 ```yaml
 - uses: ./.github/actions/heapcheck
   with:
-    jar: seclume-heapcheck/target/seclume-heapcheck-0.11.0-SNAPSHOT.jar
+    jar: seclume-heapcheck/target/seclume-heapcheck-0.11.0.jar
     dump: app.hprof
     secret-directory: /run/secrets/app
     baseline: previous.json # optional
