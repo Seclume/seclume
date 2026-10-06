@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed: Oracle - a malformed object column could hang the reading thread
+
+A chunked value inside an object column (`XMLType` and other object types)
+took its chunk length without the limits the other chunked reads apply. A
+length that came out negative walked the reader backwards over the same bytes
+for ever, so a hostile or broken answer held the caller's thread - and, in a
+pool, a connection. It is now refused as a malformed answer. Found by the
+nightly coverage-guided fuzzing; the input is kept as a regression case.
+
 ## [0.11.0] - 2026-10-06
 
 seclume's own TLS now serves every server, TLS 1.2 included, and JSSE is used
