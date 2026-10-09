@@ -60,6 +60,11 @@ public final class TtcDataTypes {
         0x00, 0x00, 0x00, 0x00, 0x03
     };
 
+    /** Where the compile capabilities carry the TTC field version. */
+    static final int FIELD_VERSION_INDEX = 7;
+    /** Ours: 23.4, the newest this client writes and reads. */
+    static final int FIELD_VERSION = 0x18;
+
     private static final int[] RUNTIME_CAPABILITIES = {
         0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00
     };
@@ -183,7 +188,7 @@ public final class TtcDataTypes {
      */
     public void negotiate(NsChannel channel) throws IOException {
         WireBuffer out = channel.beginData();
-        putMessage(out);
+        putMessage(out, channel.ttcFieldVersion());
         channel.sendData();
 
         int packetType = channel.nextPacket();
@@ -207,11 +212,21 @@ public final class TtcDataTypes {
      * not a second version of them.
      */
     static void putMessage(WireBuffer out) {
+        putMessage(out, FIELD_VERSION);
+    }
+
+    /**
+     * The same, announcing {@code fieldVersion}: ours, or the server's when it
+     * is lower - what is announced is what both ends then write and read.
+     */
+    static void putMessage(WireBuffer out, int fieldVersion) {
         out.putByte((byte) TtcMessage.TYPE_DATA_TYPES);
         putShortLe(out, CHARSET_AL32UTF8);
         putShortLe(out, CHARSET_AL32UTF8);
         out.putByte((byte) FLAGS);
-        putCapabilities(out, COMPILE_CAPABILITIES);
+        int[] compile = COMPILE_CAPABILITIES.clone();
+        compile[FIELD_VERSION_INDEX] = fieldVersion;
+        putCapabilities(out, compile);
         putCapabilities(out, RUNTIME_CAPABILITIES);
         out.putByte((byte) 0);
         for (int i = 0; i < TYPES.length; i += 4) {

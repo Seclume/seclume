@@ -90,8 +90,12 @@ class LocalOracleTlsTest {
             String tls = describe(connection);
             System.err.println("[tcps, own stack] " + tls);
             assertNotNull(tls, "a TCPS listener is encrypted by construction");
-            assertTrue(tls.startsWith("TLSv1.3 / TLS_AES_"),
-                    "the own stack speaks TLS 1.3 and two suites; it reported: " + tls);
+            // TLS 1.3 where the server has it (23ai); 18c and 21c have TLS
+            // 1.2 only, and then one of the own stack's ECDHE-GCM suites.
+            assertTrue(tls.startsWith("TLSv1.3 / TLS_AES_")
+                            || tls.startsWith("TLSv1.2 / TLS_ECDHE_"),
+                    "the own stack speaks TLS 1.3, or TLS 1.2 with ECDHE and GCM; it reported: "
+                            + tls);
             // Without the marker a silent fall back to JSSE would read as a
             // pass: both stacks negotiate the same suite against this server.
             assertTrue(tls.endsWith(" (seclume)"),

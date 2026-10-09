@@ -61,26 +61,32 @@ jdbc:seclume:postgresql://db:5432/app?tls=require&tlsStack=seclume
 
 **The own stack is used for every server**, and nothing changes stack behind the caller's back.
 A server with TLS 1.3 gets TLS 1.3. A server limited to TLS 1.2 - SQL Server on TDS 7.4 or on
-Windows Server 2019, Oracle 19c, MySQL 5.7, a PostgreSQL with `ssl_max_protocol_version` - gets a
+Windows Server 2019, PostgreSQL 9.6 to 11 built with an older OpenSSL, any server held to it
+by configuration (`ssl_max_protocol_version`, `--tls-version`, `SSL_VERSION`) - gets a
 deliberately small TLS 1.2 profile:
 
 | Part | TLS 1.2 profile |
 |---|---|
 | key exchange | ECDHE on X25519, P-256 or P-384 - no static RSA key exchange, so forward secrecy always |
 | records | AES-128-GCM or AES-256-GCM - no CBC, no MAC-then-encrypt |
-| master secret | the extended master secret (RFC 7627), required |
+| master secret | the extended master secret (RFC 7627) whenever the server has it |
 | renegotiation | secure renegotiation (RFC 5746) required of the server; this client never renegotiates |
 | downgrade | a TLS 1.3 server's downgrade marker (RFC 8446 section 4.1.3) is refused |
-| left out | resumption, session tickets, compression, CBC, RC4, 3DES, static RSA |
+| left out | resumption, session tickets, compression, CBC, RC4, 3DES, static RSA, finite-field DHE |
 
 Those left out are the parts of TLS 1.2 whose history is padding oracles and Lucky13; what is
 left has the same record protection and the same key exchange group as TLS 1.3. A server that
 speaks neither - CBC or static RSA only - is refused with a message that names `tlsStack=jsse`,
 the one way to reach it, at the cost of the password passing through the heap.
+**Finite-field DHE is left out on purpose**, too: it would mean Diffie-Hellman over primes the
+server chooses, with the checks against weak and malicious parameters that Logjam and the
+small-subgroup attacks made necessary - a field of known mistakes, for servers old or unusual
+enough to offer DHE and no ECDHE. Such a server is reached with `tlsStack=jsse` as well.
 `-Dseclume.tls.tls12=false` keeps the own stack to TLS 1.3.
-`-Dseclume.tls.requireExtendedMasterSecret=false` lets a TLS 1.2 server without the extended
-master secret through, for one too old to have it; what RFC 7627 closes is the triple
+A TLS 1.2 server without the extended master secret - Oracle 18c and 21c among them - is
+accepted, and the master secret derived as RFC 5246 does: what RFC 7627 closes is the triple
 handshake, which needs resumption or renegotiation, and the own stack does neither.
+`-Dseclume.tls.requireExtendedMasterSecret=true` refuses such a server.
 
 Every mode above works on either stack, so this is a capability setting, not a security one.
 The own stack gives up resumption. Its key exchange groups are X25519, P-256 and P-384, all
@@ -108,7 +114,8 @@ and `tds=8.0` (see below).
 independent review. That is why it is not the default. It keeps the risky parts small:
 
 - The **server certificate** is checked by the JDK: its `X509TrustManager`, and `Signature`
-  for CertificateVerify.
+  for CertificateVerify - RSA (PSS, and PKCS#1 for a TLS 1.2 ServerKeyExchange), ECDSA on
+  P-256, P-384 and P-521, Ed25519 and Ed448, and RSA keys restricted to PSS.
 - The **key exchange** runs in the operating system's crypto library: P-256 and ML-KEM
   through OpenSSL on Linux and CNG on Windows.
 - **AES-GCM** for the records goes through the same libraries, which is constant time and
@@ -154,8 +161,9 @@ server refuses it and the connect fails; it does not quietly fall back. Both sta
 
 A password held carefully protects nothing while the private key that authenticates the
 *same* connection sits in an unwipeable `PrivateKey`: whoever has that key does not need the
-password. So seclume signs the client `CertificateVerify` with a P-256 key that never becomes
-a Java object. The key file goes through a secret provider into native memory,
+password. So seclume signs the client `CertificateVerify` with a P-256 or P-384 key that never
+becomes a Java object - P-384 with SHA-384, as FIPS and CNSA configurations issue it.
+The key file goes through a secret provider into native memory,
 `EcPrivateKeyFile` picks the scalar out of the PKCS#8 or SEC1 structure in place, and CNG or
 OpenSSL keeps it from there. Only the certificate chain and the signature, both public, are
 ordinary objects.
@@ -172,10 +180,10 @@ for a password, so the key can arrive the way the rest of your secrets do. Or ha
 directly, when the application builds it itself:
 
 ```java
-try (ClientIdentity me = new P256ClientIdentity(Path.of("/etc/tls/client.crt"),
-                                                SecretProviders.of(Map.of(
-                                                    "provider", "file",
-                                                    "path", "/etc/tls/client.key")))) {
+try (ClientIdentity me = new EcClientIdentity(Path.of("/etc/tls/client.crt"),
+                                              SecretProviders.of(Map.of(
+                                                  "provider", "file",
+                                                  "path", "/etc/tls/client.key")))) {
     dataSource.setClientIdentity(me);
 }
 ```
@@ -201,8 +209,8 @@ certificate alone: PostgreSQL's `cert` method, or a MySQL account with an empty 
 
 Two things are refused rather than worked around:
 
-- **P-256 only.** An RSA client certificate would mean the JCA, and the JCA means the key on
-  the heap.
+- **P-256 or P-384 only.** An RSA client certificate would mean the JCA, and the JCA means the
+  key on the heap. P-521 is not offered: no database client certificate uses it.
 - **`tlsStack=seclume` is required.** Presenting a certificate through the JDK's TLS needs a
   `KeyManager`, which hands out a `PrivateKey`. So that combination fails with a message
   saying so, instead of connecting quietly without the certificate the configuration asked

@@ -261,7 +261,92 @@ public final class NsChannel implements AutoCloseable {
         if (piggyback != null) {
             piggyback.writeInto(out);
         }
+        callStart = out.position();
         return out;
+    }
+
+    // ---- the TTC field version ---------------------------------------------
+
+    /**
+     * The TTC field version both ends speak - ours, lowered to the server's
+     * when it announces less (see {@link TtcProtocol}). It decides which
+     * fields a message has: what came with 23.1 is absent before it.
+     */
+    private int ttcFieldVersion = TtcDataTypes.FIELD_VERSION;
+    /** Where the call of the current message starts, behind any piggyback. */
+    private int callStart;
+
+    /** From 23.1 (extension 1) on, every call carries an eight-byte token number. */
+    static final int FIELD_VERSION_TOKEN_NUMBER = 18;
+
+    public int ttcFieldVersion() {
+        return ttcFieldVersion;
+    }
+
+    /** Takes the server's field version; ours is never raised by it. */
+    public void serverFieldVersion(int server) {
+        ttcFieldVersion = Math.min(TtcDataTypes.FIELD_VERSION, server);
+    }
+
+    /**
+     * Whether the server flags the last packet of every answer - protocol 319
+     * (23ai) and newer. Before it, the end of an answer is its closing status
+     * message, and the reader has to find it there; see OracleSession.
+     */
+    public boolean marksEndOfAnswer() {
+        return protocolVersion >= NsPacket.VERSION_END_OF_RESPONSE;
+    }
+
+    /**
+     * Told by the reader that an answer is complete, for a server that does
+     * not flag it: from here nobody waits, and a break has no reader for the
+     * markers it would provoke - what the flag does below for newer servers.
+     */
+    public void answerRead() {
+        if (!marksEndOfAnswer()) {
+            synchronized (breakLock) {
+                awaitingAnswer = false;
+                // As for the flag: a break the server has not answered yet
+                // is answered after this - its markers and ORA-01013 belong
+                // to this call. See lateBreak.
+                if (breakInFlight) {
+                    breakInFlight = false;
+                    lateBreak = true;
+                }
+            }
+        }
+    }
+
+    /** Whether calls carry a token number - 23.1 and newer. */
+    public boolean tokenNumbers() {
+        return ttcFieldVersion >= FIELD_VERSION_TOKEN_NUMBER;
+    }
+
+    /**
+     * Every call is written as 23.1 has it: type, function, sequence number,
+     * then the token number - always zero, so one byte. For a server before
+     * 23.1 that byte is taken out here, in one place, instead of in every
+     * message: the call itself and a piggyback in front of it. 18c and 21c
+     * read the token as the next field, and the login ended in ORA-03120
+     * (compatibility run, 07.10.2026).
+     */
+    private void dropTokenNumbers() {
+        int piggybackStart = NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE;
+        dropTokenNumberAt(callStart, TtcMessage.TYPE_FUNCTION);
+        if (callStart > piggybackStart) {
+            dropTokenNumberAt(piggybackStart, TtcMessage.TYPE_PIGGYBACK);
+        }
+    }
+
+    private void dropTokenNumberAt(int message, int type) {
+        int token = message + 3;
+        int end = out.position();
+        if (token >= end || (out.getByte(message) & 0xff) != type || out.getByte(token) != 0) {
+            return;
+        }
+        java.lang.foreign.MemorySegment.copy(out.segment(), token + 1, out.segment(), token,
+                end - token - 1);
+        out.position(end - 1);
     }
 
     /**
@@ -362,7 +447,9 @@ public final class NsChannel implements AutoCloseable {
     private void discardLateBreak() throws IOException {
         lateBreak = false;
         int type = answerMarkers(nextPacket());
-        while (type == NsPacket.TYPE_DATA
+        // Without the flag (before 319) the break's answer is the one packet
+        // after its markers: the ORA-01013 status, nothing more.
+        while (type == NsPacket.TYPE_DATA && marksEndOfAnswer()
                 && (dataFlags & NsPacket.DATA_FLAGS_END_OF_RESPONSE) == 0) {
             type = answerMarkers(nextPacket());
         }
@@ -609,6 +696,9 @@ public final class NsChannel implements AutoCloseable {
             breakInFlight = false;
         }
         roundTrips++;
+        if (!tokenNumbers()) {
+            dropTokenNumbers();
+        }
         if (flight != null) {
             int ttc = out.position() > NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE
                     ? out.getByte(NsPacket.HEADER_SIZE + NsPacket.DATA_FLAGS_SIZE) & 0xff
@@ -853,6 +943,7 @@ public final class NsChannel implements AutoCloseable {
         } else {
             dataFlags = 0;
         }
+        packetFlags = in.getByte(5) & 0xff;
         if (flight != null) {
             int at = in.position();
             flight.record(false, nameOf(packetType,
@@ -867,6 +958,18 @@ public final class NsChannel implements AutoCloseable {
                     at + 2 < in.limit() ? in.getByte(at + 2) & 0xff : -1);
         }
         return packetType;
+    }
+
+    /** The flags byte of the last packet read - see {@link #packetFlags()}. */
+    private int packetFlags;
+
+    /**
+     * The flags in the header of the last packet read. Only a RESEND's are
+     * read: {@link NsPacket#FLAG_TLS_RENEGOTIATE} there says whether the
+     * server process wants a TLS session of its own.
+     */
+    public int packetFlags() {
+        return packetFlags;
     }
 
     /**
@@ -932,11 +1035,31 @@ public final class NsChannel implements AutoCloseable {
             acceptFlags0 = in.getByte(22) & 0xff;
             acceptFlags1 = in.getByte(23) & 0xff;
         }
+        // From 318 on, four more flag bytes behind the large SDU and TDU (and
+        // five bytes nobody reads). One of them says the server takes
+        // FAST_AUTH - protocol, data types and the first login step in one
+        // message. 23ai sets it; 18c and 21c send the field empty and close
+        // the connection on a FAST_AUTH (compatibility run, 07.10.2026).
+        int flagsAt = NsPacket.HEADER_SIZE + 33;
+        fastAuth = version >= 318 && packetEnd >= flagsAt + 4
+                && (readBigEndian(flagsAt, 4) & ACCEPT_FLAG_FAST_AUTH) != 0;
         if (TRACE) {
             System.err.println("[ns] accept version=" + version + " sdu=" + sdu
                     + " flags=0x" + Integer.toHexString(acceptFlags0) + "/0x"
                     + Integer.toHexString(acceptFlags1));
         }
+    }
+
+    /** The ACCEPT flag that says FAST_AUTH is understood. */
+    static final int ACCEPT_FLAG_FAST_AUTH = 0x10000000;
+    private boolean fastAuth;
+
+    /**
+     * Whether the server takes FAST_AUTH; otherwise protocol, data types and
+     * the login go one by one. Only meaningful after {@link #readAccept}.
+     */
+    public boolean supportsFastAuth() {
+        return fastAuth;
     }
 
     /**

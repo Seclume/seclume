@@ -5,6 +5,115 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Added: client certificates on P-384
+
+`EcClientIdentity` presents a P-256 or a P-384 client certificate - the curve is
+the certificate's, P-384 signing with SHA-384 (`ecdsa_secp384r1_sha384`) - with
+the key off the heap as before: from a secret provider into native memory, into
+CNG or OpenSSL. `clientCert=`/`clientKey-*` take either curve, and so does
+`clientCertThumbprint=` for a key in the Windows certificate store.
+`P256ClientIdentity` keeps its API and still takes P-256 only. Tested against a
+JSSE server held to the whole P-384 profile - P-384 server certificate, the
+secp384r1 group alone, AES-256-GCM with SHA-384, a P-384 client certificate
+demanded - over TLS 1.3 and the TLS 1.2 profile; `EcdsaSigner` has the JDK
+verify its signatures on both curves. Live: PostgreSQL (held to secp384r1) and
+MySQL logins by a P-384 certificate alone.
+
+### Added: servers with Ed25519, Ed448 and RSASSA-PSS certificates
+
+A server whose certificate holds an EdDSA key, or an RSA key restricted to PSS
+(`id-RSASSA-PSS`), can sign with one scheme only - `ed25519`, `ed448` or
+`rsa_pss_pss_*` - and the own stack did not offer them, so such a server
+answered `handshake_failure`. They are offered now and verified by the JDK,
+over TLS 1.3 and the TLS 1.2 profile, where an EdDSA certificate rides on the
+ECDHE_ECDSA suites (RFC 8422). Tested against JSSE servers holding each key.
+
+### Added: Oracle 11g verifier, opt-in
+
+An account whose password was last set where only the 11g verifier is kept -
+on 11g itself - logs in with `legacyVerifier=11g` in the URL, or
+`setLegacyVerifier("11g")` on `OraDataSource`. Off by default: that verifier
+is a single SHA-1 round, and without the option the login is refused with a
+sentence naming the option. The password stays off the Java heap as with the
+12c verifier.
+
+### Changed: TLS 1.2 without the extended master secret is accepted
+
+The own stack asks for the extended master secret (RFC 7627) and uses it
+whenever the server has it, but no longer refuses a server without it - Oracle
+18c and 21c's TCPS among them. What RFC 7627 closes is the triple handshake,
+which needs resumption or renegotiation, and the own stack does neither.
+`-Dseclume.tls.requireExtendedMasterSecret=true` restores the refusal.
+
+### Tested: PostgreSQL 9.6 to 14, SQL Server 2017 and 2019, Oracle 11g, 18c and 21c
+
+Each in a container, against the driver's whole suite; the protocol is in
+SUPPORTED-VERSIONS.md, the matrix in the README. PostgreSQL 9.6-14, SQL Server
+2017/2019 and Oracle 18c and 21c are supported; Oracle 11g with the option below.
+
+### Fixed: PostgreSQL - "prepared statement already exists" after a pooled return
+
+The pool's `DISCARD ALL` is answered just before the next borrower's first
+message. When that message was the first execution of a new plan, the reset's
+ReadyForQuery was counted as the one closing the plan's Parse; the Parse was
+taken for failed and sent again with the next execution, which the server
+refused. Seen as the second slice of a Spring `batchUpdate`.
+
+### Fixed: PostgreSQL before 12 - floats lost digits in the text format
+
+The server's default was 15 significant digits, so `1.0/3` read as
+`0.333333333333333` in text and `0.3333333333333333` in binary. The driver
+sends `extra_float_digits=3` at login now, as pgjdbc does.
+
+### Fixed: PostgreSQL 9.6 and 10 - catalogue calls failed
+
+`getColumns` named `pg_attribute.attidentity` (PostgreSQL 10), and
+`getProcedures`, `getProcedureColumns` and `getFunctions` named
+`pg_proc.prokind` (PostgreSQL 11); on older servers they failed outright. Both
+are read by name at run time now.
+
+### Fixed: Oracle servers before 23ai
+
+- A plaintext listener's `RESEND` is answered with the CONNECT again, not with
+  a TLS handshake. `FAST_AUTH` is sent only to a server that announces it in
+  its ACCEPT; to others protocol, data types and the first login step go one by
+  one.
+- The driver speaks the lower of its own and the server's TTC field version
+  instead of always 23.4: the token number in every call, the newer column
+  fields, the trailing fields of an execute, `oaccolid` and the shape of an
+  error message follow it. `OracleSession.Detached` carries it, and a new
+  `resume` overload takes it.
+- Before protocol 319 the end of an answer is found by walking it to the call's
+  closing status; that walk no longer moves a chunked value it passes over,
+  which spoiled values longer than 252 bytes for the real read after it, and a
+  chunk reaching past what has arrived waits for the next packet instead of
+  breaking the connection.
+- Negative numbers (sign bit in the length byte) are read as such.
+- On 11g: one-byte chunk lengths, and LOB locators of 148 bytes - cut to 112,
+  a read beyond the first blocks ended in `ORA-00600` on the server.
+- A listener's `RESEND` brings up a new TLS session only when its header asks
+  for one; a TLS proxy in front of a plaintext 18c or 21c listener sends none,
+  and the handshake inside it met a server process speaking NS.
+- The first login step carries the token number where the server expects one,
+  so a 23ai server reached without `FAST_AUTH` reads it right too.
+- A malformed LOB answer from such a server ends the call instead of waiting
+  for packets that never come.
+- `legacyVerifier=11g` covers the two 11g verifiers only; an account with the
+  10g one is refused with that reason instead of failing as a wrong password.
+
+### Fixed: Oracle - return parameters with a key/value pair
+
+They were walked over as bare blocks; a server that sends one (11g after every
+select) shifted the walk off the status behind it, and the call waited for an
+answer it had already read.
+
+### Fixed: a client key file longer than 256 bytes
+
+The key's secret provider (`clientKey-*`) was held to the 256 bytes a password
+gets by default, and refused a P-384 key in PKCS#8 PEM (306 bytes as OpenSSL
+writes it) or a key file with `openssl pkcs12` attributes in front. A key file
+may now be up to 4 KiB unless `clientKey-max-length` says otherwise.
+
 ### Fixed: SQL Server - a negative value length could hang the reading thread
 
 A `sql_variant`, `text`, `ntext` or `image` value carries a four-byte length,
@@ -15,7 +124,6 @@ connection, as the Oracle case below. Such a length, or one that would wrap
 round, is now refused as a malformed answer, and the token stream refuses any
 token that does not move it forward. Found by the nightly coverage-guided
 fuzzing; the input is kept as a regression case.
-
 ### Fixed: Oracle - a malformed object column could hang the reading thread
 
 A chunked value inside an object column (`XMLType` and other object types)
@@ -24,6 +132,41 @@ length that came out negative walked the reader backwards over the same bytes
 for ever, so a hostile or broken answer held the caller's thread - and, in a
 pool, a connection. It is now refused as a malformed answer. Found by the
 nightly coverage-guided fuzzing; the input is kept as a regression case.
+
+### Fixed: TLS - smaller things
+
+- A server signing with `rsa_pss_rsae_*` must hold an rsaEncryption key, one
+  signing with `rsa_pss_pss_*` an RSASSA-PSS key (RFC 8446 section 4.2.3); the
+  JDK's verifier takes either key for either scheme, so the client checks it.
+- A client key's `max-length` set in any spelling the provider reads - such as
+  `clientKey-maxlength` - is no longer overridden by the 4096-byte default.
+- A thawed TLS 1.2 connection reports a real suite name to
+  `SSLSession.getCipherSuite()`; the description, which cannot know the
+  server's signature algorithm, keeps it as `*`.
+- A client certificate that fails to sign is reported as that, not as the
+  server refusing the certificate.
+
+### Fixed: TLS 1.2 - a refused client certificate now says so
+
+A TLS 1.2 server judges a client certificate as soon as it reads it and closes
+while the rest of the client's handshake is still being written; the reset
+throws its alert away. The failure was then only "Connection reset by peer".
+It now names the certificate as the likely cause - check the issuer, validity
+and key usage - as the TLS 1.3 handshake already did. Found with PostgreSQL
+and MySQL held to TLS 1.2; certificate logins themselves work over TLS 1.2.
+
+MySQL over TLS 1.3 gets the same sentence: the server checks the certificate
+only after the client's Finished, so the refusal can meet the login on its way
+out instead of the handshake, and was then only "the connection broke while
+sending the login".
+
+### Fixed: a moved connection names its cipher suite again
+
+After a detach and resume, `tlsDescription()` said only `TLSv1.2 (seclume)` or
+`TLSv1.3 (seclume)`. The frozen state carries the key length and the hash,
+which name the suite: `TLSv1.3 / TLS_AES_256_GCM_SHA384`, and for TLS 1.2
+everything but the server's signature algorithm, which is not carried:
+`TLSv1.2 / TLS_ECDHE_*_WITH_AES_256_GCM_SHA384`.
 
 ## [0.11.0] - 2026-10-06
 

@@ -14,18 +14,19 @@ import java.lang.invoke.MethodHandle;
 import space.seclume.secret.SecretScope;
 
 /**
- * ECDSA over P-256 through CNG.
+ * ECDSA over P-256 or P-384 through CNG.
  *
  * <p>Separate from {@link CngP256} because CNG itself separates them: a key
  * imported under {@code ECDH_P256} cannot sign, and one imported under
  * {@code ECDSA_P256} cannot agree. The blob layout is the same but the magic
- * number is not - {@code ECS2} rather than {@code ECK2} - and using the wrong
- * one fails at import, which is the right place for it to fail.
+ * number is not - {@code ECS2} rather than {@code ECK2}, {@code ECS4} for
+ * P-384 - and using the wrong one fails at import, which is the right place
+ * for it to fail.
  *
  * <p>{@code BCryptSignHash} returns the raw pair {@code r || s}; the DER that
- * TLS wants is made in {@link P256Signer}.
+ * TLS wants is made in {@link EcdsaSigner}.
  */
-final class CngP256Signer implements P256Signer.Backend {
+final class CngEcdsaSigner implements EcdsaSigner.Backend {
 
     private static final SymbolLookup LIB =
             SymbolLookup.libraryLookup("bcrypt.dll", Arena.global());
@@ -40,31 +41,28 @@ final class CngP256Signer implements P256Signer.Backend {
     private static final MethodHandle DESTROY_KEY = bind("BCryptDestroyKey", ADDRESS);
     private static final MethodHandle CLOSE = bind("BCryptCloseAlgorithmProvider", ADDRESS, JAVA_INT);
 
-    /** BCRYPT_ECDSA_PRIVATE_P256_MAGIC - 'ECS2', not the 'ECK2' of key agreement. */
-    private static final int PRIVATE_MAGIC = 0x32534345;
-    /** BCRYPT_ECDSA_PUBLIC_P256_MAGIC - 'ECS1'. */
-    private static final int PUBLIC_MAGIC = 0x31534345;
-    /** Magic, key length, x, y, d. */
-    private static final int BLOB_SIZE = 8 + 32 + 32 + 32;
-    /** The same without d. */
-    private static final int PUBLIC_BLOB_SIZE = 8 + 32 + 32;
+    private final EcdsaSigner.Curve curve;
 
     private MemorySegment algorithm = MemorySegment.NULL;
     private MemorySegment key = MemorySegment.NULL;
 
-    CngP256Signer(MemorySegment point, MemorySegment scalar) {
-        try (Arena arena = Arena.ofConfined(); SecretScope blob = SecretScope.allocate(BLOB_SIZE)) {
+    CngEcdsaSigner(EcdsaSigner.Curve curve, MemorySegment point, MemorySegment scalar) {
+        this.curve = curve;
+        int field = curve.field();
+        // Magic, key length, x, y, d.
+        int blobSize = 8 + 3 * field;
+        try (Arena arena = Arena.ofConfined(); SecretScope blob = SecretScope.allocate(blobSize)) {
             MemorySegment handle = arena.allocate(ADDRESS);
-            call(OPEN, handle, wide(arena, "ECDSA_P256"), MemorySegment.NULL, 0);
+            call(OPEN, handle, wide(arena, curve.cngAlgorithm()), MemorySegment.NULL, 0);
             algorithm = handle.get(ADDRESS, 0);
 
-            blob.segment().set(JAVA_INT, 0, PRIVATE_MAGIC);
-            blob.segment().set(JAVA_INT, 4, 32);
-            MemorySegment.copy(point, 1, blob.segment(), 8, 64);   // x and y, without the 0x04
-            MemorySegment.copy(scalar, 0, blob.segment(), 72, 32);
+            blob.segment().set(JAVA_INT, 0, curve.cngPrivateMagic());
+            blob.segment().set(JAVA_INT, 4, field);
+            MemorySegment.copy(point, 1, blob.segment(), 8, 2L * field);   // x and y, without the 0x04
+            MemorySegment.copy(scalar, 0, blob.segment(), 8 + 2L * field, field);
 
             call(IMPORT, algorithm, MemorySegment.NULL, wide(arena, "ECCPRIVATEBLOB"),
-                    handle, blob.segment(), BLOB_SIZE, 0);
+                    handle, blob.segment(), blobSize, 0);
             key = handle.get(ADDRESS, 0);
             checkPair(arena, point);
         } catch (RuntimeException | Error failure) {
@@ -90,23 +88,23 @@ final class CngP256Signer implements P256Signer.Backend {
      * finds out now instead of during a handshake.
      */
     private void checkPair(Arena arena, MemorySegment point) {
-        MemorySegment publicBlob = arena.allocate(PUBLIC_BLOB_SIZE, 4);
-        publicBlob.set(JAVA_INT, 0, PUBLIC_MAGIC);
-        publicBlob.set(JAVA_INT, 4, 32);
-        MemorySegment.copy(point, 1, publicBlob, 8, 64);
+        int field = curve.field();
+        int publicBlobSize = 8 + 2 * field;
+        MemorySegment publicBlob = arena.allocate(publicBlobSize, 4);
+        publicBlob.set(JAVA_INT, 0, curve.cngPublicMagic());
+        publicBlob.set(JAVA_INT, 4, field);
+        MemorySegment.copy(point, 1, publicBlob, 8, 2L * field);
 
         MemorySegment handle = arena.allocate(ADDRESS);
         call(IMPORT, algorithm, MemorySegment.NULL, wide(arena, "ECCPUBLICBLOB"),
-                handle, publicBlob, PUBLIC_BLOB_SIZE, 0);
+                handle, publicBlob, publicBlobSize, 0);
         MemorySegment publicKey = handle.get(ADDRESS, 0);
         try {
-            MemorySegment digest = arena.allocate(P256Signer.FIELD);   // all zeroes will do
-            MemorySegment raw = arena.allocate(2L * P256Signer.FIELD);
+            MemorySegment digest = arena.allocate(field);   // all zeroes will do
+            MemorySegment raw = arena.allocate(2L * field);
             MemorySegment count = arena.allocate(JAVA_INT);
-            call(SIGN, key, MemorySegment.NULL, digest, P256Signer.FIELD,
-                    raw, 2 * P256Signer.FIELD, count, 0);
-            call(VERIFY, publicKey, MemorySegment.NULL, digest, P256Signer.FIELD,
-                    raw, 2 * P256Signer.FIELD, 0);
+            call(SIGN, key, MemorySegment.NULL, digest, field, raw, 2 * field, count, 0);
+            call(VERIFY, publicKey, MemorySegment.NULL, digest, field, raw, 2 * field, 0);
         } catch (IllegalStateException mismatch) {
             throw new IllegalStateException("this private key does not belong to the public key "
                     + "it was given with - check that the certificate and the key file are a "
@@ -119,14 +117,14 @@ final class CngP256Signer implements P256Signer.Backend {
     @Override
     public int sign(MemorySegment digest, MemorySegment der) {
         try (Arena arena = Arena.ofConfined();
-             SecretScope raw = SecretScope.allocate(2 * P256Signer.FIELD)) {
+             SecretScope raw = SecretScope.allocate(2 * curve.field())) {
             MemorySegment count = arena.allocate(JAVA_INT);
             call(SIGN, key, MemorySegment.NULL, digest, (int) digest.byteSize(),
-                    raw.segment(), 2 * P256Signer.FIELD, count, 0);
-            if (count.get(JAVA_INT, 0) != 2 * P256Signer.FIELD) {
+                    raw.segment(), 2 * curve.field(), count, 0);
+            if (count.get(JAVA_INT, 0) != 2 * curve.field()) {
                 throw new IllegalStateException("unexpected CNG ECDSA signature length");
             }
-            return P256Signer.der(raw.segment(), der);
+            return EcdsaSigner.der(raw.segment(), curve.field(), der);
         }
     }
 
@@ -165,12 +163,12 @@ final class CngP256Signer implements P256Signer.Backend {
             int status = (int) function.invokeWithArguments(args);
             if (status != 0) {
                 throw new IllegalStateException(
-                        "CNG ECDSA P-256 failed: NTSTATUS 0x" + Integer.toHexString(status));
+                        "CNG ECDSA failed: NTSTATUS 0x" + Integer.toHexString(status));
             }
         } catch (RuntimeException | Error e) {
             throw e;
         } catch (Throwable e) {
-            throw new IllegalStateException("CNG ECDSA P-256 downcall failed", e);
+            throw new IllegalStateException("CNG ECDSA downcall failed", e);
         }
     }
 }

@@ -75,7 +75,22 @@ public final class OracleSession implements AutoCloseable {
                            ResultLimit resultLimit, TlsMode tls,
                            space.seclume.internal.jdbc.TlsStack tlsStack,
                            space.seclume.tls.ClientIdentity identity,
-                           space.seclume.oracle.net.AdvancedNegotiation.Mode nativeEncryption) {
+                           space.seclume.oracle.net.AdvancedNegotiation.Mode nativeEncryption,
+                           boolean legacyVerifier11g) {
+
+        /**
+         * Without the 11g verifier - the default: an account that has only
+         * the 11g verifier is refused, and says how to allow it.
+         */
+        public Settings(String host, int port, String service, String user,
+                        SecretProvider secret, int connectTimeoutMillis, HostList hosts,
+                        ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity,
+                        space.seclume.oracle.net.AdvancedNegotiation.Mode nativeEncryption) {
+            this(host, port, service, user, secret, connectTimeoutMillis, hosts, resultLimit,
+                    tls, tlsStack, identity, nativeEncryption, false);
+        }
 
         /** Oracle's native network encryption as the server asks - see AdvancedNegotiation.Mode. */
         public Settings(String host, int port, String service, String user,
@@ -145,7 +160,7 @@ public final class OracleSession implements AutoCloseable {
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), service, user, secret,
                     connectTimeoutMillis, hosts, resultLimit, tls, tlsStack, identity,
-                    nativeEncryption);
+                    nativeEncryption, legacyVerifier11g);
         }
 
 
@@ -207,7 +222,18 @@ public final class OracleSession implements AutoCloseable {
      */
     public record Detached(space.seclume.internal.Transport stream, int protocolVersion,
                            int sequence, boolean inTransaction,
-                           space.seclume.internal.TlsLayer tls) {
+                           space.seclume.internal.TlsLayer tls, int ttcFieldVersion) {
+
+        /**
+         * Without the TTC field version: a session of 23ai, which speaks the
+         * newest. A session of an older server has to carry its own - see
+         * {@link #ttcFieldVersion}.
+         */
+        public Detached(space.seclume.internal.Transport stream, int protocolVersion,
+                        int sequence, boolean inTransaction,
+                        space.seclume.internal.TlsLayer tls) {
+            this(stream, protocolVersion, sequence, inTransaction, tls, NEWEST_FIELD_VERSION);
+        }
 
         /** A stream that was in the clear, and therefore carries no encryption. */
         public Detached(space.seclume.internal.Transport stream, int protocolVersion,
@@ -215,6 +241,12 @@ public final class OracleSession implements AutoCloseable {
             this(stream, protocolVersion, sequence, inTransaction, null);
         }
     }
+
+    /**
+     * The TTC field version of 23ai, assumed where a caller does not say -
+     * which was right while 23ai was the only server this driver reached.
+     */
+    public static final int NEWEST_FIELD_VERSION = 0x18;
 
     /**
      * Native Network Encryption's checksum keystream runs on from packet to
@@ -260,7 +292,7 @@ public final class OracleSession implements AutoCloseable {
         }
         space.seclume.internal.TlsLayer tls = channel.tlsLayer();
         Detached detached = new Detached(channel.transport(), channel.protocolVersion(),
-                sequence, inTransaction, tls);
+                sequence, inTransaction, tls, channel.ttcFieldVersion());
         channel.release(tls != null);
         return detached;
     }
@@ -291,7 +323,7 @@ public final class OracleSession implements AutoCloseable {
                     "25000");
         }
         return new Detached(channel.transport(), channel.protocolVersion(), sequence,
-                inTransaction, channel.tlsLayer());
+                inTransaction, channel.tlsLayer(), channel.ttcFieldVersion());
     }
 
     /**
@@ -324,9 +356,24 @@ public final class OracleSession implements AutoCloseable {
                                        int protocolVersion, int sequence,
                                        boolean inTransaction,
                                        space.seclume.internal.TlsLayer tls) {
+        return resume(stream, protocolVersion, sequence, inTransaction, tls,
+                NEWEST_FIELD_VERSION);
+    }
+
+    /**
+     * The same, for a session of any server: the TTC field version decides
+     * which fields its calls have. A 21c session resumed without it wrote
+     * 23ai's token numbers and was answered ORA-03120.
+     */
+    public static OracleSession resume(space.seclume.internal.Transport stream,
+                                       int protocolVersion, int sequence,
+                                       boolean inTransaction,
+                                       space.seclume.internal.TlsLayer tls,
+                                       int ttcFieldVersion) {
         OracleSession session = new OracleSession(tls == null
                 ? NsChannel.over(stream, protocolVersion)
                 : NsChannel.over(stream, protocolVersion, tls));
+        session.channel.serverFieldVersion(ttcFieldVersion);
         session.sequence = sequence;
         session.inTransaction = inTransaction;
         session.autoCommit = !inTransaction;
@@ -656,11 +703,25 @@ public final class OracleSession implements AutoCloseable {
                 // gets a plaintext fatal alert, because the new peer is
                 // waiting for a ClientHello. Opening a new TCP connection
                 // gets RESEND again, because a new connection starts at the
-                // listener. A plaintext listener never does any of this,
-                // which is why it stayed invisible until there was a TCPS
-                // one to test against.
-                channel.startTls(settings.host(), settings.port(),
-                        settings.tls().verifies(), settings.tlsStack(), settings.identity());
+                // listener.
+                //
+                // A plaintext listener asks the same of 18c and 21c, and
+                // there the answer is the CONNECT again and nothing else: a
+                // handshake met a server process that speaks no TLS, and
+                // every login to them ended in "the connection ended in the
+                // middle of a TLS record" (compatibility run, 07.10.2026).
+                // 23ai's plaintext listener does not ask.
+                //
+                // Which of the two it is, the RESEND says in its own header,
+                // and only that tells a TCPS listener from a TLS proxy in
+                // front of a plaintext one: the proxy's TLS ends before the
+                // listener, and a handshake inside it met a server process
+                // answering with NS packets.
+                if (channel.tlsLayer() != null
+                        && (channel.packetFlags() & NsPacket.FLAG_TLS_RENEGOTIATE) != 0) {
+                    channel.startTls(settings.host(), settings.port(),
+                            settings.tls().verifies(), settings.tlsStack(), settings.identity());
+                }
                 type = channel.sendConnect(settings.connectString());
             }
             if (type == NsPacket.TYPE_REFUSE) {
@@ -704,12 +765,26 @@ public final class OracleSession implements AutoCloseable {
                     new TtcDataTypes().negotiate(channel);
                     TtcLogin.phaseTwoExternal(channel, settings.connectString());
                 } else {
-                    TtcAuth.Challenge challenge = TtcFastAuth.open(channel, "seclume",
-                            settings.user());
+                    // One exchange where the server takes FAST_AUTH (23ai),
+                    // the three it took before everywhere else.
+                    TtcAuth.Challenge challenge;
+                    if (channel.supportsFastAuth()) {
+                        challenge = TtcFastAuth.open(channel, "seclume", settings.user());
+                    } else {
+                        new TtcProtocol().negotiate(channel);
+                        new TtcDataTypes().negotiate(channel);
+                        // Withheld like the second step: no length of any
+                        // login message is recorded, as with FAST_AUTH.
+                        channel.nextPacketCarriesTheCredential();
+                        challenge = TtcAuth.phaseOne(channel, settings.user());
+                    }
                     channel.nextPacketCarriesTheCredential();
                     TtcLogin.phaseTwo(channel, settings.user(), settings.secret(), challenge,
-                            settings.connectString());
+                            settings.connectString(), settings.legacyVerifier11g());
                 }
+                // The login's answers are read: nothing is in flight now, which a
+                // server before 319 does not flag - see NsChannel.answerRead.
+                channel.answerRead();
                 OracleSession session = new OracleSession(channel);
                 session.setResultLimit(settings.resultLimit());
                 loggedIn = true;
@@ -1068,12 +1143,15 @@ public final class OracleSession implements AutoCloseable {
                     int length = in.limit() - from;
                     answer.ensureCapacity(answer.position() + length);
                     answer.putBytes(in.segment(), from, length);
-                    if ((channel.dataFlags() & END_OF_ANSWER) != 0) {
+                    if (channel.marksEndOfAnswer()
+                            ? (channel.dataFlags() & END_OF_ANSWER) != 0
+                            : lobComplete(answer, amountFollows, channel.ttcFieldVersion())) {
                         break;
                     }
                 }
+                channel.answerRead();
                 TtcLob.Answer result = TtcLob.read(answer, 0, answer.position(), sink,
-                        amountFollows);
+                        amountFollows, channel.ttcFieldVersion());
                 if (result.tail().isFailure()
                         && result.tail().errorNumber() != TtcResult.ORA_NO_DATA_FOUND) {
                     throw new SQLException("the LOB call failed (ORA-"
@@ -1193,7 +1271,7 @@ public final class OracleSession implements AutoCloseable {
         if (type != NsPacket.TYPE_DATA) {
             throw new SQLException("expected a DATA packet, got " + NsPacket.typeName(type));
         }
-        TtcResult result = new TtcResult(columns, carried);
+        TtcResult result = new TtcResult(columns, carried).fieldVersion(channel.ttcFieldVersion());
         result.expectReturned(returning, returningFromCall, returningCursors);
 
         if ((channel.dataFlags() & END_OF_ANSWER) != 0) {
@@ -1203,11 +1281,15 @@ public final class OracleSession implements AutoCloseable {
             result.read(in, in.position(), in.limit(), handler);
             keep(result);
         } else {
-            try (WireBuffer whole = collectAnswer()) {
+            final int expected = returning;
+            try (WireBuffer whole = collectAnswer(() -> new TtcResult(columns, null)
+                    .fieldVersion(channel.ttcFieldVersion())
+                    .expectingReturned(expected, returningFromCall, returningCursors))) {
                 result.read(whole, 0, whole.position(), handler);
                 keep(result);
             }
         }
+        channel.answerRead();
         if (channel.takeLateBreak()) {
             // Cancelled, and the server acts on it only now - its markers and
             // the ORA-01013 behind them are this call's outcome, not the next
@@ -1275,7 +1357,8 @@ public final class OracleSession implements AutoCloseable {
      *
      * <p>The first packet is already in the channel buffer when this starts.
      */
-    private WireBuffer collectAnswer() throws IOException, SQLException {
+    private WireBuffer collectAnswer(java.util.function.Supplier<TtcResult> probe)
+            throws IOException, SQLException {
         WireBuffer whole = new WireBuffer(32 * 1024);
         while (true) {
             WireBuffer in = channel.packet();
@@ -1283,7 +1366,9 @@ public final class OracleSession implements AutoCloseable {
             int length = in.limit() - from;
             whole.ensureCapacity(whole.position() + length);
             whole.putBytes(in.segment(), from, length);
-            if ((channel.dataFlags() & END_OF_ANSWER) != 0) {
+            if (channel.marksEndOfAnswer()
+                    ? (channel.dataFlags() & END_OF_ANSWER) != 0
+                    : complete(whole, probe)) {
                 return whole;
             }
             int type = drainMarkers(channel.nextPacket());
@@ -1292,6 +1377,43 @@ public final class OracleSession implements AutoCloseable {
                 throw new SQLException("the answer broke off after "
                         + whole.position() + " bytes: " + NsPacket.typeName(type));
             }
+        }
+    }
+
+    /**
+     * Whether what has arrived is the whole answer, for a server before
+     * protocol 319, which marks no packet as the last: a trial walk over it
+     * reaches the call's closing status, or runs out of bytes. The walk
+     * builds nothing that is kept and calls no handler. Anything but running
+     * out - a malformed answer - ends the waiting, so that the real walk
+     * reports it rather than this one waiting for more.
+     */
+    private static boolean complete(WireBuffer whole,
+                                    java.util.function.Supplier<TtcResult> probe) {
+        try {
+            TtcResult trial = probe.get().trial();
+            trial.read(whole, 0, whole.position(), null);
+            return trial.ended();
+        } catch (WireBuffer.Truncated more) {
+            return !more.endOfData();
+        } catch (SQLException | RuntimeException malformed) {
+            return true;
+        }
+    }
+
+    /** The same trial for a LOB call's answer; its data goes into a scratch buffer. */
+    private static boolean lobComplete(WireBuffer answer, boolean amountFollows,
+                                       int fieldVersion) {
+        try (WireBuffer scratch = new WireBuffer(Math.max(64, answer.position()))) {
+            return TtcLob.read(answer, 0, answer.position(), scratch, amountFollows,
+                    fieldVersion).tail().ended();
+        } catch (WireBuffer.Truncated more) {
+            // As in complete(): waiting helps only an answer that ran out of
+            // bytes. A malformed one does not become well formed by waiting,
+            // and waiting for it held the caller's thread and the connection.
+            return !more.endOfData();
+        } catch (SQLException | RuntimeException malformed) {
+            return true;
         }
     }
 

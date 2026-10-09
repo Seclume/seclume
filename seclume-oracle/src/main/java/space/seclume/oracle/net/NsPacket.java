@@ -83,6 +83,16 @@ public final class NsPacket {
 
     /** The level this client aims for. */
     public static final int VERSION_DESIRED = 319;
+    /** From this protocol version on, the last packet of an answer is flagged. */
+    public static final int VERSION_END_OF_RESPONSE = 319;
+
+    /**
+     * In a RESEND's header: the server process behind the listener brings up
+     * a TLS session of its own, and the CONNECT goes again inside it. Without
+     * it the CONNECT goes again as it is - also over TLS, when the TLS is a
+     * proxy's in front of a plaintext listener.
+     */
+    public static final int FLAG_TLS_RENEGOTIATE = 0x08;
     /** Anything below this is not supported. */
     public static final int VERSION_MINIMUM = 300;
     /** From here on the header length is four bytes instead of two. */

@@ -169,21 +169,12 @@ public final class TtcLob {
             out.putByte((byte) length);
             out.putBytes(data.segment(), 0, length);
         } else {
-            out.putByte((byte) CHUNKED);
-            int written = 0;
-            while (written < length) {
-                int chunk = Math.min(CHUNK_SIZE, length - written);
-                TtcParameters.putNumber(out, chunk);
-                out.putBytes(data.segment(), written, chunk);
-                written += chunk;
-            }
-            TtcParameters.putNumber(out, 0);
+            TtcParameters.putChunked(out, data.segment(), 0, length,
+                    TtcParameters.bigChunks(channel.ttcFieldVersion()));
         }
         channel.sendData();
     }
 
-    /** How much goes into one chunk: 0x7fff. */
-    private static final int CHUNK_SIZE = 32767;
 
     /** The largest payload length that fits in a single length byte. */
     private static final int SHORT_LENGTH = 252;
@@ -280,6 +271,13 @@ public final class TtcLob {
      */
     public static Answer read(WireBuffer in, int at, int end, WireBuffer sink,
                               boolean amountFollows) throws SQLException {
+        return read(in, at, end, sink, amountFollows, TtcDataTypes.FIELD_VERSION);
+    }
+
+    /** The same from a server of {@code fieldVersion}: its chunks and its error message. */
+    public static Answer read(WireBuffer in, int at, int end, WireBuffer sink,
+                              boolean amountFollows, int fieldVersion) throws SQLException {
+        boolean bigChunks = TtcParameters.bigChunks(fieldVersion);
         int p = at;
         long reported = -1;
         int locatorAt = -1;
@@ -287,7 +285,7 @@ public final class TtcLob {
         while (p < end) {
             int type = in.getByte(p) & 0xff;
             if (type == TtcMessage.TYPE_LOB_DATA) {
-                p = readData(in, p + 1, end, sink);
+                p = readData(in, p + 1, end, sink, bigChunks);
             } else if (type == TtcMessage.TYPE_PARAMETER) {
                 Returned returned = readReturned(in, p + 1, amountFollows);
                 reported = returned.value();
@@ -298,7 +296,7 @@ public final class TtcLob {
                 break;
             }
         }
-        TtcResult tail = new TtcResult();
+        TtcResult tail = new TtcResult().fieldVersion(fieldVersion);
         tail.read(in, p, end, null);
         return new Answer(tail, reported, locatorAt, locatorLength);
     }
@@ -315,13 +313,14 @@ public final class TtcLob {
     }
 
     /** The contents: one length and the bytes, or a chain of chunks. */
-    private static int readData(WireBuffer in, int at, int end, WireBuffer sink) {
+    private static int readData(WireBuffer in, int at, int end, WireBuffer sink,
+                                boolean bigChunks) {
         int p = at;
         int length = in.getByte(p) & 0xff;
         p++;
         if (length != CHUNKED) {
             if (length > 0) {
-                append(sink, in, p, length);
+                append(sink, in, p, length, end);
                 p += length;
             }
             return p;
@@ -330,20 +329,37 @@ public final class TtcLob {
             int lengthOfLength = in.getByte(p) & 0xff;
             p++;
             long chunk = 0;
-            for (int i = 0; i < lengthOfLength; i++) {
-                chunk = (chunk << 8) | (in.getByte(p + i) & 0xff);
+            if (bigChunks) {
+                if (lengthOfLength > 4) {
+                    throw WireBuffer.malformed("a LOB chunk length of " + lengthOfLength
+                            + " bytes");
+                }
+                for (int i = 0; i < lengthOfLength; i++) {
+                    chunk = (chunk << 8) | (in.getByte(p + i) & 0xff);
+                }
+                p += lengthOfLength;
+            } else {
+                chunk = lengthOfLength;                   // before 12.1: the byte is the length
             }
-            p += lengthOfLength;
             if (chunk == 0) {
                 break;                                    // the chain ends on a zero length
             }
-            append(sink, in, p, chunk);
+            append(sink, in, p, chunk, end);
             p += (int) chunk;
         }
         return p;
     }
 
-    private static void append(WireBuffer sink, WireBuffer in, int at, long length) {
+    /**
+     * Copies a piece of the contents out. One that reaches past what has
+     * arrived is out of data, not malformed: before protocol 319 the answer
+     * is still being collected, and the rest is in the next packet.
+     */
+    private static void append(WireBuffer sink, WireBuffer in, int at, long length, int end) {
+        if (length > end - at) {
+            throw WireBuffer.Truncated.outOfData("a LOB piece of " + length
+                    + " bytes where " + (end - at) + " have arrived");
+        }
         sink.ensureCapacity(sink.position() + (int) length);
         sink.putBytes(in.segment(), at, length);
     }

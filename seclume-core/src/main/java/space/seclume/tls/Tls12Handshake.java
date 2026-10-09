@@ -70,15 +70,17 @@ final class Tls12Handshake {
     }
 
     /**
-     * Whether a TLS 1.2 server has to support the extended master secret: yes,
-     * unless {@code -Dseclume.tls.requireExtendedMasterSecret=false} says
-     * otherwise - for a server too old to have it. Without it the master
-     * secret is derived from the two randoms as RFC 5246 does; what RFC 7627
-     * closes is the triple handshake, which needs resumption or renegotiation,
-     * and this client does neither.
+     * Whether a TLS 1.2 server has to support the extended master secret: no,
+     * unless {@code -Dseclume.tls.requireExtendedMasterSecret=true} says so.
+     * It is asked for and used whenever the server has it. Without it the
+     * master secret is derived from the two randoms as RFC 5246 does; what
+     * RFC 7627 closes is the triple handshake, which needs resumption or
+     * renegotiation, and this client does neither - so requiring it bought
+     * nothing but refusing servers too old to have it, Oracle 18c's TCPS
+     * among them.
      */
     static boolean requireExtendedMasterSecret() {
-        return !"false".equalsIgnoreCase(
+        return "true".equalsIgnoreCase(
                 System.getProperty("seclume.tls.requireExtendedMasterSecret"));
     }
 
@@ -170,8 +172,8 @@ final class Tls12Handshake {
             throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
                     "the TLS 1.2 server does not support the extended master secret (RFC 7627); "
                             + "without it the master secret is not bound to this handshake, "
-                            + "and this client refuses to derive one "
-                            + "(-Dseclume.tls.requireExtendedMasterSecret=false allows it)");
+                            + "and -Dseclume.tls.requireExtendedMasterSecret=true says to refuse "
+                            + "such a server");
         }
         if (!seen[1]) {
             throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
@@ -316,10 +318,9 @@ final class Tls12Handshake {
         ClientHandshake.requireAuthenticatedServer(chain, signed[0]);
 
         // ---- our flight -----------------------------------------------------
-        boolean presented = false;
-        ClientIdentity signer = null;
+        ClientIdentity signer = request[0] == null || identity == null
+                ? null : identity.forHandshake();
         if (request[0] != null) {
-            signer = identity == null ? null : identity.forHandshake();
             if (signer != null && !request[0].accepts(signer.signatureScheme())) {
                 // The server would refuse a signature it did not ask for;
                 // saying so here is clearer than its handshake_failure.
@@ -329,6 +330,10 @@ final class Tls12Handshake {
             }
             sendCertificate(records, transcript, handshakeLog, signer, arena);
         }
+        // From here on our certificate is out. A TLS 1.2 server judges it as
+        // soon as it reads it, so a refusal - and the reset that swallows its
+        // alert - can already meet the rest of our flight being written.
+        boolean presented = signer != null;
 
         NativeEcdh.Group curve = NativeEcdh.Group.of(curveOf(serverPoint[0]));
         try (NativeEcdh keyExchange = NativeEcdh.generate(curve);
@@ -348,7 +353,8 @@ final class Tls12Handshake {
                 refused.initCause(badPoint);
                 throw refused;
             }
-            sendClientKeyExchange(records, transcript, handshakeLog, keyExchange, arena);
+            afterCertificate(presented, () -> sendClientKeyExchange(records, transcript,
+                    handshakeLog, keyExchange, arena));
 
             if (extendedMasterSecret) {
                 // RFC 7627: the master secret from the hash of everything up to
@@ -366,14 +372,16 @@ final class Tls12Handshake {
             premaster.fill((byte) 0);
 
             if (signer != null) {
+                // Not wrapped as a whole: a signature that fails here is this
+                // client's own problem, and must not be reported as the server
+                // refusing the certificate. Only the write is.
                 sendCertificateVerify(records, transcript, handshakeLog, signer, arena);
-                presented = true;
             }
 
             RecordProtection[] keys = keyBlock(suite, masterSecret, clientRandom, serverRandom);
             RecordProtection serverKeys = keys[1];
             try {
-                records.writeChangeCipherSpec();
+                afterCertificate(presented, records::writeChangeCipherSpec);
                 records.writeWith(keys[0]);
 
                 transcript.current(hashed, 0);
@@ -382,13 +390,8 @@ final class Tls12Handshake {
                 finished.set(ValueLayout.JAVA_BYTE, 3, (byte) VERIFY_DATA);
                 Tls12Prf.derive(hash, masterSecret, "client finished", hashed,
                         finished, Handshake.HEADER, VERIFY_DATA);
-                try {
-                    records.write((byte) 22, finished, 0, Handshake.HEADER + VERIFY_DATA);
-                } catch (TlsAlertException alert) {
-                    throw alert;
-                } catch (IOException gone) {
-                    throw ClientHandshake.refusedAfterCertificate(gone, presented);
-                }
+                afterCertificate(presented, () -> records.write((byte) 22, finished, 0,
+                        Handshake.HEADER + VERIFY_DATA));
                 transcript.update(finished, 0, Handshake.HEADER + VERIFY_DATA);
 
                 // ---- the server's ChangeCipherSpec and Finished ----------------
@@ -495,10 +498,16 @@ final class Tls12Handshake {
         }
     }
 
-    /** The certificate's key has to be the kind the suite authenticates with. */
+    /**
+     * The certificate's key has to be the kind the suite authenticates with.
+     * The ECDHE_ECDSA suites carry EdDSA certificates as well (RFC 8422,
+     * section 5.1); an RSASSA-PSS key is an RSA key to the RSA suites.
+     */
     private static void requireKeyFor(Suite suite, X509Certificate leaf)
             throws TlsProtocolException {
-        boolean ok = suite.ecdsa() ? leaf.getPublicKey() instanceof ECPublicKey
+        boolean ok = suite.ecdsa()
+                ? leaf.getPublicKey() instanceof ECPublicKey
+                        || leaf.getPublicKey() instanceof java.security.interfaces.EdECPublicKey
                 : leaf.getPublicKey() instanceof RSAPublicKey;
         if (!ok) {
             throw new TlsProtocolException(TlsAlertException.HANDSHAKE_FAILURE,
@@ -653,6 +662,27 @@ final class Tls12Handshake {
         }
     }
 
+    /** One write of our flight. */
+    interface FlightWrite {
+        void run() throws IOException;
+    }
+
+    /**
+     * A write after our certificate went out: the connection failing there is
+     * most likely the server refusing the certificate, and is named so - see
+     * {@link ClientHandshake#refusedAfterCertificate}. An alert that did
+     * arrive says it better and is passed on as it is.
+     */
+    static void afterCertificate(boolean presented, FlightWrite write) throws IOException {
+        try {
+            write.run();
+        } catch (TlsAlertException alert) {
+            throw alert;
+        } catch (IOException gone) {
+            throw ClientHandshake.refusedAfterCertificate(gone, presented);
+        }
+    }
+
     private static void sendCertificate(RecordStream records, TranscriptHash transcript,
             ByteArrayOutputStream log, ClientIdentity identity, Arena arena) throws IOException {
         List<byte[]> chain = identity == null ? List.of() : identity.chain();
@@ -704,7 +734,7 @@ final class Tls12Handshake {
         }
         MemorySegment message = arena.allocate(Handshake.HEADER + 4L + signature.length);
         int length = CertificateVerifyMessage.write(message, identity.signatureScheme(), signature);
-        records.write((byte) 22, message, 0, length);
+        afterCertificate(true, () -> records.write((byte) 22, message, 0, length));
         transcript.update(message, 0, length);
         log(log, message, 0, length);
     }

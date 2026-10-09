@@ -194,6 +194,9 @@ class LocalCancelTest {
             }
             long millis = (System.nanoTime() - before) / 1_000_000L;
             canceller.join();
+            // ORA-06550: dbms_session.sleep came with 18c.
+            org.junit.jupiter.api.Assumptions.assumeFalse(cancelled != null
+                    && cancelled.getMessage().contains("ORA-06550"), "no dbms_session.sleep");
             assertNotNull(cancelled, "the sleep finished as a success after " + millis
                     + " ms although it was cancelled");
             assertTrue(cancelled.getMessage().contains(ORA_CANCELLED), cancelled.getMessage());

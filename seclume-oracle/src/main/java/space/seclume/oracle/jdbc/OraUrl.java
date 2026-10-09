@@ -97,9 +97,23 @@ final class OraUrl {
                     // Oracle's own encryption, for listeners that require it
                     // (SQLNET.ENCRYPTION_SERVER) rather than offering TCPS.
                     space.seclume.oracle.net.AdvancedNegotiation.Mode.of(
-                            parsed.option("nativeEncryption", null)));
+                            parsed.option("nativeEncryption", null)),
+                    // An account that has only the 11g password verifier
+                    // (SHA-1) - off unless asked for by name.
+                    legacyVerifier(parsed.option("legacyVerifier", null)));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }
+    }
+
+    /** {@code legacyVerifier=11g} allows the 11g verifier; nothing else is a value. */
+    static boolean legacyVerifier(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        if (value.trim().equalsIgnoreCase("11g")) {
+            return true;
+        }
+        throw new IllegalArgumentException("legacyVerifier takes 11g, not '" + value + "'");
     }
 }

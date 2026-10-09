@@ -58,6 +58,29 @@ public final class TtcRow {
 
     private int end;
 
+    /** Whether chunk lengths are numbers (12.1 on) or single bytes - see TtcParameters. */
+    private boolean bigChunks = true;
+
+    /**
+     * A row for a trial walk, which must leave the answer as it found it:
+     * chunks are walked over instead of moved together, so the real walk
+     * after it reads the bytes the server sent. Without this a value of more
+     * than 252 bytes reached the real walk already compacted, on every
+     * server before 23ai - where a trial walk finds the end of an answer.
+     */
+    private boolean dry;
+
+    TtcRow dry() {
+        this.dry = true;
+        return this;
+    }
+
+    /** Reads chunks as a server of {@code fieldVersion} writes them. */
+    TtcRow chunksOf(int fieldVersion) {
+        this.bigChunks = TtcParameters.bigChunks(fieldVersion);
+        return this;
+    }
+
     public TtcRow(WireBuffer in, List<OracleColumn> columns) {
         this.in = in;
         this.columns = columns;
@@ -361,7 +384,7 @@ public final class TtcRow {
             // without a limit turned negative and walked p backwards, round
             // and round over the same bytes (Jazzer, 06.10.2026).
             int chunk = chunkLength(p, lengthOfLength);
-            p += lengthOfLength;
+            p += bigChunks ? lengthOfLength : 0;
             if (chunk == 0) {
                 return p;
             }
@@ -439,7 +462,7 @@ public final class TtcRow {
             int lengthOfLength = in.getByte(read) & 0xff;
             read++;
             int chunk = chunkLength(read, lengthOfLength);
-            read += lengthOfLength + chunk;
+            read += (bigChunks ? lengthOfLength : 0) + chunk;
             if (chunk == 0) {
                 return read;
             }
@@ -456,6 +479,11 @@ public final class TtcRow {
      * moves; a gap is left where the lengths were.
      */
     private int readChunked(int at, int column) {
+        if (dry) {
+            cells[column * 2] = at;
+            cells[column * 2 + 1] = -1;
+            return skipChunks(at);
+        }
         int write = at;
         int read = at;
         int total = 0;
@@ -463,7 +491,7 @@ public final class TtcRow {
             int lengthOfLength = in.getByte(read) & 0xff;
             read++;
             int chunk = chunkLength(read, lengthOfLength);
-            read += lengthOfLength;
+            read += bigChunks ? lengthOfLength : 0;
             if (chunk == 0) {
                 break;
             }
@@ -485,6 +513,14 @@ public final class TtcRow {
      * malformed answer instead.
      */
     private int chunkLength(int at, int lengthOfLength) {
+        if (!bigChunks) {
+            // Before 12.1 the byte is the chunk's length itself.
+            if (lengthOfLength > in.segment().byteSize() - at) {
+                throw space.seclume.internal.WireBuffer.Truncated.outOfData("a chunk of "
+                        + lengthOfLength + " bytes in an answer that has fewer left");
+            }
+            return lengthOfLength;
+        }
         if (lengthOfLength > 4) {
             throw space.seclume.internal.WireBuffer.malformed("a chunk length of "
                     + lengthOfLength + " bytes");
@@ -494,7 +530,10 @@ public final class TtcRow {
             chunk = (chunk << 8) | (in.getByte(at + i) & 0xff);
         }
         if (chunk > in.segment().byteSize() - at - lengthOfLength) {
-            throw space.seclume.internal.WireBuffer.malformed("a chunk of " + chunk
+            // Out of data rather than malformed: an answer still being
+            // collected has its next packet to come (21c, a JSON value of
+            // 100 KB in the row).
+            throw space.seclume.internal.WireBuffer.Truncated.outOfData("a chunk of " + chunk
                     + " bytes in an answer that has fewer left");
         }
         return (int) chunk;

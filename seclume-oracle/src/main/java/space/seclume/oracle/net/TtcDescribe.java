@@ -64,6 +64,14 @@ public final class TtcDescribe {
      * @param introduced whether the leading block is there
      */
     public static Parsed read(WireBuffer in, int at, boolean introduced) {
+        return read(in, at, introduced, TtcDataTypes.FIELD_VERSION);
+    }
+
+    /**
+     * The same for a connection speaking {@code fieldVersion}: the fields of
+     * 23.1 and 23.4 at the end of each column are there only from those on.
+     */
+    public static Parsed read(WireBuffer in, int at, boolean introduced, int fieldVersion) {
         Reader reader = new Reader(in, at);
         if (introduced) {
             reader.block();                            // a block that is skipped
@@ -85,7 +93,7 @@ public final class TtcDescribe {
 
         List<OracleColumn> columns = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            columns.add(readColumn(reader));
+            columns.add(readColumn(reader, fieldVersion));
         }
 
         // One number between the last column and the trailer - once, not once
@@ -117,7 +125,7 @@ public final class TtcDescribe {
         return new Parsed(List.copyOf(columns), reader.at());
     }
 
-    private static OracleColumn readColumn(Reader in) {
+    private static OracleColumn readColumn(Reader in, int fieldVersion) {
         int type = in.byteValue();
         in.byteValue();                                // flags
         int precision = in.byteValue();
@@ -137,7 +145,9 @@ public final class TtcDescribe {
         int charset = (int) in.number();
         in.byteValue();                                // character set form
         int maxSize = (int) in.number();
-        in.number();                                   // oaccolid
+        if (fieldVersion >= TtcQuery.FIELD_VERSION_12_2) {
+            in.number();                               // oaccolid, from 12.2 on
+        }
         boolean nullable = in.byteValue() != 0;
         // The name length arrives three times in a row: as a byte, as a
         // number, and as the block prefix in front of the letters. Only the
@@ -149,9 +159,21 @@ public final class TtcDescribe {
         String typeName = in.number() > 0 ? in.text() : ""; // and its name
         in.number();                                   // column position
         in.number();                                   // UDS flags
+        // What came with 23.1 and 23.4 is there only when both ends speak it:
+        // a 21c server ends the column after the UDS flags.
+        if (fieldVersion < FIELD_VERSION_23_1) {
+            return column(name, type, precision, scale, bufferSize, maxSize, charset, nullable,
+                    schema, typeName);
+        }
         in.block();                                    // domain schema (23.1)
         in.block();                                    // domain name (23.1)
-        in.number();                                   // number of annotations (23.1)
+        if (fieldVersion >= FIELD_VERSION_23_1_EXT_3) {
+            in.number();                               // number of annotations (23.1)
+        }
+        if (fieldVersion < FIELD_VERSION_23_4) {
+            return column(name, type, precision, scale, bufferSize, maxSize, charset, nullable,
+                    schema, typeName);
+        }
         // 23.4: a vector's dimensions as a number, then its format and flags
         // as one byte each - not as numbers. For every other column all
         // three are zero and a zero reads the same either way, which is why
@@ -161,6 +183,18 @@ public final class TtcDescribe {
         in.number();                                   // dimensions
         in.byteValue();                                // format
         in.byteValue();                                // flags
+        return column(name, type, precision, scale, bufferSize, maxSize, charset, nullable,
+                schema, typeName);
+    }
+
+    /** TTC field versions that add to a column's description (python-oracledb's numbering). */
+    static final int FIELD_VERSION_23_1 = 17;
+    static final int FIELD_VERSION_23_1_EXT_3 = 20;
+    static final int FIELD_VERSION_23_4 = 24;
+
+    private static OracleColumn column(String name, int type, int precision, int scale,
+            int bufferSize, int maxSize, int charset, boolean nullable, String schema,
+            String typeName) {
         return new OracleColumn(name, type, precision, scale, bufferSize, maxSize,
                 charset, nullable, type == OracleColumn.TYPE_OBJECT
                         ? (schema.isEmpty() ? typeName : schema + "." + typeName) : "");
@@ -189,12 +223,14 @@ public final class TtcDescribe {
         }
 
         long number() {
-            int length = byteValue();
+            // The top bit of the length byte is the sign - see TtcResult.number.
+            int head = byteValue();
+            int length = head & 0x7f;
             long value = 0;
             for (int i = 0; i < length; i++) {
                 value = (value << 8) | byteValue();
             }
-            return value;
+            return (head & 0x80) != 0 ? -value : value;
         }
 
         /** A block of bytes; beyond 252 it arrives in chunks. */

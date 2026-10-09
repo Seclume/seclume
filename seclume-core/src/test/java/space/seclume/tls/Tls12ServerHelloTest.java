@@ -27,16 +27,6 @@ class Tls12ServerHelloTest {
     private static final byte[] DOWNGRADE = {0x44, 0x4F, 0x57, 0x4E, 0x47, 0x52, 0x44, 0x01};
 
     @Test
-    void withoutTheExtendedMasterSecretItIsRefused() {
-        Peer peer = new Peer(id -> serverHello(0x0303, plainRandom(), 0xC02F,
-                renegotiationInfo()));
-        TlsProtocolException refused = refused(peer);
-        assertEquals(TlsAlertException.HANDSHAKE_FAILURE, refused.alert());
-        assertTrue(refused.getMessage().contains("extended master secret"), refused.getMessage());
-        assertEquals(TlsAlertException.HANDSHAKE_FAILURE, peer.alertSent());
-    }
-
-    @Test
     void withoutSecureRenegotiationItIsRefused() {
         Peer peer = new Peer(id -> serverHello(0x0303, plainRandom(), 0xC02F,
                 extendedMasterSecret()));

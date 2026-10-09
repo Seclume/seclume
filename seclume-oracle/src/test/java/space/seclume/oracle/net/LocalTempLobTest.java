@@ -53,7 +53,8 @@ class LocalTempLobTest {
         } catch (IOException e) {
             Assumptions.abort("no Oracle listener on " + HOST + ":" + PORT);
         }
-        url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/FREEPDB1"
+        url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/"
+                + System.getProperty("seclume.oracle.service", "FREEPDB1")
                 + "?user=seclume_test&provider=file&path="
                 + password.toString().replace(File.separatorChar, '/');
     }

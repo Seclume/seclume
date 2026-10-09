@@ -107,20 +107,40 @@ public final class TestCertificates implements AutoCloseable {
      * it can sign with off the heap.
      */
     public Issued issueEc(String alias, String... extensions) throws Exception {
-        return issue(alias, true, extensions);
+        return issue(alias, "secp256r1", extensions);
+    }
+
+    /** The same on P-384 - what FIPS and CNSA configurations issue. */
+    public Issued issueP384(String alias, String... extensions) throws Exception {
+        return issue(alias, "secp384r1", extensions);
     }
 
     private Issued issue(String alias, boolean ec, String... extensions) throws Exception {
+        return issue(alias, ec ? "secp256r1" : null, extensions);
+    }
+
+    /** @param group the EC group, or null for RSA */
+    private Issued issue(String alias, String group, String... extensions) throws Exception {
+        List<String> key = group != null
+                ? List.of("-keyalg", "EC", "-groupname", group, "-sigalg",
+                        group.equals("secp384r1") ? "SHA384withECDSA" : "SHA256withECDSA")
+                : List.of("-keyalg", "RSA", "-keysize", "2048", "-sigalg", "SHA256withRSA");
+        return issueWith(alias, key, extensions);
+    }
+
+    /**
+     * Any key keytool makes: {@code -keyalg Ed25519}, or {@code -keyalg
+     * RSASSA-PSS} for an RSA key restricted to PSS - the certificates whose
+     * signature schemes a client has to offer by name.
+     */
+    public Issued issueWith(String alias, List<String> keyOptions, String... extensions)
+            throws Exception {
         Path store = directory.resolve(alias + ".p12");
         Path request = directory.resolve(alias + ".csr");
         Path signed = directory.resolve(alias + ".cer");
 
-        List<String> genkey = ec
-                ? List.of(keytool, "-genkeypair", "-alias", alias, "-keyalg", "EC",
-                        "-groupname", "secp256r1", "-sigalg", "SHA256withECDSA")
-                : List.of(keytool, "-genkeypair", "-alias", alias, "-keyalg", "RSA",
-                        "-keysize", "2048", "-sigalg", "SHA256withRSA");
-        List<String> command = new ArrayList<>(genkey);
+        List<String> command = new ArrayList<>(List.of(keytool, "-genkeypair", "-alias", alias));
+        command.addAll(keyOptions);
         command.addAll(List.of("-dname", "CN=" + alias, "-validity", "2",
                 "-keystore", store.toString(), "-storetype", "PKCS12",
                 "-storepass", PASSWORD, "-keypass", PASSWORD));

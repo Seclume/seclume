@@ -67,6 +67,9 @@ public final class ClientIdentities {
     /** Which Windows store: {@code CurrentUser} (the default) or {@code LocalMachine}. */
     public static final String STORE = "clientCertStore";
 
+    /** How long a client key file may be unless {@code clientKey-max-length} says otherwise. */
+    static final int KEY_MAX_LENGTH = 4096;
+
     private ClientIdentities() {
     }
 
@@ -109,6 +112,17 @@ public final class ClientIdentities {
                     + "says where its private key comes from - add " + KEY_PREFIX + "provider "
                     + "and its settings, for example " + KEY_PREFIX + "provider=file and "
                     + KEY_PREFIX + "path=/etc/tls/client.key");
+        }
+        // A key file is no password: a P-384 key in PKCS#8 PEM is over 300
+        // bytes, past the 256 a secret is held to by default. Unless the
+        // settings say otherwise, a key file may be up to 4 KiB.
+        // Any spelling the provider would read counts as set - it matches
+        // without case or hyphens, and a default under the exact name would
+        // win over clientKey-maxlength=8192.
+        boolean set = key.keySet().stream()
+                .anyMatch(name -> name.replace("-", "").equalsIgnoreCase("maxlength"));
+        if (!set) {
+            key.put("max-length", String.valueOf(KEY_MAX_LENGTH));
         }
         return IDENTITIES.computeIfAbsent(cacheKey(certificate, key), ignored -> {
             SecretProvider secret = SecretProviders.of(new LinkedHashMap<>(key));
