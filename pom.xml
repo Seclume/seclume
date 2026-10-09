@@ -111,6 +111,13 @@
 
   <dependencyManagement>
     <dependencies>
+      <!-- Pinned for CVE-2026-106451 (arbitrary code execution); arrives
+           transitively, through the Spring Boot starter's Kafka support. -->
+      <dependency>
+        <groupId>at.yawk.lz4</groupId>
+        <artifactId>lz4-java</artifactId>
+        <version>1.11.4</version>
+      </dependency>
       <!-- Coverage-guided fuzzing: an ordinary build replays the saved
            inputs, JAZZER_FUZZ=1 searches for new ones. Tests only. -->
       <dependency>
