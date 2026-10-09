@@ -171,6 +171,13 @@ class LocalOracleJsonTest {
     private static void recreate(Statement statement) throws Exception {
         statement.execute("begin execute immediate 'drop table zl_json purge'; "
                 + "exception when others then null; end;");
-        statement.execute("create table zl_json (id number, j json)");
+        try {
+            statement.execute("create table zl_json (id number, j json)");
+        } catch (java.sql.SQLException noJsonType) {
+            // JSON as a type of its own arrived in 21c: 18c answers ORA-00902.
+            Assumptions.assumeTrue(noJsonType.getErrorCode() != 902,
+                    "this server has no JSON type (ORA-00902)");
+            throw noJsonType;
+        }
     }
 }

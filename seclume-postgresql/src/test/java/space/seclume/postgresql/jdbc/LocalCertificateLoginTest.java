@@ -87,6 +87,26 @@ class LocalCertificateLoginTest {
         assertEquals(0, SecretScope.open(), "a secret scope was left open");
     }
 
+    /**
+     * The same user with a P-384 certificate from the same issuer - the curve
+     * FIPS and CNSA configurations issue. Present when {@code certuser-p384.*}
+     * is in {@code .local-certauth}.
+     */
+    @Test
+    void aP384CertificateLogsInTheSameWay() throws Exception {
+        Assumptions.assumeTrue(Files.exists(certificates.resolve("certuser-p384.crt")),
+                "no certuser-p384.crt in .local-certauth");
+        try (Connection connection = DriverManager.getConnection(
+                url("certuser", "certuser-p384"));
+             Statement statement = connection.createStatement();
+             ResultSet row = statement.executeQuery("select current_user")) {
+            assertEquals("cert", connection.unwrap(PgSession.class).authenticationMethod());
+            assertTrue(row.next());
+            assertEquals("certuser", row.getString(1));
+        }
+        assertEquals(0, SecretScope.open(), "a secret scope was left open");
+    }
+
     /** A valid certificate for another name is not this user's. */
     @Test
     void anotherNamesCertificateIsRefusedByTheServer() {
@@ -103,9 +123,13 @@ class LocalCertificateLoginTest {
         SQLException refused = assertThrows(SQLException.class,
                 () -> DriverManager.getConnection(url("certuser", "forged")).close());
         // The server's alert is usually lost to the reset that follows it,
-        // so the driver has to name the certificate itself.
-        assertTrue(refused.getMessage().contains("right after the client certificate was sent"),
-                refused.getMessage());
+        // so the driver has to name the certificate itself. When the alert
+        // does arrive - a matter of timing, seen under the load of a full
+        // build - it is passed on as it is, and says it better.
+        String said = refused.getMessage();
+        assertTrue(said.contains("right after the client certificate was sent")
+                || said.contains("unknown_ca") || said.contains("bad_certificate")
+                || said.contains("certificate_unknown"), said);
     }
 
     /** No certificate at all, where the server demands one. */

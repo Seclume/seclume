@@ -67,8 +67,6 @@ public final class TtcBinds {
     private static final int YEAR_BIAS = 100;
     /** Up to this length a value carries a single length byte. */
     private static final int SHORT_LENGTH = 252;
-    /** The length byte that says "chunks follow". */
-    private static final int CHUNKED = 0xfe;
     /** How much goes into one chunk. */
     private static final int CHUNK_SIZE = 32767;
 
@@ -118,14 +116,14 @@ public final class TtcBinds {
      * @param buffer where the locator lies
      * @param at     its first byte
      * @param length how long it is — 38 for a temporary LOB, 112 for a
-     *               persistent one; never assumed
+     *               persistent one (148 from 11g); never assumed
      */
     public record Locator(WireBuffer buffer, int at, int length, boolean character) {
     }
 
     /**
-     * The buffer size the server is told for a locator: 112, whatever the
-     * locator itself is long. The same for both kinds.
+     * The buffer size the server is told for a locator: 112, or the locator's
+     * own length where that is more. The same for both kinds.
      */
     private static final long LOCATOR_BUFFER = 112;
 
@@ -249,6 +247,16 @@ public final class TtcBinds {
      * @param sizes the buffer size per variable, or {@code null} for this row
      */
     public void putDescriptors(WireBuffer out, long[] sizes) throws SQLException {
+        putDescriptors(out, sizes, TtcDataTypes.FIELD_VERSION);
+    }
+
+    /** How the values of this message are chunked - set with the descriptors. */
+    private boolean bigChunks = true;
+
+    /** The same for a server of {@code fieldVersion}: before 12.2 there is no oaccolid. */
+    public void putDescriptors(WireBuffer out, long[] sizes, int fieldVersion)
+            throws SQLException {
+        bigChunks = TtcParameters.bigChunks(fieldVersion);
         messageRules = null;                           // a new message, a fresh look
         described = new boolean[values.size()];
         for (int index = 0; index < values.size(); index++) {
@@ -273,7 +281,9 @@ public final class TtcBinds {
             TtcParameters.putNumber(out, text ? CHARSET : 0);
             out.putByte((byte) (text ? CSFRM_IMPLICIT : 0));
             TtcParameters.putNumber(out, 0);           // largest character count
-            TtcParameters.putNumber(out, 0);           // oaccolid
+            if (fieldVersion >= TtcQuery.FIELD_VERSION_12_2) {
+                TtcParameters.putNumber(out, 0);       // oaccolid
+            }
         }
     }
 
@@ -461,8 +471,10 @@ public final class TtcBinds {
      * to the first value would have to be renegotiated every time.
      */
     private static long bufferSizeOf(Object value, int type) {
-        if (value instanceof Locator) {
-            return LOCATOR_BUFFER;
+        if (value instanceof Locator lob) {
+            // At least the locator itself: an 11g server's persistent one
+            // is 148 bytes, and a buffer of 112 would cut it.
+            return Math.max(LOCATOR_BUFFER, lob.length());
         }
         if (value instanceof space.seclume.internal.jdbc.NativeValue nativeValue) {
             // Before the switch below, which reaches its default and casts to
@@ -497,7 +509,7 @@ public final class TtcBinds {
         out.putBytes(lob.buffer().segment(), lob.at(), lob.length());
     }
 
-    private static void putText(WireBuffer out, String text) {
+    private void putText(WireBuffer out, String text) {
         int start = out.position();
         out.putByte((byte) 0);                         // room for the length
         out.putText(text);
@@ -526,7 +538,7 @@ public final class TtcBinds {
      * secret is a trade worth making. See
      * {@link space.seclume.SensitiveParameters}.
      */
-    private static void putNative(WireBuffer out,
+    private void putNative(WireBuffer out,
             space.seclume.internal.jdbc.NativeValue value) {
         int length = value.length();
         if (length <= SHORT_LENGTH) {
@@ -534,32 +546,17 @@ public final class TtcBinds {
             out.putBytes(value.memory(), 0, length);
             return;
         }
-        out.putByte((byte) CHUNKED);
-        int at = 0;
-        while (at < length) {
-            int chunk = Math.min(CHUNK_SIZE, length - at);
-            TtcParameters.putNumber(out, chunk);
-            out.putBytes(value.memory(), at, chunk);
-            at += chunk;
-        }
-        TtcParameters.putNumber(out, 0);
+        TtcParameters.putChunked(out, value.memory(), 0, length, bigChunks);
     }
 
-    private static void putBytes(WireBuffer out, byte[] bytes) {
+    private void putBytes(WireBuffer out, byte[] bytes) {
         if (bytes.length <= SHORT_LENGTH) {
             out.putByte((byte) bytes.length);
             out.putBytes(java.lang.foreign.MemorySegment.ofArray(bytes), 0, bytes.length);
             return;
         }
-        out.putByte((byte) CHUNKED);
-        int at = 0;
-        while (at < bytes.length) {
-            int chunk = Math.min(CHUNK_SIZE, bytes.length - at);
-            TtcParameters.putNumber(out, chunk);
-            out.putBytes(java.lang.foreign.MemorySegment.ofArray(bytes), at, chunk);
-            at += chunk;
-        }
-        TtcParameters.putNumber(out, 0);
+        TtcParameters.putChunked(out, java.lang.foreign.MemorySegment.ofArray(bytes), 0,
+                bytes.length, bigChunks);
     }
 
     /**

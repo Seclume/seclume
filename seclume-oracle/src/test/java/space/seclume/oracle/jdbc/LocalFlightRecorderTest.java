@@ -134,7 +134,7 @@ class LocalFlightRecorderTest {
         try (Connection connection = DriverManager.getConnection(url);
              Statement statement = connection.createStatement()) {
             try (ResultSet rows = statement.executeQuery(
-                    "select '" + LITERAL + "' as " + '"' + LITERAL + '"')) {
+                    "select '" + LITERAL + "' as " + '"' + LITERAL + '"' + " from dual")) {
                 assertTrue(rows.next());
                 assertEquals(LITERAL, rows.getString(1));
             }

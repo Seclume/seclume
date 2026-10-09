@@ -83,6 +83,41 @@ public final class TtcResult {
         this.columns = columns;
     }
 
+    /** The TTC field version of the connection the answer came on - see NsChannel. */
+    private int fieldVersion = TtcDataTypes.FIELD_VERSION;
+    /** Whether the walk reached the message that closes a call - see {@link #ended()}. */
+    private boolean ended;
+
+    /**
+     * Whether the answer read so far is the whole of it: the walk reached the
+     * call's closing status. A server before protocol 319 marks no packet as
+     * the last of an answer, and this is how its end is told - as Oracle's
+     * own thin client tells it.
+     */
+    public boolean ended() {
+        return ended;
+    }
+
+    /** A walk that only looks - see {@link TtcRow#dry}. */
+    private boolean trial;
+
+    /** Makes this a trial walk: nothing in the answer is moved. */
+    public TtcResult trial() {
+        this.trial = true;
+        return this;
+    }
+
+    private TtcRow shaped(TtcRow row) {
+        row.chunksOf(fieldVersion);
+        return trial ? row.dry() : row;
+    }
+
+    /** Sets the field version the answer is read with. */
+    public TtcResult fieldVersion(int version) {
+        this.fieldVersion = version;
+        return this;
+    }
+
     /**
      * The same, continuing a result that has already delivered rows.
      *
@@ -110,7 +145,7 @@ public final class TtcResult {
         if (row != null) {
             row.rebind(in);
         } else if (!columns.isEmpty()) {
-            row = new TtcRow(in, columns);
+            row = shaped(new TtcRow(in, columns));
         }
         previous = row;
         byte[] unchanged = null;
@@ -133,14 +168,14 @@ public final class TtcResult {
             p++;
             switch (type) {
                 case TtcMessage.TYPE_DESCRIBE_INFO -> {
-                    TtcDescribe.Parsed parsed = TtcDescribe.read(in, p);
+                    TtcDescribe.Parsed parsed = TtcDescribe.read(in, p, true, fieldVersion);
                     columns = keepInline(columns, parsed.columns());
                     // A description means a new result: whatever the previous
                     // one carried over says nothing about this one.
                     if (row != null) {
                         row.release();
                     }
-                    row = columns.isEmpty() ? null : new TtcRow(in, columns);
+                    row = columns.isEmpty() ? null : shaped(new TtcRow(in, columns));
                     previous = row;
                     p = parsed.end();
                 }
@@ -188,6 +223,7 @@ public final class TtcResult {
                 case TtcMessage.TYPE_PARAMETER -> p = skipReturnParameters(in, p);
                 case TtcMessage.TYPE_ERROR -> {
                     readError(in, p);
+                    ended = true;
                     if (refused != null) {
                         throw refused;
                     }
@@ -198,6 +234,7 @@ public final class TtcResult {
                     // type is kept so that a caller can say what stopped the
                     // walk instead of silently returning too few rows.
                     stoppedAt = type;
+                    ended = true;
                     if (refused != null) {
                         throw refused;
                     }
@@ -300,9 +337,19 @@ public final class TtcResult {
         p += (int) bytes;
         long pairs = number(in, p);
         p = skipNumber(in, p);
+        // Key and value each as a length and, only when it is not zero, a
+        // block - the length once as a number and once as the block's prefix.
+        // An 11g server answers a plain select with one such pair (an
+        // eleven-byte value); read as bare blocks it shifted the walk off the
+        // error message behind it, and the call waited for an end it had read.
         for (long i = 0; i < pairs; i++) {
-            p = skipBlock(in, p);                      // key
-            p = skipBlock(in, p);                      // value
+            for (int part = 0; part < 2; part++) {     // key, value
+                long length = number(in, p);
+                p = skipNumber(in, p);
+                if (length > 0) {
+                    p = skipBlock(in, p);
+                }
+            }
             p = skipNumber(in, p);                     // flags
         }
         long registration = number(in, p);
@@ -343,7 +390,9 @@ public final class TtcResult {
         int p = at;
         p = skipNumber(in, p);                         // call status
         p = skipNumber(in, p);                         // end-to-end sequence
+        long currentRow = number(in, p);
         p = skipNumber(in, p);                         // current row number
+        long shortNumber = number(in, p);
         p = skipNumber(in, p);                         // error number, old and short
         p = skipNumber(in, p);                         // array element error
         p = skipNumber(in, p);                         // array element error
@@ -381,14 +430,30 @@ public final class TtcResult {
         p = skipList(in, p);                           // batch error offsets
         p = skipList(in, p);                           // batch error messages
 
+        if (fieldVersion < FIELD_VERSION_12_1) {
+            // An 11g server has neither the wide error number nor the wide
+            // row count: the short fields at the start are all there is, and
+            // the text follows the batch lists directly.
+            errorNumber = (int) shortNumber;
+            affectedRows = currentRow;
+            exhausted = errorNumber == ORA_NO_DATA_FOUND;
+            errorText = readErrorText(in, p, 0);
+            return;
+        }
         errorNumber = (int) number(in, p);
         p = skipNumber(in, p);
         // And right behind the number the count of rows the statement touched -
         // the one thing an update has to report back.
         affectedRows = number(in, p);
         exhausted = errorNumber == ORA_NO_DATA_FOUND;
-        errorText = readErrorText(in, p);
+        errorText = readErrorText(in, skipNumber(in, p),
+                fieldVersion >= FIELD_VERSION_20_1 ? 2 : 0);
     }
+
+    /** The first field version with the wide error number and row count. */
+    private static final int FIELD_VERSION_12_1 = 7;
+    /** The first with the SQL type and checksum in front of the error text. */
+    private static final int FIELD_VERSION_20_1 = 14;
 
     /**
      * The server's own wording, behind the number.
@@ -397,16 +462,18 @@ public final class TtcResult {
      * while "table or view does not exist" ends the question - and a PL/SQL
      * block reports what it raised only here, in the text.
      *
-     * <p>Three fields sit between the row count and the text, and the text
-     * itself is a length and its bytes. Anything unexpected gives up quietly
+     * <p>Up to two fields sit between the row count and the text - the SQL
+     * type and a checksum, from 20.1 on - and the text itself is a length and
+     * its bytes. Anything unexpected gives up quietly
      * and leaves the number to speak: an error must never turn into a second
      * error while it is being read.
      */
-    private static String readErrorText(WireBuffer in, int at) {
+    private static String readErrorText(WireBuffer in, int at, int skipped) {
         try {
-            int p = skipNumber(in, at);                // row count
-            p = skipNumber(in, p);                     // error position in the text
-            p = skipNumber(in, p);                     // reserved, always zero here
+            int p = at;
+            for (int i = 0; i < skipped; i++) {
+                p = skipNumber(in, p);                 // SQL type, server checksum
+            }
             int length = in.getByte(p) & 0xff;
             if (length == 0 || length > 0xfd || p + 1 + length > in.limit()) {
                 return null;
@@ -444,17 +511,25 @@ public final class TtcResult {
         return at + 1 + (length == 0 ? 0 : length);
     }
 
+    /**
+     * A length-prefixed number. The top bit of the length byte is the sign:
+     * {@code 81 01} is -1, which is what 21c answers a PL/SQL call's output
+     * bind with as its return code. Read as a length of 129 it sent the walk
+     * past the end of the answer, and the call waited for bytes that never
+     * came (compatibility run, 07.10.2026).
+     */
     private static long number(WireBuffer in, int at) {
-        int length = in.getByte(at) & 0xff;
+        int head = in.getByte(at) & 0xff;
+        int length = head & 0x7f;
         long value = 0;
         for (int i = 0; i < length; i++) {
             value = (value << 8) | (in.getByte(at + 1 + i) & 0xff);
         }
-        return value;
+        return (head & 0x80) != 0 ? -value : value;
     }
 
     private static int skipNumber(WireBuffer in, int at) {
-        return at + 1 + (in.getByte(at) & 0xff);
+        return at + 1 + (in.getByte(at) & 0x7f);
     }
 
 
@@ -509,6 +584,12 @@ public final class TtcResult {
         this.expectedReturned = count;
         this.returnedFromCall = fromCall;
         this.cursorBinds = cursors;
+    }
+
+    /** The same, for a result built in one expression. */
+    public TtcResult expectingReturned(int count, boolean fromCall, boolean[] cursors) {
+        expectReturned(count, fromCall, cursors);
+        return this;
     }
 
     private boolean returnedFromCall;
@@ -570,7 +651,7 @@ public final class TtcResult {
      */
     private int readCursorBind(WireBuffer in, int at) {
         int p = at + 1;
-        TtcDescribe.Parsed described = TtcDescribe.read(in, p, false);
+        TtcDescribe.Parsed described = TtcDescribe.read(in, p, false, fieldVersion);
         p = described.end();
         int id = (int) number(in, p);
         p = skipNumber(in, p);

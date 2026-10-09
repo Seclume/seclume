@@ -179,6 +179,22 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
         this.service = settings.service();
         this.tls = settings.tls();
         this.nativeEncryption = settings.nativeEncryption();
+        this.legacyVerifier11g = settings.legacyVerifier11g();
+    }
+
+    /** Whether an account with only the 11g verifier may log in - see OraUrl. */
+    private boolean legacyVerifier11g;
+
+    public void setLegacyVerifier(String value) throws SQLException {
+        try {
+            this.legacyVerifier11g = OraUrl.legacyVerifier(value);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException(e.getMessage(), "08001", e);
+        }
+    }
+
+    public String getLegacyVerifier() {
+        return legacyVerifier11g ? "11g" : null;
     }
 
     /**
@@ -249,7 +265,7 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
                 user, provider, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity(), nativeEncryption);
+                resolvedIdentity(), nativeEncryption, legacyVerifier11g);
         return new OraConnection(space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> OracleSession.open(settings))),

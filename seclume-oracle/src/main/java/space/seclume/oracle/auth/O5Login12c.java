@@ -314,6 +314,19 @@ public final class O5Login12c {
                                         int passwordLength,
                                         MemorySegment salt, long saltOffset,
                                         MemorySegment out, long outOffset) {
+        return encryptedPassword(comboKey, comboOffset, COMBO_KEY_LENGTH, password,
+                passwordOffset, passwordLength, salt, saltOffset, out, outOffset);
+    }
+
+    /**
+     * The same with a combo key of {@code keyLength} bytes - 24 for the 11g
+     * verifier, whose combo key is AES-192.
+     */
+    public static int encryptedPassword(MemorySegment comboKey, long comboOffset, int keyLength,
+                                        MemorySegment password, long passwordOffset,
+                                        int passwordLength,
+                                        MemorySegment salt, long saltOffset,
+                                        MemorySegment out, long outOffset) {
         int plainLength = PASSWORD_SALT_LENGTH + passwordLength;
         int padding = Aes.BLOCK - (plainLength % Aes.BLOCK);
         int paddedLength = plainLength + padding;
@@ -328,7 +341,7 @@ public final class O5Login12c {
                         passwordLength);
                 plain.asSlice(plainLength, padding).fill((byte) padding);
 
-                try (AesKey key = new AesKey(comboKey, comboOffset, COMBO_KEY_LENGTH)) {
+                try (AesKey key = new AesKey(comboKey, comboOffset, keyLength)) {
                     Aes.cbcEncrypt(key, iv, plain, 0, cipher, 0, paddedLength);
                 }
                 return toUpperHex(cipher, paddedLength, out, outOffset);

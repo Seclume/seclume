@@ -80,12 +80,14 @@ class TlsFreezeThawTest {
                 SecretScope frozen = SecretScope.allocate(512)) {
 
             int length;
+            String described;
             // Several exchanges first, so that both sequence counters are well
             // past zero - a migration that silently restarted them would still
             // pass if this froze immediately after the handshake.
             TlsConnection before = ClientHandshake.connect(socket, HOSTNAME,
                     CertificateTrust.of(trustStore));
             try {
+                described = before.description();
                 for (int i = 0; i < 5; i++) {
                     echo(before, "round " + i);
                 }
@@ -97,6 +99,10 @@ class TlsFreezeThawTest {
 
             TlsConnection after = TlsConnection.thaw(socket, frozen.segment(), 0, length);
             try {
+                // The suite, all of it; the key exchange group of the handshake
+                // ("with X25519") is not carried - nothing after it needs it.
+                assertEquals(described.replaceFirst(" with .*$", ""), after.description(),
+                        "the suite was lost in the move");
                 echo(after, "after the move");
                 echo(after, "and again");
             } finally {
@@ -120,10 +126,12 @@ class TlsFreezeThawTest {
                 Transport socket = connectTo(server);
                 SecretScope frozen = SecretScope.allocate(512)) {
             int length;
+            String described;
             TlsConnection before = ClientHandshake.connect(socket, HOSTNAME,
                     CertificateTrust.of(trustStore));
             try {
-                assertTrue(before.description().startsWith("TLSv1.2 / "), before.description());
+                described = before.description();
+                assertTrue(described.startsWith("TLSv1.2 / "), described);
                 for (int i = 0; i < 5; i++) {
                     echo(before, "round " + i);
                 }
@@ -133,7 +141,9 @@ class TlsFreezeThawTest {
             }
             TlsConnection after = TlsConnection.thaw(socket, frozen.segment(), 0, length);
             try {
-                assertTrue(after.description().startsWith("TLSv1.2"), after.description());
+                // All of it but the server's signature algorithm, which is not carried.
+                assertEquals(described.replaceFirst("TLS_ECDHE_[A-Z]+_WITH_", "TLS_ECDHE_*_WITH_"),
+                        after.description());
                 echo(after, "after thawing");
                 echo(after, "and again");
             } finally {

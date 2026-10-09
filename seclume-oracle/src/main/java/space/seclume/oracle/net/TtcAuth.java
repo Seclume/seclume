@@ -62,7 +62,7 @@ public final class TtcAuth {
      */
     public static Challenge phaseOne(NsChannel channel, String user) throws IOException {
         WireBuffer out = channel.beginData();
-        putPhaseOne(out, user);
+        putPhaseOne(out, user, true);
         channel.sendData();
         return readChallenge(channel);
     }
@@ -72,8 +72,14 @@ public final class TtcAuth {
      *
      * <p>Separate from {@link #phaseOne} because {@code FAST_AUTH} puts the
      * same bytes into a larger packet.
+     *
+     * @param tokenNumber whether the call carries a token number: on its own
+     *                    yes (and NsChannel takes it out again for a server
+     *                    before 23.1), inside FAST_AUTH no - that message goes
+     *                    out before any field version is agreed, and 23ai
+     *                    answered one with a token in it with a MARKER
      */
-    static void putPhaseOne(WireBuffer out, String user) {
+    static void putPhaseOne(WireBuffer out, String user, boolean tokenNumber) {
         List<TtcParameters.Pair> pairs = List.of(
                 new TtcParameters.Pair("AUTH_TERMINAL", "unknown", 0),
                 new TtcParameters.Pair("AUTH_PROGRAM_NM", "seclume", 0),
@@ -83,7 +89,16 @@ public final class TtcAuth {
 
         out.putByte((byte) TtcMessage.TYPE_FUNCTION);
         out.putByte((byte) TtcMessage.FUNC_AUTH_PHASE_ONE);
-        TtcParameters.putNumber(out, 1);
+        // Sequence, token number, "a user follows" - spelled out. It used to
+        // be putNumber(1), whose two bytes 01 01 happen to be the sequence and
+        // the flag: right for a server without token numbers, and one field
+        // short for 23ai when it is not reached by FAST_AUTH. The token is
+        // taken out again for older servers in NsChannel.sendData.
+        out.putByte((byte) 1);                    // sequence number
+        if (tokenNumber) {
+            TtcParameters.putNumber(out, 0);      // token number
+        }
+        out.putByte((byte) 1);                    // a user follows
         TtcParameters.putNumber(out, user.length());
         TtcParameters.putNumber(out, AUTH_MODE_PHASE_ONE);
         // A single byte, not a number - the one field in this header that is

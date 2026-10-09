@@ -18,9 +18,9 @@ import org.junit.jupiter.api.parallel.Isolated;
 import space.seclume.internal.Transport;
 
 /**
- * {@code -Dseclume.tls.requireExtendedMasterSecret=false}: a TLS 1.2 server
- * without the extended master secret is let through only when that is said by
- * name, and refused otherwise. Isolated: it changes a system property.
+ * {@code -Dseclume.tls.requireExtendedMasterSecret=true}: a TLS 1.2 server
+ * without the extended master secret is let through by default and refused
+ * only when that is said by name. Isolated: it changes a system property.
  */
 @Isolated
 class Tls12WithoutExtendedMasterSecretTest {
@@ -28,22 +28,22 @@ class Tls12WithoutExtendedMasterSecretTest {
     private static final String PROPERTY = "seclume.tls.requireExtendedMasterSecret";
 
     @Test
-    void refusedByDefaultAndLetThroughByName() {
+    void letThroughByDefaultAndRefusedByName() {
         Function<byte[], byte[]> withoutEms = id -> serverHello(0x0303, plainRandom(), 0xC02F,
                 renegotiationInfo());
-        TlsProtocolException refused = assertThrows(TlsProtocolException.class,
+        IOException gone = assertThrows(IOException.class,
                 () -> ClientHandshake.connectWithoutAuthenticating(new Peer(withoutEms),
                         "db.example.com"));
-        assertEquals(TlsAlertException.HANDSHAKE_FAILURE, refused.alert());
-        assertTrue(refused.getMessage().contains(PROPERTY), refused.getMessage());
+        // Past the ServerHello: the server's flight simply ends here.
+        assertInstanceOf(EOFException.class, gone, gone.toString());
 
-        System.setProperty(PROPERTY, "false");
+        System.setProperty(PROPERTY, "true");
         try {
-            IOException gone = assertThrows(IOException.class,
+            TlsProtocolException refused = assertThrows(TlsProtocolException.class,
                     () -> ClientHandshake.connectWithoutAuthenticating(new Peer(withoutEms),
                             "db.example.com"));
-            // Past the ServerHello: the server's flight simply ends here.
-            assertInstanceOf(EOFException.class, gone, gone.toString());
+            assertEquals(TlsAlertException.HANDSHAKE_FAILURE, refused.alert());
+            assertTrue(refused.getMessage().contains(PROPERTY), refused.getMessage());
         } finally {
             System.clearProperty(PROPERTY);
         }

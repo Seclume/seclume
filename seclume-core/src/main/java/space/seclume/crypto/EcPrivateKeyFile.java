@@ -57,11 +57,27 @@ public final class EcPrivateKeyFile {
      * @return {@value #SCALAR}, always - anything else has thrown by now
      */
     public static int scalar(MemorySegment source, int length, MemorySegment out) {
-        if (out.byteSize() < SCALAR) {
-            throw new IllegalArgumentException("a P-256 private key needs 32 bytes");
+        return scalar(source, length, out, SCALAR);
+    }
+
+    /**
+     * The same for a curve whose scalar is {@code size} bytes - 32 for P-256,
+     * 48 for P-384. The size comes from the certificate the key belongs to; a
+     * key of another curve is refused here if it is longer, and by the
+     * provider's pair check if it is not.
+     *
+     * @return {@code size}, always - anything else has thrown by now
+     */
+    public static int scalar(MemorySegment source, int length, MemorySegment out, int size) {
+        if (size != 32 && size != 48) {
+            throw new IllegalArgumentException("a P-256 or P-384 scalar is 32 or 48 bytes, not "
+                    + size);
+        }
+        if (out.byteSize() < size) {
+            throw new IllegalArgumentException("the private key needs " + size + " bytes");
         }
         if (length > 0 && source.get(ValueLayout.JAVA_BYTE, 0) == 0x30) {
-            return fromDer(source, 0, length, out);
+            return fromDer(source, 0, length, out, size);
         }
         try (Arena arena = Arena.ofConfined()) {
             long bodyAt = afterFirstLine(source, length);
@@ -74,7 +90,7 @@ public final class EcPrivateKeyFile {
                     Math.max(Base64Off.decodedUpperBound(bodyLength), 1))) {
                 int decoded = Base64Off.decode(source, bodyAt, bodyLength, der.segment(), 0);
                 der.length(decoded);
-                return fromDer(der.segment(), 0, decoded, out);
+                return fromDer(der.segment(), 0, decoded, out, size);
             }
         }
     }
@@ -87,7 +103,8 @@ public final class EcPrivateKeyFile {
      * by the PEM label, which is only a comment and is wrong often enough to
      * matter.
      */
-    private static int fromDer(MemorySegment der, long offset, int length, MemorySegment out) {
+    private static int fromDer(MemorySegment der, long offset, int length, MemorySegment out,
+                               int size) {
         Der.Reader outer = new Der.Reader(der, offset, length).readSequence();
         int version = outer.readSmallInteger();
 
@@ -114,16 +131,17 @@ public final class EcPrivateKeyFile {
         }
 
         Der.Range scalar = key.readOctetStringRange();
-        if (scalar.length() > SCALAR) {
+        if (scalar.length() > size) {
             throw new IllegalArgumentException(
-                    "this is not a P-256 key: its private scalar is " + scalar.length()
-                    + " bytes, not " + SCALAR);
+                    "this is not a " + (size == 32 ? "P-256" : "P-384") + " key: its private "
+                    + "scalar is " + scalar.length() + " bytes, not " + size
+                    + " - the key and the certificate are of different curves");
         }
         // Shorter is legal and happens roughly once in 256 keys: a scalar with
         // a leading zero byte. It is left-padded rather than rejected.
-        out.asSlice(0, SCALAR).fill((byte) 0);
-        MemorySegment.copy(der, scalar.offset(), out, SCALAR - scalar.length(), scalar.length());
-        return SCALAR;
+        out.asSlice(0, size).fill((byte) 0);
+        MemorySegment.copy(der, scalar.offset(), out, size - scalar.length(), scalar.length());
+        return size;
     }
 
     /** The position just after the {@code -----BEGIN ...-----} line. */

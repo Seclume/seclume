@@ -144,9 +144,47 @@ class ClientIdentitiesTest {
                 "the message has to say what is missing: " + refused.getMessage());
     }
 
+    /**
+     * A P-384 key from the same two settings. Its PKCS#8 PEM is longer than
+     * the 256 bytes a secret is held to by default - the first live run
+     * against PostgreSQL refused it there - so a key file gets 4 KiB unless
+     * the settings name a length.
+     */
+    @Test
+    void aP384KeyFileLongerThanAPasswordIsTaken(@TempDir Path dir) throws Exception {
+        TestCertificates.Issued p384 = certificates.issueP384("cache-client-384",
+                "ku:c=digitalSignature", "eku=clientAuth");
+        // As `openssl pkcs12 -nodes` writes it: attributes before the key.
+        // OpenSSL's own P-384 PKCS#8 is 306 bytes with the public key in it;
+        // the JDK leaves that out, so the headers make the length here.
+        String pem = "Bag Attributes\n    localKeyID: 01 00 00 00\n"
+                + "    friendlyName: cache-client-384\n"
+                + "Key Attributes: <No Attributes>\n" + privateKeyPem(p384);
+        assertTrue(pem.length() > 256, "the fixture no longer shows the case: " + pem.length());
+        Path key = dir.resolve("client384.key");
+        Files.writeString(key, pem);
+        Path chain = dir.resolve("client384.crt");
+        Files.writeString(chain, certificatePem(p384.certificate()));
+        Map<String, String> options = new LinkedHashMap<>();
+        options.put(ClientIdentities.CERTIFICATE, chain.toString());
+        options.put(ClientIdentities.KEY_PREFIX + "provider", "file");
+        options.put(ClientIdentities.KEY_PREFIX + "path", key.toString());
+        ClientIdentity identity = ClientIdentities.of(options);
+        assertEquals(HandshakeSignature.ECDSA_SECP384R1_SHA384, identity.signatureScheme());
+
+        // A length the settings name is kept, in either spelling.
+        ClientIdentities.closeAll();
+        options.put(ClientIdentities.KEY_PREFIX + "maxLength", "200");
+        assertThrows(RuntimeException.class, () -> ClientIdentities.of(options));
+    }
+
     // ---------------------------------------------------------------------
 
     private static String privateKeyPem() throws Exception {
+        return privateKeyPem(client);
+    }
+
+    private static String privateKeyPem(TestCertificates.Issued client) throws Exception {
         KeyStore store = KeyStore.getInstance("PKCS12");
         try (InputStream in = Files.newInputStream(client.keystore())) {
             store.load(in, TestCertificates.PASSWORD.toCharArray());

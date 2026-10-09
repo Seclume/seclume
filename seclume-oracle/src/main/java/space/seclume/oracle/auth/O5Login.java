@@ -66,6 +66,27 @@ public final class O5Login {
     }
 
     /**
+     * The client's half of the session key, encrypted the way the server's
+     * came: AES-192 in CBC mode with a zero IV, under the derived key.
+     */
+    public static void encryptSessionKey(MemorySegment key, long keyOffset,
+                                         MemorySegment clientKey, long clientOffset,
+                                         int length, MemorySegment out, long outOffset) {
+        if (length % 16 != 0) {
+            throw new IllegalArgumentException(
+                    "a session key of " + length + " bytes; AES needs a multiple of 16");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment iv = arena.allocate(Aes.BLOCK);
+            try (AesKey aesKey = new AesKey(key, keyOffset, KEY_LENGTH)) {
+                Aes.cbcEncrypt(aesKey, iv, clientKey, clientOffset, out, outOffset, length);
+            } finally {
+                iv.fill((byte) 0);
+            }
+        }
+    }
+
+    /**
      * Decrypts the server session key.
      *
      * <p>AES-192 in CBC mode with a zero IV. A zero IV is normally a mistake;

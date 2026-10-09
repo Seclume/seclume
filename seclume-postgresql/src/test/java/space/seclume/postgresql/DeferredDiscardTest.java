@@ -61,6 +61,42 @@ class DeferredDiscardTest {
         }
     }
 
+    /**
+     * The first execution of a plan after a return. Its Parse rides with the
+     * execution, and the reset's answer is read just before it - which once
+     * happened after the driver had noted which ReadyForQuery would close the
+     * Parse's block. The reset's ReadyForQuery was taken for that one, the
+     * Parse for failed, and the next execution sent it again: "prepared
+     * statement already exists", found as the second slice of a Spring batch.
+     */
+    @Test
+    void aPlanParsedRightAfterTheDiscardIsParsedOnce() throws Exception {
+        String sql = "insert into ledger values (42)";
+        Recording wire = new Recording(answer(complete("DISCARD ALL"),
+                message('1'), parameters(), message('n'), message('2'), message('n'),
+                complete("INSERT 0 1"),
+                message('2'), message('n'), complete("INSERT 0 1")));
+        try (PgSession session = session(wire)) {
+            session.discardAllLater();
+            session.parseLater("seclume_1", sql);
+            session.bindAndExecute("seclume_1", new PgParameters(0), 0, null, null);
+            assertFalse(session.hasPendingParse("seclume_1"),
+                    "the Parse was taken for failed after the reset's answer");
+            session.bindAndExecute("seclume_1", new PgParameters(0), 0, null, null);
+            assertEquals(1, count(wire.sent(), sql), wire.sent());
+        }
+    }
+
+    /** A message with no body: ParseComplete, BindComplete, NoData. */
+    private static byte[] message(char tag) {
+        return ByteBuffer.allocate(5).put((byte) tag).putInt(4).array();
+    }
+
+    /** ParameterDescription without parameters. */
+    private static byte[] parameters() {
+        return ByteBuffer.allocate(7).put((byte) 't').putInt(6).putShort((short) 0).array();
+    }
+
     private static PgSession session(Transport wire) {
         return PgSession.resume(wire,
                 Map.of("client_encoding", "UTF8", "DateStyle", "ISO, MDY",

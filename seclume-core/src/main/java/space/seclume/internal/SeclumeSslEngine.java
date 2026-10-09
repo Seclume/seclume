@@ -586,7 +586,11 @@ public final class SeclumeSslEngine extends SSLEngine {
             }
             String suite = description.substring(slash + 3);
             int space = suite.indexOf(' ');
-            return space < 0 ? suite : suite.substring(0, space);
+            suite = space < 0 ? suite : suite.substring(0, space);
+            // A thawed TLS 1.2 connection knows its suite except for the
+            // server's signature algorithm and shows that part as "*" - fine
+            // for a person, no name a suite allow-list or lookup knows.
+            return suite.indexOf('*') >= 0 ? SUITES[0] : suite;
         }
 
         @Override

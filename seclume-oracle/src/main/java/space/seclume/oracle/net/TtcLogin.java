@@ -7,6 +7,7 @@ import java.sql.SQLException;
 
 import space.seclume.internal.Entropy;
 import space.seclume.internal.WireBuffer;
+import space.seclume.oracle.auth.O5Login;
 import space.seclume.oracle.auth.O5Login12c;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
@@ -49,7 +50,7 @@ public final class TtcLogin {
     private static final int AUTH_MODE_PHASE_TWO = 0x0101;
     /** The salt that goes in front of an encrypted value. */
     private static final int SALT_LENGTH = 16;
-    /** How many pairs the second stage sends. */
+    /** How many pairs the second stage sends with the 12c verifier; 11g has no speedy key. */
     private static final int PAIR_COUNT = 8;
     /** How many bytes of the speedy key travel. */
     private static final int SPEEDY_KEY_BYTES = 80;
@@ -99,10 +100,36 @@ public final class TtcLogin {
     public static void phaseTwo(NsChannel channel, String user, SecretProvider secret,
                                 TtcAuth.Challenge challenge, String connectString)
             throws IOException, SQLException {
+        phaseTwo(channel, user, secret, challenge, connectString, false);
+    }
+
+    /**
+     * The same, and with {@code legacyVerifier11g} an account that has only
+     * the 11g verifier may log in too.
+     */
+    public static void phaseTwo(NsChannel channel, String user, SecretProvider secret,
+                                TtcAuth.Challenge challenge, String connectString,
+                                boolean legacyVerifier11g)
+            throws IOException, SQLException {
         if (!challenge.is12c()) {
-            throw new IOException("this server wants the 11g verifier (0x"
-                    + Integer.toHexString(challenge.verifierType())
-                    + "), which seclume does not send");
+            int type = challenge.verifierType();
+            if (type != O5Login12c.VERIFIER_TYPE_11G_1 && type != O5Login12c.VERIFIER_TYPE_11G_2) {
+                // The 10g verifier (DES) or one nobody knows: a SHA-1 key
+                // derived for it would only end in ORA-01017, which sends
+                // people to reset passwords that are right.
+                throw new IOException("this account has a password verifier seclume does not "
+                        + "implement (0x" + Integer.toHexString(type) + "); reset the password "
+                        + "so the server keeps a 12c verifier");
+            }
+            if (!legacyVerifier11g) {
+                throw new IOException("this account has only the 11g verifier (0x"
+                        + Integer.toHexString(challenge.verifierType())
+                        + "), a SHA-1 hash that seclume does not use unless asked to;"
+                        + " allow it with legacyVerifier=11g, or reset the password"
+                        + " so the server keeps a 12c verifier");
+            }
+            phaseTwo11g(channel, user, secret, challenge, connectString);
+            return;
         }
         int keyLength = challenge.sessionKey().length() / 2;
         if (keyLength != O5Login12c.SESSION_KEY_LENGTH_32) {
@@ -143,7 +170,7 @@ public final class TtcLogin {
                         challenge.derivationCount(), comboKey, 0);
 
                 WireBuffer out = channel.beginData();
-                putHeader(out, user);
+                putHeader(out, user, PAIR_COUNT);
                 putHexPair(out, "AUTH_SESSKEY", clientEncrypted, keyLength, 1);
 
                 Entropy.fill(salt);
@@ -154,14 +181,7 @@ public final class TtcLogin {
                 putEncryptedPair(out, "AUTH_PASSWORD", comboKey, salt,
                         password.secret(), password.length(), Integer.MAX_VALUE);
 
-                TtcParameters.putPair(out, "SESSION_CLIENT_CHARSET", CHARSET, 0);
-                TtcParameters.putPair(out, "SESSION_CLIENT_DRIVER_NAME", DRIVER_NAME, 0);
-                TtcParameters.putPair(out, "SESSION_CLIENT_VERSION", DRIVER_VERSION, 0);
-                // The time zone has to be set here, not later: a session that
-                // starts in the server's zone and is moved afterwards has
-                // already written timestamps in the wrong one.
-                TtcParameters.putPair(out, "AUTH_ALTER_SESSION", alterTimeZone(), 1);
-                TtcParameters.putPair(out, "AUTH_CONNECT_STRING", connectString, 0);
+                putSessionPairs(out, connectString);
                 channel.sendData();
             } finally {
                 // Everything derived from the password goes too - the hash is
@@ -175,6 +195,83 @@ public final class TtcLogin {
             }
         }
         readAnswer(channel);
+    }
+
+    /**
+     * The second stage with the 11g verifier - for accounts whose password was
+     * last set where only that one is kept, as on Oracle 11g itself.
+     *
+     * <ol>
+     *   <li>{@code key = SHA1(password ‖ AUTH_VFR_DATA) ‖ 0000} - AES-192</li>
+     *   <li>the server's 48-byte {@code AUTH_SESSKEY} decrypted with it; the
+     *       client's 48 random bytes encrypted the same way</li>
+     *   <li>{@code comboKey = MD5(x[0..16]) ‖ MD5(x[16..24])}, first 24
+     *       bytes, where {@code x} is bytes 16 to 40 of both halves XORed</li>
+     *   <li>{@code AUTH_PASSWORD = hex(AES-CBC(comboKey, 16 random bytes ‖
+     *       password))} - no speedy key, there is no PBKDF2 to skip</li>
+     * </ol>
+     *
+     * <p>Only reached when the configuration asks for it by name: the hash
+     * the server keeps for such an account is a single SHA-1 round.
+     */
+    private static void phaseTwo11g(NsChannel channel, String user, SecretProvider secret,
+                                    TtcAuth.Challenge challenge, String connectString)
+            throws IOException, SQLException {
+        int keyLength = challenge.sessionKey().length() / 2;
+        if (keyLength != O5Login12c.SESSION_KEY_LENGTH) {
+            throw new IOException("the server sent an 11g session key of " + keyLength
+                    + " bytes; the 11g verifier uses " + O5Login12c.SESSION_KEY_LENGTH);
+        }
+        try (Arena arena = Arena.ofConfined();
+             SecretScope password = SecretScope.fromProvider(secret)) {
+            MemorySegment verifier = hexToBytes(arena, challenge.salt());
+            MemorySegment serverEncrypted = hexToBytes(arena, challenge.sessionKey());
+
+            MemorySegment passwordHash = arena.allocate(O5Login.KEY_LENGTH);
+            MemorySegment serverHalf = arena.allocate(keyLength);
+            MemorySegment clientHalf = arena.allocate(keyLength);
+            MemorySegment clientEncrypted = arena.allocate(keyLength);
+            MemorySegment comboKey = arena.allocate(O5Login12c.COMBO_KEY_LENGTH);
+            MemorySegment salt = arena.allocate(SALT_LENGTH);
+            try {
+                O5Login.deriveKey(password.secret(), 0, password.length(),
+                        verifier, 0, (int) verifier.byteSize(), passwordHash, 0);
+                O5Login.decryptSessionKey(passwordHash, 0, serverEncrypted, 0,
+                        keyLength, serverHalf, 0);
+                Entropy.fill(clientHalf);
+                O5Login.encryptSessionKey(passwordHash, 0, clientHalf, 0,
+                        keyLength, clientEncrypted, 0);
+                O5Login12c.comboKey(serverHalf, 0, clientHalf, 0, comboKey, 0);
+
+                WireBuffer out = channel.beginData();
+                putHeader(out, user, PAIR_COUNT - 1);
+                putHexPair(out, "AUTH_SESSKEY", clientEncrypted, keyLength, 1);
+                Entropy.fill(salt);
+                putEncryptedPair(out, "AUTH_PASSWORD", comboKey, O5Login.KEY_LENGTH, salt,
+                        password.secret(), password.length(), Integer.MAX_VALUE);
+                putSessionPairs(out, connectString);
+                channel.sendData();
+            } finally {
+                passwordHash.fill((byte) 0);
+                serverHalf.fill((byte) 0);
+                clientHalf.fill((byte) 0);
+                comboKey.fill((byte) 0);
+                salt.fill((byte) 0);
+            }
+        }
+        readAnswer(channel);
+    }
+
+    /** The pairs after the credential, the same for both verifiers. */
+    private static void putSessionPairs(WireBuffer out, String connectString) {
+        TtcParameters.putPair(out, "SESSION_CLIENT_CHARSET", CHARSET, 0);
+        TtcParameters.putPair(out, "SESSION_CLIENT_DRIVER_NAME", DRIVER_NAME, 0);
+        TtcParameters.putPair(out, "SESSION_CLIENT_VERSION", DRIVER_VERSION, 0);
+        // The time zone has to be set here, not later: a session that
+        // starts in the server's zone and is moved afterwards has
+        // already written timestamps in the wrong one.
+        TtcParameters.putPair(out, "AUTH_ALTER_SESSION", alterTimeZone(), 1);
+        TtcParameters.putPair(out, "AUTH_CONNECT_STRING", connectString, 0);
     }
 
     /**
@@ -222,7 +319,7 @@ public final class TtcLogin {
     }
 
     /** The header of the second stage - the pairs follow the user name. */
-    private static void putHeader(WireBuffer out, String user) {
+    private static void putHeader(WireBuffer out, String user, int pairCount) {
         out.putByte((byte) TtcMessage.TYPE_FUNCTION);
         out.putByte((byte) TtcMessage.FUNC_AUTH_PHASE_TWO);
         // Two bytes, not one: the reference client writes this first field
@@ -232,7 +329,7 @@ public final class TtcLogin {
         TtcParameters.putNumber(out, user.length());
         TtcParameters.putNumber(out, AUTH_MODE_PHASE_TWO);
         out.putByte((byte) 1);                     // the one field that is not a number
-        TtcParameters.putNumber(out, PAIR_COUNT);
+        TtcParameters.putNumber(out, pairCount);
         TtcParameters.putNumber(out, 1);
         TtcParameters.putText(out, user);
     }
@@ -268,11 +365,19 @@ public final class TtcLogin {
     private static void putEncryptedPair(WireBuffer out, String name, MemorySegment comboKey,
                                          MemorySegment salt, MemorySegment content,
                                          int contentLength, int maxHexLength) {
+        putEncryptedPair(out, name, comboKey, O5Login12c.COMBO_KEY_LENGTH, salt, content,
+                contentLength, maxHexLength);
+    }
+
+    /** The same under a combo key of {@code keyLength} bytes - 24 for the 11g verifier. */
+    private static void putEncryptedPair(WireBuffer out, String name, MemorySegment comboKey,
+                                         int keyLength, MemorySegment salt, MemorySegment content,
+                                         int contentLength, int maxHexLength) {
         int room = (SALT_LENGTH + contentLength + 16) * 2;
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment hex = arena.allocate(room);
             try {
-                int written = O5Login12c.encryptedPassword(comboKey, 0, content, 0,
+                int written = O5Login12c.encryptedPassword(comboKey, 0, keyLength, content, 0,
                         contentLength, salt, 0, hex, 0);
                 int length = Math.min(written, maxHexLength);
                 TtcParameters.putNumber(out, name.length());

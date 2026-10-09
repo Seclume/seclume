@@ -90,7 +90,8 @@ class LocalDetachSeamTest {
         session.releaseCursors();
         OracleSession.Detached detached = session.detach();
         try (Connection resumed = OraConnection.resume(OracleSession.resume(detached.stream(),
-                detached.protocolVersion(), detached.sequence(), detached.inTransaction()),
+                detached.protocolVersion(), detached.sequence(), detached.inTransaction(),
+                detached.tls(), detached.ttcFieldVersion()),
                 facts)) {
             try (Statement statement = resumed.createStatement()) {
                 statement.executeUpdate("insert into zl_seam values (1)");

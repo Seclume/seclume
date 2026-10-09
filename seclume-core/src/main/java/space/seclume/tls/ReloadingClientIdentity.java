@@ -91,7 +91,7 @@ final class ReloadingClientIdentity implements ClientIdentity {
         this.certificate = certificate;
         this.key = key;
         byte[] content = read(certificate);
-        this.current = new P256ClientIdentity(P256ClientIdentity.parseChain(content, certificate),
+        this.current = new EcClientIdentity(EcClientIdentity.parseChain(content, certificate),
                 key);
         this.loaded = content;
     }
@@ -120,8 +120,8 @@ final class ReloadingClientIdentity implements ClientIdentity {
         space.seclume.jfr.SeclumeEvents.CertificateReload event =
                 space.seclume.jfr.Observed.beginCertificateReload();
         try {
-            ClientIdentity next = new P256ClientIdentity(
-                    P256ClientIdentity.parseChain(now, certificate), key);
+            ClientIdentity next = new EcClientIdentity(
+                    EcClientIdentity.parseChain(now, certificate), key);
             ClientIdentity previous = current;
             current = next;
             loaded = now;

@@ -62,7 +62,7 @@ public final class TtcFastAuth {
         out.putByte((byte) 0);
         putAll(out, AFTER_NAME);
         TtcDataTypes.putMessage(out);
-        TtcAuth.putPhaseOne(out, user);
+        TtcAuth.putPhaseOne(out, user, false);
         channel.sendData();
 
         return TtcAuth.readChallenge(channel);

@@ -34,6 +34,13 @@ public final class HandshakeSignature {
     public static final int ECDSA_SECP256R1_SHA256 = 0x0403;
     public static final int ECDSA_SECP384R1_SHA384 = 0x0503;
     public static final int ECDSA_SECP521R1_SHA512 = 0x0603;
+    /** {@code ed25519} and {@code ed448}: EdDSA over the content itself (RFC 8446, 8422). */
+    public static final int ED25519 = 0x0807;
+    public static final int ED448 = 0x0808;
+    /** {@code rsa_pss_pss_*}: RSA-PSS with a key that is itself RSASSA-PSS. */
+    public static final int RSA_PSS_PSS_SHA256 = 0x0809;
+    public static final int RSA_PSS_PSS_SHA384 = 0x080a;
+    public static final int RSA_PSS_PSS_SHA512 = 0x080b;
 
     private static final String SERVER_CONTEXT = "TLS 1.3, server CertificateVerify";
     private static final String CLIENT_CONTEXT = "TLS 1.3, client CertificateVerify";
@@ -70,7 +77,7 @@ public final class HandshakeSignature {
         byte[] content = content(true, transcriptHash);
         try {
             Signature verifier = verifierFor(signatureScheme);
-            if (verifier == null) {
+            if (verifier == null || !keyFits(leafKey, signatureScheme)) {
                 return false;
             }
             verifier.initVerify(leafKey);
@@ -105,7 +112,7 @@ public final class HandshakeSignature {
                 case RSA_PKCS1_SHA512 -> Signature.getInstance("SHA512withRSA");
                 default -> verifierFor(signatureScheme);
             };
-            if (verifier == null) {
+            if (verifier == null || !keyFits(leafKey, signatureScheme)) {
                 return false;
             }
             verifier.initVerify(leafKey);
@@ -125,7 +132,7 @@ public final class HandshakeSignature {
      * A verifier for one {@code SignatureScheme}, or null for one this client
      * never offered.
      *
-     * <p>The six here are exactly the six {@link ClientHello} advertises, and
+     * <p>The schemes here are exactly those {@link ClientHello} advertises, and
      * that is the invariant worth keeping: a scheme offered but not
      * understood is a handshake that fails against a perfectly ordinary
      * server, and one understood but not offered is dead code.
@@ -144,7 +151,31 @@ public final class HandshakeSignature {
             case ECDSA_SECP256R1_SHA256 -> Signature.getInstance("SHA256withECDSA");
             case ECDSA_SECP384R1_SHA384 -> Signature.getInstance("SHA384withECDSA");
             case ECDSA_SECP521R1_SHA512 -> Signature.getInstance("SHA512withECDSA");
+            case ED25519 -> Signature.getInstance("Ed25519");
+            case ED448 -> Signature.getInstance("Ed448");
+            // The same PSS; the key says it is for PSS only, and the JDK's
+            // RSASSA-PSS takes such a key as it is.
+            case RSA_PSS_PSS_SHA256 -> pss("SHA-256", MGF1ParameterSpec.SHA256, 32);
+            case RSA_PSS_PSS_SHA384 -> pss("SHA-384", MGF1ParameterSpec.SHA384, 48);
+            case RSA_PSS_PSS_SHA512 -> pss("SHA-512", MGF1ParameterSpec.SHA512, 64);
             default -> null;
+        };
+    }
+
+    /**
+     * Whether the key is of the kind the scheme names, where the JCA would not
+     * tell: the RSASSA-PSS verifier takes an rsaEncryption key and a PSS-only
+     * one alike. RFC 8446 section 4.2.3 keeps them apart - rsa_pss_rsae_* for
+     * rsaEncryption keys, rsa_pss_pss_* for RSASSA-PSS keys - and this client
+     * offers both, so it holds a server to the one it used.
+     */
+    static boolean keyFits(PublicKey key, int scheme) {
+        return switch (scheme) {
+            case RSA_PSS_RSAE_SHA256, RSA_PSS_RSAE_SHA384, RSA_PSS_RSAE_SHA512 ->
+                    "RSA".equals(key.getAlgorithm());
+            case RSA_PSS_PSS_SHA256, RSA_PSS_PSS_SHA384, RSA_PSS_PSS_SHA512 ->
+                    "RSASSA-PSS".equals(key.getAlgorithm());
+            default -> true;
         };
     }
 

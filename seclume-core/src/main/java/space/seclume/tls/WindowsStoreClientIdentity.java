@@ -75,6 +75,8 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
     private static final int NCRYPT_SILENT_FLAG = 0x40;
 
     private final List<byte[]> chain;
+    /** Bytes per coordinate: 32 for P-256, 48 for P-384 - the certificate's curve. */
+    private final int field;
     private final MemorySegment key;
     private final boolean freeKey;
     private boolean closed;
@@ -118,7 +120,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
                     int length = view.get(JAVA_INT, 16);
                     byte[] der = view.get(ADDRESS, 8).reinterpret(length)
                             .toArray(JAVA_BYTE);
-                    requireP256(der);
+                    this.field = field(der);
                     this.chain = List.of(der);
 
                     MemorySegment handle = arena.allocate(JAVA_LONG);
@@ -153,13 +155,14 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
 
     @Override
     public int signatureScheme() {
-        return HandshakeSignature.ECDSA_SECP256R1_SHA256;
+        return field == 48 ? HandshakeSignature.ECDSA_SECP384R1_SHA384
+                : HandshakeSignature.ECDSA_SECP256R1_SHA256;
     }
 
     /**
      * Asks Windows for a signature over the hash of the content.
      *
-     * <p>NCrypt answers ECDSA with the raw {@code r || s}, 64 bytes, where TLS
+     * <p>NCrypt answers ECDSA with the raw {@code r || s}, 64 or 96 bytes, where TLS
      * wants the DER structure, so it is converted here. Nothing about this is
      * secret: a signature is meant to be seen.
      */
@@ -170,18 +173,18 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         }
         Native n = Native.get();
         try (Arena arena = Arena.ofConfined()) {
-            byte[] digest = sha256(content);
+            byte[] digest = digest(content, field);
             MemorySegment hash = arena.allocate(digest.length);
             MemorySegment.copy(digest, 0, hash, JAVA_BYTE, 0, digest.length);
-            MemorySegment signature = arena.allocate(64);
+            MemorySegment signature = arena.allocate(2L * field);
             MemorySegment written = arena.allocate(JAVA_INT);
             int status = (int) n.signHash.invokeExact(key, MemorySegment.NULL, hash,
-                    digest.length, signature, 64, written, NCRYPT_SILENT_FLAG);
+                    digest.length, signature, 2 * field, written, NCRYPT_SILENT_FLAG);
             if (status != 0) {
                 throw new IllegalStateException("Windows refused to sign with the client "
                         + "certificate's key: NCrypt status 0x" + Integer.toHexString(status));
             }
-            return der(signature.toArray(JAVA_BYTE));
+            return der(signature.toArray(JAVA_BYTE), field);
         } catch (RuntimeException | Error failure) {
             throw failure;
         } catch (Throwable impossible) {
@@ -208,9 +211,14 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
 
     /** {@code r || s} into {@code SEQUENCE { INTEGER r, INTEGER s }}. */
     static byte[] der(byte[] raw) {
-        byte[] r = integer(raw, 0);
-        byte[] s = integer(raw, 32);
-        ByteArrayOutputStream out = new ByteArrayOutputStream(72);
+        return der(raw, 32);
+    }
+
+    /** The same for halves of {@code field} bytes - 48 for P-384. */
+    static byte[] der(byte[] raw, int field) {
+        byte[] r = integer(raw, 0, field);
+        byte[] s = integer(raw, field, field);
+        ByteArrayOutputStream out = new ByteArrayOutputStream(2 + 2 * (3 + field));
         out.write(0x30);
         out.write(r.length + s.length);
         out.writeBytes(r);
@@ -218,13 +226,13 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         return out.toByteArray();
     }
 
-    /** One 32-byte half as a DER INTEGER: leading zeros dropped, a zero added if the top bit is set. */
-    private static byte[] integer(byte[] raw, int from) {
+    /** One half as a DER INTEGER: leading zeros dropped, a zero added if the top bit is set. */
+    private static byte[] integer(byte[] raw, int from, int field) {
         int start = from;
-        while (start < from + 31 && raw[start] == 0) {
+        while (start < from + field - 1 && raw[start] == 0) {
             start++;
         }
-        int length = from + 32 - start;
+        int length = from + field - start;
         boolean pad = (raw[start] & 0x80) != 0;
         byte[] out = new byte[2 + (pad ? 1 : 0) + length];
         out[0] = 0x02;
@@ -233,27 +241,33 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         return out;
     }
 
-    private static void requireP256(byte[] der) {
+    /** 32 or 48: the certificate's curve, P-256 or P-384; anything else refused. */
+    private static int field(byte[] der) {
         try (InputStream in = new java.io.ByteArrayInputStream(der)) {
             X509Certificate certificate = (X509Certificate) CertificateFactory.getInstance("X.509")
                     .generateCertificate(in);
-            if (!(certificate.getPublicKey() instanceof ECPublicKey ec)
-                    || ec.getParams().getCurve().getField().getFieldSize() != 256) {
+            int bits = certificate.getPublicKey() instanceof ECPublicKey ec
+                    ? ec.getParams().getCurve().getField().getFieldSize() : 0;
+            if (bits != 256 && bits != 384) {
                 throw new IllegalArgumentException("the certificate holds a "
-                        + certificate.getPublicKey().getAlgorithm() + " key; seclume signs "
-                        + "client certificates with P-256 only");
+                        + certificate.getPublicKey().getAlgorithm() + " key"
+                        + (bits > 0 ? " on a " + bits + "-bit curve" : "")
+                        + "; seclume signs client certificates with P-256 or P-384 only");
             }
+            return bits / 8;
         } catch (CertificateException | java.io.IOException e) {
             throw new IllegalArgumentException("the certificate in the store cannot be read", e);
         }
     }
 
-    private static byte[] sha256(byte[] content) {
+    /** SHA-256 for P-256, SHA-384 for P-384, as TLS pairs them. */
+    private static byte[] digest(byte[] content, int field) {
         try {
             // seclume-allow: public transcript data, never the key
-            return MessageDigest.getInstance("SHA-256").digest(content);
+            return MessageDigest.getInstance(field == 48 ? "SHA-384" : "SHA-256")
+                    .digest(content);
         } catch (java.security.NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException("a JVM without SHA-256", impossible);
+            throw new IllegalStateException("a JVM without SHA-2", impossible);
         }
     }
 

@@ -44,21 +44,30 @@ final class OraLob implements AutoCloseable {
 
     private final OracleSession session;
     private final WireBuffer locator;
+    /**
+     * How long the locator is, as the row said: 112 bytes from 23ai, but an
+     * 11g server sends 148 for the same column - its locator lists more of
+     * the LOB's blocks. Cut to 112, the list ended early, and a read beyond
+     * the blocks it still named sent the server to an address that was not
+     * there: ORA-00600 [25012].
+     */
+    private final int locatorLength;
     private boolean freed;
 
-    private OraLob(OracleSession session, WireBuffer source, int at) {
+    private OraLob(OracleSession session, WireBuffer source, int at, int length) {
         this.session = session;
-        this.locator = new WireBuffer(TtcLob.LOCATOR_LENGTH);
-        this.locator.putBytes(source.segment(), at, TtcLob.LOCATOR_LENGTH);
+        this.locatorLength = length > 0 ? length : TtcLob.LOCATOR_LENGTH;
+        this.locator = new WireBuffer(locatorLength);
+        this.locator.putBytes(source.segment(), at, locatorLength);
     }
 
     /** Takes its own copy of the locator: the row it came from moves on. */
-    static Clob clob(OracleSession session, WireBuffer source, int at) {
-        return new AsClob(new OraLob(session, source, at));
+    static Clob clob(OracleSession session, WireBuffer source, int at, int length) {
+        return new AsClob(new OraLob(session, source, at, length));
     }
 
-    static Blob blob(OracleSession session, WireBuffer source, int at) {
-        return new AsBlob(new OraLob(session, source, at));
+    static Blob blob(OracleSession session, WireBuffer source, int at, int length) {
+        return new AsBlob(new OraLob(session, source, at, length));
     }
 
     /**
@@ -71,7 +80,7 @@ final class OraLob implements AutoCloseable {
             throw new SQLException("this LOB has been freed", "HY000");
         }
         WireBuffer value = new WireBuffer(1024);
-        session.readLob(locator, 0, TtcLob.LOCATOR_LENGTH, offset, amount, value);
+        session.readLob(locator, 0, locatorLength, offset, amount, value);
         return value;
     }
 
@@ -118,7 +127,7 @@ final class OraLob implements AutoCloseable {
         if (freed) {
             throw new SQLException("this LOB has been freed", "HY000");
         }
-        return session.lobLength(locator, 0, TtcLob.LOCATOR_LENGTH);
+        return session.lobLength(locator, 0, locatorLength);
     }
 
     /** Reads in blocks, one round trip each, and stops when a block comes back empty. */

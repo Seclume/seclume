@@ -192,18 +192,20 @@ public final class ClientHello {
         }
         String name = dnsName(serverName); // public routing metadata, never a secret
         int sessionLength = (int) sessionId.byteSize();
-        // supported_versions (7), groups (6 + 2 per group), signatures (18),
-        // certificate signatures (24), key_share (6 + the shares), optional
-        // server_name (9 + name).
+        // supported_versions (7), groups (6 + 2 per group), signatures (6 + 2
+        // per scheme), certificate signatures (6 + 2 per scheme + 6),
+        // key_share (6 + the shares), optional server_name (9 + name).
         int alpnLength = alpn == null ? 0 : 4 + 2 + 1 + alpn.length();
         // supported_versions with one or two versions, and the key shares, only
         // where TLS 1.3 is offered; ec_point_formats (6), extended_master_secret
         // (4), an empty renegotiation_info (5) and three more signature schemes
         // (6) only where TLS 1.2 is.
         int versionsLength = offers13 ? (offers12 ? 9 : 7) : 0;
-        int signaturesLength = 18 + (offers12 ? 6 : 0);
+        int signaturesLength = 6 + 2 * SIGNATURE_SCHEMES.length + (offers12 ? 6 : 0);
+        int certificateSignaturesLength = 6 + 2 * SIGNATURE_SCHEMES.length + 6;
         int cookieLength = cookie == null ? 0 : 4 + 2 + (int) cookie.byteSize();
-        int extensions = versionsLength + 6 + 2 * supportedGroups.length + signaturesLength + 24
+        int extensions = versionsLength + 6 + 2 * supportedGroups.length + signaturesLength
+                + certificateSignaturesLength
                 + (offers13 ? 6 + sharesLength : 0)
                 + (offers12 ? 6 + 4 + 5 : 0)
                 + (name == null ? 0 : 9 + name.length()) + alpnLength + cookieLength;
@@ -263,8 +265,8 @@ public final class ClientHello {
         }
         // Certificates may additionally be signed with RSA PKCS#1 v1.5.
         // Those schemes are deliberately absent from CertificateVerify's list.
-        extension(buffer, SIGNATURE_ALGORITHMS_CERT, 20);
-        buffer.putShort((short) 18);
+        extension(buffer, SIGNATURE_ALGORITHMS_CERT, certificateSignaturesLength - 4);
+        buffer.putShort((short) (certificateSignaturesLength - 6));
         signatures(buffer);
         buffer.putShort((short) 0x0401).putShort((short) 0x0501).putShort((short) 0x0601);
 
@@ -306,9 +308,26 @@ public final class ClientHello {
     /** RFC 7301, application_layer_protocol_negotiation. */
     public static final int EXTENSION_ALPN = 16;
 
+    /**
+     * What a server may sign with, in order of preference: RSA-PSS for an
+     * ordinary RSA key, ECDSA, EdDSA, and RSA-PSS for a key that is itself
+     * RSASSA-PSS ({@code rsa_pss_pss_*}). Every one is verified by the JDK -
+     * see {@link HandshakeSignature}, which has to understand exactly these.
+     */
+    static final int[] SIGNATURE_SCHEMES = {
+        HandshakeSignature.RSA_PSS_RSAE_SHA256, HandshakeSignature.RSA_PSS_RSAE_SHA384,
+        HandshakeSignature.RSA_PSS_RSAE_SHA512,
+        HandshakeSignature.ECDSA_SECP256R1_SHA256, HandshakeSignature.ECDSA_SECP384R1_SHA384,
+        HandshakeSignature.ECDSA_SECP521R1_SHA512,
+        HandshakeSignature.ED25519, HandshakeSignature.ED448,
+        HandshakeSignature.RSA_PSS_PSS_SHA256, HandshakeSignature.RSA_PSS_PSS_SHA384,
+        HandshakeSignature.RSA_PSS_PSS_SHA512,
+    };
+
     private static void signatures(ByteBuffer buffer) {
-        buffer.putShort((short) 0x0804).putShort((short) 0x0805).putShort((short) 0x0806);
-        buffer.putShort((short) 0x0403).putShort((short) 0x0503).putShort((short) 0x0603);
+        for (int scheme : SIGNATURE_SCHEMES) {
+            buffer.putShort((short) scheme);
+        }
     }
 
     private static void extension(ByteBuffer buffer, int type, int length) {

@@ -530,6 +530,12 @@ public final class PgSession implements AutoCloseable {
             // The JVM's zone, as pgjdbc sends it: ::date, date_trunc and
             // timestamptz text then agree with the vendor driver.
             out.putCString("TimeZone").putCString(sessionTimeZone());
+            // Every digit of a float in text: before PostgreSQL 12 the default
+            // was 15 significant digits, so 1.0/3 came back as
+            // 0.333333333333333 in text and as 0.3333333333333333 in binary.
+            // 3 is what pgjdbc sends; from 12 on any positive value means the
+            // shortest exact form, which is the default there anyway.
+            out.putCString("extra_float_digits").putCString("3");
             out.putByte((byte) 0);
             channel.end();
             channel.flush();
@@ -1295,6 +1301,13 @@ public final class PgSession implements AutoCloseable {
         if (pendingSql == null) {
             return 0;
         }
+        // The answer to a reset sent at the last return is read before the
+        // count below is taken, not inside command() after it: read there,
+        // its ReadyForQuery was counted as the one closing this Parse's block,
+        // the Parse was taken for failed and sent again with the next
+        // execution - "prepared statement already exists", on the second
+        // slice of a batch after a pooled connection's DISCARD ALL.
+        settleDiscard();
         unconfirmedParses.add(new InFlightParse(statement, pendingSql,
                 readyCount + carriedBefore + 1));
         WireBuffer out = command(PgProtocol.PARSE);

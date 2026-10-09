@@ -26,6 +26,44 @@ public final class TtcParameters {
     private TtcParameters() {
     }
 
+    /**
+     * Whether chunk lengths are numbers - four bytes at most, chunks of up to
+     * 32767 - or single bytes. The "big chunks" capability came with 12.1;
+     * an 11.2 server does not announce it and reads a chunk's length from one
+     * byte, so a statement text in number-length chunks reached it as
+     * ORA-00911.
+     */
+    public static boolean bigChunks(int fieldVersion) {
+        return fieldVersion >= TtcQuery.FIELD_VERSION_12_1;
+    }
+
+    /** The chunk size where chunk lengths are single bytes. */
+    static final int SMALL_CHUNK = 64;
+    /** And where they are numbers: 0x7fff. */
+    static final int BIG_CHUNK = 32767;
+
+    /**
+     * A long value in chunks: the 0xfe marker, every chunk with its own
+     * length, and a zero length to close.
+     */
+    public static void putChunked(WireBuffer out, java.lang.foreign.MemorySegment from,
+                                  long offset, long length, boolean bigChunks) {
+        out.putByte((byte) 0xfe);
+        int size = bigChunks ? BIG_CHUNK : SMALL_CHUNK;
+        long at = 0;
+        while (at < length) {
+            int chunk = (int) Math.min(size, length - at);
+            if (bigChunks) {
+                putNumber(out, chunk);
+            } else {
+                out.putByte((byte) chunk);
+            }
+            out.putBytes(from, offset + at, chunk);
+            at += chunk;
+        }
+        out.putByte((byte) 0);
+    }
+
     /** Writes a number in Oracle's length-prefixed form. */
     public static void putNumber(WireBuffer out, long value) {
         if (value == 0) {
@@ -85,12 +123,14 @@ public final class TtcParameters {
 
     /** Reads a number in the length-prefixed form. */
     public static long number(WireBuffer in) {
-        int bytes = in.getByte() & 0xff;
+        // The top bit of the length byte is the sign - see TtcResult.number.
+        int head = in.getByte() & 0xff;
+        int bytes = head & 0x7f;
         long value = 0;
         for (int i = 0; i < bytes; i++) {
             value = (value << 8) | (in.getByte() & 0xff);
         }
-        return value;
+        return (head & 0x80) != 0 ? -value : value;
     }
 
     /**

@@ -75,7 +75,31 @@ class LocalCertificateLoginTest {
                      + "where variable_name = 'Ssl_version')")) {
             assertTrue(row.next());
             assertEquals("certuser@%", row.getString(1));
-            assertEquals("TLSv1.3", row.getString(2));
+            // TLS 1.3 as the fixture runs; the same login has to work with the
+            // server held to TLS 1.2 (tls_version), where the certificate is
+            // proved differently. Either way client and server have to agree.
+            String version = row.getString(2);
+            assertTrue(version.equals("TLSv1.3") || version.equals("TLSv1.2"), version);
+            String ours = connection.unwrap(MyConnection.class).tlsDescription();
+            assertTrue(ours.startsWith(version + " ") && ours.endsWith(" (seclume)"), ours);
+        }
+        assertEquals(0, SecretScope.open(), "a secret scope was left open");
+    }
+
+    /**
+     * The same account with a P-384 certificate from the same issuer. Present
+     * when {@code certuser-p384.*} is in {@code .local-certauth}.
+     */
+    @Test
+    void aP384CertificateLogsInTheSameWay() throws Exception {
+        Assumptions.assumeTrue(Files.exists(certificates.resolve("certuser-p384.crt")),
+                "no certuser-p384.crt in .local-certauth");
+        try (Connection connection = DriverManager.getConnection(
+                url("certuser", "certuser-p384"));
+             Statement statement = connection.createStatement();
+             ResultSet row = statement.executeQuery("select current_user()")) {
+            assertTrue(row.next());
+            assertEquals("certuser@%", row.getString(1));
         }
         assertEquals(0, SecretScope.open(), "a secret scope was left open");
     }
@@ -93,8 +117,14 @@ class LocalCertificateLoginTest {
     void theRightSubjectFromAnotherIssuerIsRefused() {
         SQLException refused = assertThrows(SQLException.class,
                 () -> DriverManager.getConnection(url("certuser", "forged")).close());
-        assertTrue(refused.getMessage().contains("right after the client certificate was sent"),
-                refused.getMessage());
+        // The server's alert is usually lost to the reset that follows it,
+        // so the driver has to name the certificate itself. When the alert
+        // does arrive - a matter of timing, seen under the load of a full
+        // build - it is passed on as it is, and says it better.
+        String said = refused.getMessage();
+        assertTrue(said.contains("right after the client certificate was sent")
+                || said.contains("unknown_ca") || said.contains("bad_certificate")
+                || said.contains("certificate_unknown"), said);
     }
 
     /** No certificate, where the account requires one. */

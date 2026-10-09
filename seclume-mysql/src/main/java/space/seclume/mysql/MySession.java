@@ -799,7 +799,8 @@ public final class MySession implements AutoCloseable {
             channel.flush();
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
-                    "the connection broke while sending the login", "08006", e);
+                    "the connection broke while sending the login"
+                    + certificateHint(settings, channel), "08006", e);
         }
     }
 
@@ -930,8 +931,27 @@ public final class MySession implements AutoCloseable {
             }
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw new SQLNonTransientConnectionException(
-                    "the connection broke during authentication", "08006", e);
+                    "the connection broke during authentication"
+                    + certificateHint(settings, channel), "08006", e);
         }
+    }
+
+    /**
+     * What to say when the connection dies during the login after a client
+     * certificate went out. Under TLS 1.3 the server checks the certificate
+     * only after the client's Finished, so the handshake looks complete and
+     * the refusal - an alert, usually lost to the reset behind it - meets the
+     * login on its way out or the first answer to it. The same hint the
+     * handshake gives when it sees the refusal itself.
+     */
+    private static String certificateHint(Settings settings, MyChannel channel) {
+        // Under TLS 1.2 the server's Finished already said the certificate
+        // was taken; a break after it is something else.
+        String tls = channel.tlsDescription();
+        return settings.identity() == null || tls == null || !tls.startsWith("TLSv1.3") ? ""
+                : " - right after the client certificate was sent, which is how a server "
+                + "refuses one: check that it trusts the certificate's issuer, and that the "
+                + "certificate is valid and meant for client authentication";
     }
 
     /**

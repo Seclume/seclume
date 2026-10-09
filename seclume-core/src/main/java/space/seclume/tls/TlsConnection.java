@@ -6,6 +6,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 
+import space.seclume.crypto.HashAlgorithm;
 import space.seclume.internal.Transport;
 
 /**
@@ -546,10 +547,22 @@ public final class TlsConnection implements Transport {
         records.writeWith(state.writing());
         records.established();
         TlsConnection connection = new TlsConnection(transport, records);
-        if (state.tls12()) {
-            connection.description = "TLSv1.2";
-        }
+        connection.description = thawedDescription(state.tls12(), state.reading());
         return connection;
+    }
+
+    /**
+     * What a thawed connection can say about itself: the frozen state carries
+     * the key length and the hash, which name the TLS 1.3 suite exactly. For
+     * TLS 1.2 they name all but the server's signature algorithm - RSA or
+     * ECDSA, which nothing after the handshake needs - shown as {@code *}.
+     */
+    static String thawedDescription(boolean tls12, RecordProtection reading) {
+        String cipher = reading.keyLength() == 32 ? "AES_256_GCM" : "AES_128_GCM";
+        String hash = reading.hash() == HashAlgorithm.SHA_384 ? "SHA384" : "SHA256";
+        return tls12
+                ? "TLSv1.2 / TLS_ECDHE_*_WITH_" + cipher + "_" + hash
+                : "TLSv1.3 / TLS_" + cipher + "_" + hash;
     }
 
     @Override

@@ -66,6 +66,30 @@ public final class TtcProtocol {
         if (elements > 0) {
             in.skip(elements * 5);
         }
+        // Then the FDO (its length big-endian) and the server's compile
+        // capabilities, one length byte and the bytes. Their field version
+        // is how far the server's messages go: 21c answers 16, 23ai 24 - and
+        // a client writing 23.x fields to a 21c server ends its login in
+        // ORA-03120. The lower of the two is what both sides then speak.
+        if (in.remaining() >= 2) {
+            int fdo = ((in.getByte() & 0xff) << 8) | (in.getByte() & 0xff);
+            if (in.remaining() > fdo) {
+                in.skip(fdo);
+                int length = in.getByte() & 0xff;
+                if (length > TtcDataTypes.FIELD_VERSION_INDEX && in.remaining() >= length) {
+                    in.skip(TtcDataTypes.FIELD_VERSION_INDEX);
+                    serverFieldVersion = in.getByte() & 0xff;
+                    channel.serverFieldVersion(serverFieldVersion);
+                }
+            }
+        }
+    }
+
+    private int serverFieldVersion = -1;
+
+    /** The server's TTC field version, or -1 when its answer did not carry one. */
+    public int serverFieldVersion() {
+        return serverFieldVersion;
     }
 
     /** The banner the server sends about itself - with version and edition. */

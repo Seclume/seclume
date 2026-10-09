@@ -215,14 +215,16 @@ class NsHandshakeTest {
         for (int attempt = 0; attempt < 3; attempt++) {
             try (NsChannel channel = NsChannel.connect(HOST, PORT, 10_000)) {
                 int type = channel.sendConnect(description);
+                if (type == NsPacket.TYPE_RESEND) {
+                    // On the same connection, as OracleSession does: a new one
+                    // starts at the listener and gets RESEND again (18c, 21c).
+                    type = channel.sendConnect(description);
+                }
                 if (type == NsPacket.TYPE_ACCEPT) {
                     channel.readAccept();
                     System.out.println("ACCEPT after " + attempt + " redirect(s), version="
                             + channel.protocolVersion());
                     return;
-                }
-                if (type == NsPacket.TYPE_RESEND) {
-                    continue;
                 }
                 if (type == NsPacket.TYPE_REDIRECT) {
                     description = channel.readRedirect();

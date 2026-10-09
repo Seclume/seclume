@@ -90,12 +90,26 @@ public final class TtcQuery {
     private static final int AL8I4_LENGTH = 13;
     /** Zero bytes between the last pointer and the statement text. */
     private static final int TAIL_ZEROES = 15;
+
+    /**
+     * How many of those zeroes a server of {@code fieldVersion} reads: al8blv,
+     * al8dnam with their lengths and the upper half of the registration id
+     * always; the DML row count pointers from 12.1; SQL signature and SQL id
+     * from 12.2; the chunk ids from 12.2 EXT1. One too many and an 11g
+     * server answers ORA-03120, an integer overflow in its conversion.
+     */
+    static int tailZeroes(int fieldVersion) {
+        return fieldVersion >= FIELD_VERSION_12_2_EXT1 ? TAIL_ZEROES
+                : fieldVersion >= FIELD_VERSION_12_2 ? TAIL_ZEROES - 2
+                : fieldVersion >= FIELD_VERSION_12_1 ? TAIL_ZEROES - 7
+                : TAIL_ZEROES - 10;
+    }
+
+    static final int FIELD_VERSION_12_1 = 7;
+    static final int FIELD_VERSION_12_2 = 8;
+    static final int FIELD_VERSION_12_2_EXT1 = 9;
     /** Up to this length a byte string carries a single length byte. */
     private static final int SHORT_LENGTH = 252;
-    /** The length byte that says "chunks follow". */
-    private static final int CHUNKED = 0xfe;
-    /** How much goes into one chunk. */
-    private static final int CHUNK_SIZE = 32767;
 
     /**
      * How many rows the server sends along when none are expected.
@@ -174,6 +188,14 @@ public final class TtcQuery {
     public static void put(WireBuffer out, int sequence, String sql, int prefetchRows,
                            boolean query, TtcBinds binds, int cursorId, int iterations,
                            Rows rows, boolean autoCommit, boolean plsql) {
+        put(out, sequence, sql, prefetchRows, query, binds, cursorId, iterations, rows,
+                autoCommit, plsql, TtcDataTypes.FIELD_VERSION);
+    }
+
+    /** The same for a server of {@code fieldVersion} - see {@link #tailZeroes}. */
+    public static void put(WireBuffer out, int sequence, String sql, int prefetchRows,
+                           boolean query, TtcBinds binds, int cursorId, int iterations,
+                           Rows rows, boolean autoCommit, boolean plsql, int fieldVersion) {
         byte[] text = sql.getBytes(java.nio.charset.StandardCharsets.UTF_8); // seclume-allow: statement text, never a secret
 
         out.putByte((byte) TtcMessage.TYPE_FUNCTION);
@@ -231,10 +253,10 @@ public final class TtcQuery {
         // count is fixed rather than derived. All of them
         // are zero for a query without bind variables, so the number is the
         // only thing that matters.
-        out.putZeroes(TAIL_ZEROES);
+        out.putZeroes(tailZeroes(fieldVersion));
 
         if (cursorId == 0) {
-            putBytes(out, text);
+            putBytes(out, text, TtcParameters.bigChunks(fieldVersion));
         }
         putAl8i4(out, query, cursorId, iterations, prefetchRows);
         if (count > 0) {
@@ -247,7 +269,7 @@ public final class TtcQuery {
                         binds.measure(sizes);
                     }
                 }
-                binds.putDescriptors(out, sizes);
+                binds.putDescriptors(out, sizes, fieldVersion);
                 for (int row = 0; row < iterations; row++) {
                     if (rows != null) {
                         rows.bind(row);
@@ -317,21 +339,14 @@ public final class TtcQuery {
      * its own length, closed by a zero. Metadata queries are longer than 252
      * bytes almost by definition, so this is not an exotic path.
      */
-    private static void putBytes(WireBuffer out, byte[] text) {
+    private static void putBytes(WireBuffer out, byte[] text, boolean bigChunks) {
         if (text.length <= SHORT_LENGTH) {
             out.putByte((byte) text.length);
             out.putBytes(java.lang.foreign.MemorySegment.ofArray(text), 0, text.length);
             return;
         }
-        out.putByte((byte) CHUNKED);
-        int at = 0;
-        while (at < text.length) {
-            int chunk = Math.min(CHUNK_SIZE, text.length - at);
-            TtcParameters.putNumber(out, chunk);
-            out.putBytes(java.lang.foreign.MemorySegment.ofArray(text), at, chunk);
-            at += chunk;
-        }
-        TtcParameters.putNumber(out, 0);
+        TtcParameters.putChunked(out, java.lang.foreign.MemorySegment.ofArray(text), 0,
+                text.length, bigChunks);
     }
 
     /** Sends the call on its own packet. */
@@ -407,7 +422,7 @@ public final class TtcQuery {
         TtcParameters.putNumber(out, 0);                  // registration id, lower half
         out.putByte((byte) 0);                            // pointer: al8objlist
         out.putByte((byte) 1);                            // pointer: al8objlen
-        out.putZeroes(TAIL_ZEROES);
+        out.putZeroes(tailZeroes(channel.ttcFieldVersion()));
         putAl8i4(out, true, cursorId, 0, 0);
         for (OracleColumn column : columns) {
             boolean inline = column.needsDefine();
@@ -427,7 +442,9 @@ public final class TtcQuery {
             out.putByte((byte) (column.charset() == OracleColumn.AL16UTF16 ? 2
                     : column.charset() != 0 ? 1 : 0));    // character set form
             TtcParameters.putNumber(out, inline ? size : 0);  // how much may come inline
-            TtcParameters.putNumber(out, 0);              // oaccolid
+            if (channel.ttcFieldVersion() >= FIELD_VERSION_12_2) {
+                TtcParameters.putNumber(out, 0);          // oaccolid
+            }
         }
         channel.sendData();
     }
@@ -438,7 +455,7 @@ public final class TtcQuery {
                             Rows rows, boolean autoCommit, boolean plsql) throws IOException {
         WireBuffer out = channel.beginData();
         put(out, sequence, sql, prefetchRows, query, binds, cursorId, iterations, rows,
-                autoCommit, plsql);
+                autoCommit, plsql, channel.ttcFieldVersion());
         channel.sendData();
     }
 }

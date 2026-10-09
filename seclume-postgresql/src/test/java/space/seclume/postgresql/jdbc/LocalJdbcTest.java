@@ -1448,6 +1448,42 @@ class LocalJdbcTest {
     }
 
     /**
+     * The routine catalogue on every server, procedures or not: a function
+     * exists in all of them, and so do getProcedures and getProcedureColumns.
+     * Before PostgreSQL 11 there is no {@code prokind}, and naming it made
+     * both fail outright on 9.6 and 10 - found by the compatibility run of
+     * 07.10.2026.
+     */
+    @Test
+    void theRoutineCatalogueAnswersOnEveryVersion() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create or replace function zl_halved(n int, out half int) "
+                    + "language sql as $$ select n / 2 $$");
+            try {
+                List<String> described = new ArrayList<>();
+                try (ResultSet columns = connection.getMetaData()
+                        .getProcedureColumns(null, null, "zl_halved", null)) {
+                    while (columns.next()) {
+                        described.add(columns.getString("COLUMN_NAME") + " "
+                                + columns.getShort("COLUMN_TYPE"));
+                    }
+                }
+                // The return value first, at position 0, then the arguments.
+                assertEquals(List.of(" 5", "n 1", "half 4"), described);
+                try (ResultSet routines = connection.getMetaData()
+                        .getProcedures(null, null, "zl_halved")) {
+                    assertTrue(routines.next(), "the function is not in the catalogue");
+                    assertEquals(2, routines.getShort("PROCEDURE_TYPE"),
+                            "a function returns a result");
+                }
+            } finally {
+                statement.execute("drop function zl_halved(int)");
+            }
+        }
+    }
+
+    /**
      * What is not a call runs as the query it is - and only OUT parameters
      * are refused.
      *

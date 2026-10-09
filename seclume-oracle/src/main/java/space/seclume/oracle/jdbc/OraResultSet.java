@@ -33,12 +33,14 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
 
     @Override
     protected java.sql.Clob clobAt(int column) throws SQLException {
-        return OraLob.clob(lobSession(), block.data(), block.offset(column));
+        return OraLob.clob(lobSession(), block.data(), block.offset(column),
+                block.length(column));
     }
 
     @Override
     protected java.sql.Blob blobAt(int column) throws SQLException {
-        return OraLob.blob(lobSession(), block.data(), block.offset(column));
+        return OraLob.blob(lobSession(), block.data(), block.offset(column),
+                block.length(column));
     }
 
     @Override

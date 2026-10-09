@@ -156,7 +156,10 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
                        case when a.attnotnull then 'NO' else 'YES' end as "IS_NULLABLE",
                        null::text as "SCOPE_CATALOG", null::text as "SCOPE_SCHEMA",
                        null::text as "SCOPE_TABLE", null::int as "SOURCE_DATA_TYPE",
-                       case when a.attidentity <> '' then 'YES'
+                       -- attidentity arrived in PostgreSQL 10: on 9.6 the
+                       -- column is missing and getColumns failed outright.
+                       -- By name at run time, as attgenerated below.
+                       case when coalesce(to_jsonb(a) ->> 'attidentity', '') <> '' then 'YES'
                             when pg_get_expr(ad.adbin, ad.adrelid) like 'nextval(%%' then 'YES'
                             else 'NO' end as "IS_AUTOINCREMENT",
                        -- attgenerated arrived in PostgreSQL 12, and a server of
@@ -370,7 +373,15 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
 
     // Information this driver does not give: empty rather than guessed.
 
-    /** Procedures and functions, which PostgreSQL keeps in one table. */
+    /**
+     * Procedures and functions, which PostgreSQL keeps in one table.
+     *
+     * <p>{@code prokind} arrived in PostgreSQL 11, together with procedures;
+     * before it every row is a function, or an aggregate where
+     * {@code proisagg} says so. Both are read by name at run time
+     * ({@code to_jsonb}), so the one query works on 9.6 as on 18 - naming the
+     * column would fail to parse on a server without it.
+     */
     @Override
     public ResultSet getProcedures(String catalog, String schemaPattern, String namePattern)
             throws SQLException {
@@ -379,13 +390,13 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
                        p.proname as "PROCEDURE_NAME", null::text as "RESERVED_1",
                        null::text as "RESERVED_2", null::text as "RESERVED_3",
                        d.description as "REMARKS",
-                       (case p.prokind when 'p' then 1 else 2 end)::smallint
+                       (case coalesce(to_jsonb(p) ->> 'prokind', case when (to_jsonb(p) ->> 'proisagg')::boolean then 'a' else 'f' end) when 'p' then 1 else 2 end)::smallint
                            as "PROCEDURE_TYPE",
                        p.proname || '_' || p.oid as "SPECIFIC_NAME"
                 from pg_catalog.pg_proc p
                 join pg_catalog.pg_namespace n on n.oid = p.pronamespace
                 left join pg_catalog.pg_description d on d.objoid = p.oid
-                where p.prokind in ('p','f') and %s and %s
+                where coalesce(to_jsonb(p) ->> 'prokind', case when (to_jsonb(p) ->> 'proisagg')::boolean then 'a' else 'f' end) in ('p','f') and %s and %s
                 order by 2, 3
                 """.formatted(like("n.nspname", schemaPattern),
                         like("p.proname", namePattern)));
@@ -412,12 +423,13 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
                 ? "true" : "\"COLUMN_NAME\" like " + literal(columnPattern);
         return query("""
                 with routines as (
-                    select p.oid, n.nspname, p.proname, p.prokind, p.prorettype,
+                    select p.oid, n.nspname, p.proname, coalesce(to_jsonb(p) ->> 'prokind', case when (to_jsonb(p) ->> 'proisagg')::boolean then 'a' else 'f' end) as prokind,
+                           p.prorettype,
                            coalesce(p.proallargtypes, p.proargtypes::oid[]) as types,
                            p.proargmodes as modes, p.proargnames as names
                     from pg_catalog.pg_proc p
                     join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-                    where p.prokind in ('p','f') and %s and %s
+                    where coalesce(to_jsonb(p) ->> 'prokind', case when (to_jsonb(p) ->> 'proisagg')::boolean then 'a' else 'f' end) in ('p','f') and %s and %s
                 ), described as (
                     select r.nspname, r.proname, r.oid,
                            coalesce(r.names[a.ord], '$' || a.ord) as "COLUMN_NAME",

@@ -489,7 +489,7 @@ public final class WireBuffer implements AutoCloseable {
         int valid = Math.max(limit, position);
         if (at < 0 || bytes < 0 || at > valid - bytes) {
             throw new Truncated("the buffer holds " + valid + " valid bytes, and " + bytes
-                    + " were wanted at " + at + " - the server sent something unexpected");
+                    + " were wanted at " + at + " - the server sent something unexpected", true);
         }
     }
 
@@ -568,8 +568,27 @@ public final class WireBuffer implements AutoCloseable {
 
         private static final long serialVersionUID = 1L;
 
+        private final boolean endOfData;
+
         Truncated(String message) {
+            this(message, false);
+        }
+
+        Truncated(String message, boolean endOfData) {
             super(message);
+            this.endOfData = endOfData;
+        }
+
+        /**
+         * Whether the reader ran out of bytes - what it holds ends before what
+         * it was asked for - rather than finding something malformed in them.
+         * A reader still collecting an answer (Oracle before protocol 319
+         * flags no last packet) waits for more on the first and stops on the
+         * second: a malformed answer does not become well formed by waiting,
+         * and waiting for one hung the call.
+         */
+        public boolean endOfData() {
+            return endOfData;
         }
 
         /**
@@ -584,6 +603,16 @@ public final class WireBuffer implements AutoCloseable {
          */
         public static Truncated because(String message) {
             return new Truncated(message);
+        }
+
+        /**
+         * The same for a decoder that ran out of bytes: a length that reaches
+         * past what has arrived. While an answer is still being collected
+         * that means "more to come", not "malformed" - see
+         * {@link #endOfData()}.
+         */
+        public static Truncated outOfData(String message) {
+            return new Truncated(message, true);
         }
     }
 
@@ -614,7 +643,7 @@ public final class WireBuffer implements AutoCloseable {
             throw new Truncated(
                     "the message ends after " + limit + " bytes, but " + bytes
                     + " more were needed at " + position
-                    + " - the server sent something unexpected");
+                    + " - the server sent something unexpected", true);
         }
     }
 
