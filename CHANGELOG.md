@@ -124,6 +124,7 @@ connection, as the Oracle case below. Such a length, or one that would wrap
 round, is now refused as a malformed answer, and the token stream refuses any
 token that does not move it forward. Found by the nightly coverage-guided
 fuzzing; the input is kept as a regression case.
+
 ### Fixed: Oracle - a malformed object column could hang the reading thread
 
 A chunked value inside an object column (`XMLType` and other object types)
