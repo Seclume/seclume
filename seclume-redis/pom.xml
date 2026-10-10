@@ -21,7 +21,7 @@
     seclume's TLS 1.3 under Netty. Neither client ever holds the password.</description>
 
   <properties>
-    <jedis.version>8.0.1</jedis.version>
+    <jedis.version>8.0.2</jedis.version>
     <lettuce.version>7.8.0.RELEASE</lettuce.version>
   </properties>
 

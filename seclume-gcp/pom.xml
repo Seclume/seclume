@@ -19,7 +19,7 @@
     client library.</description>
 
   <properties>
-    <google-auth.version>1.53.0</google-auth.version>
+    <google-auth.version>1.54.0</google-auth.version>
   </properties>
 
   <dependencies>
