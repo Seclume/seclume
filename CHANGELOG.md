@@ -3,6 +3,18 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed: Oracle - native memory left behind by a broken-off answer
+
+Collecting an answer that spans several packets allocates native memory, which
+was freed only when the answer was complete. One that broke off - a connection
+lost mid-answer - left it behind every time. Since 0.11.1 every answer from a
+server before 23ai is collected that way, and the nightly fuzz run grew past
+the runner's memory (15 GB in ten minutes; 1.2 GB flat with the fix). Those
+answers are also no longer walked once per packet: bytes already received are
+more of the same answer, and only when none are waiting is the end looked for.
+
 ## [0.11.1] - 2026-10-11
 
 Older servers: Oracle 18c and 21c are supported, TCPS included, and 11g with
