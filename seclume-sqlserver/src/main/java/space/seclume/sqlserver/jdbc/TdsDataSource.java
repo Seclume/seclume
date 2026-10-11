@@ -254,9 +254,16 @@ public final class TdsDataSource implements DataSource, ExpiringCredentials {
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tdsVersion, tlsStack,
                 resolvedIdentity());
-        TdsConnection connection = new TdsConnection(space.seclume.internal.TrustChoice.using(
+        TdsSession session = space.seclume.internal.TrustChoice.using(
                 trust, () -> space.seclume.internal.Transports.using(transport,
-                        () -> TdsSession.open(settings))),
+                        () -> TdsSession.open(settings)));
+        // A recovery opens its connection the way this one was opened.
+        space.seclume.internal.TrustChoice.Choice chosen = trust;
+        String through = transport;
+        session.recoverWith((again, data) -> space.seclume.internal.TrustChoice.using(chosen,
+                () -> space.seclume.internal.Transports.using(through,
+                        () -> TdsSession.open(again, data))));
+        TdsConnection connection = new TdsConnection(session,
                 TdsUrl.PREFIX + "//" + host + ":" + port + "/" + database);
         connection.varcharParameters(varcharParameters);
         return connection;

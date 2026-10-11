@@ -46,11 +46,17 @@ public final class TdsDriver implements Driver {
         }
         TdsSession.Settings settings = TdsUrl.settings(url, properties);
         boolean varchar = TdsUrl.varcharParameters(url, properties);
-        TdsConnection connection = new TdsConnection(space.seclume.internal.TrustChoice.using(
-                space.seclume.internal.TrustChoice.of(url, properties),
-                () -> space.seclume.internal.Transports.using(
-                        space.seclume.internal.Transports.option(url, properties),
-                        () -> TdsSession.open(settings))), url);
+        space.seclume.internal.TrustChoice.Choice trust =
+                space.seclume.internal.TrustChoice.of(url, properties);
+        String transport = space.seclume.internal.Transports.option(url, properties);
+        TdsSession session = space.seclume.internal.TrustChoice.using(trust,
+                () -> space.seclume.internal.Transports.using(transport,
+                        () -> TdsSession.open(settings)));
+        // A recovery opens its connection the way this one was opened.
+        session.recoverWith((again, data) -> space.seclume.internal.TrustChoice.using(trust,
+                () -> space.seclume.internal.Transports.using(transport,
+                        () -> TdsSession.open(again, data))));
+        TdsConnection connection = new TdsConnection(session, url);
         connection.varcharParameters(varchar);
         return connection;
     }

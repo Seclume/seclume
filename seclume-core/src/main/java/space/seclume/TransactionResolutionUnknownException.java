@@ -78,6 +78,10 @@ public final class TransactionResolutionUnknownException extends SQLNonTransient
         if (state == null || !state.startsWith("08")) {
             return failure;
         }
+        if (state.equals("08001")) {
+            // No connection could be made: the statement never left.
+            return failure;
+        }
         if (sql != null && onlyReads(sql)) {
             return failure;
         }
@@ -282,6 +286,10 @@ public final class TransactionResolutionUnknownException extends SQLNonTransient
         }
         String state = failure.getSQLState();
         if (state == null || !state.startsWith("08")) {
+            return failure;
+        }
+        if (state.equals("08001")) {
+            // No connection could be made: the statement never left.
             return failure;
         }
         return new TransactionResolutionUnknownException(

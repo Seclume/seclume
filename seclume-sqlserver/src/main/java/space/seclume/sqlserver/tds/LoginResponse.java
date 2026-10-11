@@ -52,7 +52,8 @@ public final class LoginResponse {
                 case Tds.TOKEN_ENVCHANGE -> at = readEnvChange(in, at);
                 case Tds.TOKEN_ERROR -> at = readError(in, at, true);
                 case Tds.TOKEN_INFO -> at = readError(in, at, false);
-                case Tds.TOKEN_FEATURE_EXT_ACK -> at = skipFeatureExtAck(in, at);
+                case Tds.TOKEN_FEATURE_EXT_ACK -> at = readFeatureExtAck(in, at);
+                case Tds.TOKEN_SESSION_STATE -> at = readSessionState(in, at);
                 case Tds.TOKEN_SSPI -> at = readSspi(in, at, length);
                 case Tds.TOKEN_DONE, Tds.TOKEN_DONE_PROC, Tds.TOKEN_DONE_IN_PROC -> at += 12;
                 default -> throw new IOException(
@@ -109,6 +110,13 @@ public final class LoginResponse {
         p++;
         String newValue = readUtf16(in, p, newChars);
         switch (kind) {
+            case 2 -> language = newValue;
+            case 7 -> {                         // a collation: bytes, not text
+                collation = new byte[newChars]; // seclume-allow: a collation, five bytes of protocol
+                for (int i = 0; i < newChars; i++) {
+                    collation[i] = in.getByte(p + i);
+                }
+            }
             case 1 -> database = newValue;      // database
             case 4 -> {                         // packet size
                 try {
@@ -147,7 +155,7 @@ public final class LoginResponse {
         return end;
     }
 
-    private int skipFeatureExtAck(WireBuffer in, int at) {
+    private int readFeatureExtAck(WireBuffer in, int at) throws IOException {
         int p = at;
         while (true) {
             int feature = in.getByte(p) & 0xff;
@@ -156,8 +164,59 @@ public final class LoginResponse {
                 return p;
             }
             int dataLength = readInt(in, p);
+            if (dataLength < 0) {
+                throw new IOException("a FEATUREEXTACK entry of " + dataLength + " bytes");
+            }
+            if (feature == RecoveryState.FEATURE) {
+                recoveryAcknowledged = bytes(in, p + 4, dataLength);
+            }
             p += 4 + dataLength;
         }
+    }
+
+    /** SESSIONSTATE in the login answer - the state a recovering login put back. */
+    private int readSessionState(WireBuffer in, int at) throws IOException {
+        int tokenLength = readInt(in, at);
+        if (tokenLength < 5) {
+            throw new IOException("a SESSIONSTATE token of " + tokenLength + " bytes");
+        }
+        sessionStates.add(new TokenStream.SessionState(readInt(in, at + 4) & 0xffffffffL,
+                (in.getByte(at + 8) & 0x01) != 0, bytes(in, at + 9, tokenLength - 5)));
+        return at + 4 + tokenLength;
+    }
+
+    private static byte[] bytes(WireBuffer in, int at, int length) {
+        byte[] value = new byte[length]; // seclume-allow: session state the server described, not a secret
+        for (int i = 0; i < length; i++) {
+            value[i] = in.getByte(at + i);
+        }
+        return value;
+    }
+
+    private byte[] recoveryAcknowledged;
+    private String language;
+    private byte[] collation;
+
+    /** The language the login settled on, or null. */
+    String language() {
+        return language;
+    }
+
+    /** The collation the login settled on, or null. */
+    byte[] collation() {
+        return collation;
+    }
+    private final java.util.List<TokenStream.SessionState> sessionStates =
+            new java.util.ArrayList<>();
+
+    /** The SESSIONRECOVERY acknowledgement's data, or null when the server sent none. */
+    byte[] recoveryAcknowledged() {
+        return recoveryAcknowledged;
+    }
+
+    /** The SESSIONSTATE tokens of the login answer. */
+    java.util.List<TokenStream.SessionState> sessionStates() {
+        return sessionStates;
     }
 
     private static int readUShort(WireBuffer in, int at) {

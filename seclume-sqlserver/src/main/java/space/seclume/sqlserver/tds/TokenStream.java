@@ -275,6 +275,7 @@ public final class TokenStream {
                     p += 4;
                 }
                 case Tds.TOKEN_FEATURE_EXT_ACK -> p = skipFeatureExtAck(in, p);
+                case Tds.TOKEN_SESSION_STATE -> p = readSessionState(in, p, end);
                 default -> throw new IOException(
                         "unexpected token " + Tds.tokenName(token) + " at offset " + (p - 1));
             }
@@ -381,11 +382,69 @@ public final class TokenStream {
                 transactionDescriptor = 0;
                 transactionChanged = true;
             }
+            case 2 -> language = utf16(in, p + 1, in.getByte(p) & 0xff);
+            case 7 -> {                               // a collation: a byte length, then bytes
+                int length = in.getByte(p) & 0xff;
+                collation = new byte[length]; // seclume-allow: a collation, five bytes of protocol
+                for (int i = 0; i < length; i++) {
+                    collation[i] = in.getByte(p + 1 + i);
+                }
+            }
             default -> {
-                // Language, collation, packet size - of no concern here.
+                // Packet size and the rest - of no concern here.
             }
         }
         return end;
+    }
+
+    /**
+     * One SESSIONSTATE token (MS-TDS 2.2.7.21): length, sequence number,
+     * status - whether the session is still recoverable - and the values.
+     * See {@link RecoveryState}.
+     */
+    private int readSessionState(WireBuffer in, int at, int available) throws Incomplete,
+            IOException {
+        if (at + 4 > available) {
+            throw INCOMPLETE;
+        }
+        int length = in.getIntLe(at);
+        if (length < 5) {
+            throw new IOException("a SESSIONSTATE token of " + length + " bytes");
+        }
+        int end = at + 4 + length;
+        if (end > available) {
+            throw INCOMPLETE;
+        }
+        byte[] values = new byte[length - 5]; // seclume-allow: session state the server described, not a secret
+        for (int i = 0; i < values.length; i++) {
+            values[i] = in.getByte(at + 9 + i);
+        }
+        sessionStates.add(new SessionState(in.getIntLe(at + 4) & 0xffffffffL,
+                (in.getByte(at + 8) & 0x01) != 0, values));
+        return end;
+    }
+
+    /** A SESSIONSTATE token: sequence number, still recoverable, the values. */
+    public record SessionState(long sequence, boolean recoverable, byte[] values) {
+    }
+
+    private final java.util.List<SessionState> sessionStates = new java.util.ArrayList<>();
+    private String language;
+    private byte[] collation;
+
+    /** The SESSIONSTATE tokens of this answer, in order. */
+    public java.util.List<SessionState> sessionStates() {
+        return sessionStates;
+    }
+
+    /** The language this answer switched to, or null. */
+    public String language() {
+        return language;
+    }
+
+    /** The collation this answer switched to, or null. */
+    public byte[] collation() {
+        return collation;
     }
 
     /** A one-byte length, then that many bytes, least significant first. */

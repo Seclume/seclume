@@ -5,6 +5,30 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### SQL Server: an idle connection the server dropped comes back with its settings
+
+SQL Server's idle connection resiliency (TDS feature `SESSIONRECOVERY`) is
+used now. At login the driver asks for the feature, then keeps what the server
+reports about the session's state. Before it sends a request on a connection
+that has been quiet for a second, it checks without a round trip whether the
+server has closed it. A server restart, a failover or a `KILL` all look like
+that. If the connection is gone, the driver logs in again with that state and
+sends the request on the new connection. The server sets up a new session with
+the same database, language and `SET` options.
+
+This happens only when nothing can be lost:
+- no transaction is open;
+- no prepared handle is held;
+- the server still says the session can be recovered. A temporary table, a
+  cursor or `EXECUTE AS` makes it say no.
+
+In every other case the failure goes through as before. When the new login
+itself fails, the error has SQLState `08001`: nothing was sent, so it is not
+reported as an auto-commit statement of unknown outcome. Tested against
+SQL Server 2022 (`LocalSessionRecoveryTest`: two recoveries in a row; a
+temporary table and an open transaction are not recovered) and byte for byte
+(`RecoveryStateTest`).
+
 ### Fixed: a rebuilt connection no longer drops session state silently
 
 The pool rebuilds a connection that breaks while it is borrowed

@@ -244,6 +244,31 @@ public final class SocketTransport implements Transport, NetworkTimeouts.Watched
         return channel.isOpen();
     }
 
+    /**
+     * One read that does not wait: nothing to read means the peer is still
+     * there. Three system calls, and only after {@code quietMillis} of
+     * silence - a connection used a moment ago is not asked.
+     */
+    @Override
+    public synchronized boolean goneWhileQuiet(long quietMillis) {
+        if (!channel.isOpen()) {
+            return true;
+        }
+        if (System.nanoTime() - lastTraffic < quietMillis * 1_000_000L || busySince != 0) {
+            return false;
+        }
+        try {
+            channel.configureBlocking(false);
+            try {
+                return channel.read(ByteBuffer.allocateDirect(1)) != 0;
+            } finally {
+                channel.configureBlocking(true);
+            }
+        } catch (IOException | RuntimeException e) {
+            return true;
+        }
+    }
+
     @Override
     public void close() {
         NetworkTimeouts.forget(this);
