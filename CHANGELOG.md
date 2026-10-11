@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed: notices for the code and data seclume carries
+
+NOTICE now names python-oracledb (UPL-1.0 or Apache-2.0), from which parts of
+the Oracle driver are derived, with its licence text in `licenses/`, and the
+Public Suffix List (MPL-2.0). Every published jar carries `LICENSE`, `NOTICE`
+and `licenses/` under `META-INF` - they were in the repository only.
+
 ### Fixed: Oracle - native memory left behind by a broken-off answer
 
 Collecting an answer that spans several packets allocates native memory, which

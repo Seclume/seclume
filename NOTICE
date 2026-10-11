@@ -29,11 +29,28 @@ go-ora (https://github.com/sijms/go-ora), Copyright (c) 2020 Samy Sultan,
 licensed under the MIT License. The licence text is in
 licenses/go-ora-MIT.txt.
 
+Parts of the Oracle driver (seclume-oracle) are derived from python-oracledb
+(https://github.com/oracle/python-oracledb), version 4.0.2,
+Copyright (c) 2016, 2026 Oracle and/or its affiliates, dual-licensed under the
+Universal Permissive License (UPL) 1.0 and the Apache License, Version 2.0:
+the password verifiers and session key derivation of the login, the layout of
+OSON (binary JSON) and VECTOR values, and details of the TTC messages. Which
+parts, and how, is recorded in PROVENANCE.md and at the places in the source
+that use them. The licence text, as python-oracledb publishes it, is in
+licenses/python-oracledb-LICENSE.txt; python-oracledb's own NOTICE reads:
+"Copyright (c) 2016, 2026, Oracle and/or its affiliates."
+
 Data, not code: seclume-core carries Amazon RDS's public CA certificate bundle
 (space/seclume/internal/aws-rds-global-bundle.pem), as published by Amazon Web
 Services at https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem,
 so that tlsRootCert=aws-rds can verify RDS servers. The certificates are public
 trust anchors and are redistributed unchanged.
+
+Data, not code: seclume-core carries the Public Suffix List
+(https://publicsuffix.org/), maintained by the Mozilla Foundation and its
+contributors and licensed under the Mozilla Public License, Version 2.0, so that
+a TLS wildcard never spans a public suffix. Its licence text travels with it
+(space/seclume/tls/public-suffix-LICENSE.txt).
 
 Test data: seclume-core/src/test/resources/wycheproof carries test vectors from
 Project Wycheproof (https://github.com/C2SP/wycheproof), Copyright Google LLC
