@@ -189,10 +189,116 @@ public final class TdsSession implements AutoCloseable {
     /** The statements in the group, so a failure can say which one it was. */
     private final java.util.List<String> pipelineSql = new java.util.ArrayList<>();
 
-    private final TdsChannel channel;
-    private final String serverName;
-    private final int serverVersion;
+    private TdsChannel channel;
+    private String serverName;
+    private int serverVersion;
     private String database;
+
+    // ---- session recovery ------------------------------------------------
+    //
+    // SQL Server's idle connection resiliency: the server describes the
+    // session's state as it changes (RecoveryState), and a connection found
+    // gone before a request is sent is replaced by a new login carrying that
+    // state - same database, language and SET options, another session.
+
+    /** What the server said about the session's state; null when it did not take part. */
+    private RecoveryState recovery;
+    /** How a new connection is opened in this one's place - see {@link #recoverWith}. */
+    private Recovering recovering;
+    /** Prepared handles the server holds for this session; none survives a new one. */
+    private int handlesHeld;
+    /** A RESETCONNECTION was asked for and has not gone out yet. */
+    private boolean resetAsked;
+    /** How often a gone connection was replaced. */
+    private int recoveries;
+
+    /**
+     * A connection is asked whether its peer is still there only after this
+     * much silence: one used a moment ago is not worth the system calls.
+     */
+    static volatile long recoveryQuietMillis = 1_000;
+
+    /**
+     * Opens a new session in this one's place - in the same circumstances as
+     * the first (the trust and transport chosen for it), with
+     * {@link Settings} and the recovery data given.
+     */
+    @FunctionalInterface
+    public interface Recovering {
+        TdsSession open(Settings settings, byte[] recoveryData) throws SQLException;
+    }
+
+    /** Where {@link #open} was pointed - for a recovery. */
+    private Settings settings;
+
+    /**
+     * Lets this session be put back on a new connection when its own is found
+     * gone. Without this, nothing is recovered.
+     */
+    public void recoverWith(Recovering how) {
+        this.recovering = how;
+    }
+
+    /** How often this session moved to a new connection. */
+    public int recoveries() {
+        return recoveries;
+    }
+
+    /** Whether the server said it could put this session's state on a new connection. */
+    public boolean recoverable() {
+        return recovery != null && recovery.recoverable();
+    }
+
+    /**
+     * Before a request: a connection that has gone while it sat idle is
+     * replaced, the session's state put back by the server. Only when nothing
+     * could be lost - no transaction, no answer half read, no prepared
+     * handle, nothing pipelined - and the server says it can.
+     */
+    private void recoverIfGone() throws SQLException {
+        if (recovering == null || settings == null || recovery == null
+                || !recovery.recoverable() || transactionDescriptor != 0 || handlesHeld != 0
+                || pipelining || pendingTokens != null || !channel.isIdle()
+                || !channel.raw().goneWhileQuiet(recoveryQuietMillis)) {
+            return;
+        }
+        byte[] data = recovery.featureData(database);
+        TdsSession fresh;
+        try {
+            fresh = recovering.open(settings, data);
+        } catch (SQLException e) {
+            channel.close();
+            throw new SQLNonTransientConnectionException("the connection to " + serverName
+                    + " was gone, and the session could not be put back on a new one - "
+                    + "nothing was sent: " + e.getMessage(), "08001", e);
+        }
+        if (fresh.recovery == null) {
+            fresh.close();
+            channel.close();
+            throw new SQLNonTransientConnectionException("the connection to " + serverName
+                    + " was gone, and the server did not take the session's state back - "
+                    + "nothing was sent", "08001");
+        }
+        TdsChannel old = channel;
+        channel = fresh.channel;
+        serverName = fresh.serverName;
+        serverVersion = fresh.serverVersion;
+        method = fresh.method;
+        if (!fresh.database.isEmpty()) {
+            database = fresh.database;
+        }
+        for (TokenStream.SessionState state : fresh.loginStates) {
+            recovery.apply(state.sequence(), state.recoverable(), state.values());
+        }
+        if (resetAsked) {
+            channel.resetBeforeNextRequest();
+        }
+        recoveries++;
+        old.close();
+    }
+
+    /** SESSIONSTATE tokens of the login answer, applied by whoever keeps the state. */
+    private java.util.List<TokenStream.SessionState> loginStates = java.util.List.of();
 
     /**
      * The transaction descriptor the server hands out with {@code BEGIN
@@ -282,6 +388,7 @@ public final class TdsSession implements AutoCloseable {
     /** The session is reset before the next request - see {@link TdsChannel#resetBeforeNextRequest}. */
     public void resetBeforeNextRequest() {
         channel.resetBeforeNextRequest();
+        resetAsked = true;
     }
 
     /**
@@ -427,16 +534,29 @@ public final class TdsSession implements AutoCloseable {
     // ---- connecting and logging in ---------------------------------------
 
     public static TdsSession open(Settings settings) throws SQLException {
+        return open(settings, new byte[0]);
+    }
+
+    /**
+     * Opens a session - with {@code recoveryData} from a session whose
+     * connection is gone, so that the server puts its state on this one; an
+     * empty array asks for the feature only.
+     */
+    public static TdsSession open(Settings settings, byte[] recoveryData) throws SQLException {
         // One server: a plain connect. Several: the next one when a server
         // cannot be reached - and only then, see HostList.
         // With several servers and a preference in the URL, each one is asked
         // what it is before its connection is kept - see TargetServer. With
         // one server, or none asked for, nothing is asked and this is the
         // connect it always was.
-        return settings.hosts().open(server -> openOne(settings.at(server)), ROLES);
+        TdsSession session = settings.hosts().open(
+                server -> openOne(settings.at(server), recoveryData), ROLES);
+        session.settings = settings;
+        return session;
     }
 
-    private static TdsSession openOne(Settings settings) throws SQLException {
+    private static TdsSession openOne(Settings settings, byte[] recoveryData)
+            throws SQLException {
         // The expensive one: a physical connect, the TLS handshake and the
         // login. Recorded around the whole of it, because that is the number
         // a pool's warm-up time is made of. See space.seclume.jfr.
@@ -444,7 +564,7 @@ public final class TdsSession implements AutoCloseable {
                 space.seclume.jfr.Observed.beginConnect();
         TdsSession opened = null;
         try {
-            opened = connectAndLogIn(settings);
+            opened = connectAndLogIn(settings, recoveryData);
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "sqlserver",
@@ -453,7 +573,8 @@ public final class TdsSession implements AutoCloseable {
         }
     }
 
-    private static TdsSession connectAndLogIn(Settings settings) throws SQLException {
+    private static TdsSession connectAndLogIn(Settings settings, byte[] recoveryData)
+            throws SQLException {
         TdsChannel channel;
         try {
             channel = TdsChannel.connect(settings.host(), settings.port(),
@@ -467,7 +588,7 @@ public final class TdsSession implements AutoCloseable {
                     "cannot reach " + settings.host() + ":" + settings.port(), "08001", e);
         }
         try {
-            TdsSession session = login(channel, settings);
+            TdsSession session = login(channel, settings, recoveryData);
             space.seclume.internal.Transports.loggedIn(session.transport());
             return session;
         } catch (space.seclume.internal.WireBuffer.Truncated e) {
@@ -490,7 +611,7 @@ public final class TdsSession implements AutoCloseable {
         }
     }
 
-    private static TdsSession login(TdsChannel channel, Settings settings)
+    private static TdsSession login(TdsChannel channel, Settings settings, byte[] recoveryData)
             throws IOException, SQLException {
         PreLogin preLogin;
         if (settings.tdsVersion().wrapsTheConnection()) {
@@ -524,7 +645,8 @@ public final class TdsSession implements AutoCloseable {
                         + "or name the server's key with tlsPin; nothing was sent", "28000");
             }
             Login7.Settings login = new Login7.Settings(settings.host(), settings.database(),
-                    settings.user(), settings.secret(), settings.applicationName(), "seclume");
+                    settings.user(), settings.secret(), settings.applicationName(), "seclume",
+                    recoveryData);
             LoginResponse response;
             if (Kerberos.is(settings.secret())) {
                 response = integrated(channel, login, preLogin,
@@ -545,6 +667,22 @@ public final class TdsSession implements AutoCloseable {
                 channel.packetSize(response.packetSize());
             }
             TdsSession session = new TdsSession(channel, response);
+            byte[] acknowledged = response.recoveryAcknowledged();
+            if (acknowledged != null) {
+                try {
+                    session.recovery = RecoveryState.fromAcknowledgement(acknowledged,
+                            response.database(), response.collation(), response.language());
+                } catch (IllegalArgumentException malformed) {
+                    session.recovery = null;     // not understood: then not recovered either
+                }
+            }
+            session.loginStates = response.sessionStates();
+            if (session.recovery != null && (recoveryData == null || recoveryData.length == 0)) {
+                for (TokenStream.SessionState state : session.loginStates) {
+                    session.recovery.apply(state.sequence(), state.recoverable(),
+                            state.values());
+                }
+            }
             session.method = Kerberos.is(settings.secret()) ? "Kerberos (integrated, mutual)"
                     : AccessToken.is(settings.secret()) ? "access token (FEDAUTH, inside TLS)"
                     : "SQL login (LOGIN7, inside TLS)";
@@ -896,6 +1034,7 @@ public final class TdsSession implements AutoCloseable {
             TdsParameters.writeInt(out, "", handle);
             channel.send(Tds.TYPE_RPC);
             readAnswer(null);
+            handlesHeld = Math.max(0, handlesHeld - 1);
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         }
@@ -978,6 +1117,7 @@ public final class TdsSession implements AutoCloseable {
             }
             prepared.handle = handle;
             prepared.declaration = declaration;
+            handlesHeld++;
             // updateCount(), not updateCounts(): the latter is only filled
             // when a number of answers was announced in advance, which is the
             // batch case. This is a single call with a single count.
@@ -1309,6 +1449,7 @@ public final class TdsSession implements AutoCloseable {
     private WireBuffer beginMessage() throws SQLException {
         drainPending();                      // a paused answer first - see resume
         flushPipeline();
+        recoverIfGone();
         return channel.begin();
     }
 
@@ -1497,6 +1638,21 @@ public final class TdsSession implements AutoCloseable {
             throw new IOException("expected a result, got type 0x" + Integer.toHexString(type));
         }
         tokens.finish();
+        if (recovery != null) {
+            if (resetAsked) {
+                recovery.reset();            // the request that carried it has been answered
+            }
+            if (tokens.language() != null) {
+                recovery.language(tokens.language());
+            }
+            if (tokens.collation() != null) {
+                recovery.collation(tokens.collation());
+            }
+            for (TokenStream.SessionState state : tokens.sessionStates()) {
+                recovery.apply(state.sequence(), state.recoverable(), state.values());
+            }
+        }
+        resetAsked = false;
         updateCount = tokens.updateCount();
         if (!tokens.database().isEmpty()) {
             database = tokens.database();

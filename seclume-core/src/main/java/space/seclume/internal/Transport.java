@@ -88,6 +88,23 @@ public interface Transport extends AutoCloseable {
         throw new IOException("this transport cannot send urgent data");
     }
 
+    /**
+     * Whether the peer has visibly gone from a connection that has been
+     * quiet for at least {@code quietMillis}: an end of stream, a reset, or
+     * bytes nobody asked for. Looked at without waiting. A {@code true}
+     * means the connection must not be used again - looking may have taken
+     * a byte off the stream.
+     *
+     * <p>For a driver that can put a session back on a new connection, and
+     * may only do so before a request is sent: once one is on the wire, a
+     * failure no longer says whether the server ran it.
+     *
+     * <p>Default: {@code false}, cannot tell.
+     */
+    default boolean goneWhileQuiet(long quietMillis) {
+        return false;
+    }
+
     /** Whether this transport can still carry bytes. */
     boolean isOpen();
 

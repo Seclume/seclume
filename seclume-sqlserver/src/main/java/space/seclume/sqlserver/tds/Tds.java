@@ -117,6 +117,8 @@ public final class Tds {
     public static final int TOKEN_FEATURE_EXT_ACK = 0xae;
     /** The server's token in an integrated login. */
     public static final int TOKEN_SSPI = 0xed;
+    /** Session state the server would put back on a new connection - see RecoveryState. */
+    public static final int TOKEN_SESSION_STATE = 0xe4;
 
     /** TDS 7.4 - the level this driver speaks (SQL Server 2012 and newer). */
     public static final int VERSION_7_4 = 0x74000004;
@@ -144,6 +146,7 @@ public final class Tds {
             case TOKEN_RETURN_VALUE -> "RETURNVALUE";
             case TOKEN_RETURN_STATUS -> "RETURNSTATUS";
             case TOKEN_FEATURE_EXT_ACK -> "FEATUREEXTACK";
+            case TOKEN_SESSION_STATE -> "SESSIONSTATE";
             default -> "unknown(0x" + Integer.toHexString(token) + ")";
         };
     }

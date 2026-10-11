@@ -30,10 +30,27 @@ public final class Login7 {
 
     /** Connection settings. The password is not in here, only its source. */
     public record Settings(String host, String database, String user, SecretProvider secret,
-                           String applicationName, String clientHostName) {
+                           String applicationName, String clientHostName,
+                           byte[] sessionRecovery) {
 
         public Settings(String host, String database, String user, SecretProvider secret) {
             this(host, database, user, secret, "seclume", "seclume");
+        }
+
+        /** Without session recovery - see {@link #sessionRecovery()}. */
+        public Settings(String host, String database, String user, SecretProvider secret,
+                        String applicationName, String clientHostName) {
+            this(host, database, user, secret, applicationName, clientHostName, null);
+        }
+
+        /**
+         * The SESSIONRECOVERY feature: {@code null} not to ask for it, empty
+         * to ask for it at an ordinary login, and {@link RecoveryState}'s
+         * data to put a session's state back on this one.
+         */
+        @Override
+        public byte[] sessionRecovery() {
+            return sessionRecovery;
         }
     }
 
@@ -95,6 +112,8 @@ public final class Login7 {
                             byte[] sspi) throws IOException, SQLException {
         boolean token = AccessToken.is(settings.secret());
         boolean integrated = sspi != null;
+        byte[] recovery = settings.sessionRecovery();
+        boolean features = token || recovery != null;
         WireBuffer out = channel.begin();
         int start = out.position();
 
@@ -113,7 +132,7 @@ public final class Login7 {
         out.putByte((byte) 0xe0);                     // OptionFlags1: little-endian, ASCII
         out.putByte((byte) (OPTION_FLAGS2 | (integrated ? INTEGRATED_SECURITY : 0)));
         out.putByte((byte) 0x00);                     // TypeFlags
-        out.putByte((byte) (token ? FEXTENSION : 0x00)); // OptionFlags3: features follow?
+        out.putByte((byte) (features ? FEXTENSION : 0x00)); // OptionFlags3: features follow?
         out.putIntLe(0);                              // time zone
         out.putIntLe(0);                              // LCID
 
@@ -140,7 +159,7 @@ public final class Login7 {
         lengths[4] = putUtf16(out, settings.host());
         offsets[5] = out.position() - start;
         int extensionAt = out.position();
-        if (token) {
+        if (features) {
             // Four bytes that hold where the feature list starts; the table
             // below halves every length, and this one counts bytes.
             out.putIntLe(0);
@@ -185,9 +204,17 @@ public final class Login7 {
         at += 4;
         out.putUnsignedLeAt(at, sspiLength >= 0xffff ? sspiLength : 0, 4);  // cbSSPILong
 
-        if (token) {
+        if (features) {
             out.putUnsignedLeAt(extensionAt, out.position() - start, 4);
-            putFedAuth(out, settings.secret(), preLogin);
+            if (token) {
+                putFedAuth(out, settings.secret(), preLogin);
+            }
+            if (recovery != null) {
+                out.putByte((byte) RecoveryState.FEATURE);
+                out.putIntLe(recovery.length);
+                out.putBytes(MemorySegment.ofArray(recovery), 0, recovery.length);
+            }
+            out.putByte((byte) FEATURE_TERMINATOR);
         }
 
         int total = out.position() - start;
@@ -229,7 +256,7 @@ public final class Login7 {
     /**
      * The FEDAUTH feature with a security token (MS-TDS 2.2.6.4): library 1,
      * the echo bit, the token in UTF-16LE with its byte length, the server's
-     * nonce if it sent one - then the end of the feature list.
+     * nonce if it sent one.
      */
     private static void putFedAuth(WireBuffer out, SecretProvider secret, PreLogin preLogin)
             throws SQLException {
@@ -252,7 +279,6 @@ public final class Login7 {
             }
             out.putUnsignedLeAt(lengthAt, out.position() - lengthAt - 4, 4);
         }
-        out.putByte((byte) FEATURE_TERMINATOR);
     }
 
     private static void putShortAt(WireBuffer out, int at, int value) {
