@@ -3,7 +3,20 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.1] - 2026-10-11
+
+Older servers: Oracle 18c and 21c are supported, TCPS included, and 11g with
+`legacyVerifier=11g`; PostgreSQL 9.6-14 and SQL Server 2017-2019 are tested,
+with SUPPORTED-VERSIONS.md recording how.
+
+Beyond that, in short:
+- **TLS**: P-384 client certificates; Ed25519, Ed448 and RSA-PSS server
+  certificates; a refused client certificate is named; TLS 1.2 without the
+  extended master secret is accepted (it is used whenever offered).
+- **Fixes**: "prepared statement already exists" on PostgreSQL after a pooled
+  return; floats before PostgreSQL 12; hangs on malformed Oracle and SQL Server
+  answers; a moved TLS connection's cipher suite; `lz4-java` pinned for
+  CVE-2026-106451.
 
 ### Added: client certificates on P-384
 
@@ -3754,6 +3767,7 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.11.1]: https://github.com/Seclume/seclume/releases/tag/v0.11.1
 [0.11.0]: https://github.com/Seclume/seclume/releases/tag/v0.11.0
 [0.10.0]: https://github.com/Seclume/seclume/releases/tag/v0.10.0
 [0.9.0]: https://github.com/Seclume/seclume/releases/tag/v0.9.0
