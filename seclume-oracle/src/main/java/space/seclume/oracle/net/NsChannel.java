@@ -1154,6 +1154,15 @@ public final class NsChannel implements AutoCloseable {
         return in.readString(rest);
     }
 
+    /**
+     * Whether bytes behind the current packet have already arrived. Nothing
+     * the server sends is unasked for, so while an answer is being read they
+     * can only be more of it - and the reader need not look for its end yet.
+     */
+    public boolean moreReceived() {
+        return filled > packetEnd;
+    }
+
     private void fill(int needed) throws IOException {
         while (filled < needed) {
             in.ensureCapacity(Math.max(needed, in.capacity()));

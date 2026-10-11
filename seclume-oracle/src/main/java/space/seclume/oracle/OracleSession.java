@@ -1145,7 +1145,9 @@ public final class OracleSession implements AutoCloseable {
                     answer.putBytes(in.segment(), from, length);
                     if (channel.marksEndOfAnswer()
                             ? (channel.dataFlags() & END_OF_ANSWER) != 0
-                            : lobComplete(answer, amountFollows, channel.ttcFieldVersion())) {
+                            : !channel.moreReceived()
+                                    && lobComplete(answer, amountFollows,
+                                            channel.ttcFieldVersion())) {
                         break;
                     }
                 }
@@ -1360,20 +1362,39 @@ public final class OracleSession implements AutoCloseable {
     private WireBuffer collectAnswer(java.util.function.Supplier<TtcResult> probe)
             throws IOException, SQLException {
         WireBuffer whole = new WireBuffer(32 * 1024);
+        try {
+            return collectInto(whole, probe);
+        } catch (IOException | SQLException | RuntimeException | Error broke) {
+            // Native memory, freed only by close: an answer that breaks off
+            // here - the normal end of a fuzz input, and of a connection
+            // that dies mid-answer - left 32 KB or more behind every time,
+            // and the nightly fuzz run grew past the runner's memory.
+            whole.close();
+            throw broke;
+        }
+    }
+
+    private WireBuffer collectInto(WireBuffer whole,
+                                   java.util.function.Supplier<TtcResult> probe)
+            throws IOException, SQLException {
         while (true) {
             WireBuffer in = channel.packet();
             int from = in.position();
             int length = in.limit() - from;
             whole.ensureCapacity(whole.position() + length);
             whole.putBytes(in.segment(), from, length);
+            // Before protocol 319 the end is found by walking what has come.
+            // Not after every packet: more bytes already received are more of
+            // this answer, and a walk from the start after each packet made a
+            // large answer cost its size squared - the nightly fuzz run found
+            // it as an input that took minutes.
             if (channel.marksEndOfAnswer()
                     ? (channel.dataFlags() & END_OF_ANSWER) != 0
-                    : complete(whole, probe)) {
+                    : !channel.moreReceived() && complete(whole, probe)) {
                 return whole;
             }
             int type = drainMarkers(channel.nextPacket());
             if (type != NsPacket.TYPE_DATA) {
-                whole.close();
                 throw new SQLException("the answer broke off after "
                         + whole.position() + " bytes: " + NsPacket.typeName(type));
             }
