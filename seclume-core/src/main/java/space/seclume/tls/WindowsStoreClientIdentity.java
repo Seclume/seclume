@@ -5,7 +5,6 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -13,8 +12,6 @@ import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
-// seclume-allow: hashes the public transcript, never the key - see sign below
-import java.security.MessageDigest;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -173,7 +170,8 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         }
         Native n = Native.get();
         try (Arena arena = Arena.ofConfined()) {
-            byte[] digest = digest(content, field);
+            byte[] digest = EcClientIdentity.digest(content,
+                    space.seclume.crypto.EcdsaSigner.Curve.ofField(field));
             MemorySegment hash = arena.allocate(digest.length);
             MemorySegment.copy(digest, 0, hash, JAVA_BYTE, 0, digest.length);
             MemorySegment signature = arena.allocate(2L * field);
@@ -184,7 +182,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
                 throw new IllegalStateException("Windows refused to sign with the client "
                         + "certificate's key: NCrypt status 0x" + Integer.toHexString(status));
             }
-            return der(signature.toArray(JAVA_BYTE), field);
+            return space.seclume.crypto.EcdsaSigner.der(signature.toArray(JAVA_BYTE), field);
         } catch (RuntimeException | Error failure) {
             throw failure;
         } catch (Throwable impossible) {
@@ -209,38 +207,6 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
 
     // ---------------------------------------------------------------- helpers
 
-    /** {@code r || s} into {@code SEQUENCE { INTEGER r, INTEGER s }}. */
-    static byte[] der(byte[] raw) {
-        return der(raw, 32);
-    }
-
-    /** The same for halves of {@code field} bytes - 48 for P-384. */
-    static byte[] der(byte[] raw, int field) {
-        byte[] r = integer(raw, 0, field);
-        byte[] s = integer(raw, field, field);
-        ByteArrayOutputStream out = new ByteArrayOutputStream(2 + 2 * (3 + field));
-        out.write(0x30);
-        out.write(r.length + s.length);
-        out.writeBytes(r);
-        out.writeBytes(s);
-        return out.toByteArray();
-    }
-
-    /** One half as a DER INTEGER: leading zeros dropped, a zero added if the top bit is set. */
-    private static byte[] integer(byte[] raw, int from, int field) {
-        int start = from;
-        while (start < from + field - 1 && raw[start] == 0) {
-            start++;
-        }
-        int length = from + field - start;
-        boolean pad = (raw[start] & 0x80) != 0;
-        byte[] out = new byte[2 + (pad ? 1 : 0) + length];
-        out[0] = 0x02;
-        out[1] = (byte) (length + (pad ? 1 : 0));
-        System.arraycopy(raw, start, out, pad ? 3 : 2, length);
-        return out;
-    }
-
     /** 32 or 48: the certificate's curve, P-256 or P-384; anything else refused. */
     private static int field(byte[] der) {
         try (InputStream in = new java.io.ByteArrayInputStream(der)) {
@@ -257,17 +223,6 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
             return bits / 8;
         } catch (CertificateException | java.io.IOException e) {
             throw new IllegalArgumentException("the certificate in the store cannot be read", e);
-        }
-    }
-
-    /** SHA-256 for P-256, SHA-384 for P-384, as TLS pairs them. */
-    private static byte[] digest(byte[] content, int field) {
-        try {
-            // seclume-allow: public transcript data, never the key
-            return MessageDigest.getInstance(field == 48 ? "SHA-384" : "SHA-256")
-                    .digest(content);
-        } catch (java.security.NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException("a JVM without SHA-2", impossible);
         }
     }
 

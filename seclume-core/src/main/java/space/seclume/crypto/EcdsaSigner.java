@@ -1,5 +1,6 @@
 package space.seclume.crypto;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
@@ -220,6 +221,21 @@ public final class EcdsaSigner implements AutoCloseable {
         out.set(ValueLayout.JAVA_BYTE, 4L + rLength, (byte) 0x02);
         out.set(ValueLayout.JAVA_BYTE, 5L + rLength, (byte) sLength);
         return 2 + content;
+    }
+
+    /**
+     * The same for a signature already on the heap - one from the Windows
+     * certificate store, say. A signature is public; nothing here needs to
+     * stay off the heap.
+     */
+    public static byte[] der(byte[] raw, int field) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment in = arena.allocate(raw.length);
+            MemorySegment.copy(raw, 0, in, ValueLayout.JAVA_BYTE, 0, raw.length);
+            MemorySegment out = arena.allocate(2 + 2 * (3L + field));
+            int length = der(in, field, out);
+            return out.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE);
+        }
     }
 
     /** One half as the body of a DER INTEGER. @return its length */
