@@ -125,6 +125,54 @@ class RenewBrokenConnectionTest {
         }
     }
 
+    /**
+     * A {@code SET} since the borrow began: the new connection would not have
+     * it, and the application's next query would run without it, unwarned.
+     */
+    @Test
+    void withSessionStateSetTheFailureGoesThrough() throws SQLException {
+        StubDataSource source = new StubDataSource();
+        try (SeclumePool pool = new SeclumePool(source, settings());
+             Connection connection = pool.getConnection()) {
+            source.handedOut().get(0).sessionReset = new NotedReset(true);
+            source.handedOut().get(0).broken = true;
+
+            SQLException thrown = assertThrows(SQLException.class, connection::createStatement);
+
+            assertEquals("08006", thrown.getSQLState());
+            assertEquals(1, source.openedCount(),
+                    "rebuilt without the state the session had been given");
+            assertEquals(0, pool.statistics().renewed());
+        }
+    }
+
+    /** And a driver that noted nothing is rebuilt as before. */
+    @Test
+    void withNothingNotedItIsRebuilt() throws SQLException {
+        StubDataSource source = new StubDataSource();
+        try (SeclumePool pool = new SeclumePool(source, settings());
+             Connection connection = pool.getConnection()) {
+            source.handedOut().get(0).sessionReset = new NotedReset(false);
+            source.handedOut().get(0).broken = true;
+
+            assertNotNull(connection.createStatement());
+            assertEquals(1, pool.statistics().renewed());
+        }
+    }
+
+    private record NotedReset(boolean changed) implements space.seclume.SessionReset {
+
+        @Override
+        public boolean sessionStateChanged() {
+            return changed;
+        }
+
+        @Override
+        public boolean resetSessionState() {
+            return true;
+        }
+    }
+
     /** A savepoint is a transaction with a shape - the same line. */
     @Test
     void withASavepointTheFailureGoesThrough() throws SQLException {

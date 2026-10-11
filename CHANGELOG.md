@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed: a rebuilt connection no longer drops session state silently
+
+The pool rebuilds a connection that breaks while it is borrowed
+(`PoolSettings.setRenewBrokenConnections`). It does so only when nothing is
+open, and it puts back autocommit, read-only, isolation, catalog and schema.
+Before this fix, state set by SQL in the same borrow was lost: a
+`SET search_path`, a time zone, a temporary table, a session variable or
+`setSessionContext`. The application's next query ran without it, and nothing
+told the application. Now the pool asks the driver whether such a statement
+passed since the borrow began. If one did, the connection failure goes through
+as it does inside a transaction. `RenewBrokenConnectionTest` covers both cases.
+
 ### Fixed: notices for the code and data seclume carries
 
 NOTICE now names python-oracledb (UPL-1.0 or Apache-2.0), from which parts of
