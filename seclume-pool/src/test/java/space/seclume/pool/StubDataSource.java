@@ -84,8 +84,12 @@ final class StubDataSource implements DataSource {
         public Object invoke(Object proxy, Method method, Object[] args) throws SQLException {
             // A connection that has broken answers nothing any more - that is
             // what a dropped socket looks like from up here.
+            // Except what a driver answers from memory: whether it is closed,
+            // and what it can be unwrapped to.
             if (state.broken && !method.getName().equals("close")
-                    && !method.getName().equals("isClosed")) {
+                    && !method.getName().equals("isClosed")
+                    && !method.getName().equals("isWrapperFor")
+                    && !method.getName().equals("unwrap")) {
                 throw new SQLException("the connection to the server was lost", "08006");
             }
             return switch (method.getName()) {

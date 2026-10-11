@@ -419,12 +419,25 @@ final class PooledConnection implements Connection {
      * more? An open transaction, a statement still in the application's hand, a
      * savepoint - each of them would have to be silently dropped, and silently
      * dropping work is how a booking happens twice.
+     *
+     * <p>And state the session was given beyond JDBC's own settings: those
+     * the pool puts back, a {@code SET} it cannot - it never kept the text.
      */
     private boolean canRenew() {
         if (renewedOnce || tooManyStatements || savepointStanding || workSinceBoundary) {
             return false;
         }
         if (!pool.settings().isRenewBrokenConnections()) {
+            return false;
+        }
+        // A SET, a temporary table, a session variable since the borrow began:
+        // the new connection would run without it, and the application would
+        // not be told - its next query against another search_path, in another
+        // time zone, for another tenant. The driver noted it as it passed and
+        // answers without a round trip, the connection being gone. Its "no" is
+        // not proof (a function can set state unseen), its "yes" is enough.
+        space.seclume.SessionReset session = sessionReset();
+        if (session != null && session.sessionStateChanged()) {
             return false;
         }
         if (handedOut != null) {
