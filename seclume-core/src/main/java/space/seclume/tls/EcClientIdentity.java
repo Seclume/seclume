@@ -29,17 +29,31 @@ import space.seclume.secret.SecretUnavailableException;
  * A client identity whose P-256 or P-384 private key lives in the provider,
  * not in Java.
  *
- * <p>The design of {@link P256ClientIdentity}, for both curves: the
- * certificate is public and read with {@code CertificateFactory}; the private
- * key comes out of a {@link SecretProvider} into a {@link SecretScope}, its
- * scalar is picked out of the DER in place by {@link EcPrivateKeyFile}, and it
- * goes straight into CNG or OpenSSL, which keeps it. The curve is the
- * certificate's: P-256 signs with SHA-256 ({@code ecdsa_secp256r1_sha256}),
- * P-384 with SHA-384 ({@code ecdsa_secp384r1_sha384}) - the pairing TLS 1.3
- * requires and FIPS and CNSA configurations ask for.
+ * <p>The division of labour is the whole design. The <b>certificate</b> is
+ * public, so it is read with {@code CertificateFactory} like anyone else's -
+ * there is nothing to protect and a great deal of parsing not worth repeating.
+ * The <b>private key</b> never becomes an object: its bytes come out of a
+ * {@link SecretProvider} into a {@link SecretScope}, the scalar is picked out
+ * of the DER in place by {@link EcPrivateKeyFile}, and it goes straight into
+ * CNG or OpenSSL, which keeps it. Between the file and the provider it exists
+ * only in native memory that is wiped on the way out, including on failure.
  *
- * <p>Still refused: RSA, which would mean the JCA and the key on the heap,
- * and P-521, which no database client certificate uses.
+ * <p>The key is loaded <b>once</b>, at construction, and the provider holds it
+ * from then on. The alternative - reading it again for every connection, the
+ * way a password is read - would mean the file, the mount or the HSM is
+ * touched on every physical connect, for a key that does not rotate on that
+ * timescale. What it costs is that the key is resident for the life of the
+ * data source; what it buys is that it is resident in <b>one</b> place that
+ * can be closed, rather than in a fresh set of unwipeable objects per
+ * connection.
+ *
+ * <p>The curve is the certificate's: P-256 signs with SHA-256
+ * ({@code ecdsa_secp256r1_sha256}), P-384 with SHA-384
+ * ({@code ecdsa_secp384r1_sha384}) - the pairing TLS 1.3 requires and FIPS and
+ * CNSA configurations ask for. Refused with a message that says so: RSA, which
+ * would mean the JCA and the key on the heap, and P-521, which no database
+ * client certificate uses. {@link P256ClientIdentity} is this class held to
+ * P-256.
  */
 public final class EcClientIdentity implements ClientIdentity {
 
@@ -72,7 +86,14 @@ public final class EcClientIdentity implements ClientIdentity {
         return signer.curve();
     }
 
-    /** Key file to provider, through native memory and nothing else - see P256ClientIdentity. */
+    /**
+     * Key file to provider, through native memory and nothing else.
+     *
+     * <p>Everything in here is inside a try-with-resources for the reason
+     * {@code WipeOnFailureTest} spells out: a malformed key file, a wrong
+     * curve or a mismatched pair all leave through an exception, and that is
+     * exactly where a wipe gets skipped if it is not attached to the exit.
+     */
     private static EcdsaSigner load(ECPublicKey certificateKey, SecretProvider key) {
         EcdsaSigner.Curve curve = curveOf(certificateKey);
         int field = curve.field();
@@ -136,10 +157,17 @@ public final class EcClientIdentity implements ClientIdentity {
 
     // ------------------------------------------------------ the public half --
 
-    /** SHA-256 or SHA-384 over the CertificateVerify content - public transcript data. */
-    private static byte[] digest(byte[] content, EcdsaSigner.Curve curve) {
+    /**
+     * SHA-256 or SHA-384 over the CertificateVerify content.
+     *
+     * <p>Public, and for a reason worth stating: the content is built from the
+     * handshake transcript, which the server has in full as well - it has to,
+     * or it could not check the signature. Nothing secret is hashed here, and
+     * the JCA is used because there is nothing to protect.
+     */
+    static byte[] digest(byte[] content, EcdsaSigner.Curve curve) {
         try {
-            // seclume-allow: public transcript data, see P256ClientIdentity
+            // seclume-allow: public transcript data, see the javadoc above
             return MessageDigest.getInstance(curve == EcdsaSigner.Curve.P384 ? "SHA-384"
                     : "SHA-256").digest(content);
         } catch (java.security.NoSuchAlgorithmException impossible) {
@@ -169,9 +197,14 @@ public final class EcClientIdentity implements ClientIdentity {
 
     /**
      * {@code 0x04 || x || y} out of the certificate's key - the public
-     * coordinates, which every handshake sends in the clear. See
-     * P256ClientIdentity on why a BigInteger is acceptable here and nowhere
-     * near the scalar.
+     * coordinates, which every handshake sends in the clear.
+     *
+     * <p><b>On the BigInteger.</b> The rule against it stands and is not bent
+     * here. What passes through is the <b>public</b> key out of the
+     * certificate, which seclume sends to the server in every handshake and
+     * which anybody holding the certificate already has - nothing to wipe. The
+     * private scalar takes a route that touches no Java object at all; see
+     * {@code load}.
      */
     private static byte[] publicPoint(ECPublicKey key, int field) {
         ECPoint w = key.getW();
@@ -182,7 +215,12 @@ public final class EcClientIdentity implements ClientIdentity {
         return point;
     }
 
-    /** A coordinate into exactly {@code field} bytes. */
+    /**
+     * A coordinate into exactly {@code field} bytes. {@code BigInteger.toByteArray}
+     * gives neither: it adds a leading zero when the top bit is set and drops
+     * leading zeroes otherwise, so a naive copy is off by one byte roughly
+     * half the time.
+     */
     private static void fixed(BigInteger value, byte[] into, int at, int field) {   // seclume-allow: public coordinates
         byte[] bytes = value.toByteArray();
         int from = Math.max(0, bytes.length - field);
@@ -211,7 +249,7 @@ public final class EcClientIdentity implements ClientIdentity {
         }
     }
 
-    /** The chain out of a PEM bundle or a DER file, leaf first - see P256ClientIdentity. */
+    /** The chain out of a PEM bundle or a DER file, leaf first. */
     static List<byte[]> parseChain(byte[] content, Path file) {
         try (InputStream in = new java.io.ByteArrayInputStream(content)) {
             List<byte[]> chain = new ArrayList<>();
