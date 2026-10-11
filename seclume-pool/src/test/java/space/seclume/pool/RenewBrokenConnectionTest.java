@@ -155,7 +155,9 @@ class RenewBrokenConnectionTest {
             source.handedOut().get(0).sessionReset = new NotedReset(false);
             source.handedOut().get(0).broken = true;
 
-            assertNotNull(connection.createStatement());
+            try (Statement statement = connection.createStatement()) {
+                assertNotNull(statement);
+            }
             assertEquals(1, pool.statistics().renewed());
         }
     }
