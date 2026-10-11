@@ -136,6 +136,23 @@
   </dependencyManagement>
 
   <build>
+    <!-- Every jar carries the licence and the notices, which the licences
+         of the code it includes (python-oracledb, go-ora, the Public Suffix
+         List) ask for in every copy - a jar on a repository is one. -->
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <resource>
+        <directory>${maven.multiModuleProjectDirectory}</directory>
+        <targetPath>META-INF</targetPath>
+        <includes>
+          <include>LICENSE</include>
+          <include>NOTICE</include>
+          <include>licenses/**</include>
+        </includes>
+      </resource>
+    </resources>
     <pluginManagement>
       <plugins>
         <plugin>
