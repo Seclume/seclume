@@ -123,6 +123,16 @@ jobs:
         working-directory: .github/ci-tools
       - run: python3 ../scripts/npm_audit.py
         working-directory: .github/ci-tools
+      # SoftHSM, for the client key in a PKCS#11 token (Pkcs11ClientIdentityTest):
+      # a token directory of the job's own, named by SOFTHSM2_CONF.
+      - name: SoftHSM token store
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq softhsm2 opensc >/dev/null
+          mkdir -p "$RUNNER_TEMP/softhsm/tokens"
+          printf 'directories.tokendir = %s\nobjectstore.backend = file\n' \
+            "$RUNNER_TEMP/softhsm/tokens" > "$RUNNER_TEMP/softhsm/softhsm2.conf"
+          echo "SOFTHSM2_CONF=$RUNNER_TEMP/softhsm/softhsm2.conf" >> "$GITHUB_ENV"
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
       - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-heapcheck,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test

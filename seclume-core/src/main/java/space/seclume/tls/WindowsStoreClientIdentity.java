@@ -16,6 +16,8 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.ECPublicKey;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HexFormat; // seclume-allow: a thumbprint - the hash of a public certificate
 import java.util.List;
 import java.util.Locale;
@@ -55,10 +57,15 @@ import java.util.Locale;
  * clientCertStore=CurrentUser    or LocalMachine; the "My" store either way
  * </pre>
  *
- * <p><b>Not covered:</b> the intermediate certificates - only the leaf is
- * sent, which is enough when the server's trust store has the issuing CA; a
- * renewed certificate has a new thumbprint and needs the setting changed; and
- * RSA keys, which are refused as {@link P256ClientIdentity} refuses them.
+ * <p><b>The chain</b> is what Windows builds for the certificate - leaf, then
+ * the intermediate certificates it finds in the stores - without a
+ * self-signed root at the end, which the server has to have anyway. A
+ * renewed certificate has a new thumbprint: {@code clientCertSubject} names
+ * it by subject instead, and the newest valid one is used and looked for
+ * again every minute - see {@link #newestBySubject}.
+ *
+ * <p><b>Not covered:</b> RSA keys, which are refused as
+ * {@link P256ClientIdentity} refuses them.
  */
 public final class WindowsStoreClientIdentity implements ClientIdentity {
 
@@ -118,7 +125,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
                     byte[] der = view.get(ADDRESS, 8).reinterpret(length)
                             .toArray(JAVA_BYTE);
                     this.field = field(der);
-                    this.chain = List.of(der);
+                    this.chain = withIssuers(n, context, store, der, machine);
 
                     MemorySegment handle = arena.allocate(JAVA_LONG);
                     MemorySegment keySpec = arena.allocate(JAVA_INT);
@@ -205,6 +212,154 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         }
     }
 
+    /**
+     * The certificate and the intermediate certificates Windows finds for
+     * it, leaf first, without a self-signed root. Only the leaf when no chain
+     * can be built - which is what was sent before.
+     */
+    private static List<byte[]> withIssuers(Native n, MemorySegment context, MemorySegment store,
+                                            byte[] leaf, boolean machine) throws Throwable {
+        try (Arena arena = Arena.ofConfined()) {
+            // CERT_CHAIN_PARA with no usage asked for: cbSize and zeroes.
+            MemorySegment parameters = arena.allocate(32);
+            parameters.set(JAVA_INT, 0, 32);
+            MemorySegment built = arena.allocate(ADDRESS);
+            MemorySegment engine = machine ? MemorySegment.ofAddress(1)  // HCCE_LOCAL_MACHINE
+                    : MemorySegment.NULL;                                 // HCCE_CURRENT_USER
+            int ok = (int) n.getChain.invokeExact(engine, context, MemorySegment.NULL, store,
+                    parameters, 0, MemorySegment.NULL, built);
+            if (ok == 0 || built.get(ADDRESS, 0).address() == 0) {
+                return List.of(leaf);
+            }
+            MemorySegment chainContext = built.get(ADDRESS, 0).reinterpret(24);
+            try {
+                if (chainContext.get(JAVA_INT, 12) < 1) {                       // cChain
+                    return List.of(leaf);
+                }
+                MemorySegment simple = chainContext.get(ADDRESS, 16).reinterpret(8)
+                        .get(ADDRESS, 0).reinterpret(24);
+                int count = simple.get(JAVA_INT, 12);                           // cElement
+                MemorySegment elements = simple.get(ADDRESS, 16).reinterpret(8L * count);
+                List<byte[]> ders = new ArrayList<>();
+                for (int i = 0; i < count; i++) {
+                    MemorySegment certificate = elements.get(ADDRESS, 8L * i).reinterpret(16)
+                            .get(ADDRESS, 8).reinterpret(40);
+                    int length = certificate.get(JAVA_INT, 16);
+                    ders.add(certificate.get(ADDRESS, 8).reinterpret(length).toArray(JAVA_BYTE));
+                }
+                if (ders.isEmpty() || !Arrays.equals(ders.getFirst(), leaf)) {
+                    return List.of(leaf);
+                }
+                if (ders.size() > 1 && selfSigned(ders.getLast())) {
+                    ders.removeLast();
+                }
+                return List.copyOf(ders);
+            } finally {
+                n.freeChain.invokeExact(chainContext);
+            }
+        }
+    }
+
+    private static boolean selfSigned(byte[] der) {
+        X509Certificate certificate = certificate(der);
+        return certificate.getSubjectX500Principal().equals(
+                certificate.getIssuerX500Principal());
+    }
+
+    private static X509Certificate certificate(byte[] der) {
+        try (InputStream in = new java.io.ByteArrayInputStream(der)) {
+            return (X509Certificate) CertificateFactory.getInstance("X.509")
+                    .generateCertificate(in);
+        } catch (CertificateException | java.io.IOException e) {
+            throw new IllegalArgumentException("a certificate in the store cannot be read", e);
+        }
+    }
+
+    /**
+     * The thumbprint of the newest certificate in the store whose subject is
+     * {@code subject} and which is valid now: the one that replaced the last
+     * when a certificate was renewed.
+     *
+     * @param subject a whole subject ({@code CN=app1, O=Example}), or a common
+     *                name alone ({@code app1}) - matched exactly, not as a part
+     */
+    public static String newestBySubject(String subject, boolean machine) {
+        if (!System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("windows")) {
+            throw new IllegalArgumentException("clientCertSubject names a certificate in the "
+                    + "Windows certificate store, and this is not Windows");
+        }
+        String wanted = subject == null ? "" : subject.trim();
+        if (wanted.isEmpty()) {
+            throw new IllegalArgumentException("clientCertSubject is empty");
+        }
+        javax.security.auth.x500.X500Principal whole = wanted.contains("=")
+                ? new javax.security.auth.x500.X500Principal(wanted) : null;
+        Native n = Native.get();
+        byte[] best = null;
+        java.util.Date bestFrom = null;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment store = (MemorySegment) n.openStore.invokeExact(
+                    MemorySegment.ofAddress(CERT_STORE_PROV_SYSTEM_W), 0, MemorySegment.NULL,
+                    (machine ? LOCAL_MACHINE : CURRENT_USER) | OPEN_EXISTING_READ_ONLY,
+                    wide(arena, "MY"));
+            if (store.address() == 0) {
+                throw new IllegalArgumentException("the " + where(machine)
+                        + " certificate store could not be opened");
+            }
+            try {
+                MemorySegment context = MemorySegment.NULL;
+                while (true) {
+                    context = (MemorySegment) n.enumCertificates.invokeExact(store, context);
+                    if (context.address() == 0) {
+                        break;
+                    }
+                    MemorySegment view = context.reinterpret(40);
+                    byte[] der = view.get(ADDRESS, 8).reinterpret(view.get(JAVA_INT, 16))
+                            .toArray(JAVA_BYTE);
+                    X509Certificate one;
+                    try {
+                        one = certificate(der);
+                        one.checkValidity();
+                    } catch (IllegalArgumentException | CertificateException notNow) {
+                        continue;
+                    }
+                    boolean matches = whole != null
+                            ? whole.equals(one.getSubjectX500Principal())
+                            : wanted.equalsIgnoreCase(commonName(one));
+                    if (matches && (bestFrom == null || one.getNotBefore().after(bestFrom))) {
+                        best = der;
+                        bestFrom = one.getNotBefore();
+                    }
+                }
+            } finally {
+                int _ = (int) n.closeStore.invokeExact(store, 0);
+            }
+        } catch (RuntimeException | Error failure) {
+            throw failure;
+        } catch (Throwable impossible) {
+            throw new IllegalStateException(impossible);
+        }
+        if (best == null) {
+            throw new IllegalArgumentException("no certificate valid now with the subject '"
+                    + wanted + "' in the " + where(machine) + " store");
+        }
+        try {
+            return HexFormat.of().withUpperCase().formatHex( // seclume-allow: a thumbprint - the hash of a public certificate
+                    java.security.MessageDigest.getInstance("SHA-1").digest(best));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    /** The first CN of the subject, unescaped as RFC 2253 writes it; empty when there is none. */
+    static String commonName(X509Certificate certificate) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "(?:^|,)CN=((?:\\\\.|[^,])*)", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(certificate.getSubjectX500Principal().getName(
+                        javax.security.auth.x500.X500Principal.RFC2253));
+        return m.find() ? m.group(1).replaceAll("\\\\(.)", "$1") : "";
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /** 32 or 48: the certificate's curve, P-256 or P-384; anything else refused. */
@@ -259,6 +414,9 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         final MethodHandle acquireKey;
         final MethodHandle signHash;
         final MethodHandle freeObject;
+        final MethodHandle getChain;
+        final MethodHandle freeChain;
+        final MethodHandle enumCertificates;
 
         private Native() {
             Linker linker = Linker.nativeLinker();
@@ -284,6 +442,16 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
                             ADDRESS, JAVA_INT, ADDRESS, JAVA_INT));
             freeObject = linker.downcallHandle(ncrypt.find("NCryptFreeObject").orElseThrow(),
                     FunctionDescriptor.of(JAVA_INT, ADDRESS));
+            getChain = linker.downcallHandle(
+                    crypt32.find("CertGetCertificateChain").orElseThrow(),
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS,
+                            JAVA_INT, ADDRESS, ADDRESS));
+            freeChain = linker.downcallHandle(
+                    crypt32.find("CertFreeCertificateChain").orElseThrow(),
+                    FunctionDescriptor.ofVoid(ADDRESS));
+            enumCertificates = linker.downcallHandle(
+                    crypt32.find("CertEnumCertificatesInStore").orElseThrow(),
+                    FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
         }
 
         static synchronized Native get() {

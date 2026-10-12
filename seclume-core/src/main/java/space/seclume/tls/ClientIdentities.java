@@ -67,6 +67,25 @@ public final class ClientIdentities {
     /** Which Windows store: {@code CurrentUser} (the default) or {@code LocalMachine}. */
     public static final String STORE = "clientCertStore";
 
+    /**
+     * A certificate in the Windows store by subject - a whole one
+     * ({@code CN=app1, O=Example}) or a common name - instead of a thumbprint:
+     * the newest valid one, and a renewed one taken up without a restart.
+     */
+    public static final String SUBJECT = "clientCertSubject";
+
+    /** A PKCS#11 module whose token holds the key - see {@link Pkcs11ClientIdentity}. */
+    public static final String PKCS11 = "clientCertPkcs11";
+
+    /** The token's label; without it, the first token. */
+    public static final String PKCS11_TOKEN = "clientCertPkcs11Token";
+
+    /** The label of the key, and of the certificate, on the token. */
+    public static final String PKCS11_KEY = "clientCertPkcs11Key";
+
+    /** The prefix under which the token PIN's provider is configured. */
+    public static final String PIN_PREFIX = "clientCertPin-";
+
     /** How long a client key file may be unless {@code clientKey-max-length} says otherwise. */
     static final int KEY_MAX_LENGTH = 4096;
 
@@ -86,6 +105,35 @@ public final class ClientIdentities {
      *         configuration says it does
      */
     public static ClientIdentity of(Map<String, String> settings) {
+        String module = settings.get(PKCS11);
+        if (module != null && !module.isBlank()) {
+            if (settings.get(THUMBPRINT) != null || settings.get(SUBJECT) != null) {
+                throw new IllegalArgumentException(PKCS11 + " names a client certificate's key, "
+                        + "and so does the Windows store - one connection presents one");
+            }
+            Map<String, String> pin = nested(settings, PIN_PREFIX);
+            String certificate = settings.get(CERTIFICATE);
+            String token = settings.get(PKCS11_TOKEN);
+            String label = settings.get(PKCS11_KEY);
+            return IDENTITIES.computeIfAbsent("pkcs11 " + module + "\0" + token + "\0" + label
+                    + "\0" + certificate + "\0" + new TreeMap<>(pin), ignored ->
+                    new Pkcs11ClientIdentity(module, token, label,
+                            pin.isEmpty() ? null : SecretProviders.of(new LinkedHashMap<>(pin)),
+                            certificate == null || certificate.isBlank() ? null
+                                    : Path.of(certificate)));
+        }
+        String subject = settings.get(SUBJECT);
+        if (subject != null && !subject.isBlank()) {
+            if (settings.get(CERTIFICATE) != null || settings.get(THUMBPRINT) != null) {
+                throw new IllegalArgumentException(SUBJECT + " names a client certificate, and "
+                        + "so does " + (settings.get(CERTIFICATE) != null ? CERTIFICATE
+                        : THUMBPRINT) + " - one connection presents one");
+            }
+            boolean machine = machine(settings);
+            return IDENTITIES.computeIfAbsent("windows-subject " + machine + " "
+                    + subject.trim().toLowerCase(java.util.Locale.ROOT),
+                    ignored -> new RenewingStoreClientIdentity(subject.trim(), machine));
+        }
         String thumbprint = settings.get(THUMBPRINT);
         if (thumbprint != null && !thumbprint.isBlank()) {
             if (settings.get(CERTIFICATE) != null) {
@@ -93,11 +141,7 @@ public final class ClientIdentities {
                         + "name a client certificate - one connection presents one");
             }
             String store = settings.getOrDefault(STORE, "CurrentUser");
-            boolean machine = store.equalsIgnoreCase("LocalMachine");
-            if (!machine && !store.equalsIgnoreCase("CurrentUser")) {
-                throw new IllegalArgumentException(STORE + " is CurrentUser or LocalMachine, not "
-                        + store);
-            }
+            boolean machine = machine(settings);
             return IDENTITIES.computeIfAbsent("windows " + store.toLowerCase(java.util.Locale.ROOT)
                     + " " + thumbprint.replaceAll("\\s", "").toUpperCase(java.util.Locale.ROOT),
                     ignored -> new WindowsStoreClientIdentity(thumbprint, machine));
@@ -106,7 +150,7 @@ public final class ClientIdentities {
         if (certificate == null || certificate.isBlank()) {
             return null;
         }
-        Map<String, String> key = nested(settings);
+        Map<String, String> key = nested(settings, KEY_PREFIX);
         if (key.isEmpty()) {
             throw new IllegalArgumentException(CERTIFICATE + " names a certificate but nothing "
                     + "says where its private key comes from - add " + KEY_PREFIX + "provider "
@@ -132,12 +176,23 @@ public final class ClientIdentities {
         });
     }
 
+    /** {@code clientCertStore}: LocalMachine, or CurrentUser - the default. */
+    private static boolean machine(Map<String, String> settings) {
+        String store = settings.getOrDefault(STORE, "CurrentUser");
+        boolean machine = store.equalsIgnoreCase("LocalMachine");
+        if (!machine && !store.equalsIgnoreCase("CurrentUser")) {
+            throw new IllegalArgumentException(STORE + " is CurrentUser or LocalMachine, not "
+                    + store);
+        }
+        return machine;
+    }
+
     /** The key settings, with the prefix taken off. */
-    private static Map<String, String> nested(Map<String, String> settings) {
+    private static Map<String, String> nested(Map<String, String> settings, String prefix) {
         Map<String, String> key = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : settings.entrySet()) {
-            if (entry.getKey().startsWith(KEY_PREFIX)) {
-                key.put(entry.getKey().substring(KEY_PREFIX.length()), entry.getValue());
+            if (entry.getKey().startsWith(prefix)) {
+                key.put(entry.getKey().substring(prefix.length()), entry.getValue());
             }
         }
         return key;
