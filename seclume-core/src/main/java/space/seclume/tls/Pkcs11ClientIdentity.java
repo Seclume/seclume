@@ -302,9 +302,17 @@ public final class Pkcs11ClientIdentity implements ClientIdentity {
         }
     }
 
-    /** A cleanup call's answer, which says nothing that could be acted on. */
-    private static void done(long ignored) {
-        // logging out, closing, ending a search: nothing to do when they say no
+    /**
+     * A cleanup call's answer - logging out, closing, ending a search. Nothing
+     * can be done when one says no, but it is said, for whoever wonders why
+     * the token runs out of sessions.
+     */
+    private static void done(long rv) {
+        if (rv != CKR_OK) {
+            System.getLogger(Pkcs11ClientIdentity.class.getName()).log(
+                    System.Logger.Level.DEBUG, "a PKCS#11 cleanup call answered CKR 0x{0}",
+                    Long.toHexString(rv));
+        }
     }
 
     private static void check(String call, long rv) {
