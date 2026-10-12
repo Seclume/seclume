@@ -74,9 +74,7 @@ class LocalSessionRecoveryTest {
             }
             TdsConnection tds = (TdsConnection) connection;
             assertTrue(tds.session().recoverable(), "the server should offer recovery");
-            String killed = ask(connection, "select @@spid");
-
-            kill(admin, killed);
+            kill(admin, spid(connection));
             Thread.sleep(1_500);                         // idle long enough to be looked at
 
             assertEquals("tempdb", ask(connection, "select db_name()"));
@@ -91,7 +89,7 @@ class LocalSessionRecoveryTest {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("SET DATEFORMAT ymd");
             }
-            kill(admin, ask(connection, "select @@spid"));
+            kill(admin, spid(connection));
             Thread.sleep(1_500);
             assertEquals("ymd", ask(connection, "select date_format from sys.dm_exec_sessions "
                     + "where session_id = @@spid"));
@@ -110,7 +108,7 @@ class LocalSessionRecoveryTest {
             TdsConnection tds = (TdsConnection) connection;
             assertFalse(tds.session().recoverable(),
                     "a temporary table cannot be put back, and the server says so");
-            kill(admin, ask(connection, "select @@spid"));
+            kill(admin, spid(connection));
             Thread.sleep(1_500);
             SQLException told = assertThrows(SQLException.class,
                     () -> ask(connection, "select count(*) from #mine"));
@@ -129,7 +127,7 @@ class LocalSessionRecoveryTest {
                 statement.execute("BEGIN TRANSACTION");
             }
             assertEquals("1", ask(connection, "select @@trancount"));
-            kill(admin, ask(connection, "select @@spid"));
+            kill(admin, spid(connection));
             Thread.sleep(1_500);
             SQLException told = assertThrows(SQLException.class,
                     () -> ask(connection, "select 1"));
@@ -138,9 +136,18 @@ class LocalSessionRecoveryTest {
         }
     }
 
-    private static void kill(Connection admin, String spid) throws SQLException {
+    /** The session id, read as the number it is. */
+    private static int spid(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery("select @@spid")) {
+            rows.next();
+            return rows.getInt(1);
+        }
+    }
+
+    private static void kill(Connection admin, int spid) throws SQLException {
         try (Statement statement = admin.createStatement()) {
-            statement.execute("KILL " + Integer.parseInt(spid.trim()));
+            statement.execute("KILL " + spid);
         }
     }
 
