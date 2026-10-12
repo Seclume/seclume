@@ -345,7 +345,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         }
         // A thumbprint is what Windows calls the certificate's SHA-1: a name,
         // compared with the setting, never a protection.
-        java.security.MessageDigest sha1;
+        java.security.MessageDigest sha1; // seclume-allow: hashes a public certificate
         try {
             // nosemgrep: java.lang.security.audit.crypto.use-of-sha1.use-of-sha1
             sha1 = java.security.MessageDigest.getInstance("SHA-1"); // seclume-allow: a public certificate's thumbprint

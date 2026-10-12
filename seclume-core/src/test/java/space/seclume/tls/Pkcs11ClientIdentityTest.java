@@ -44,6 +44,8 @@ import space.seclume.internal.Transport;
  * configuration with a writable token directory - the CI's core job sets that
  * up. Skipped everywhere else, including Windows, which has its store.
  */
+// Alone: ClientIdentitiesTest closes every cached identity.
+@org.junit.jupiter.api.parallel.Isolated
 @Timeout(120)
 class Pkcs11ClientIdentityTest {
 

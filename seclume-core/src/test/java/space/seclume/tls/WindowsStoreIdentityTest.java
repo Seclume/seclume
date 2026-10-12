@@ -56,6 +56,9 @@ import space.seclume.internal.Transport;
  * generated inside it (Microsoft Platform Crypto Provider). Without one that
  * case is skipped and says so.
  */
+// Alone: ClientIdentitiesTest closes every cached identity, and the ones
+// these tests hold are cached too.
+@org.junit.jupiter.api.parallel.Isolated
 @Timeout(180)
 class WindowsStoreIdentityTest {
 
