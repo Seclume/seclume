@@ -2020,7 +2020,20 @@ public final class PgSession implements AutoCloseable {
                     runUntilReady(null);          // the answers to what rode along
                 }
                 carried = 0;
-                readBatchAnswers(counts, start, sent);
+                try {
+                    readBatchAnswers(counts, start, sent);
+                } catch (SQLException refused) {
+                    // The server rolled the whole group back - its implicit
+                    // transaction ends at the Sync - and ran nothing after the
+                    // failing row. The groups before it stand. Say exactly
+                    // that, per row, so that a retry knows what to send again;
+                    // the rows after this group were never sent.
+                    long[] sentCounts = java.util.Arrays.copyOf(counts, start + sent);
+                    java.util.Arrays.fill(sentCounts, start, start + sent,
+                            java.sql.Statement.EXECUTE_FAILED);
+                    throw new java.sql.BatchUpdateException(refused.getMessage(),
+                            refused.getSQLState(), refused.getErrorCode(), sentCounts, refused);
+                }
             }
         } catch (IOException | WireBuffer.Truncated e) {
             throw brokenConnection("the connection broke while running a batch", e);
@@ -2264,6 +2277,11 @@ public final class PgSession implements AutoCloseable {
     private WireBuffer command(byte tag) throws SQLException {
         settleDiscard();
         return channel.begin(tag);
+    }
+
+    /** Whether a {@code DISCARD ALL} sent at the last return still owes its answer. */
+    public boolean discardOwed() {
+        return discardOwed;
     }
 
     /**
