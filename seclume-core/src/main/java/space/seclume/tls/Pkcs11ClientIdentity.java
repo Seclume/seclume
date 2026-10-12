@@ -206,8 +206,8 @@ public final class Pkcs11ClientIdentity implements ClientIdentity {
             return;
         }
         try {
-            long _ = (long) module.logout.invokeExact(opened);
-            long _ = (long) module.closeSession.invokeExact(opened);
+            done((long) module.logout.invokeExact(opened));
+            done((long) module.closeSession.invokeExact(opened));
         } catch (Throwable ignored) {
             // the session ends with the process at the latest
         }
@@ -266,7 +266,7 @@ public final class Pkcs11ClientIdentity implements ClientIdentity {
             check("C_FindObjects", (long) module.find.invokeExact(session, handle, 1L, found));
             return found.get(JAVA_LONG, 0) == 0 ? 0 : handle.get(JAVA_LONG, 0);
         } finally {
-            long _ = (long) module.findFinal.invokeExact(session);
+            done((long) module.findFinal.invokeExact(session));
         }
     }
 
@@ -300,6 +300,11 @@ public final class Pkcs11ClientIdentity implements ClientIdentity {
         } catch (CertificateException | java.io.IOException e) {
             throw new IllegalArgumentException("the client certificate cannot be read", e);
         }
+    }
+
+    /** A cleanup call's answer, which says nothing that could be acted on. */
+    private static void done(long ignored) {
+        // logging out, closing, ending a search: nothing to do when they say no
     }
 
     private static void check(String call, long rv) {
