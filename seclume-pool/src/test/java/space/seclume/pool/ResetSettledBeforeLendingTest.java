@@ -115,7 +115,9 @@ class ResetSettledBeforeLendingTest {
             Connection first = pool.getConnection();
             StubDataSource.StubConnection physical = source.handedOut().getFirst();
             physical.sessionReset = reset;
-            first.createStatement().close();
+            try (Statement used = first.createStatement()) {
+                assertFalse(used.isClosed());
+            }
             first.close();
 
             Thread.ofVirtual().start(() -> {
@@ -142,7 +144,9 @@ class ResetSettledBeforeLendingTest {
             Connection first = pool.getConnection();
             StubDataSource.StubConnection physical = source.handedOut().getFirst();
             physical.sessionReset = reset;
-            first.createStatement().close();
+            try (Statement used = first.createStatement()) {
+                assertFalse(used.isClosed());
+            }
             first.close();
             reset.answer.countDown();
 
