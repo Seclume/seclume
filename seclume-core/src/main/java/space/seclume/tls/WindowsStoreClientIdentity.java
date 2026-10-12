@@ -206,7 +206,8 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         closed = true;
         if (freeKey) {
             try {
-                done((int) Native.get().freeObject.invokeExact(key));
+                int status = (int) Native.get().freeObject.invokeExact(key);
+                done(status == 0 ? 1 : 0);             // NCrypt: 0 is success
             } catch (Throwable impossible) {
                 throw new IllegalStateException(impossible);
             }
@@ -366,9 +367,15 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         }
     }
 
-    /** A cleanup call's answer, which says nothing that could be acted on. */
-    private static void done(int ignored) {
-        // freeing and closing: there is nothing to do when they say no
+    /**
+     * A cleanup call's answer - freeing, closing. Nothing can be done when one
+     * says no (a Win32 {@code BOOL} of zero), but it is said.
+     */
+    private static void done(int ok) {
+        if (ok == 0) {
+            System.getLogger(WindowsStoreClientIdentity.class.getName()).log(
+                    System.Logger.Level.DEBUG, "a certificate store cleanup call failed");
+        }
     }
 
     /** The first CN of the subject, unescaped as RFC 2253 writes it; empty when there is none. */
