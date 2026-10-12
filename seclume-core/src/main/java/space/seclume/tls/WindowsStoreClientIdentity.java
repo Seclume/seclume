@@ -77,6 +77,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
     private static final int CERT_FIND_HASH = 0x0001_0000;
     private static final int ONLY_NCRYPT_SILENT = 0x0004_0000 | 0x40;
     private static final int NCRYPT_SILENT_FLAG = 0x40;
+    private static final int CERT_SHA1_HASH_PROP_ID = 3;
 
     private final List<byte[]> chain;
     /** Bytes per coordinate: 32 for P-256, 48 for P-384 - the certificate's curve. */
@@ -140,10 +141,10 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
                     this.key = MemorySegment.ofAddress(handle.get(JAVA_LONG, 0));
                     this.freeKey = callerFrees.get(JAVA_INT, 0) != 0;
                 } finally {
-                    int _ = (int) n.freeCertificate.invokeExact(context);
+                    done((int) n.freeCertificate.invokeExact(context));
                 }
             } finally {
-                int _ = (int) n.closeStore.invokeExact(store, 0);
+                done((int) n.closeStore.invokeExact(store, 0));
             }
         } catch (RuntimeException | Error failure) {
             throw failure;
@@ -205,7 +206,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         closed = true;
         if (freeKey) {
             try {
-                int _ = (int) Native.get().freeObject.invokeExact(key);
+                done((int) Native.get().freeObject.invokeExact(key));
             } catch (Throwable impossible) {
                 throw new IllegalStateException(impossible);
             }
@@ -295,7 +296,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         javax.security.auth.x500.X500Principal whole = wanted.contains("=")
                 ? new javax.security.auth.x500.X500Principal(wanted) : null;
         Native n = Native.get();
-        byte[] best = null;
+        String best = null;
         java.util.Date bestFrom = null;
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment store = (MemorySegment) n.openStore.invokeExact(
@@ -327,12 +328,12 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
                             ? whole.equals(one.getSubjectX500Principal())
                             : wanted.equalsIgnoreCase(commonName(one));
                     if (matches && (bestFrom == null || one.getNotBefore().after(bestFrom))) {
-                        best = der;
+                        best = thumbprint(n, context);
                         bestFrom = one.getNotBefore();
                     }
                 }
             } finally {
-                int _ = (int) n.closeStore.invokeExact(store, 0);
+                done((int) n.closeStore.invokeExact(store, 0));
             }
         } catch (RuntimeException | Error failure) {
             throw failure;
@@ -343,16 +344,31 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
             throw new IllegalArgumentException("no certificate valid now with the subject '"
                     + wanted + "' in the " + where(machine) + " store");
         }
-        // A thumbprint is what Windows calls the certificate's SHA-1: a name,
-        // compared with the setting, never a protection.
-        java.security.MessageDigest sha1; // seclume-allow: hashes a public certificate
-        try {
-            // nosemgrep: java.lang.security.audit.crypto.use-of-sha1.use-of-sha1
-            sha1 = java.security.MessageDigest.getInstance("SHA-1"); // seclume-allow: a public certificate's thumbprint
-        } catch (java.security.NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException(impossible);
+        return best;
+    }
+
+    /**
+     * The certificate's thumbprint as Windows keeps it - the property
+     * {@code CERT_SHA1_HASH_PROP_ID} - in the hex certmgr shows.
+     */
+    private static String thumbprint(Native n, MemorySegment context) throws Throwable {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment hash = arena.allocate(20);
+            MemorySegment length = arena.allocate(JAVA_INT);
+            length.set(JAVA_INT, 0, 20);
+            int ok = (int) n.property.invokeExact(context, CERT_SHA1_HASH_PROP_ID, hash, length);
+            if (ok == 0 || length.get(JAVA_INT, 0) != 20) {
+                throw new IllegalArgumentException("Windows gave no thumbprint for a "
+                        + "certificate in the store");
+            }
+            return HexFormat.of().withUpperCase().formatHex( // seclume-allow: a thumbprint - the hash of a public certificate
+                    hash.toArray(JAVA_BYTE));
         }
-        return HexFormat.of().withUpperCase().formatHex(sha1.digest(best)); // seclume-allow: a thumbprint - the hash of a public certificate
+    }
+
+    /** A cleanup call's answer, which says nothing that could be acted on. */
+    private static void done(int ignored) {
+        // freeing and closing: there is nothing to do when they say no
     }
 
     /** The first CN of the subject, unescaped as RFC 2253 writes it; empty when there is none. */
@@ -421,6 +437,7 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
         final MethodHandle getChain;
         final MethodHandle freeChain;
         final MethodHandle enumCertificates;
+        final MethodHandle property;
 
         private Native() {
             Linker linker = Linker.nativeLinker();
@@ -456,6 +473,9 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
             enumCertificates = linker.downcallHandle(
                     crypt32.find("CertEnumCertificatesInStore").orElseThrow(),
                     FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
+            property = linker.downcallHandle(
+                    crypt32.find("CertGetCertificateContextProperty").orElseThrow(),
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
         }
 
         static synchronized Native get() {
