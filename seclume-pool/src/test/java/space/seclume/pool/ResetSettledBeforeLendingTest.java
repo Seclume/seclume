@@ -158,6 +158,34 @@ class ResetSettledBeforeLendingTest {
         }
     }
 
+    /**
+     * The pool closed while a reset is on its way back: the connection is
+     * closed by the thread reading the answer, after it - not under it, which
+     * pulled the session out from under the read ("Session is acquired by 1
+     * clients", found by CI on PostgreSQL 15).
+     */
+    @Test
+    void closingThePoolLeavesASettlingConnectionToItsThread() throws Exception {
+        StubDataSource source = new StubDataSource();
+        Deferred reset = new Deferred();
+        SeclumePool pool = new SeclumePool(source, settings(1));
+        Connection first = pool.getConnection();
+        StubDataSource.StubConnection physical = source.handedOut().getFirst();
+        physical.sessionReset = reset;
+        try (Statement used = first.createStatement()) {
+            assertFalse(used.isClosed());
+        }
+        first.close();
+
+        Thread closer = Thread.ofVirtual().start(pool::close);
+        Thread.sleep(200);
+        assertFalse(physical.closed.get(), "closed while its reset was being read");
+        reset.answer.countDown();
+        closer.join(10_000);
+        assertFalse(closer.isAlive(), "close() did not return");
+        await(physical.closed::get);
+    }
+
     private static void await(java.util.function.BooleanSupplier condition)
             throws InterruptedException {
         long until = System.nanoTime() + 5_000_000_000L;

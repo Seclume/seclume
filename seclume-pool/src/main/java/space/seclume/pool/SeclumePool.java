@@ -959,6 +959,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         // Nobody's any more, not yet anybody's: housekeeping, and not counted
         // as active - the borrower has given it back.
         entry.setQuietly(PoolEntry.State.RESERVED);
+        settling.add(entry);
         Thread.ofVirtual().name("seclume-pool-reset").start(() -> {
             boolean refused = false;
             try {
@@ -966,9 +967,25 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             } catch (SQLException | RuntimeException e) {
                 refused = true;
             }
-            release(entry, refused);
+            try {
+                release(entry, refused);
+            } finally {
+                settling.remove(entry);
+            }
         });
     }
+
+    /**
+     * Connections whose reset answer is being read - see releaseAfterReset.
+     * Their thread owns them until it releases them: closing one under it
+     * pulled the session out from under a read in progress ("Session is
+     * acquired by 1 clients", a pool closed right after a return).
+     */
+    private final java.util.Set<PoolEntry> settling =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** How long close() waits for the resets on their way back - one round trip each, normally. */
+    private static final long SETTLE_WAIT_MILLIS = 5_000;
 
     private boolean isPastLifetime(PoolEntry entry, long now) {
         return !settings.getMaxLifetime().isZero()
@@ -1521,8 +1538,22 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 break;
             }
         }
+        // The resets on their way back finish, and their threads retire the
+        // connections - the pool is closed, so release() does.
+        long settled = System.nanoTime() + SETTLE_WAIT_MILLIS * 1_000_000L;
+        while (!settling.isEmpty() && System.nanoTime() - settled < 0) {
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
         int cut = 0;
         for (PoolEntry entry : List.copyOf(entries)) {
+            if (settling.contains(entry)) {
+                continue;                    // its own thread retires it
+            }
             if (entry.state() == PoolEntry.State.IN_USE) {
                 cut++;
             }
@@ -1556,7 +1587,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             }
         }
         for (PoolEntry entry : List.copyOf(entries)) {
-            if (entry.state() == PoolEntry.State.IN_USE) {
+            if (entry.state() == PoolEntry.State.IN_USE || settling.contains(entry)) {
                 entry.retireOnReturn();
             }
         }
