@@ -343,14 +343,16 @@ public final class WindowsStoreClientIdentity implements ClientIdentity {
             throw new IllegalArgumentException("no certificate valid now with the subject '"
                     + wanted + "' in the " + where(machine) + " store");
         }
+        // A thumbprint is what Windows calls the certificate's SHA-1: a name,
+        // compared with the setting, never a protection.
+        java.security.MessageDigest sha1;
         try {
-            return HexFormat.of().withUpperCase().formatHex( // seclume-allow: a thumbprint - the hash of a public certificate
-                    // A thumbprint is what Windows calls the certificate's SHA-1:
-                    // a name, compared with the setting, never a protection.
-                    java.security.MessageDigest.getInstance("SHA-1").digest(best)); // nosemgrep: java.lang.security.audit.crypto.use-of-sha1.use-of-sha1 - seclume-allow: a public certificate
+            // nosemgrep: java.lang.security.audit.crypto.use-of-sha1.use-of-sha1
+            sha1 = java.security.MessageDigest.getInstance("SHA-1"); // seclume-allow: a public certificate's thumbprint
         } catch (java.security.NoSuchAlgorithmException impossible) {
             throw new IllegalStateException(impossible);
         }
+        return HexFormat.of().withUpperCase().formatHex(sha1.digest(best)); // seclume-allow: a thumbprint - the hash of a public certificate
     }
 
     /** The first CN of the subject, unescaped as RFC 2253 writes it; empty when there is none. */
