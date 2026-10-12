@@ -19,6 +19,17 @@ as before only when there is none. A refused reset retires the connection.
 `activeCount()` counts borrowed connections only; one whose reset is on its way
 back is not anybody's.
 
+Measured over a LAN against PostgreSQL 16 (`PoolBenchmark.borrowQueryReturn`,
+pool of 16, TLS on both sides):
+
+| | before | after |
+|---|---|---|
+| seclume pool + seclume driver | 1236 µs | 639 µs |
+| HikariCP + pgjdbc | 633 µs | 626 µs |
+
+seclume is now as fast as HikariCP with pgjdbc, and it still resets every used
+session, which HikariCP does not do.
+
 ### PostgreSQL: `rewriteBatchedInserts`, and a batch failure says which rows landed
 
 `rewriteBatchedInserts=true` (URL, or `SeclumeDataSource.setRewriteBatchedInserts`)
