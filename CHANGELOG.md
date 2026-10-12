@@ -5,6 +5,25 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-12
+
+Faster where the benchmark showed seclume behind, and client keys that never
+enter the process.
+
+- **Pool**: the session reset's round trip is no longer paid by the next
+  borrower. Measured over a LAN, borrow, query and return went from 1236 µs to
+  639 µs, level with HikariCP and pgjdbc, and every used session is still
+  reset. A pool closed while a reset is on its way leaves that connection to
+  the thread reading the answer. The handle takes 56 bytes per borrow.
+- **PostgreSQL**: `rewriteBatchedInserts`. A failing batch now says per row
+  what landed (`BatchUpdateException`).
+- **SQL Server**: an idle connection the server dropped comes back with its
+  database, language and `SET` options (`SESSIONRECOVERY`).
+- **Client certificates**: a key in a PKCS#11 token (smart card, HSM, TPM 2.0
+  through `tpm2-pkcs11`). From the Windows store, the intermediate
+  certificates are sent and a renewal is taken up without a restart.
+- **Benchmarks**: both drivers encrypt, or neither (`-Dbench.tls`).
+
 ### The pool: the session reset's round trip is no longer the next borrower's
 
 A used connection is reset when it is returned: `DISCARD ALL` on PostgreSQL,
@@ -3913,6 +3932,7 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.12.0]: https://github.com/Seclume/seclume/releases/tag/v0.12.0
 [0.11.1]: https://github.com/Seclume/seclume/releases/tag/v0.11.1
 [0.11.0]: https://github.com/Seclume/seclume/releases/tag/v0.11.0
 [0.10.0]: https://github.com/Seclume/seclume/releases/tag/v0.10.0
