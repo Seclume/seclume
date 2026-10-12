@@ -82,6 +82,21 @@ final class SeclumeUrl {
     }
 
     /**
+     * {@code rewriteBatchedInserts=true}: a batch of {@code INSERT ... VALUES
+     * (?, ...)} goes out as multi-row inserts - pgjdbc's
+     * {@code reWriteBatchedInserts}. Off by default: a block succeeds or fails
+     * as a whole, which is not what row by row means.
+     */
+    static boolean rewriteBatchedInserts(String url, java.util.Properties properties) {
+        try {
+            return JdbcUrl.parse(url, properties, PREFIX, DEFAULT_PORT)
+                    .flag("rewriteBatchedInserts", false);
+        } catch (RuntimeException e) {
+            return false;                     // reported by settings() already
+        }
+    }
+
+    /**
      * How many server-side plans one connection keeps for reuse; 0 switches it
      * off.
      *

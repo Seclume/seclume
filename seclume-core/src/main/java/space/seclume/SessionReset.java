@@ -44,4 +44,27 @@ public interface SessionReset {
      *         should then not be lent again
      */
     boolean resetSessionState() throws SQLException;
+
+    /**
+     * Whether the reset {@link #resetSessionState} sent still owes its answer.
+     * A driver that sends it and reads the answer before the next statement
+     * (PostgreSQL's {@code DISCARD ALL}, MySQL's {@code COM_RESET_CONNECTION})
+     * says yes until {@link #settleReset} has read it; one that resets on the
+     * next request itself, or waits at once, never does.
+     */
+    default boolean resetOwed() {
+        return false;
+    }
+
+    /**
+     * Reads the answer to the reset sent at the return, waiting for it. A
+     * pool calls this before it lends the connection again - off the
+     * returning thread, so that the round trip is spent while the connection
+     * waits in the pool rather than by the next borrower.
+     *
+     * @throws SQLException when the reset was refused or the connection broke:
+     *                      the session must then not be lent again
+     */
+    default void settleReset() throws SQLException {
+    }
 }

@@ -158,6 +158,16 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
      * not the login's.
      */
     @Override
+    public boolean resetOwed() {
+        return session.resetOwed();
+    }
+
+    @Override
+    public void settleReset() throws SQLException {
+        session.settleReset();
+    }
+
+    @Override
     public boolean resetSessionState() throws SQLException {
         checkOpen();
         if (!autoCommit) {

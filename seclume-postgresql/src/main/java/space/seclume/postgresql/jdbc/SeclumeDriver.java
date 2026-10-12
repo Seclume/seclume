@@ -55,6 +55,7 @@ public final class SeclumeDriver implements Driver {
                         () -> PgSession.open(settings))), url,
                 SeclumeUrl.statementCacheSize(url, properties));
         connection.transactionPooler(pooler);
+        connection.rewriteBatchedInserts(SeclumeUrl.rewriteBatchedInserts(url, properties));
         return connection;
     }
 

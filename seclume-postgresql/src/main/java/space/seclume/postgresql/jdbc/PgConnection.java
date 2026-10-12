@@ -175,6 +175,16 @@ public final class PgConnection
      * then invalidate the local plan cache. Only used at a borrow boundary.
      */
     @Override
+    public boolean resetOwed() {
+        return session.discardOwed();
+    }
+
+    @Override
+    public void settleReset() throws SQLException {
+        session.settleDiscard();
+    }
+
+    @Override
     public boolean resetSessionState() throws SQLException {
         checkOpen();
         if (!autoCommit) {
@@ -694,6 +704,18 @@ public final class PgConnection
 
     void transactionPooler(boolean on) {
         this.transactionPooler = on;
+    }
+
+    /** Batches of plain inserts as multi-row inserts - {@code rewriteBatchedInserts}. */
+    private boolean rewriteBatchedInserts;
+
+    PgConnection rewriteBatchedInserts(boolean on) {
+        this.rewriteBatchedInserts = on;
+        return this;
+    }
+
+    boolean rewriteBatchedInserts() {
+        return rewriteBatchedInserts;
     }
 
     /** {@code BEGIN} with this connection's isolation and read-only, for a transaction pooler. */

@@ -944,6 +944,32 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         }
     }
 
+    /**
+     * Returns a connection whose session reset is still on its way: lent again
+     * only once the answer has been read, and retired if the reset was refused.
+     *
+     * <p>The driver reads that answer before its next statement anyway, so the
+     * guarantee is the same - no statement reaches a session whose reset was
+     * not confirmed. What changes is who waits: before, the next borrower of
+     * this connection spent the round trip; now it is spent here, on a virtual
+     * thread, while the borrower takes another connection that is ready. A
+     * borrower with nothing else to take waits as before.
+     */
+    void releaseAfterReset(PoolEntry entry, space.seclume.SessionReset session) {
+        // Nobody's any more, not yet anybody's: housekeeping, and not counted
+        // as active - the borrower has given it back.
+        entry.setQuietly(PoolEntry.State.RESERVED);
+        Thread.ofVirtual().name("seclume-pool-reset").start(() -> {
+            boolean refused = false;
+            try {
+                session.settleReset();
+            } catch (SQLException | RuntimeException e) {
+                refused = true;
+            }
+            release(entry, refused);
+        });
+    }
+
     private boolean isPastLifetime(PoolEntry entry, long now) {
         return !settings.getMaxLifetime().isZero()
                 && entry.ageNanos(now) > settings.getMaxLifetime().toNanos();
@@ -1285,7 +1311,15 @@ public final class SeclumePool implements DataSource, AutoCloseable {
 
     /** How many connections are borrowed right now. */
     public int activeCount() {
-        return Math.max(0, entries.size() - idleCount());
+        // Borrowed ones only: a connection being checked, or whose reset is on
+        // its way back (releaseAfterReset), is neither free nor anybody's.
+        int count = 0;
+        for (PoolEntry entry : entries) {
+            if (entry.state() == PoolEntry.State.IN_USE) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /** How many sit free in the pool. */

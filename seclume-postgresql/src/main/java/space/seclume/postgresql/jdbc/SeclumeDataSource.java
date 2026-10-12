@@ -209,6 +209,7 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
         this.applicationName = settings.applicationName();
         this.tls = settings.tls();
         this.statementCacheSize = SeclumeUrl.statementCacheSize(url, properties);
+        this.rewriteBatchedInserts = SeclumeUrl.rewriteBatchedInserts(url, properties);
     }
 
     /**
@@ -272,7 +273,22 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
                 SeclumeUrl.PREFIX + "//" + host + ":" + port + "/" + database,
                 statementCacheSize);
         connection.transactionPooler(transactionPooler);
+        connection.rewriteBatchedInserts(rewriteBatchedInserts);
         return connection;
+    }
+
+    private boolean rewriteBatchedInserts;
+
+    /**
+     * Whether a batch of plain {@code INSERT ... VALUES (?, ...)} goes out as
+     * multi-row inserts - see {@code rewriteBatchedInserts} in the URL.
+     */
+    public void setRewriteBatchedInserts(boolean rewriteBatchedInserts) {
+        this.rewriteBatchedInserts = rewriteBatchedInserts;
+    }
+
+    public boolean isRewriteBatchedInserts() {
+        return rewriteBatchedInserts;
     }
 
     /**

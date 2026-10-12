@@ -221,8 +221,18 @@ final class PooledConnection implements Connection {
             set(BROKEN, true);
         }
         front(null);
-        pool.release(entry, is(BROKEN));
+        if (!is(BROKEN) && settling != null && settling.resetOwed()) {
+            // The reset is on its way; the connection goes back to the pool
+            // once its answer is read - see SeclumePool.releaseAfterReset.
+            pool.releaseAfterReset(entry, settling);
+        } else {
+            pool.release(entry, is(BROKEN));
+        }
+        settling = null;
     }
+
+    /** The reset sent by the last restore(), whose answer the pool reads before lending. */
+    private space.seclume.SessionReset settling;
 
     /**
      * Statements the borrower left open are closed here, and said so: an
@@ -314,9 +324,10 @@ final class PooledConnection implements Connection {
             if (statements != null) {
                 statements.closeAll();
             }
+            settling = session;
             if (!session.resetSessionState()) {
                 throw new SQLException("the session cannot be fully reset - "
-                        + "the connection is is(CLOSED) rather than lent again");
+                        + "the connection is closed rather than lent again");
             }
         }
     }

@@ -1955,6 +1955,11 @@ public final class MySession implements AutoCloseable {
         return channel.beginCommand(command);
     }
 
+    /** Whether a {@code COM_RESET_CONNECTION} sent at the last return still owes its answer. */
+    public boolean resetOwed() {
+        return resetOwed;
+    }
+
     /**
      * Reads the answer to a reset sent at the last return. A refused reset
      * ends the session: whatever the last borrower left in it is still there,

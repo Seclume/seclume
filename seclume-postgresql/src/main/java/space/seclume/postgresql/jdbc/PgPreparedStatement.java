@@ -280,6 +280,15 @@ class PgPreparedStatement extends PgStatement
         if (batch == null || batch.isEmpty()) {
             return super.executeLargeBatch();
         }
+        if (connection.rewriteBatchedInserts() && batch.size() > 1) {
+            InsertBatch shape = InsertBatch.parse(originalSql);
+            if (shape != null && shape.parameters() == expectedParameters) {
+                closeResult();
+                List<Object[]> rows = batch;
+                batch = null;
+                return executeRewritten(shape, rows);
+            }
+        }
         prepare();
         closeResult();
         List<Object[]> rows = batch;
@@ -306,6 +315,80 @@ class PgPreparedStatement extends PgStatement
         }
         for (int i = 0; i < counts.length; i++) {
             counts[i] = Math.max(counts[i], 0);
+        }
+        return counts;
+    }
+
+    /** At most this many rows in one multi-row insert. */
+    private static final int MOST_ROWS = 128;
+    /** What a Bind can number: an Int16 count of parameters. */
+    private static final int MOST_PLACEHOLDERS = 32767;
+
+    /**
+     * A batch of a plain insert as multi-row inserts: blocks of the most rows
+     * that fit - {@link #MOST_ROWS}, fewer when the placeholders would pass
+     * what a Bind can carry - and the rest in powers of two, so a statement
+     * has at most eight shapes in the plan cache, and the rows keep their
+     * order. Each shape's blocks are pipelined like single rows.
+     *
+     * <p>What changes against row by row, and why it is not the default: a
+     * block is one statement, so it succeeds or fails as a whole. The
+     * {@link java.sql.BatchUpdateException} carries a count for every row
+     * sent - {@code EXECUTE_FAILED} for the rows of a failed block. The count
+     * per row is 1 when a block's rows add up to its row count, and
+     * {@code SUCCESS_NO_INFO} otherwise ({@code ON CONFLICT DO NOTHING}
+     * skipping a row).
+     */
+    private long[] executeRewritten(InsertBatch shape, List<Object[]> rows) throws SQLException {
+        int width = shape.parameters();
+        int most = Integer.highestOneBit(Math.max(1, Math.min(MOST_ROWS,
+                MOST_PLACEHOLDERS / width)));
+        long[] counts = new long[rows.size()]; // seclume-allow: update counts, not a secret
+        int at = 0;
+        while (at < rows.size()) {
+            int left = rows.size() - at;
+            int size = Integer.highestOneBit(Math.min(most, left));
+            int blocks = size == most ? left / size : 1;
+            int base = at;
+            long[] affected;
+            java.sql.BatchUpdateException failed = null;
+            try (PgPreparedStatement block = (PgPreparedStatement) connection.prepareStatement(
+                    shape.sql(size))) {
+                for (int b = 0; b < blocks; b++) {
+                    for (int row = 0; row < size; row++) {
+                        Object[] values = rows.get(base + b * size + row);
+                        if (values.length != width) {
+                            throw new SQLException("batch row " + (base + b * size + row + 1)
+                                    + " has " + values.length + " values, the insert takes "
+                                    + width, "07001");
+                        }
+                        for (int p = 0; p < width; p++) {
+                            block.parameters.set(row * width + p + 1, values[p]);
+                        }
+                    }
+                    block.addBatch();
+                }
+                try {
+                    affected = block.executeLargeBatch();
+                } catch (java.sql.BatchUpdateException blockFailed) {
+                    failed = blockFailed;
+                    affected = blockFailed.getLargeUpdateCounts();
+                }
+            }
+            int done = Math.min(blocks, affected.length);
+            for (int b = 0; b < blocks; b++) {
+                long each = b >= done || affected[b] == java.sql.Statement.EXECUTE_FAILED
+                        ? java.sql.Statement.EXECUTE_FAILED
+                        : affected[b] == size ? 1 : java.sql.Statement.SUCCESS_NO_INFO;
+                java.util.Arrays.fill(counts, base + b * size, base + (b + 1) * size, each);
+            }
+            at += blocks * size;
+            if (failed != null) {
+                // Per row, and only the rows that were sent: the rest never ran.
+                throw new java.sql.BatchUpdateException(failed.getMessage(),
+                        failed.getSQLState(), failed.getErrorCode(),
+                        java.util.Arrays.copyOf(counts, at), failed.getCause());
+            }
         }
         return counts;
     }

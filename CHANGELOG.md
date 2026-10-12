@@ -5,6 +5,48 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### The pool: the session reset's round trip is no longer the next borrower's
+
+A used connection is reset when it is returned: `DISCARD ALL` on PostgreSQL,
+`COM_RESET_CONNECTION` on MySQL. The reset is sent at the return and its
+answer is read before the next statement, so that no statement ever reaches a
+session whose reset was not confirmed. That rule stays. What changes is who
+waits for the answer. Before, the next borrower of that connection did, a full
+round trip on its first statement. Now the pool reads it on a virtual thread
+and lends the connection again only after that (`SessionReset.resetOwed()` and
+`settleReset()`). A borrower takes another connection that is ready, and waits
+as before only when there is none. A refused reset retires the connection.
+`activeCount()` counts borrowed connections only; one whose reset is on its way
+back is not anybody's.
+
+### PostgreSQL: `rewriteBatchedInserts`, and a batch failure says which rows landed
+
+`rewriteBatchedInserts=true` (URL, or `SeclumeDataSource.setRewriteBatchedInserts`)
+sends a batch of a plain `INSERT ... VALUES (?, ...)` as multi-row inserts, as
+pgjdbc's `reWriteBatchedInserts` and seclume's MySQL option do. It is off by
+default:
+- Blocks of up to 128 rows, the rest in powers of two, so there are at most
+  eight plans.
+- `ON CONFLICT` without placeholders is allowed. `RETURNING`, a `WITH`, a
+  `$` and a backslash are declined, and those batches run row by row.
+- The counts are 1 per row, or `SUCCESS_NO_INFO` where `ON CONFLICT` skipped a
+  row.
+
+The benchmark had pgjdbc at twice seclume's speed here, because seclume could
+not do it.
+
+A batch that fails now throws a `BatchUpdateException` with a count for every
+row sent, rewritten or not. Before, it threw a plain exception, and the caller
+could not tell what had landed. PostgreSQL rolls back the group that failed,
+back to its `Sync`, and the groups before it stand. So their rows count 1, the
+failed group's rows count `EXECUTE_FAILED`, and rows that were never sent are
+not listed. Tested against PostgreSQL 16 (`LocalRewriteBatchTest`).
+
+### Fixed
+
+- The pool's message for a session that cannot be reset read "is is(CLOSED)",
+  a slip in an earlier refactoring.
+
 ### The pool: a borrow allocates no more than HikariCP's
 
 A borrowed connection's handle was 72 bytes, allocated on every borrow. It
