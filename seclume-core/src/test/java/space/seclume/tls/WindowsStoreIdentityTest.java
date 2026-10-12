@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -137,15 +138,102 @@ class WindowsStoreIdentityTest {
                 missing.getMessage());
     }
 
+    /**
+     * The intermediate certificate goes with the leaf - built by Windows from
+     * the store - and the self-signed root at the top does not.
+     */
+    @Test
+    void theIntermediateGoesWithTheLeaf() throws Exception {
+        String unique = UUID.randomUUID().toString().substring(0, 8);
+        String thumbprints = powershell(
+                "$root = New-SelfSignedCertificate -Subject 'CN=seclume-root-" + unique + "' "
+                + "-CertStoreLocation Cert:\\CurrentUser\\My -KeyAlgorithm ECDSA_nistP256 "
+                + "-KeyUsage CertSign,DigitalSignature -TextExtension @('2.5.29.19={text}CA=true') "
+                + "-NotAfter (Get-Date).AddDays(1); "
+                + "$mid = New-SelfSignedCertificate -Subject 'CN=seclume-mid-" + unique + "' "
+                + "-Signer $root -CertStoreLocation Cert:\\CurrentUser\\My "
+                + "-KeyAlgorithm ECDSA_nistP256 -KeyUsage CertSign,DigitalSignature "
+                + "-TextExtension @('2.5.29.19={text}CA=true') -NotAfter (Get-Date).AddDays(1); "
+                + "$leaf = New-SelfSignedCertificate -Subject 'CN=seclume-leaf-" + unique + "' "
+                + "-Signer $mid -CertStoreLocation Cert:\\CurrentUser\\My "
+                + "-KeyAlgorithm ECDSA_nistP256 -KeyExportPolicy NonExportable "
+                + "-KeyUsage DigitalSignature "
+                + "-TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.2') "
+                + "-NotAfter (Get-Date).AddDays(1); "
+                + "$root.Thumbprint + ',' + $mid.Thumbprint + ',' + $leaf.Thumbprint");
+        String[] three = thumbprints.split(",");
+        enrolled.addAll(List.of(three));
+        try (WindowsStoreClientIdentity identity = new WindowsStoreClientIdentity(three[2],
+                false)) {
+            assertEquals(2, identity.chain().size(), "leaf and intermediate, no root");
+            X509Certificate leaf = parse(identity.chain().get(0));
+            X509Certificate middle = parse(identity.chain().get(1));
+            assertEquals("CN=seclume-leaf-" + unique, leaf.getSubjectX500Principal().getName());
+            assertEquals("CN=seclume-mid-" + unique, middle.getSubjectX500Principal().getName());
+            assertEquals(leaf.getIssuerX500Principal(), middle.getSubjectX500Principal());
+        }
+    }
+
+    /**
+     * A renewed certificate - a new key, a new thumbprint, the same subject -
+     * is found by its subject, the newest first, and taken up by an identity
+     * that is already in use.
+     */
+    @Test
+    void aRenewedCertificateIsTakenUpBySubject(@TempDir Path dir) throws Exception {
+        String subject = "seclume-renew-" + UUID.randomUUID().toString().substring(0, 8);
+        Enrolled first = enroll("Microsoft Software Key Storage Provider", dir, subject, -2);
+        long before = RenewingStoreClientIdentity.lookEveryMillis;
+        RenewingStoreClientIdentity.lookEveryMillis = 0;
+        try (ClientIdentity identity = ClientIdentities.of(Map.of(
+                ClientIdentities.SUBJECT, subject))) {
+            assertEquals(first.thumbprint(),
+                    WindowsStoreClientIdentity.newestBySubject("CN=" + subject, false));
+            handshake(identity.forHandshake(), first.certificate());
+
+            Enrolled renewed = enroll("Microsoft Software Key Storage Provider", dir, subject,
+                    -1);
+            ClientIdentity now = identity.forHandshake();
+            assertArrayEquals(renewed.certificate().getEncoded(), now.chain().get(0),
+                    "the renewed certificate was not taken up");
+            handshake(now, renewed.certificate());
+            assertEquals(1, ((RenewingStoreClientIdentity) identity).renewals());
+        } finally {
+            RenewingStoreClientIdentity.lookEveryMillis = before;
+        }
+    }
+
+    @Test
+    void aSubjectThatIsNotThereSaysSo() {
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> WindowsStoreClientIdentity.newestBySubject("seclume-nobody-" + UUID
+                        .randomUUID(), false));
+        assertTrue(missing.getMessage().contains("valid now"), missing.getMessage());
+    }
+
+    private static X509Certificate parse(byte[] der) throws Exception {
+        try (InputStream in = new java.io.ByteArrayInputStream(der)) {
+            return (X509Certificate) CertificateFactory.getInstance("X.509")
+                    .generateCertificate(in);
+        }
+    }
+
     // ------------------------------------------------------------- fixtures --
 
     private record Enrolled(String thumbprint, X509Certificate certificate) {
     }
 
     private static Enrolled enroll(String provider, Path dir) throws Exception {
+        return enroll(provider, dir, "seclume-d3-test", 0);
+    }
+
+    /** @param startDays when it becomes valid, in days from now - to tell renewals apart */
+    private static Enrolled enroll(String provider, Path dir, String commonName, int startDays)
+            throws Exception {
         Path exported = dir.resolve("client-" + UUID.randomUUID() + ".cer");
         String thumbprint = powershell(
-                "$c = New-SelfSignedCertificate -Subject 'CN=seclume-d3-test' "
+                "$c = New-SelfSignedCertificate -Subject 'CN=" + commonName + "' "
+                + "-NotBefore (Get-Date).AddDays(" + startDays + ") "
                 + "-CertStoreLocation Cert:\\CurrentUser\\My -KeyAlgorithm ECDSA_nistP256 "
                 + "-KeyExportPolicy NonExportable -Provider '" + provider + "' "
                 + "-KeyUsage DigitalSignature "

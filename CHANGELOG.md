@@ -5,6 +5,35 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Client certificates: a key in a PKCS#11 token, the chain and renewals from the Windows store
+
+**A key in a token on Linux.** `clientCertPkcs11` names a PKCS#11 module. The
+key may sit in a smart card, an HSM, SoftHSM, or a TPM 2.0 through
+`tpm2-pkcs11`. The token signs the handshake (`C_Sign`, `CKM_ECDSA`), and
+nothing in this process could ask it for the key. The one secret this side
+holds is the PIN, for the moment of `C_Login`: it is read from its provider
+(`clientCertPin-provider=...`) into native memory and wiped afterwards.
+`clientCertPkcs11Token` picks the token by label, and `clientCertPkcs11Key`
+picks key and certificate by label. `clientCert` can name a chain file
+instead of the token's certificate. P-256 and P-384 are supported. This works
+on systems with a 64-bit `long`; on Windows the certificate store does the
+same. Tested against SoftHSM with a real mutual TLS handshake in CI
+(`Pkcs11ClientIdentityTest`: the token's certificate, a chain from a file, a
+wrong PIN, a missing key).
+
+**The chain from the Windows store.** The intermediate certificates go with
+the leaf now. They are built by Windows (`CertGetCertificateChain`), without
+a self-signed root at the end. Before this, only the leaf was sent.
+
+**A renewed certificate without a restart.** `clientCertSubject` names the
+certificate by subject, either a whole DN or a common name, instead of by
+thumbprint. The newest certificate valid now is used. At most once a minute
+the store is checked again, and a renewed certificate (new key, new
+thumbprint) is taken up by the next handshake. The previous key is closed a
+minute later. Tested on Windows 11 (`WindowsStoreIdentityTest`: leaf plus
+intermediate without the root; a renewal enrolled while the identity is in
+use, then a handshake with each).
+
 ### SQL Server: an idle connection the server dropped comes back with its settings
 
 SQL Server's idle connection resiliency (TDS feature `SESSIONRECOVERY`) is
@@ -3405,10 +3434,9 @@ that certificate, asking Windows to export the key (refused), and removing
 certificate and key again. The TPM case runs where a TPM is usable and is
 skipped where it is not - including on the machine this was written on.
 
-**Not covered:** PKCS#11 tokens and TPM2 on Linux (the same interface, a
-different native API, and no hardware here to prove it on); intermediate
-certificates from the store (only the leaf is sent); a renewed certificate,
-which has a new thumbprint. And **GraalVM native image on Windows**: the
+**Not covered:** PKCS#11 tokens and TPM2 on Linux, intermediate
+certificates from the store, and a renewed certificate - all three came later,
+see above. And **GraalVM native image on Windows**: the
 signatures are registered (see "All four in a native image" above), but no
 Windows image has been built.
 
