@@ -28,6 +28,13 @@ import space.seclume.secret.SecretProvider;
  * -Dbench.password.file=.local-pg-password
  * </pre>
  *
+ * <p><b>Both sides encrypt, or neither.</b> {@code -Dbench.tls=on} (the
+ * default) asks both drivers for TLS, {@code off} turns it off on both.
+ * Until 12.10.2026 they differed on MySQL: seclume took TLS because the
+ * server offers it, Connector/J was told {@code useSSL=false}, and
+ * {@code select 1} measured an encrypted round trip against a plain one.
+ * Oracle is plain on both sides either way - TCPS is a listener of its own.
+ *
  * <p><b>The password is a {@code String} on the vendor side.</b> That is not
  * an oversight - it is the point being measured against: the other driver has
  * no way of taking it otherwise.
@@ -45,6 +52,8 @@ public final class BenchDatabase {
     private final String database;
     private final String user;
     private final Path passwordFile;
+    /** Whether both drivers use TLS - see the class comment. */
+    private final boolean tls = !"off".equalsIgnoreCase(property("bench.tls", "on"));
 
     private BenchDatabase(Kind kind, String host, int port, String database, String user,
                           Path passwordFile) {
@@ -195,6 +204,7 @@ public final class BenchDatabase {
                 source.setDatabase(database);
                 source.setUser(user);
                 source.setSecretProvider(secret);
+                source.setTls(tls ? "require" : "off");
                 yield source;
             }
             case MYSQL -> {
@@ -209,6 +219,7 @@ public final class BenchDatabase {
                 // public key, and asking an unauthenticated server for one is
                 // off by default in this driver.
                 source.setAllowPublicKeyRetrieval(true);
+                source.setTls(tls ? "require" : "off");
                 yield source;
             }
             case SQLSERVER -> {
@@ -236,9 +247,10 @@ public final class BenchDatabase {
     /** The vendor driver's URL for the same server. */
     public String vendorUrl() {
         return switch (kind) {
-            case POSTGRESQL -> "jdbc:postgresql://" + host + ":" + port + "/" + database;
+            case POSTGRESQL -> "jdbc:postgresql://" + host + ":" + port + "/" + database
+                    + "?sslmode=" + (tls ? "require" : "disable");
             case MYSQL -> "jdbc:mysql://" + host + ":" + port + "/" + database
-                    + "?allowPublicKeyRetrieval=true&useSSL=false";
+                    + "?allowPublicKeyRetrieval=true&sslMode=" + (tls ? "REQUIRED" : "DISABLED");
             case SQLSERVER -> "jdbc:sqlserver://" + host + ":" + port
                     + ";databaseName=" + database + ";encrypt=true;trustServerCertificate=true";
             case ORACLE -> "jdbc:oracle:thin:@//" + host + ":" + port + "/" + database;
