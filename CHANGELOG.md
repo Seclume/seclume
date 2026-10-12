@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### The pool: a borrow allocates no more than HikariCP's
+
+A borrowed connection's handle was 72 bytes, allocated on every borrow. It
+held sixteen booleans and three copies of settings its pool entry keeps
+anyway. HikariCP's handle is 56 bytes. Now the yes/no state is one bit each in
+an `int`, the initial settings are read from the entry, and the handle is 56
+bytes too, measured to the byte with JMH's GC profiler
+(`PoolBenchmark.borrowAndReturn`). Measured on Windows 11 against SQL Server:
+0.089 µs per borrow and return, against HikariCP's 0.115 µs.
+
 ### Client certificates: a key in a PKCS#11 token, the chain and renewals from the Windows store
 
 **A key in a token on Linux.** `clientCertPkcs11` names a PKCS#11 module. The

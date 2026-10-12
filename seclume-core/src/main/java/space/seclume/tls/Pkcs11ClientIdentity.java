@@ -216,7 +216,7 @@ public final class Pkcs11ClientIdentity implements ClientIdentity {
     // ---------------------------------------------------------------- helpers
 
     /** The slot of the token with that label, or of the first token. */
-    private long slot(Arena arena, String token) throws Throwable {
+    private long slot(Arena arena, String tokenLabel) throws Throwable {
         MemorySegment count = arena.allocate(JAVA_LONG);
         check("C_GetSlotList", (long) module.slotList.invokeExact((byte) 1, MemorySegment.NULL,
                 count));
@@ -233,20 +233,21 @@ public final class Pkcs11ClientIdentity implements ClientIdentity {
             if ((long) module.tokenInfo.invokeExact(slot, info) != CKR_OK) {
                 continue;
             }
-            String label = new String(info.asSlice(0, 32).toArray(JAVA_BYTE),
+            String label = new String(info.asSlice(0, 32).toArray(JAVA_BYTE), // seclume-allow: a token's label, public
                     StandardCharsets.UTF_8).strip();
-            if (token == null || token.isBlank() || token.strip().equals(label)) {
+            if (tokenLabel == null || tokenLabel.isBlank()
+                    || tokenLabel.strip().equals(label)) {
                 return slot;
             }
             seen.append(seen.isEmpty() ? "" : ", ").append('\'').append(label).append('\'');
         }
-        throw new IllegalArgumentException("no token labelled '" + token + "' - the module "
+        throw new IllegalArgumentException("no token labelled '" + tokenLabel + "' - the module "
                 + "has " + seen);
     }
 
     /** The first object of {@code type} with {@code label}, or 0. */
     private long find(Arena arena, long session, long type, String label) throws Throwable {
-        byte[] name = label.getBytes(StandardCharsets.UTF_8);
+        byte[] name = label.getBytes(StandardCharsets.UTF_8); // seclume-allow: an object's label, public
         MemorySegment classValue = arena.allocate(JAVA_LONG);
         classValue.set(JAVA_LONG, 0, type);
         MemorySegment labelValue = arena.allocate(Math.max(1, name.length));

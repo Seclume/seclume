@@ -49,33 +49,58 @@ final class PooledConnection implements Connection {
     /** Statements this connection keeps between borrows, or {@code null}. */
     private final StatementCache statements;
 
-    private final boolean initialAutoCommit;
-    private final boolean initialReadOnly;
-    private final int initialIsolation;
+    /**
+     * The yes/no state of this handle, one bit each. As sixteen booleans and
+     * three copies of the entry's initial settings the handle was 72 bytes,
+     * allocated on every borrow, against HikariCP's 56 - see PoolBenchmark
+     * with the GC profiler. A bit costs nothing to test, and a borrow writes
+     * two of them.
+     */
+    private int flags;
+    private static final int TOUCHED_AUTO_COMMIT = 1 << 0;
+    private static final int TOUCHED_READ_ONLY = 1 << 1;
+    private static final int TOUCHED_ISOLATION = 1 << 2;
+    private static final int TOUCHED_NETWORK_TIMEOUT = 1 << 3;
+    private static final int CLOSED = 1 << 4;
+    private static final int BROKEN = 1 << 5;
+    private static final int AUTO_COMMIT_ON = 1 << 6;
+    private static final int READ_ONLY_ON = 1 << 7;
+    private static final int TOUCHED_CATALOG = 1 << 8;
+    private static final int TOUCHED_SCHEMA = 1 << 9;
+    /** Work done since the last commit, rollback or autocommit change. */
+    private static final int WORK_SINCE_BOUNDARY = 1 << 10;
+    /** A savepoint stands - then there is a transaction with a shape to it. */
+    private static final int SAVEPOINT_STANDING = 1 << 11;
+    /** Somebody creates statements without end - then we stop counting and stop rebuilding. */
+    private static final int TOO_MANY_STATEMENTS = 1 << 12;
+    /** One rebuild per borrow: twice in a row is a server saying no. */
+    private static final int RENEWED_ONCE = 1 << 13;
+    /** Whether anything at all was asked of the connection while it was out. */
+    private static final int USED = 1 << 14;
+    /**
+     * Whether the driver connection was reached at all - wider than
+     * {@link #USED}: a validation or an abort does not make the session need
+     * a reset, but either can leave the driver closed underneath.
+     */
+    private static final int REACHED = 1 << 15;
 
-    private boolean touchedAutoCommit;
-    private boolean touchedReadOnly;
-    private boolean touchedIsolation;
+    private boolean is(int bit) {
+        return (flags & bit) != 0;
+    }
+
+    private void set(int bit, boolean on) {
+        flags = on ? flags | bit : flags & ~bit;
+    }
+
     /** Set by the first setNetworkTimeout of this borrow, with what was there before. */
-    private boolean touchedNetworkTimeout;
     private int initialNetworkTimeout;
-    private boolean closed;
-    private boolean broken;
 
     // What a rebuild has to put back, and what forbids one. All of it is
     // written on the calling thread and read on the calling thread: a borrowed
     // connection belongs to one thread at a time.
-    private boolean autoCommitOn;
-    private boolean readOnly;
     private int isolation;
     private String catalog;
     private String schema;
-    private boolean touchedCatalog;
-    private boolean touchedSchema;
-    /** Work done since the last commit, rollback or autocommit change. */
-    private boolean workSinceBoundary;
-    /** A savepoint stands - then there is a transaction with a shape to it. */
-    private boolean savepointStanding;
     /**
      * Statements handed out during this borrow; a rebuild needs them closed.
      *
@@ -87,18 +112,6 @@ final class PooledConnection implements Connection {
      * it to the byte while the timing at this scale says nothing.
      */
     private List<Statement> handedOut;
-    /** Somebody creates statements without end - then we stop counting and stop rebuilding. */
-    private boolean tooManyStatements;
-    /** One rebuild per borrow: twice in a row is a server saying no. */
-    private boolean renewedOnce;
-    /** Whether anything at all was asked of the connection while it was out. */
-    private boolean used;
-    /**
-     * Whether the driver connection was reached at all - wider than
-     * {@link #used}: a validation or an abort does not make the session need
-     * a reset, but either can leave the driver closed underneath.
-     */
-    private boolean reached;
 
     /**
      * The state to restore comes from the entry, which read it when the
@@ -110,12 +123,9 @@ final class PooledConnection implements Connection {
         this.entry = entry;
         this.statements = statements;
         this.delegate = entry.connection();
-        this.initialAutoCommit = entry.initialAutoCommit();
-        this.initialReadOnly = entry.initialReadOnly();
-        this.initialIsolation = entry.initialIsolation();
-        this.autoCommitOn = initialAutoCommit;
-        this.readOnly = initialReadOnly;
-        this.isolation = initialIsolation;
+        set(AUTO_COMMIT_ON, entry.initialAutoCommit());
+        set(READ_ONLY_ON, entry.initialReadOnly());
+        this.isolation = entry.initialIsolation();
         front(this);
     }
 
@@ -139,14 +149,14 @@ final class PooledConnection implements Connection {
      * nothing renews the connection underneath it.
      */
     void adopted() throws SQLException {
-        autoCommitOn = delegate.getAutoCommit();
-        touchedAutoCommit = autoCommitOn != initialAutoCommit;
-        readOnly = delegate.isReadOnly();
-        touchedReadOnly = readOnly != initialReadOnly;
+        set(AUTO_COMMIT_ON, delegate.getAutoCommit());
+        set(TOUCHED_AUTO_COMMIT, is(AUTO_COMMIT_ON) != entry.initialAutoCommit());
+        set(READ_ONLY_ON, delegate.isReadOnly());
+        set(TOUCHED_READ_ONLY, is(READ_ONLY_ON) != entry.initialReadOnly());
         isolation = delegate.getTransactionIsolation();
-        touchedIsolation = isolation != initialIsolation;
-        workSinceBoundary = !autoCommitOn;
-        used = true;
+        set(TOUCHED_ISOLATION, isolation != entry.initialIsolation());
+        set(WORK_SINCE_BOUNDARY, !is(AUTO_COMMIT_ON));
+        set(USED, true);
     }
 
     /**
@@ -154,7 +164,7 @@ final class PooledConnection implements Connection {
      * handle is closed afterwards; what it handed out goes with it.
      */
     Connection giveUp() {
-        closed = true;
+        set(CLOSED, true);
         if (handedOut != null) {
             for (Statement statement : handedOut) {
                 try {
@@ -177,26 +187,26 @@ final class PooledConnection implements Connection {
     }
 
     boolean isGivenUp() {
-        return closed;
+        return is(CLOSED);
     }
 
     // ---- Zurueckgeben ----------------------------------------------------
 
     @Override
     public void close() {
-        if (closed) {
+        if (is(CLOSED)) {
             return;      // JDBC requires a second close() to do nothing
         }
-        closed = true;
-        if (!broken) {
+        set(CLOSED, true);
+        if (!is(BROKEN)) {
             try {
                 restore();
             } catch (SQLException | RuntimeException e) {
-                broken = true;
+                set(BROKEN, true);
             }
         }
         // Not asked when the driver was never reached: nothing can have closed it.
-        if (!broken && (used || reached) && isDelegateGone()) {
+        if (!is(BROKEN) && (is(USED) || is(REACHED)) && isDelegateGone()) {
             // The statement that killed it ran on the driver's own object and
             // never came through this class, so nothing marked it - see the
             // note on call(). Asking the driver costs nothing: a seclume
@@ -208,10 +218,10 @@ final class PooledConnection implements Connection {
             // gets the same failure for as long as requests keep arriving,
             // which is how a database that went away for two seconds took the
             // pool with it. Found by ChaosBenchmark.
-            broken = true;
+            set(BROKEN, true);
         }
         front(null);
-        pool.release(entry, broken);
+        pool.release(entry, is(BROKEN));
     }
 
     /**
@@ -268,63 +278,63 @@ final class PooledConnection implements Connection {
         // Only when a transaction can actually be open: with autoCommit on
         // there is nothing to roll back, and asking the driver costs more than
         // the flag this class already knows.
-        if (touchedAutoCommit ? !delegate.getAutoCommit() : !initialAutoCommit) {
+        if (is(TOUCHED_AUTO_COMMIT) ? !delegate.getAutoCommit() : !entry.initialAutoCommit()) {
             // What was not committed was not intended.
             delegate.rollback();
         }
-        if (touchedAutoCommit && delegate.getAutoCommit() != initialAutoCommit) {
-            delegate.setAutoCommit(initialAutoCommit);
+        if (is(TOUCHED_AUTO_COMMIT) && delegate.getAutoCommit() != entry.initialAutoCommit()) {
+            delegate.setAutoCommit(entry.initialAutoCommit());
         }
-        if (touchedReadOnly && delegate.isReadOnly() != initialReadOnly) {
-            delegate.setReadOnly(initialReadOnly);
+        if (is(TOUCHED_READ_ONLY) && delegate.isReadOnly() != entry.initialReadOnly()) {
+            delegate.setReadOnly(entry.initialReadOnly());
         }
-        if (touchedIsolation && delegate.getTransactionIsolation() != initialIsolation) {
-            delegate.setTransactionIsolation(initialIsolation);
+        if (is(TOUCHED_ISOLATION) && delegate.getTransactionIsolation() != entry.initialIsolation()) {
+            delegate.setTransactionIsolation(entry.initialIsolation());
         }
         // A timeout one borrower chose for its own work - HikariCP-style
         // around a validation, or a short one for a quick lookup - would
         // otherwise close the next borrower's long report half way.
-        if (touchedNetworkTimeout && delegate.getNetworkTimeout() != initialNetworkTimeout) {
+        if (is(TOUCHED_NETWORK_TIMEOUT) && delegate.getNetworkTimeout() != initialNetworkTimeout) {
             delegate.setNetworkTimeout(Runnable::run, initialNetworkTimeout);
         }
         // Only when something was actually asked of the connection: if
         // nothing was, nothing can have warned. The call looks free and is
         // not - on several drivers it is a synchronized method, and it sits on
         // the path of every single return.
-        if (used) {
+        if (is(USED)) {
             delegate.clearWarnings();
         }
         // SQL text cannot reveal side effects hidden in functions or procedures.
         // Always reset a used session before another borrower can receive it.
-        if (used) {
+        if (is(USED)) {
             closeLeftStatements();
         }
-        space.seclume.SessionReset session = used ? sessionReset() : null;
+        space.seclume.SessionReset session = is(USED) ? sessionReset() : null;
         if (session != null) {
             if (statements != null) {
                 statements.closeAll();
             }
             if (!session.resetSessionState()) {
                 throw new SQLException("the session cannot be fully reset - "
-                        + "the connection is closed rather than lent again");
+                        + "the connection is is(CLOSED) rather than lent again");
             }
         }
     }
 
     /** Counts as used - see SeclumePool: a session context was set on borrow. */
     void markUsed() {
-        used = true;
+        set(USED, true);
     }
 
     @Override
     public boolean isClosed() {
         // Also closed when the pool cut the connection underneath - on
         // shutdown after the drain - without this handle being returned.
-        return closed || entry.state() == PoolEntry.State.CLOSED;
+        return is(CLOSED) || entry.state() == PoolEntry.State.CLOSED;
     }
 
     private void checkOpen() throws SQLException {
-        if (closed) {
+        if (is(CLOSED)) {
             throw new SQLException(
                     "this connection was already returned to the pool", "08003");
         }
@@ -368,7 +378,7 @@ final class PooledConnection implements Connection {
      */
     private <T> T call(SqlCall<T> action) throws SQLException {
         checkOpen();
-        used = true;
+        set(USED, true);
         try {
             return record(action.run(delegate));
         } catch (SQLException e) {
@@ -376,7 +386,7 @@ final class PooledConnection implements Connection {
                 throw e;
             }
             if (!canRenew()) {
-                broken = true;
+                set(BROKEN, true);
                 throw e;
             }
             try {
@@ -384,14 +394,14 @@ final class PooledConnection implements Connection {
             } catch (SQLException cannot) {
                 // No new connection either - then the first failure is the one
                 // worth telling, with this one attached to it.
-                broken = true;
+                set(BROKEN, true);
                 e.addSuppressed(cannot);
                 throw e;
             }
             try {
                 return record(action.run(delegate));
             } catch (SQLException again) {
-                broken = true;
+                set(BROKEN, true);
                 again.addSuppressed(e);
                 throw again;
             }
@@ -424,7 +434,7 @@ final class PooledConnection implements Connection {
      * the pool puts back, a {@code SET} it cannot - it never kept the text.
      */
     private boolean canRenew() {
-        if (renewedOnce || tooManyStatements || savepointStanding || workSinceBoundary) {
+        if (is(RENEWED_ONCE) || is(TOO_MANY_STATEMENTS) || is(SAVEPOINT_STANDING) || is(WORK_SINCE_BOUNDARY)) {
             return false;
         }
         if (!pool.settings().isRenewBrokenConnections()) {
@@ -459,25 +469,25 @@ final class PooledConnection implements Connection {
     private void renew() throws SQLException {
         pool.renew(entry);
         delegate = entry.connection();
-        renewedOnce = true;
+        set(RENEWED_ONCE, true);
         if (handedOut != null) {
             handedOut.clear();
         }
-        if (autoCommitOn != initialAutoCommit) {
-            delegate.setAutoCommit(autoCommitOn);
+        if (is(AUTO_COMMIT_ON) != entry.initialAutoCommit()) {
+            delegate.setAutoCommit(is(AUTO_COMMIT_ON));
         }
-        if (readOnly != initialReadOnly) {
-            delegate.setReadOnly(readOnly);
+        if (is(READ_ONLY_ON) != entry.initialReadOnly()) {
+            delegate.setReadOnly(is(READ_ONLY_ON));
         }
-        if (isolation != initialIsolation) {
+        if (isolation != entry.initialIsolation()) {
             delegate.setTransactionIsolation(isolation);
         }
         // Catalog and schema only when they were set here: asking a fresh
         // connection to go where it already is costs a round trip for nothing.
-        if (touchedCatalog) {
+        if (is(TOUCHED_CATALOG)) {
             delegate.setCatalog(catalog);
         }
-        if (touchedSchema) {
+        if (is(TOUCHED_SCHEMA)) {
             delegate.setSchema(schema);
         }
     }
@@ -491,21 +501,21 @@ final class PooledConnection implements Connection {
      */
     private <T> T record(T result) {
         if (result instanceof Statement statement) {
-            if (!autoCommitOn) {
+            if (!is(AUTO_COMMIT_ON)) {
                 // Inside a transaction a statement is work, whether or not it
                 // is still open by the time anything breaks.
-                workSinceBoundary = true;
+                set(WORK_SINCE_BOUNDARY, true);
             }
             if (handedOut == null) {
                 handedOut = new ArrayList<>(4);
             }
             if (handedOut.size() >= 64) {
-                tooManyStatements = true;
+                set(TOO_MANY_STATEMENTS, true);
             } else {
                 handedOut.add(statement);
             }
         } else if (result instanceof Savepoint) {
-            savepointStanding = true;
+            set(SAVEPOINT_STANDING, true);
         }
         return result;
     }
@@ -611,13 +621,13 @@ final class PooledConnection implements Connection {
 
     @Override
     public void setAutoCommit(boolean autoCommit) throws SQLException {
-        touchedAutoCommit = true;
+        set(TOUCHED_AUTO_COMMIT, true);
         run(c -> c.setAutoCommit(autoCommit));
         // Either direction ends whatever was open: switching it on commits on
         // every server we speak to, switching it off starts from nothing.
-        autoCommitOn = autoCommit;
-        workSinceBoundary = false;
-        savepointStanding = false;
+        set(AUTO_COMMIT_ON, autoCommit);
+        set(WORK_SINCE_BOUNDARY, false);
+        set(SAVEPOINT_STANDING, false);
     }
 
     @Override
@@ -628,15 +638,15 @@ final class PooledConnection implements Connection {
     @Override
     public void commit() throws SQLException {
         run(Connection::commit);
-        workSinceBoundary = false;
-        savepointStanding = false;
+        set(WORK_SINCE_BOUNDARY, false);
+        set(SAVEPOINT_STANDING, false);
     }
 
     @Override
     public void rollback() throws SQLException {
         run(Connection::rollback);
-        workSinceBoundary = false;
-        savepointStanding = false;
+        set(WORK_SINCE_BOUNDARY, false);
+        set(SAVEPOINT_STANDING, false);
     }
 
     @Override
@@ -646,9 +656,9 @@ final class PooledConnection implements Connection {
 
     @Override
     public void setReadOnly(boolean readOnly) throws SQLException {
-        touchedReadOnly = true;
+        set(TOUCHED_READ_ONLY, true);
         run(c -> c.setReadOnly(readOnly));
-        this.readOnly = readOnly;
+        set(READ_ONLY_ON, readOnly);
     }
 
     @Override
@@ -660,7 +670,7 @@ final class PooledConnection implements Connection {
     public void setCatalog(String catalog) throws SQLException {
         run(c -> c.setCatalog(catalog));
         this.catalog = catalog;
-        this.touchedCatalog = true;
+        set(TOUCHED_CATALOG, true);
     }
 
     @Override
@@ -670,7 +680,7 @@ final class PooledConnection implements Connection {
 
     @Override
     public void setTransactionIsolation(int level) throws SQLException {
-        touchedIsolation = true;
+        set(TOUCHED_ISOLATION, true);
         run(c -> c.setTransactionIsolation(level));
         this.isolation = level;
     }
@@ -754,19 +764,19 @@ final class PooledConnection implements Connection {
 
     @Override
     public boolean isValid(int timeout) throws SQLException {
-        reached = true;
-        return !closed && delegate.isValid(timeout);
+        set(REACHED, true);
+        return !is(CLOSED) && delegate.isValid(timeout);
     }
 
     @Override
     public void setClientInfo(String name, String value) throws SQLClientInfoException {
-        reached = true;
+        set(REACHED, true);
         delegate.setClientInfo(name, value);
     }
 
     @Override
     public void setClientInfo(Properties properties) throws SQLClientInfoException {
-        reached = true;
+        set(REACHED, true);
         delegate.setClientInfo(properties);
     }
 
@@ -794,7 +804,7 @@ final class PooledConnection implements Connection {
     public void setSchema(String schema) throws SQLException {
         run(c -> c.setSchema(schema));
         this.schema = schema;
-        this.touchedSchema = true;
+        set(TOUCHED_SCHEMA, true);
     }
 
     @Override
@@ -808,17 +818,17 @@ final class PooledConnection implements Connection {
      */
     @Override
     public void abort(Executor executor) throws SQLException {
-        broken = true;
-        reached = true;
+        set(BROKEN, true);
+        set(REACHED, true);
         delegate.abort(executor);
         close();
     }
 
     @Override
     public void setNetworkTimeout(Executor executor, int milliseconds) throws SQLException {
-        if (!touchedNetworkTimeout) {
+        if (!is(TOUCHED_NETWORK_TIMEOUT)) {
             initialNetworkTimeout = call(Connection::getNetworkTimeout);
-            touchedNetworkTimeout = true;
+            set(TOUCHED_NETWORK_TIMEOUT, true);
         }
         run(c -> c.setNetworkTimeout(executor, milliseconds));
     }
@@ -834,7 +844,7 @@ final class PooledConnection implements Connection {
         if (iface.isInstance(this)) {
             return iface.cast(this);
         }
-        used = true;
+        set(USED, true);
         return delegate.unwrap(iface);
     }
 
@@ -843,7 +853,7 @@ final class PooledConnection implements Connection {
         if (iface.isInstance(this)) {
             return true;
         }
-        reached = true;
+        set(REACHED, true);
         return delegate.isWrapperFor(iface);
     }
 
@@ -859,6 +869,6 @@ final class PooledConnection implements Connection {
 
     @Override
     public String toString() {
-        return "PooledConnection[" + (closed ? "returned" : "in use") + "]";
+        return "PooledConnection[" + (is(CLOSED) ? "returned" : "in use") + "]";
     }
 }
