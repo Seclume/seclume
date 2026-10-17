@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.13.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-nats</artifactId>
+  <name>seclume NATS</name>
+  <description>
+    NATS with the NKey seed, password or token off the heap: an AuthHandler
+    that signs server challenges in native memory with Ed25519 (for bare NKey
+    seeds and .creds files), and a DataPort whose connections encrypt with
+    seclume's own TLS 1.3 and write a password or token into the CONNECT
+    handshake from native memory.
+  </description>
+
+  <properties>
+    <jnats.version>2.26.4</jnats.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The application brings the client; this module configures it. -->
+    <dependency>
+      <groupId>io.nats</groupId>
+      <artifactId>jnats</artifactId>
+      <version>${jnats.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
