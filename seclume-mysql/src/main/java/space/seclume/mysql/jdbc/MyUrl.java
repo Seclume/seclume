@@ -73,7 +73,10 @@ final class MyUrl {
 
         SecretProvider secret;
         try {
-            secret = SecretProviders.of(new HashMap<>(parsed.options()));
+            HashMap<String, String> secretOptions = new HashMap<>(parsed.options());
+            secretOptions.putIfAbsent("host", parsed.host());
+            secretOptions.putIfAbsent("port", String.valueOf(parsed.port()));
+            secret = SecretProviders.of(secretOptions);
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

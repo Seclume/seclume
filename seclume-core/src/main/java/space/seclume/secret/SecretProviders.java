@@ -118,22 +118,26 @@ public final class SecretProviders {
             // The password is built, not stored: an AWS RDS IAM token, signed
             // here so that the short-lived credential never becomes a String.
             // The AWS key itself comes from one of the sources above, named in
-            // "key-provider".
-            // credentials=instance: the EC2 instance role's temporary
-            // credentials instead of a key pair - see AwsInstanceRole.
-            case "rds-iam", "rdsiam" -> "instance".equalsIgnoreCase(value(settings, "credentials"))
-                    ? new RdsIamSecretProvider(AwsInstanceRole.shared(),
-                            required(settings, "region", "rds-iam"),
-                            required(settings, "host", "rds-iam"),
-                            Integer.parseInt(required(settings, "port", "rds-iam")),
-                            required(settings, "db-user", "rds-iam"))
-                    : new RdsIamSecretProvider(
-                    of(nested(settings, "key-")),
-                    required(settings, "access-key-id", "rds-iam"),
-                    required(settings, "region", "rds-iam"),
-                    required(settings, "host", "rds-iam"),
-                    Integer.parseInt(required(settings, "port", "rds-iam")),
-                    required(settings, "db-user", "rds-iam"));
+            // "key-provider" (with an optional "session-token-provider"), or
+            // from the workload's role via credentials=instance|container|web-identity.
+            case "rds-iam", "rdsiam" -> {
+                AwsInstanceRole role = AwsInstanceRole.of(settings);
+                yield role != null
+                        ? new RdsIamSecretProvider(role,
+                                required(settings, "region", "rds-iam"),
+                                required(settings, "host", "rds-iam"),
+                                Integer.parseInt(required(settings, "port", "rds-iam")),
+                                dbUser(settings))
+                        : new RdsIamSecretProvider(
+                                of(nested(settings, "key-")),
+                                nested(settings, "session-token-").isEmpty() ? null
+                                        : of(nested(settings, "session-token-")),
+                                required(settings, "access-key-id", "rds-iam"),
+                                required(settings, "region", "rds-iam"),
+                                required(settings, "host", "rds-iam"),
+                                Integer.parseInt(required(settings, "port", "rds-iam")),
+                                dbUser(settings));
+            }
             // Stored encrypted, decrypted straight into the target segment. Two
             // inner sources rather than one, and they should not be the same
             // place: "cipher-" says where the ciphertext is, "key-" where the
@@ -159,27 +163,29 @@ public final class SecretProviders {
             // that no SDK ever hands out a String. "token-" says where the
             // bearer token comes from; for AWS it is "key-", because a
             // signature is made rather than a token presented.
-            case "aws-secrets-manager", "awssecretsmanager" ->
-                    "instance".equalsIgnoreCase(value(settings, "credentials"))
-                    ? new AwsSecretsManagerSecretProvider(AwsInstanceRole.shared(),
-                            required(settings, "region", "aws-secrets-manager"),
-                            required(settings, "secret-id", "aws-secrets-manager"),
-                            value(settings, "field"), maxLength)
-                    : new AwsSecretsManagerSecretProvider(
-                            of(nested(settings, "key-")),
-                            // Optional, and only for temporary credentials.
-                            // It is signed as well as sent, which is why it
-                            // is a provider rather than a setting: a value
-                            // written here would be a String in the
-                            // configuration, which is the one thing this
-                            // library refuses everywhere else.
-                            nested(settings, "session-token-").isEmpty() ? null
-                                    : of(nested(settings, "session-token-")),
-                            required(settings, "access-key-id", "aws-secrets-manager"),
-                            required(settings, "region", "aws-secrets-manager"),
-                            required(settings, "secret-id", "aws-secrets-manager"),
-                            value(settings, "field"),
-                            maxLength);
+            case "aws-secrets-manager", "awssecretsmanager" -> {
+                AwsInstanceRole role = AwsInstanceRole.of(settings);
+                yield role != null
+                        ? new AwsSecretsManagerSecretProvider(role,
+                                required(settings, "region", "aws-secrets-manager"),
+                                required(settings, "secret-id", "aws-secrets-manager"),
+                                value(settings, "field"), maxLength)
+                        : new AwsSecretsManagerSecretProvider(
+                                of(nested(settings, "key-")),
+                                // Optional, and only for temporary credentials.
+                                // It is signed as well as sent, which is why it
+                                // is a provider rather than a setting: a value
+                                // written here would be a String in the
+                                // configuration, which is the one thing this
+                                // library refuses everywhere else.
+                                nested(settings, "session-token-").isEmpty() ? null
+                                        : of(nested(settings, "session-token-")),
+                                required(settings, "access-key-id", "aws-secrets-manager"),
+                                required(settings, "region", "aws-secrets-manager"),
+                                required(settings, "secret-id", "aws-secrets-manager"),
+                                value(settings, "field"),
+                                maxLength);
+            }
             case "azure-key-vault", "azurekeyvault" -> new AzureKeyVaultSecretProvider(
                     required(settings, "vault-uri", "azure-key-vault"),
                     required(settings, "name", "azure-key-vault"),
@@ -281,6 +287,24 @@ public final class SecretProviders {
 
     private static Path path(Map<String, String> settings, String kind) {
         return Path.of(required(settings, "path", kind));
+    }
+
+    /**
+     * {@code db-user} when given explicitly (for example when the token is
+     * signed for another name than the URL's), otherwise the connection's
+     * {@code user} - so a JDBC URL does not have to name the database user
+     * twice.
+     */
+    private static String dbUser(Map<String, String> settings) {
+        String explicit = value(settings, "db-user");
+        if (explicit != null && !explicit.isBlank()) {
+            return explicit;
+        }
+        String fallback = value(settings, "user");
+        if (fallback != null && !fallback.isBlank()) {
+            return fallback;
+        }
+        return required(settings, "db-user", "rds-iam");
     }
 
     private static String required(Map<String, String> settings, String key, String kind) {

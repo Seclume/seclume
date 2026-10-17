@@ -40,7 +40,7 @@ final class SeclumeDataSources {
         }
         String url = withResultLimit(name, configured, Runtime.getRuntime().maxMemory());
         SecretProvider secret = new SecretProviderFactory(beans)
-                .create(name, properties.getSecret());
+                .create(name, properties.getSecret(), url, properties.getUsername());
         if (secret == null) {
             // 'integrated': Kerberos, with the operating system's ticket and no
             // secret here at all - which PostgreSQL and MariaDB on Linux speak

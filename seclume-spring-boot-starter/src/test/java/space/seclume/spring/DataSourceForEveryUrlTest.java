@@ -1,6 +1,7 @@
 package space.seclume.spring;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -102,6 +103,51 @@ class DataSourceForEveryUrlTest {
                                            "oracle"}) {
             assertTrue(failure.getMessage().contains("jdbc:seclume:" + prefix + ":"),
                     "the message does not name " + prefix + ": " + failure.getMessage());
+        }
+    }
+
+    /**
+     * {@code rds-iam} configured through {@code seclume.datasources.main.secret.*}
+     * and through {@code secret-uri}: all nested settings arrive, and {@code host},
+     * {@code port} and {@code db-user} come from the data source's own URL and
+     * {@code username}.
+     */
+    @Test
+    void rdsIamWorksFromSpringPropertiesAndSecretUri() {
+        java.util.Map<String, Object> fromProperties = new java.util.LinkedHashMap<>();
+        fromProperties.put("seclume.datasources.main.url",
+                "jdbc:seclume:postgresql://rds.example.com:5432/app");
+        fromProperties.put("seclume.datasources.main.username", "iam_app");
+        fromProperties.put("seclume.datasources.main.secret.provider", "rds-iam");
+        fromProperties.put("seclume.datasources.main.secret.region", "eu-central-1");
+        fromProperties.put("seclume.datasources.main.secret.access-key-id",
+                "AKIAIOSFODNN7EXAMPLE");
+        fromProperties.put("seclume.datasources.main.secret.key-provider", "file");
+        fromProperties.put("seclume.datasources.main.secret.key-path", secretFile.toString());
+
+        try (var context = new org.springframework.context.annotation
+                .AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getPropertySources().addFirst(
+                    new org.springframework.core.env.MapPropertySource("test", fromProperties));
+            context.register(SeclumeAutoConfiguration.class);
+            context.refresh();
+            assertNotNull(context.getBean(DataSource.class));
+        }
+
+        java.util.Map<String, Object> fromUri = new java.util.LinkedHashMap<>();
+        fromUri.put("seclume.datasources.main.url",
+                "jdbc:seclume:mysql://rds.example.com:3306/app");
+        fromUri.put("seclume.datasources.main.username", "iam_app");
+        fromUri.put("seclume.datasources.main.secret-uri",
+                "rds-iam?region=eu-central-1&credentials=instance");
+
+        try (var context = new org.springframework.context.annotation
+                .AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getPropertySources().addFirst(
+                    new org.springframework.core.env.MapPropertySource("test", fromUri));
+            context.register(SeclumeAutoConfiguration.class);
+            context.refresh();
+            assertNotNull(context.getBean(DataSource.class));
         }
     }
 

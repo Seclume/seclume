@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
  * documentation, which exists precisely so that signatures can be shown in
  * public.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class RdsIamSecretProviderTest {
 
     private static final String ACCESS_KEY = "AKIAIOSFODNN7EXAMPLE";
@@ -92,9 +93,91 @@ class RdsIamSecretProviderTest {
         assertTrue(thrown.getMessage().contains("closed"), thrown.getMessage());
     }
 
-    private static String token(SecretProvider key) {
+    /**
+     * Temporary credentials: the session token is URL-encoded into the query,
+     * placed between {@code X-Amz-Expires} and {@code X-Amz-SignedHeaders},
+     * and covered by the signature.
+     */
+    @Test
+    void aSessionTokenIsSignedAndSentAndRaisesTheMaxLength() {
+        String rawSession = "FwoGZXIvYXdzE/session+token==";
+        String encodedSession = "FwoGZXIvYXdzE%2Fsession%2Btoken%3D%3D";
         RdsIamSecretProvider provider = new RdsIamSecretProvider(
-                key, ACCESS_KEY, "eu-central-1", "db.example.com", 5432, "app", FIXED);
+                new PlainKey(SECRET_KEY), new PlainKey(rawSession),
+                ACCESS_KEY, "eu-central-1", "db.example.com", 5432, "app", FIXED);
+        assertEquals(8192, provider.maxSecretLength());
+
+        String signed = read(provider);
+        assertTrue(signed.contains("&X-Amz-Expires=900&X-Amz-Security-Token=" + encodedSession
+                + "&X-Amz-SignedHeaders=host&X-Amz-Signature="), signed);
+
+        String canonicalQuery = "Action=connect&DBUser=app"
+                + "&X-Amz-Algorithm=AWS4-HMAC-SHA256"
+                + "&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20260910%2Feu-central-1%2Frds-db"
+                + "%2Faws4_request"
+                + "&X-Amz-Date=20260910T120000Z&X-Amz-Expires=900"
+                + "&X-Amz-Security-Token=" + encodedSession
+                + "&X-Amz-SignedHeaders=host";
+        String canonical = "GET\n/\n" + canonicalQuery + "\nhost:db.example.com:5432\n\n"
+                + "host\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        String toSign = "AWS4-HMAC-SHA256\n20260910T120000Z\n"
+                + "20260910/eu-central-1/rds-db/aws4_request\n"
+                + space.seclume.internal.AwsSigV4.sha256Hex(canonical);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment sig = space.seclume.internal.AwsSigV4.sign(
+                    arena, new PlainKey(SECRET_KEY)::writeSecret,
+                    toSign, "20260910", "eu-central-1", "rds-db");
+            String expected = "db.example.com:5432/?" + canonicalQuery
+                    + "&X-Amz-Signature=" + space.seclume.internal.AwsSigV4.hex(sig);
+            assertEquals(expected, signed);
+        }
+    }
+
+    @Test
+    void closingTheProviderClosesBothKeyAndSessionToken() {
+        PlainKey key = new PlainKey(SECRET_KEY);
+        PlainKey session = new PlainKey("session-token");
+        RdsIamSecretProvider provider = new RdsIamSecretProvider(
+                key, session, ACCESS_KEY, "eu-central-1", "db.example.com", 5432, "app", FIXED);
+        provider.close();
+        assertTrue(key.closed, "the secret key provider was not closed");
+        assertTrue(session.closed, "the session token provider was not closed");
+    }
+
+    @Test
+    void secretProvidersWiresSessionTokenAndFallsBackToUser(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path keyFile = dir.resolve("key");
+        java.nio.file.Path tokenFile = dir.resolve("token");
+        java.nio.file.Files.writeString(keyFile, SECRET_KEY);
+        java.nio.file.Files.writeString(tokenFile, "FwoGZXIvYXdzESessionToken");
+
+        try (SecretProvider provider = SecretProviders.of(java.util.Map.of(
+                "provider", "rds-iam",
+                "access-key-id", ACCESS_KEY,
+                "region", "eu-central-1",
+                "host", "db.example.com",
+                "port", "5432",
+                "user", "from-url-user",
+                "key-provider", "file",
+                "key-path", keyFile.toString(),
+                "session-token-provider", "file",
+                "session-token-path", tokenFile.toString()))) {
+            assertEquals(8192, provider.maxSecretLength());
+            String signed = read(provider);
+            assertTrue(signed.startsWith("db.example.com:5432/?Action=connect&DBUser=from-url-user"),
+                    signed);
+            assertTrue(signed.contains("&X-Amz-Security-Token=FwoGZXIvYXdzESessionToken&"),
+                    signed);
+        }
+    }
+
+    private static String token(SecretProvider key) {
+        return read(new RdsIamSecretProvider(
+                key, ACCESS_KEY, "eu-central-1", "db.example.com", 5432, "app", FIXED));
+    }
+
+    private static String read(SecretProvider provider) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment target = arena.allocate(provider.maxSecretLength());
             int length = provider.writeSecret(target);
@@ -110,6 +193,7 @@ class RdsIamSecretProviderTest {
     private static class PlainKey implements SecretProvider {
 
         private final String key;
+        boolean closed;
 
         PlainKey(String key) {
             this.key = key;
@@ -126,6 +210,11 @@ class RdsIamSecretProviderTest {
         @Override
         public int maxSecretLength() {
             return 256;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
         }
     }
 

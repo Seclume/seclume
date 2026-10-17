@@ -75,6 +75,33 @@ public final class TrustChoice {
         return new Choice(root, pin == null ? null : parsePin(pin));
     }
 
+    /** What a settings map chooses - for a secret provider that dials TLS itself. */
+    public static Choice of(java.util.Map<String, String> options) {
+        String root = mapOption(options, ROOT_CERT);
+        String pin = mapOption(options, PIN);
+        if (root == null && pin == null) {
+            return null;
+        }
+        try {
+            return new Choice(root, pin == null ? null : parsePin(pin));
+        } catch (SQLException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
+    }
+
+    private static String mapOption(java.util.Map<String, String> options, String name) {
+        if (options == null) {
+            return null;
+        }
+        for (java.util.Map.Entry<String, String> entry : options.entrySet()) {
+            if (entry.getKey().replace("-", "").equalsIgnoreCase(name)) {
+                String value = entry.getValue();
+                return value == null || value.isBlank() ? null : value.trim();
+            }
+        }
+        return null;
+    }
+
     /** Runs an open with {@code choice} for the handshakes on this thread; null changes nothing. */
     public static <T> T using(Choice choice, Transports.Opening<T> opening) throws SQLException {
         if (choice == null) {

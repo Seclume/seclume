@@ -115,7 +115,10 @@ public class SeclumeEnvironmentPostProcessor implements EnvironmentPostProcessor
 
     // ---------------------------------------------------------------- 1 ----
 
-    private void expandSecretUris(ConfigurableEnvironment environment) {
+    static void expandSecretUris(ConfigurableEnvironment environment) {
+        if (environment.getPropertySources().contains(EXPANDED)) {
+            return;
+        }
         Map<String, Object> expanded = new LinkedHashMap<>();
         for (String name : dataSourceNames(environment)) {
             String uri = environment.getProperty(PREFIX + name + URI_KEY);
@@ -151,8 +154,8 @@ public class SeclumeEnvironmentPostProcessor implements EnvironmentPostProcessor
         }
     }
 
-    private void rejectMixedConfiguration(ConfigurableEnvironment environment, String dataSource,
-            String base) {
+    private static void rejectMixedConfiguration(ConfigurableEnvironment environment,
+            String dataSource, String base) {
         List<String> both = new ArrayList<>();
         for (PropertySource<?> source : environment.getPropertySources()) {
             if (EXPANDED.equals(source.getName())
@@ -173,7 +176,7 @@ public class SeclumeEnvironmentPostProcessor implements EnvironmentPostProcessor
         }
     }
 
-    private Set<String> dataSourceNames(ConfigurableEnvironment environment) {
+    private static Set<String> dataSourceNames(ConfigurableEnvironment environment) {
         Set<String> names = new LinkedHashSet<>();
         for (PropertySource<?> source : environment.getPropertySources()) {
             if (!(source instanceof EnumerablePropertySource<?> enumerable)) {

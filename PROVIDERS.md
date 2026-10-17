@@ -123,13 +123,19 @@ in the configuration in the clear and there is no secret store either.
 
 ```properties
 provider=rds-iam
-access-key-id=AKIA...     region=eu-central-1
-host=db.abc.eu-central-1.rds.amazonaws.com    port=5432    db-user=app
-key-provider=file         key-path=/run/secrets/aws-secret-key
+region=eu-central-1
+credentials=instance                  # or container, web-identity; or a key pair:
+access-key-id=AKIA...
+key-provider=file                     key-path=/run/secrets/aws-secret-key
+session-token-provider=file           # optional, for temporary credentials
+session-token-path=/run/secrets/aws-session-token
+host=db.abc.eu-central-1.rds.amazonaws.com    port=5432    db-user=app   # default to the URL's
 ```
 
 No password exists anywhere: a fifteen-minute token is signed locally for each connection,
-and the AWS secret key never leaves native memory.
+and neither the AWS secret key nor the session token ever leaves native memory. `host`, `port`
+and `db-user` default to the connection's own URL and user; set them explicitly only when
+dialling through a local tunnel whose address differs from the RDS endpoint.
 
 ### Vault
 

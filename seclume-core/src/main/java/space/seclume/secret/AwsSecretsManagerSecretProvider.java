@@ -340,11 +340,17 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
     public void close() {
         try {
             if (awsSecretKey != null) {
-                awsSecretKey.close();       // null with an instance role
+                awsSecretKey.close();       // null with a workload role
             }
         } finally {
-            if (sessionToken != null) {
-                sessionToken.close();
+            try {
+                if (sessionToken != null) {
+                    sessionToken.close();
+                }
+            } finally {
+                if (role != null && role != AwsInstanceRole.shared()) {
+                    role.close();
+                }
             }
         }
     }

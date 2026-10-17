@@ -173,8 +173,10 @@ public class SeclumeProperties {
         private String command;
         /** Name of the {@code SecretProvider} bean for {@code provider: bean}. */
         private String bean;
-        /** Upper bound in bytes; no database password is longer. */
-        private int maxLength = 256;
+        /** Upper bound in bytes; null means the provider's own default (256, or 8192 for tokens). */
+        private Integer maxLength;
+        /** Additional provider settings, including prefixed ones such as {@code key-provider}. */
+        private Map<String, String> settings = new LinkedHashMap<>();
 
         public String getProvider() {
             return provider;
@@ -233,11 +235,23 @@ public class SeclumeProperties {
         }
 
         public int getMaxLength() {
-            return maxLength;
+            return maxLength != null ? maxLength : 256;
         }
 
         public void setMaxLength(int maxLength) {
             this.maxLength = maxLength;
+        }
+
+        Integer configuredMaxLength() {
+            return maxLength;
+        }
+
+        public Map<String, String> getSettings() {
+            return settings;
+        }
+
+        public void setSettings(Map<String, String> settings) {
+            this.settings = settings != null ? new LinkedHashMap<>(settings) : new LinkedHashMap<>();
         }
     }
 
