@@ -206,7 +206,7 @@ class FailoverWithoutClusterTest {
         // (The production consequence of that window is real and deliberate:
         // a connection returned 100 ms before its server went away does go
         // out unchecked, and the application sees the failure.)
-        settings.setValidationBypassWindow(Duration.ofNanos(1));
+        settings.setValidationBypassWindow(Duration.ZERO);
         return new SeclumePool(new UrlSource(url), settings);
     }
 
@@ -327,7 +327,9 @@ class FailoverWithoutClusterTest {
         private final ServerSocket listener;
         private final String host;
         private final int port;
+        private final Thread acceptor;
         private final List<Socket> open = new CopyOnWriteArrayList<>();
+        private final List<Thread> pumps = new CopyOnWriteArrayList<>();
         private volatile boolean stopped;
         private volatile int connections;
 
@@ -335,7 +337,7 @@ class FailoverWithoutClusterTest {
             this.listener = listener;
             this.host = host;
             this.port = port;
-            Thread.ofVirtual().name("front-accept").start(this::accept);
+            this.acceptor = Thread.ofVirtual().name("front-accept").start(this::accept);
         }
 
         static Front to(String host, int port) throws IOException {
@@ -360,23 +362,33 @@ class FailoverWithoutClusterTest {
                 } catch (IOException closed) {
                     return;
                 }
+                if (stopped) {
+                    close(from);
+                    return;
+                }
                 connections++;
                 open.add(from);
                 Socket to = new Socket();
+                open.add(to);
                 try {
                     to.connect(new InetSocketAddress(host, port), 5_000);
                 } catch (IOException unreachable) {
                     close(from);
+                    close(to);
                     continue;
                 }
-                open.add(to);
-                pump(from, to);
-                pump(to, from);
+                if (stopped) {
+                    close(from);
+                    close(to);
+                    return;
+                }
+                pumps.add(pump(from, to));
+                pumps.add(pump(to, from));
             }
         }
 
-        private void pump(Socket from, Socket to) {
-            Thread.ofVirtual().name("front-pump").start(() -> {
+        private Thread pump(Socket from, Socket to) {
+            return Thread.ofVirtual().name("front-pump").start(() -> {
                 byte[] buffer = new byte[16 * 1024];
                 try (InputStream in = from.getInputStream();
                         OutputStream out = to.getOutputStream()) {
@@ -402,7 +414,23 @@ class FailoverWithoutClusterTest {
             for (Socket socket : open) {
                 close(socket);
             }
+            join(acceptor);
+            for (Socket socket : open) {
+                close(socket);
+            }
             open.clear();
+            for (Thread pump : pumps) {
+                join(pump);
+            }
+            pumps.clear();
+        }
+
+        private static void join(Thread thread) {
+            try {
+                thread.join();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
 
         private static void close(Socket socket) {

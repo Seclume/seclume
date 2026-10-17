@@ -243,9 +243,28 @@ public class SeclumeAutoConfiguration {
         }
 
         private static SeclumeProperties bind(Environment environment) {
-            return org.springframework.boot.context.properties.bind.Binder.get(environment)
-                    .bind("seclume", SeclumeProperties.class)
+            if (environment instanceof ConfigurableEnvironment configurable) {
+                SeclumeEnvironmentPostProcessor.expandSecretUris(configurable);
+            }
+            org.springframework.boot.context.properties.bind.Binder binder =
+                    org.springframework.boot.context.properties.bind.Binder.get(environment);
+            SeclumeProperties properties = binder.bind("seclume", SeclumeProperties.class)
                     .orElseGet(SeclumeProperties::new);
+            for (Map.Entry<String, SeclumeProperties.DataSourceProperties> entry
+                    : properties.getDatasources().entrySet()) {
+                Map<String, String> raw = binder.bind(
+                        "seclume.datasources." + entry.getKey() + ".secret",
+                        org.springframework.boot.context.properties.bind.Bindable
+                                .mapOf(String.class, String.class))
+                        .orElse(Map.of());
+                if (!raw.isEmpty()) {
+                    Map<String, String> merged =
+                            new java.util.LinkedHashMap<>(raw);
+                    merged.putAll(entry.getValue().getSecret().getSettings());
+                    entry.getValue().getSecret().setSettings(merged);
+                }
+            }
+            return properties;
         }
 
         /**

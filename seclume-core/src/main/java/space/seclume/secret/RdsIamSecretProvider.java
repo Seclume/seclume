@@ -59,6 +59,7 @@ public final class RdsIamSecretProvider implements SecretProvider {
             DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
 
     private final SecretProvider awsSecretKey;
+    private final SecretProvider sessionToken;
     private final String accessKeyId;
     private final String region;
     private final String host;
@@ -77,13 +78,35 @@ public final class RdsIamSecretProvider implements SecretProvider {
      */
     public RdsIamSecretProvider(SecretProvider awsSecretKey, String accessKeyId, String region,
                                 String host, int port, String user) {
-        this(awsSecretKey, accessKeyId, region, host, port, user, Clock.systemUTC());
+        this(awsSecretKey, null, accessKeyId, region, host, port, user, Clock.systemUTC());
     }
 
     /** The same with a clock of its own - a signature is only reproducible with one. */
     public RdsIamSecretProvider(SecretProvider awsSecretKey, String accessKeyId, String region,
                                 String host, int port, String user, Clock clock) {
+        this(awsSecretKey, null, accessKeyId, region, host, port, user, clock);
+    }
+
+    /**
+     * The same with temporary credentials.
+     *
+     * @param sessionToken where the session token comes from, or {@code null}
+     *                     for a long-term access key. The token is signed in
+     *                     the canonical query as well as sent in the URL, and
+     *                     never becomes a Java object on either path
+     */
+    public RdsIamSecretProvider(SecretProvider awsSecretKey, SecretProvider sessionToken,
+                                String accessKeyId, String region, String host, int port,
+                                String user) {
+        this(awsSecretKey, sessionToken, accessKeyId, region, host, port, user, Clock.systemUTC());
+    }
+
+    /** The same with temporary credentials and a clock of its own - for tests. */
+    public RdsIamSecretProvider(SecretProvider awsSecretKey, SecretProvider sessionToken,
+                                String accessKeyId, String region, String host, int port,
+                                String user, Clock clock) {
         this.awsSecretKey = awsSecretKey;
+        this.sessionToken = sessionToken;
         this.accessKeyId = accessKeyId;
         this.region = region;
         this.host = host;
@@ -93,17 +116,24 @@ public final class RdsIamSecretProvider implements SecretProvider {
     }
 
     /**
-     * The same with the credentials of the EC2 instance's role - temporary
-     * ones, so the token carries their session token, signed and sent, and
-     * built in native memory like the rest.
+     * The same with the credentials of the workload's AWS role - EC2 instance
+     * role, ECS task or EKS Pod Identity container credentials, or EKS IRSA -
+     * temporary ones, so the token carries their session token, signed and
+     * sent, and built in native memory like the rest.
      */
     public RdsIamSecretProvider(AwsInstanceRole role, String region, String host, int port,
                                 String user) {
-        this(null, null, region, host, port, user, Clock.systemUTC());
+        this(role, region, host, port, user, Clock.systemUTC());
+    }
+
+    /** The same with a workload role and a clock of its own - for tests. */
+    public RdsIamSecretProvider(AwsInstanceRole role, String region, String host, int port,
+                                String user, Clock clock) {
+        this(null, null, null, region, host, port, user, clock);
         this.role = role;
     }
 
-    /** The instance role the credentials come from, or null for a key pair. */
+    /** The workload role the credentials come from, or null for a key pair. */
     private AwsInstanceRole role;
 
     @Override
@@ -111,7 +141,7 @@ public final class RdsIamSecretProvider implements SecretProvider {
         if (role != null) {
             return role.use((id, key, session) -> token(target, id, key, session));
         }
-        return token(target, accessKeyId, awsSecretKey, null);
+        return token(target, accessKeyId, awsSecretKey, sessionToken);
     }
 
     /**
@@ -176,7 +206,26 @@ public final class RdsIamSecretProvider implements SecretProvider {
      */
     @Override
     public int maxSecretLength() {
-        return role != null ? 8192 : 1024;
+        return role != null || sessionToken != null ? 8192 : 1024;
+    }
+
+    @Override
+    public void close() {
+        try {
+            if (awsSecretKey != null) {
+                awsSecretKey.close();
+            }
+        } finally {
+            try {
+                if (sessionToken != null) {
+                    sessionToken.close();
+                }
+            } finally {
+                if (role != null && role != AwsInstanceRole.shared()) {
+                    role.close();
+                }
+            }
+        }
     }
 
     /**

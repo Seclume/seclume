@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -55,6 +56,47 @@ class DriverDiscoveryTest {
         assertThrows(SQLException.class,
                 () -> DriverManager.getDriver("jdbc:seclume:postgresql://host/db"),
                 "we answered a URL that belongs to somebody else");
+    }
+
+    @Test
+    void rdsIamUsesTheUrlHostPortAndUserUnlessOverridden(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path key = dir.resolve("aws-key");
+        java.nio.file.Files.writeString(key, "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY");
+
+        var direct = MyUrl.settings(
+                "jdbc:seclume:mysql://mydb.cluster.eu-central-1.rds.amazonaws.com:3306/app"
+                + "?user=app_user&provider=rds-iam&region=eu-central-1"
+                + "&access-key-id=AKIAIOSFODNN7EXAMPLE&key-provider=file&key-path=" + key,
+                null);
+        String directToken = readSecret(direct.secret());
+        assertTrue(directToken.startsWith(
+                "mydb.cluster.eu-central-1.rds.amazonaws.com:3306/?Action=connect&DBUser=app_user"),
+                directToken);
+
+        var tunneled = MyUrl.settings(
+                "jdbc:seclume:mysql://127.0.0.1:13306/app"
+                + "?user=app_user&provider=rds-iam&region=eu-central-1"
+                + "&host=mydb.cluster.eu-central-1.rds.amazonaws.com&port=3306&db-user=iam_user"
+                + "&access-key-id=AKIAIOSFODNN7EXAMPLE&key-provider=file&key-path=" + key,
+                null);
+        assertEquals("127.0.0.1", tunneled.host());
+        assertEquals(13306, tunneled.port());
+        String tunneledToken = readSecret(tunneled.secret());
+        assertTrue(tunneledToken.startsWith(
+                "mydb.cluster.eu-central-1.rds.amazonaws.com:3306/?Action=connect&DBUser=iam_user"),
+                tunneledToken);
+    }
+
+    private static String readSecret(space.seclume.secret.SecretProvider provider) {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment seg = arena.allocate(provider.maxSecretLength());
+            int n = provider.writeSecret(seg);
+            byte[] bytes = new byte[n];
+            java.lang.foreign.MemorySegment.copy(
+                    seg, java.lang.foreign.ValueLayout.JAVA_BYTE, 0, bytes, 0, n);
+            return new String(bytes, StandardCharsets.US_ASCII);
+        }
     }
 
     /** The class name as it actually ships, read from the resource. */

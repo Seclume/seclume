@@ -46,12 +46,19 @@ final class SecretProviderFactory {
      *         driver itself brings along how it authenticates
      */
     SecretProvider create(String name, SeclumeProperties.Secret secret) {
-        String provider = secret.getProvider();
+        return create(name, secret, null, null);
+    }
+
+    SecretProvider create(String name, SeclumeProperties.Secret secret, String url, String user) {
+        Map<String, String> settings = settings(secret, url, user);
+        String provider = settings.get("provider");
         if (provider == null || provider.isBlank()) {
             throw new IllegalStateException(
                     "seclume.datasources." + name + ".secret.provider is missing - set it to "
                     + "one of file, env-file, unix-socket, process, dpapi, credential-manager, "
-                    + "bean, integrated");
+                    + "rds-iam, encrypted, vault, aws-secrets-manager, azure-key-vault, "
+                    + "gcp-secret-manager, azure-managed-identity, gcp-metadata, bean, "
+                    + "integrated, none");
         }
         String kind = provider.trim().toLowerCase(Locale.ROOT);
         return switch (kind) {
@@ -59,14 +66,17 @@ final class SecretProviderFactory {
             case "bean" -> fromBean(name, secret);
             case "dpapi", "credential-manager", "credentialmanager" -> {
                 requireWindows(name, kind);
-                yield SecretProviders.of(settings(secret));
+                yield SecretProviders.of(settings);
             }
-            default -> SecretProviders.of(settings(secret));
+            default -> SecretProviders.of(settings);
         };
     }
 
     private SecretProvider fromBean(String name, SeclumeProperties.Secret secret) {
         String beanName = secret.getBean();
+        if (beanName == null || beanName.isBlank()) {
+            beanName = secret.getSettings().get("bean");
+        }
         if (beanName == null || beanName.isBlank()) {
             throw new IllegalStateException(
                     "seclume.datasources." + name + ".secret.provider is 'bean', so "
@@ -93,16 +103,58 @@ final class SecretProviderFactory {
     }
 
     /** Translates the Spring fields into the keys {@link SecretProviders} knows. */
-    private static Map<String, String> settings(SeclumeProperties.Secret secret) {
+    private static Map<String, String> settings(SeclumeProperties.Secret secret, String url,
+                                                String user) {
         Map<String, String> settings = new LinkedHashMap<>();
+        if (secret.getSettings() != null) {
+            for (Map.Entry<String, String> entry : secret.getSettings().entrySet()) {
+                if (!"bean".equalsIgnoreCase(entry.getKey())) {
+                    put(settings, entry.getKey(), entry.getValue());
+                }
+            }
+        }
         put(settings, "provider", secret.getProvider());
         put(settings, "path", secret.getPath());
         put(settings, "key", secret.getKey());
         put(settings, "target", secret.getTarget());
         put(settings, "entropy", secret.getEntropy());
         put(settings, "command", secret.getCommand());
-        settings.put("max-length", String.valueOf(secret.getMaxLength()));
+        if (secret.configuredMaxLength() != null) {
+            settings.put("max-length", String.valueOf(secret.configuredMaxLength()));
+        }
+        addUrlDefaults(settings, url, user);
         return settings;
+    }
+
+    private static void addUrlDefaults(Map<String, String> settings, String url, String user) {
+        if (user != null && !user.isBlank()) {
+            settings.putIfAbsent("user", user);
+        }
+        if (url == null || url.isBlank()) {
+            return;
+        }
+        String prefix;
+        int defaultPort;
+        if (url.startsWith("jdbc:seclume:postgresql:")) {
+            prefix = "jdbc:seclume:postgresql:";
+            defaultPort = 5432;
+        } else if (url.startsWith("jdbc:seclume:mysql:")) {
+            prefix = "jdbc:seclume:mysql:";
+            defaultPort = 3306;
+        } else if (url.startsWith("jdbc:seclume:mariadb:")) {
+            prefix = "jdbc:seclume:mariadb:";
+            defaultPort = 3306;
+        } else {
+            return;
+        }
+        try {
+            space.seclume.internal.JdbcUrl.Parsed parsed =
+                    space.seclume.internal.JdbcUrl.parse(url, null, prefix, defaultPort);
+            settings.putIfAbsent("host", parsed.host());
+            settings.putIfAbsent("port", String.valueOf(parsed.port()));
+        } catch (IllegalArgumentException ignored) {
+            // Reported by SeclumeDataSources when building the driver DataSource.
+        }
     }
 
     private static void put(Map<String, String> settings, String key, String value) {

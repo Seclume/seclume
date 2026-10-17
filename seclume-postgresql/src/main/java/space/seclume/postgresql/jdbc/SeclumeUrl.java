@@ -52,7 +52,10 @@ final class SeclumeUrl {
 
         SecretProvider secret;
         try {
-            secret = SecretProviders.of(new HashMap<>(parsed.options()));
+            HashMap<String, String> secretOptions = new HashMap<>(parsed.options());
+            secretOptions.putIfAbsent("host", parsed.host());
+            secretOptions.putIfAbsent("port", String.valueOf(parsed.port()));
+            secret = SecretProviders.of(secretOptions);
         } catch (IllegalArgumentException e) {
             // The DriverManager only passes SQLException on; the caller still
             // has to be able to read the reason.
