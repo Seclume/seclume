@@ -20,7 +20,7 @@
     memory as it is encrypted.</description>
 
   <properties>
-    <kafka.version>4.3.1</kafka.version>
+    <kafka.version>4.4.0</kafka.version>
   </properties>
 
   <dependencies>
