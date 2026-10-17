@@ -69,7 +69,7 @@ final class NKeyOff {
      */
     static byte[] sign(MemorySegment source, int length, byte[] nonce) {
         if (nonce == null) {
-            throw new IllegalArgumentException("nonce is null");
+            throw new IllegalArgumentException("the NATS server challenge nonce cannot be null");
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment seed = arena.allocate(SEED_LENGTH);

@@ -134,7 +134,9 @@ public final class SeclumeNats {
         switch (settings.mode) {
             case PASSWORD -> builder.userInfo(settings.user.toCharArray(), PLACEHOLDER_CHARS.clone());
             case TOKEN -> builder.token(PLACEHOLDER_CHARS.clone());
-            case NKEY, CREDS -> builder.authHandler(
+            case NKEY -> builder.authHandler(
+                    new SeclumeNatsAuthHandler(settings.secret, null, settings.target()));
+            case CREDS -> builder.authHandler(
                     new SeclumeNatsAuthHandler(settings.secret, null, settings.target()));
         }
         return builder;

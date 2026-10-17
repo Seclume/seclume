@@ -2,7 +2,6 @@ package space.seclume.nats;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -12,6 +11,7 @@ import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -60,8 +60,9 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
     private volatile TlsLayer tls;
     private volatile boolean closed;
 
-    private boolean handshakeDone;
-    private final ByteArrayOutputStream handshakeBuffer = new ByteArrayOutputStream();
+    private volatile boolean handshakeDone;
+    private byte[] handshakeLine = new byte[512];
+    private int handshakeLen;
 
     /** Instantiated reflectively by {@link Options#buildDataPort()}. */
     public SeclumeNatsDataPort() {
@@ -89,7 +90,6 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
         }
         this.transport = new PlainSocketTransport(this.socket, this.in, this.out);
         this.closed = false;
-        this.handshakeBuffer.reset();
         this.handshakeDone = settings == null
                 || (settings.mode != NatsSettings.AuthMode.PASSWORD
                     && settings.mode != NatsSettings.AuthMode.TOKEN);
@@ -153,14 +153,17 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
         int at = 0;
         while (at < toWrite && !handshakeDone) {
             byte b = src[at++];
-            handshakeBuffer.write(b);
-            if (handshakeBuffer.size() > MAX_HANDSHAKE_BYTES) {
+            if (handshakeLen >= MAX_HANDSHAKE_BYTES) {
                 throw new IOException("a NATS handshake line longer than "
                         + MAX_HANDSHAKE_BYTES + " bytes");
             }
+            if (handshakeLen == handshakeLine.length) {
+                handshakeLine = Arrays.copyOf(handshakeLine, handshakeLine.length * 2);
+            }
+            handshakeLine[handshakeLen++] = b;
             if (b == '\n') {
-                byte[] line = handshakeBuffer.toByteArray();
-                handshakeBuffer.reset();
+                byte[] line = Arrays.copyOf(handshakeLine, handshakeLen);
+                handshakeLen = 0;
                 if (startsWithConnect(line)) {
                     rewriteAndSendConnect(line);
                     handshakeDone = true;

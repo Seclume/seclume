@@ -157,60 +157,60 @@ public final class FakeNatsServerMain {
 
             try (SSLSocket tls = (SSLSocket) sslFactory.createSocket(
                     socket, "localhost", socket.getPort(), true)) {
+                javax.net.ssl.SSLParameters sslParams = tls.getSSLParameters();
+                sslParams.setEndpointIdentificationAlgorithm("HTTPS");
+                tls.setSSLParameters(sslParams);
                 tls.setUseClientMode(false);
                 tls.setEnabledProtocols(new String[] {"TLSv1.3"});
                 tls.startHandshake();
 
-                BufferedReader in = new BufferedReader(
+                try (BufferedReader in = new BufferedReader(
                         new InputStreamReader(tls.getInputStream(), StandardCharsets.UTF_8));
-                OutputStream out = tls.getOutputStream();
+                     OutputStream out = tls.getOutputStream()) {
 
-                String connectLine = in.readLine();
-                if (connectLine == null || !connectLine.startsWith("CONNECT ")) {
-                    return;
-                }
-                String json = connectLine.substring("CONNECT ".length()).trim();
-                String error = verifyAuth(json, nonce, nkey, nkeyPub, credsKey, credsPub,
-                        expectedPassword, expectedToken);
-                if (error != null) {
-                    out.write(("-ERR '" + error + "'\r\n").getBytes(StandardCharsets.US_ASCII));
-                    out.flush();
-                    return;
-                }
-                authenticatedConnections.incrementAndGet();
-
-                String activeSub = null;
-                String activeSid = "1";
-                String line;
-                while ((line = in.readLine()) != null) {
-                    if (line.equals("PING")) {
-                        out.write("PONG\r\n".getBytes(StandardCharsets.US_ASCII));
+                    String connectLine = in.readLine();
+                    String error = inspectFrame(connectLine, nonce, nkey, nkeyPub,
+                            credsKey, credsPub, expectedPassword, expectedToken);
+                    if (error != null) {
+                        out.write(("-ERR '" + error + "'\r\n").getBytes(StandardCharsets.US_ASCII));
                         out.flush();
-                    } else if (line.startsWith("SUB ")) {
-                        String[] parts = line.split(" ");
-                        if (parts.length >= 3) {
-                            activeSub = parts[1];
-                            activeSid = parts[parts.length - 1];
-                        }
-                    } else if (line.startsWith("PUB ")) {
-                        String[] parts = line.split(" ");
-                        String subject = parts[1];
-                        int bytes = Integer.parseInt(parts[parts.length - 1]);
-                        char[] payload = new char[bytes];
-                        int read = 0;
-                        while (read < bytes) {
-                            int n = in.read(payload, read, bytes - read);
-                            if (n < 0) {
-                                return;
-                            }
-                            read += n;
-                        }
-                        in.readLine(); // trailing CRLF of PUB payload
-                        if (activeSub != null && subject.equals(activeSub)) {
-                            String msg = "MSG " + subject + " " + activeSid + " " + bytes + "\r\n"
-                                    + new String(payload) + "\r\n";
-                            out.write(msg.getBytes(StandardCharsets.UTF_8));
+                        return;
+                    }
+                    authenticatedConnections.incrementAndGet();
+
+                    String activeSub = null;
+                    String activeSid = "1";
+                    String line;
+                    while ((line = in.readLine()) != null) {
+                        if (line.equals("PING")) {
+                            out.write("PONG\r\n".getBytes(StandardCharsets.US_ASCII));
                             out.flush();
+                        } else if (line.startsWith("SUB ")) {
+                            String[] parts = line.split(" ");
+                            if (parts.length >= 3) {
+                                activeSub = parts[1];
+                                activeSid = parts[parts.length - 1];
+                            }
+                        } else if (line.startsWith("PUB ")) {
+                            String[] parts = line.split(" ");
+                            String subject = parts[1];
+                            int bytes = Integer.parseInt(parts[parts.length - 1]);
+                            char[] payload = new char[bytes];
+                            int read = 0;
+                            while (read < bytes) {
+                                int n = in.read(payload, read, bytes - read);
+                                if (n < 0) {
+                                    return;
+                                }
+                                read += n;
+                            }
+                            in.readLine(); // trailing CRLF of PUB payload
+                            if (activeSub != null && subject.equals(activeSub)) {
+                                String msg = "MSG " + subject + " " + activeSid + " " + bytes + "\r\n"
+                                        + new String(payload) + "\r\n";
+                                out.write(msg.getBytes(StandardCharsets.UTF_8));
+                                out.flush();
+                            }
                         }
                     }
                 }
@@ -220,10 +220,14 @@ public final class FakeNatsServerMain {
         }
     }
 
-    private static String verifyAuth(String json, String nonce,
-                                     NKey nkey, String nkeyPub,
-                                     NKey credsKey, String credsPub,
-                                     String expectedPassword, String expectedToken) {
+    private static String inspectFrame(String connectLine, String nonce,
+                                       NKey nkey, String nkeyPub,
+                                       NKey credsKey, String credsPub,
+                                       String expectedPassword, String expectedToken) {
+        if (connectLine == null || !connectLine.startsWith("CONNECT ")) {
+            return "Protocol Violation";
+        }
+        String json = connectLine.substring("CONNECT ".length()).trim();
         try {
             String nkeyField = jsonField(json, "nkey");
             if (nkeyField != null && !nkeyField.isEmpty()) {
