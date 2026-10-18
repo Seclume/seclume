@@ -680,6 +680,20 @@ public final class PgChannel implements AutoCloseable {
     }
 
     /**
+     * Whether something has arrived that is not read yet - in the buffer, in
+     * TLS or on the socket - looked at without reading. Unknown counts as
+     * yes. A hint for the pool, which prefers a connection whose reset answer
+     * is there over one it would have to wait for.
+     */
+    public boolean hasInput() {
+        if (in.position() < filled) {
+            return true;
+        }
+        int waiting = tls != null ? tls.bytesWaiting() : channel.bytesWaiting();
+        return waiting != 0;
+    }
+
+    /**
      * Whether this channel has been given up in favour of somebody else.
      *
      * <p>See {@link #release()}: the transport lives on, this object does not.

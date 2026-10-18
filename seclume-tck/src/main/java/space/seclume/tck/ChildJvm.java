@@ -25,11 +25,17 @@ public final class ChildJvm {
 
     public static Result run(Class<?> mainClass, List<String> arguments, long timeoutSeconds)
             throws IOException, InterruptedException {
+        return run(mainClass, List.of(), arguments, timeoutSeconds);
+    }
+
+    public static Result run(Class<?> mainClass, List<String> jvmArguments, List<String> arguments,
+                             long timeoutSeconds) throws IOException, InterruptedException {
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         command.add("--enable-native-access=ALL-UNNAMED");
         command.add("-cp");
         command.add(System.getProperty("java.class.path"));
+        command.addAll(jvmArguments);
         // The probe has to reach the same server as whoever started it. Those
         // properties are set on the command line of the build, and a child
         // process inherits nothing of that: without this the probe quietly

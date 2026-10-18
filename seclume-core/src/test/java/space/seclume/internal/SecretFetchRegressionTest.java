@@ -138,4 +138,37 @@ class SecretFetchRegressionTest {
                     arena.allocate(64)));
         }
     }
+
+    /**
+     * A token with a line break in it - a token file with a second line -
+     * would start a header of its own. Refused before anything is sent, and
+     * the message names the header, not the token.
+     */
+    @Test
+    void aSecretHeaderWithALineBreakIsRefusedBeforeAnythingIsSent() throws IOException {
+        ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        try (server; Arena arena = Arena.ofConfined()) {
+            byte[] token = "abc\r\nX-Evil: 1".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+            MemorySegment value = arena.allocate(token.length);
+            MemorySegment.copy(MemorySegment.ofArray(token), 0, value, 0, token.length);
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> SecretFetch.sendLinkLocal("127.0.0.1", server.getLocalPort(), 2000,
+                            "GET", "/", Map.of(), java.util.List.of(
+                                    new SecretFetch.SecretHeader("X-Token", value, token.length)),
+                            arena.allocate(64)));
+            org.junit.jupiter.api.Assertions.assertFalse(refused.getMessage().contains("abc"),
+                    "the message shows the token: " + refused.getMessage());
+        }
+    }
+
+    @Test
+    void aPathWithALineBreakIsRefused() throws IOException {
+        ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        try (server; Arena arena = Arena.ofConfined()) {
+            assertThrows(IllegalArgumentException.class, () -> SecretFetch.sendLinkLocal(
+                    "127.0.0.1", server.getLocalPort(), 2000, "GET",
+                    "/x HTTP/1.1\r\nHost: elsewhere\r\n\r\nGET /y", Map.of(),
+                    java.util.List.of(), arena.allocate(64)));
+        }
+    }
 }

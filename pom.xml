@@ -70,8 +70,10 @@
     <module>seclume-sqlserver</module>
     <module>seclume-oracle</module>
     <module>seclume-pool</module>
+    <module>seclume-r2dbc</module>
     <module>seclume-crac</module>
     <module>seclume-kafka</module>
+    <module>seclume-mongodb</module>
     <module>seclume-redis</module>
     <module>seclume-mail</module>
     <module>seclume-http</module>

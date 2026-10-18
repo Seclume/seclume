@@ -188,6 +188,32 @@ class LocalOracleLobTest {
         }
     }
 
+    /**
+     * getObject on a LOB column is a Blob or a Clob, as getColumnClassName
+     * says. It answered a BLOB with "a BLOB is not text" - found by R2DBC's
+     * test kit, which reads a row without naming a type.
+     */
+    @Test
+    void getObjectOnALobIsTheLob() throws Exception {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            createAndFill(connection, "lob text", "0A0B0C");
+            try (Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery("select c, b from zl_lob")) {
+                assertTrue(rows.next());
+                Object text = rows.getObject(1);
+                Object bytes = rows.getObject(2);
+                assertTrue(text instanceof java.sql.Clob, String.valueOf(text));
+                assertTrue(bytes instanceof java.sql.Blob, String.valueOf(bytes));
+                java.sql.Clob clob = (java.sql.Clob) text;
+                java.sql.Blob blob = (java.sql.Blob) bytes;
+                assertEquals("lob text", clob.getSubString(1, (int) clob.length()));
+                assertArrayEquals(new byte[] {0x0a, 0x0b, 0x0c}, blob.getBytes(1, (int) blob.length()));
+                assertEquals(rows.getMetaData().getColumnClassName(2), "java.sql.Blob");
+            }
+        }
+    }
+
     /** A LOB that is there but empty, and one that is not there at all. */
     @Test
     void tellsEmptyFromNull() throws Exception {

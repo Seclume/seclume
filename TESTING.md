@@ -738,6 +738,69 @@ SSL_CLIENT_AUTHENTICATION = FALSE
 `lsnrctl stop && lsnrctl start`, then `alter system register;` as sysdba so the services show
 up. `-Dseclume.oracle.tcps.port=` moves it; without a listener the class skips and says so.
 
+## Proving the promises, not only the paths
+
+The tests above check that the code does what it should. These check the promises seclume
+makes, each with a negative control: the same check run against something deliberately
+broken has to fail, or a green run only means that the check cannot see.
+
+**The pool, as a state machine.** `PoolStateMachineTest` drives a pool through random,
+reproducible sequences: borrows, returns, statements left open, broken connections, resets
+answered late or refused, suspend and resume. After every step it checks that no connection
+is lent while its reset is unconfirmed, that one whose reset was refused is never lent again,
+that none is lent twice at once, that `activeCount()` matches the handles held, and that
+closing the pool closes everything. `ConcurrentPoolStateMachineTest` does the same with four
+borrowers and a thread answering and refusing resets, and closes the pool mid-run. A failure
+names the seed. Controls: reading no reset answer before lending fails 150 of 150 sequences;
+ignoring a refused reset fails 109 of 150; closing a session under a borrower reading its
+reset answer fails 160 of 200 concurrent ones. The CI runs 150 and 25 sequences, the nightly
+fuzz job 20 000 and 2 000.
+
+**No password anywhere in the process.** `ProcessMemoryTest` (Linux) starts a second JVM
+that logs in to PostgreSQL over TLS with SCRAM, runs a query, and then waits while this test
+reads every readable region of its memory through `/proc/<pid>/mem` - heap, native memory,
+OpenSSL's allocations, stacks, about 400 MB - and searches it for the password in UTF-8 and
+UTF-16. With the connections closed and with one still open, it finds nothing. Control: a
+child that keeps the password as a `String` is found. The CI's PostgreSQL job runs it
+against a server with TLS of its own and fails if it was skipped.
+
+**An APM agent in the process.** Agents like OpenTelemetry's instrument JDBC by rewriting
+bytecode and record what passes through it. `ApmAgentHeapDumpTest` starts a JVM with the
+real OpenTelemetry Java agent, has it export every span, logs in to PostgreSQL six times and
+runs prepared statements, then searches a heap dump for the password: nothing. The test
+fails, rather than passing quietly, if the agent produced no JDBC span - an agent that did
+not run proves nothing. Control: a probe that reads the password into a `String` is found.
+
+**The own TLS against other people's.** `TlsInteropTest` connects to servers started by
+`tls-interop/run.sh`: OpenSSL, GnuTLS, Go's crypto/tls, rustls and the JDK's JSSE, TLS 1.3
+and 1.2, ECDSA and RSA keys, P-256, P-384 (a HelloRetryRequest), X25519 and, with OpenSSL 3.5,
+X25519MLKEM768 - each handshake verified against a CA, not pinned. And servers that must be
+refused, each for its own reason: an expired certificate, the wrong name, a stranger's CA,
+TLS 1.1, static RSA, CBC, ChaCha20 only. The `tls-interop` workflow runs it weekly and on
+every change to the TLS code, and fails if an implementation is missing - the post-quantum
+group in a Fedora container of its own, since the Ubuntu runner's OpenSSL 3.0 has no ML-KEM.
+
+**Constant time.** `ConstantTimeLeakageTest` times what handles secrets the way dudect does:
+two classes of input interleaved at random, prepared outside the clock in the same memory,
+the slowest samples cropped, Welch's t-test between them, a leak beyond |t| = 4.5. Measured:
+`ConstantTime.equals` (the SCRAM server proof, TLS Finished) for a difference in the first
+against the last byte, the Java AES-GCM refusing a tag forged in its first against its last
+byte, and the Java AES on a fixed against random blocks. Control: a comparison that returns
+at the first difference reaches |t| around 1 500. Too noisy for every build, so it runs with
+`-Dseclume.constantTime=true` and in the nightly fuzz job. Its first versions found three
+leaks, all of them in the test: random input made while the clock ran, two buffers at two
+addresses, and a store to one cache line or another just before the measurement.
+
+**A fresh Oracle session on the same connection.** `LocalLogInAgainTest` sets every kind of
+state an Oracle session carries - client identifier, application context, package variable,
+NLS, current schema, roles, temporary table rows - and checks each at its default after the
+pool's reset, a logoff and login on the same connection; and that an open transaction is
+rolled back, not committed by the logoff.
+
+**The native PBKDF2 against the own.** `NativePbkdf2Test` derives the same keys through
+OpenSSL or CNG and through seclume's own code, for SHA-1, SHA-256, SHA-384 and SHA-512, one
+round and 4096, shorter and longer than one hash.
+
 ## What needs a server
 
 Every test class whose name begins with `Local`, plus the Spring Data suite. They look for two

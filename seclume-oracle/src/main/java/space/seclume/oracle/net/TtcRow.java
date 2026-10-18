@@ -140,6 +140,51 @@ public final class TtcRow {
         return carried[index] ? carry : in;
     }
 
+    /**
+     * Takes over the carry buffers of the row before, wiped, instead of
+     * making new ones.
+     *
+     * <p>Every answer brings a row of its own, and each buffer is native
+     * memory in a shared arena: closing one stops every thread of the JVM for
+     * a moment (a handshake), and Oracle's prepared query paid that once per
+     * execution - a third of its time on the client. The values of the row
+     * before are of no use to this one, so they are zeroed on the way over;
+     * nothing of one answer is left for the next to see.
+     */
+    public void adoptBuffers(TtcRow before) {
+        if (carry != null || spare != null || before == this) {
+            return;
+        }
+        carry = before.carry;
+        spare = before.spare;
+        before.carry = null;
+        before.spare = null;
+        if (carry != null) {
+            carry.clear();
+        }
+        if (spare != null) {
+            spare.clear();
+        }
+    }
+
+    /** Zeroes what was carried over; the buffers stay, for {@link #adoptBuffers}. */
+    public void wipeCarry() {
+        if (carry != null) {
+            carry.clear();
+        }
+        if (spare != null) {
+            spare.clear();
+        }
+        // The cells keep pointing at the carry buffer: a row read after this,
+        // by mistake, finds zeroes there - not another answer's bytes in the
+        // receive buffer.
+    }
+
+    /** The buffer the carried values are in, or null - for the tests. */
+    WireBuffer carryBuffer() {
+        return carry;
+    }
+
     /** Lets go of the carry buffer; the row is finished with. */
     public void release() {
         if (carry != null) {

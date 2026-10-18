@@ -1,5 +1,11 @@
 package space.seclume.oracle.jdbc;
 
+import java.sql.SQLTimeoutException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import space.seclume.Pipelined;
 import space.seclume.RoundTrips;
 import space.seclume.Secured;
@@ -147,14 +153,111 @@ public final class OraConnection implements Connection, space.seclume.internal.j
         return sessionState.changed();
     }
 
-    /** Oracle sessions require retirement: arbitrary application contexts cannot be reset. */
+    /**
+     * A new session on the same connection - see {@link OracleSession#logInAgain}.
+     *
+     * <p>Oracle has no complete reset: a procedure can set application
+     * contexts or ALTER SESSION through dynamic SQL, and neither package
+     * reinitialisation nor {@code RESET_STATE} undoes all of it. A new
+     * session does. It starts here, on a thread of its own, and is waited
+     * for before the connection is used again: by the pool before it lends
+     * it ({@link #settleReset}), by anything else first ({@link #checkOpen}). Where the session cannot log in again - a
+     * Kerberos or Windows login, a session that was handed over - this says
+     * no and the pool closes the connection, as it did for every one before.
+     */
     @Override
     public boolean resetSessionState() throws SQLException {
         checkOpen();
-        // A procedure can change application contexts or ALTER SESSION through
-        // dynamic SQL. Package reinitialization cannot restore all of that.
-        // Retire the physical session until a complete server reset is supported.
-        return false;
+        if (!autoCommit || !session.canLogInAgain()) {
+            return false;
+        }
+        for (OraStatement statement : List.copyOf(open)) {
+            statement.close();
+        }
+        open.clear();
+        sessionState.clear();
+        savepointCounter = 0;
+        loginOwed = true;
+        // Started now, on a thread of its own: a login is milliseconds of
+        // PBKDF2 and two round trips, and the pool takes a connection whose
+        // login is done before one whose is not (resetAnswered). Nobody else
+        // touches the session meanwhile - the pool holds it, and every use of
+        // this connection waits for the login first (checkOpen).
+        CompletableFuture<Void> login = new CompletableFuture<>();
+        relogin = login;
+        Thread.ofVirtual().name("seclume-oracle-login").start(() -> {
+            try {
+                session.logInAgain();
+                login.complete(null);
+            } catch (SQLException | RuntimeException e) {
+                login.completeExceptionally(e);
+            }
+        });
+        return true;
+    }
+
+    /** Whether {@link #resetSessionState} promised a new session not yet made. */
+    private volatile boolean loginOwed;
+    /** The login on its way, while one is owed. */
+    private volatile CompletableFuture<Void> relogin;
+    /** The longest a borrower waits for a login that is on its way. */
+    private static final long LOGIN_WAIT_SECONDS = 30;
+
+    @Override
+    public boolean resetOwed() {
+        return loginOwed;
+    }
+
+    @Override
+    public boolean resetAnswered() {
+        CompletableFuture<Void> login = relogin;
+        return !loginOwed || login == null || login.isDone();
+    }
+
+    /**
+     * Waits for the login started at the return, and gives the new session
+     * what this connection was set to: a session starts at READ COMMITTED and
+     * with read-write transactions. A login that failed, did not finish in
+     * time, or a connection closed meanwhile is a failure: the connection is
+     * closed and not lent.
+     */
+    @Override
+    public void settleReset() throws SQLException {
+        if (!loginOwed) {
+            return;
+        }
+        loginOwed = false;
+        CompletableFuture<Void> login = relogin;
+        relogin = null;
+        try {
+            if (login != null) {
+                login.get(LOGIN_WAIT_SECONDS, TimeUnit.SECONDS);
+            }
+        } catch (ExecutionException e) {
+            close();
+            throw e.getCause() instanceof SQLException failure ? failure
+                    : new SQLException("logging in again failed", "08006", e.getCause());
+        } catch (TimeoutException e) {
+            close();
+            throw new SQLTimeoutException("logging in again took more than "
+                    + LOGIN_WAIT_SECONDS + " s - the connection is closed", "08006", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            close();
+            throw new SQLException("interrupted while logging in again", "08006", e);
+        }
+        if (closed || !session.isOpen()) {
+            throw new SQLException("the connection was closed while it logged in again",
+                    "08003");
+        }
+        int wanted = isolation;
+        isolation = TRANSACTION_READ_COMMITTED;
+        if (wanted != isolation) {
+            setTransactionIsolation(wanted);
+        }
+        if (readOnly) {
+            session.setReadOnlyTransactions(true);
+        }
     }
 
     private final OracleSession session;
@@ -641,6 +744,9 @@ public final class OraConnection implements Connection, space.seclume.internal.j
             return false;
         }
         try {
+            if (loginOwed) {
+                settleReset();
+            }
             session.query("select 1 from dual", null);
             return true;
         } catch (SQLException e) {
@@ -664,6 +770,18 @@ public final class OraConnection implements Connection, space.seclume.internal.j
     public void close() {
         if (!closed) {
             closed = true;
+            // A login on its way finishes first: the session is not taken
+            // apart under the thread that is using it.
+            CompletableFuture<Void> login = relogin;
+            if (login != null) {
+                try {
+                    login.get(LOGIN_WAIT_SECONDS, TimeUnit.SECONDS);
+                } catch (ExecutionException | TimeoutException ignored) {
+                    // It failed or hangs; the connection is closed either way.
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             for (OraStatement statement : List.copyOf(open)) {
                 statement.close();
             }
@@ -686,6 +804,9 @@ public final class OraConnection implements Connection, space.seclume.internal.j
     void checkOpen() throws SQLException {
         if (isClosed()) {
             throw new SQLException("this connection is closed", "08003");
+        }
+        if (loginOwed) {
+            settleReset();
         }
     }
 

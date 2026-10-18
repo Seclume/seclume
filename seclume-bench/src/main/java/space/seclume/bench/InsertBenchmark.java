@@ -68,6 +68,12 @@ public class InsertBenchmark {
             if (rewrite && source instanceof space.seclume.mysql.jdbc.MyDataSource mysql) {
                 mysql.setRewriteBatchedInserts(true);
             }
+            // PostgreSQL's was left out when it came (0.12.0), and the rewrite
+            // row compared pgjdbc rewriting with seclume not rewriting.
+            if (rewrite && source
+                    instanceof space.seclume.postgresql.jdbc.SeclumeDataSource postgres) {
+                postgres.setRewriteBatchedInserts(true);
+            }
             connection = source.getConnection();
         } else {
             java.util.Properties properties = database.vendorProperties();

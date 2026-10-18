@@ -150,11 +150,10 @@ class LocalRewriteBatchTest {
     }
 
     /**
-     * 300 rows, a duplicate in the block of 8 (rows 288 to 295): the two
-     * blocks of 128 and the block of 32 went in groups of their own and
-     * landed; the block of 8 failed as a whole - PostgreSQL rolls a group back
-     * to its Sync - and the block of 4 after it was never sent. The counts
-     * tell a retry exactly that.
+     * 300 rows, a duplicate in the block of 8 (rows 288 to 295). All five
+     * blocks - 128, 128, 32, 8, 4 - go out in one pipelined group, as pgjdbc
+     * sends them; PostgreSQL rolls a group back to its Sync, so nothing of it
+     * landed, and the counts say so for every row.
      */
     @Test
     void theCountsSayWhichBlocksLanded() throws Exception {
@@ -168,12 +167,12 @@ class LocalRewriteBatchTest {
                     java.sql.BatchUpdateException.class, insert::executeLargeBatch);
             assertEquals("23505", refused.getSQLState(), refused.getMessage());
             long[] counts = refused.getLargeUpdateCounts();
-            assertEquals(296, counts.length, "only the rows that were sent");
-            for (int i = 0; i < 296; i++) {
-                assertEquals(i < 288 ? 1 : Statement.EXECUTE_FAILED, counts[i], "row " + i);
+            assertEquals(300, counts.length, "every row was sent");
+            for (int i = 0; i < 300; i++) {
+                assertEquals(Statement.EXECUTE_FAILED, counts[i], "row " + i);
             }
         }
-        assertEquals("288", one("select count(*) from " + table));
+        assertEquals("0", one("select count(*) from " + table));
     }
 
     @Test

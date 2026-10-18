@@ -285,10 +285,18 @@ message names the oldest holders. Beyond that, what matters is what a connection
   | PostgreSQL | `DISCARD ALL`, including server and local prepared statement caches |
   | MySQL | `COM_RESET_CONNECTION` |
   | SQL Server | the RESETCONNECTION bit on the next request |
-  | Oracle | used sessions are closed because a complete reset of arbitrary application contexts is unavailable |
+  | Oracle | log off and log in again on the same connection: a new session, the same TCP and TLS connection and server process |
 
-  This adds reset work to each used borrow; Oracle opens a new physical session for the next
-  borrower. Foreign JDBC drivers without `SessionReset` retain JDBC-only cleanup and do not
+  This adds reset work to each used borrow, made while the connection waits in the pool, not
+  by the next borrower. Oracle has no complete reset of its own: neither package
+  reinitialisation nor `RESET_STATE` clears the client identifier or `ALTER SESSION`
+  settings. A new session clears everything: package state, application contexts, client
+  identifier, NLS settings, current schema, roles and temporary table rows
+  (`LocalLogInAgainTest`). An open transaction is rolled back first, since a logoff would
+  commit it. It costs one login, about 8 ms of which PBKDF2 is most, instead of a new
+  connection and server process, which under load ran Oracle out of processes (ORA-12516).
+  Kerberos and Windows logins cannot log in again on their connection; those sessions are
+  still closed. Foreign JDBC drivers without `SessionReset` retain JDBC-only cleanup and do not
   receive this isolation guarantee. Migration with `detach()` / `adopt()` preserves the live
   session and its transaction; cleanup occurs only when the adopted borrow is returned.
 
@@ -410,6 +418,101 @@ This is proven by a running Spring Boot application against all four servers, wi
 `ddl-auto=validate`, so the schema is compared against the driver's own metadata before a
 single test runs. Hibernate, Flyway, Liquibase, jOOQ, MyBatis and Spring Data JDBC are listed
 in [FRAMEWORKS.md](FRAMEWORKS.md).
+
+## R2DBC
+
+`seclume-r2dbc` is an R2DBC driver over the four JDBC drivers, not beside them. Everything
+that makes seclume what it is - the protocols, its own TLS, the secret providers, the
+password never on the heap, the session reset on every return - is in the JDBC drivers and
+the pool, and a reactive application gets all of it. Each connection runs its calls one
+after the other on a virtual thread: a blocked read costs a virtual thread, never one of the
+few threads a reactive application has.
+
+```
+r2dbc:seclume:postgresql://app@db.internal/orders?provider=file&path=/run/secrets/db
+```
+
+- **The database's own placeholders**: `$1` on PostgreSQL, `?` on MySQL, `@name` on SQL
+  Server, `:name` on Oracle - what each vendor's R2DBC driver takes, so SQL written for one
+  of them runs unchanged. String literals, comments and dollar-quoted bodies are left alone.
+- **No password in the URL**: `password=` is refused. The secret comes from a provider, as
+  everywhere in seclume.
+- **Rows as they are asked for**: a result read halfway is left there, and the connection
+  carries on.
+- **Over the pool**: `SeclumeConnectionFactory.over(pool)`, and with Spring Boot that is the
+  application's `ConnectionFactory` as soon as `seclume-r2dbc` is on the class path - over
+  the same `seclume.datasources` as the JDBC side, with Spring's `R2dbcTransactionManager`
+  and `DatabaseClient` on top. A connection given back is reset like a JDBC one.
+- **Transactions, savepoints, isolation, generated keys, batches, BLOB/CLOB, a text of
+  several statements** with one result each.
+- **R2DBC's errors**: SQLSTATE classes become `R2dbcBadGrammarException`,
+  `R2dbcDataIntegrityViolationException`, `R2dbcTimeoutException` and the rest.
+
+Proven by R2DBC's own conformance suite (`r2dbc-spi-test`, all 34 cases) against each of the
+four databases, see [FRAMEWORKS.md](FRAMEWORKS.md). Where a database differs, the case says
+how rather than being left out: MySQL refuses a text of several statements on purpose and
+Oracle has none, so that case checks the refusal; on Oracle generated keys are asked for by
+name, as Oracle requires, and a `NUMBER` is read as the `BigDecimal` it is.
+
+Against r2dbc-postgresql on one connection it is level on `select 1`, 10 % faster on a row
+with a bind and 37 % on a thousand rows. Over the pool it is slower, by the session reset
+r2dbc-pool does not make - [BENCHMARKS.md](BENCHMARKS.md#r2dbc-on-postgresql-15102026).
+
+## MongoDB
+
+`seclume-mongodb` connects the official MongoDB Java driver (`org.mongodb:mongodb-driver-sync` 5.x)
+with the password off the heap:
+
+```java
+MongoClient client = SeclumeMongo.client(
+        "mongodb://orders@cluster.example.invalid:27017/?authSource=admin&provider=file&path=/run/secrets/mongo");
+MongoDatabase db = client.getDatabase("orders");
+```
+
+Or on an existing `MongoClientSettings.Builder`:
+
+```java
+MongoClientSettings.Builder builder = MongoClientSettings.builder();
+SeclumeMongo.configure(builder, url);
+MongoClient client = MongoClients.create(builder.build());
+```
+
+The official driver given a password keeps it as a `char[]` in its `MongoCredential` and computes
+SCRAM on the JVM heap at every connect; over TLS, JSSE copies the plaintext again. Here the driver
+is given no credential at all:
+
+- **Pre-authenticated TLS socket:** `SeclumeMongoSocketFactory` opens the connection, runs seclume's
+  own TLS 1.3 stack with certificate and host name verification (`tlsRootCert=`, `tlsPin=`), and
+  executes SCRAM-SHA-256 (`saslStart`, `saslContinue`) entirely in native memory (`MemorySegment`,
+  `space.seclume.internal.Scram`) before handing the already-authenticated socket to the driver.
+- **Off-heap secret lifecycle:** The password is read from its `SecretProvider` into a scoped native
+  `MemorySegment` and wiped with zeroes immediately after the client proof is calculated. The client
+  proof is encoded into BSON binary in native memory and sent over TLS without ever becoming a Java
+  `String` or `byte[]`.
+- **Driver compatibility:** Standard MongoDB URL parameters (`replicaSet`, multiple hosts, `readPreference`,
+  `appName`, `connectTimeoutMS`, `w`, etc.) are preserved and passed to `MongoClientSettings` via
+  `applyConnectionString`. The driver issues its subsequent `hello` and commands on the pre-authenticated
+  connection without credentials.
+- **Strict TLS enforcement:** `tls=false` and `ssl=false` are rejected with `IllegalArgumentException`.
+  A password in the URL is strictly refused ("use a provider").
+- **Mutual authentication and protocol hardening:**
+  - SASLprep is enforced off-heap: passwords with non-ASCII characters are rejected in v1 with a clear
+    error message before network traffic.
+  - Iteration limits: server-requested iterations below 4096 (RFC 7677) or above 10,000,000 are refused.
+  - Server nonce must start with the client nonce.
+  - Server signature is verified in constant time in native memory (`Scram.verifyServerFinal`).
+
+Shown against MongoDB 8 (`LocalMongoTlsTest` against `seclume-mongo` with TLS 1.3 requireTLS, and
+`ScriptedMongoServerTest` with mock TLS 1.3 fixture):
+- Successful SCRAM-SHA-256 authentication and `ping` command execution;
+- Both the password and the client proof are proven absent from the JVM heap dump via `NoSecretInHeap.assertAbsent`;
+- Refusal on missing SCRAM-SHA-256, low iterations (< 4096), invalid server nonce prefix, wrong server
+  signature, premature connection termination, non-ASCII password, and TLS host name mismatch.
+
+The login is part of connecting: the connect timeout bounds TLS and SCRAM, so a server that
+answers TCP and then says nothing does not hold the connection. Only SCRAM-SHA-256 is used -
+a user the server offers SCRAM-SHA-1 alone is refused, never logged in with the weaker one.
+The reactive driver (Netty, `SSLEngine`) is not covered yet.
 
 ## Reports: JasperReports, embedded
 

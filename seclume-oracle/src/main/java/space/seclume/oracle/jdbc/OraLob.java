@@ -80,7 +80,12 @@ final class OraLob implements AutoCloseable {
             throw new SQLException("this LOB has been freed", "HY000");
         }
         WireBuffer value = new WireBuffer(1024);
-        session.readLob(locator, 0, locatorLength, offset, amount, value);
+        try {
+            session.readLob(locator, 0, locatorLength, offset, amount, value);
+        } catch (SQLException | RuntimeException e) {
+            value.close();                 // native memory - see NsChannel.writeBreak
+            throw e;
+        }
         return value;
     }
 

@@ -283,6 +283,46 @@ class PoolWithPostgresTest {
         }
     }
 
+    /**
+     * A statement prepared again comes back as JDBC promises a new one: with
+     * the driver's defaults. Across borrowers the cache starts afresh anyway;
+     * inside one borrow the same text prepared twice is the cached object,
+     * and a setMaxRows(1) left on it gave the second use one row of three,
+     * silently, and a query timeout cut it short.
+     */
+    @Test
+    void aStatementPreparedAgainHasItsDefaults() throws Exception {
+        PoolSettings settings = settings(1);
+        settings.setStatementCacheSize(8);
+        try (SeclumePool pool = new SeclumePool(dataSource(), settings);
+             Connection connection = pool.getConnection()) {
+            String sql = "select generate_series(1, ?)";
+            PreparedStatement limited = connection.prepareStatement(sql);
+            limited.setMaxRows(1);
+            limited.setQueryTimeout(1);
+            limited.setFetchSize(1);
+            limited.setInt(1, 3);
+            try (ResultSet rows = limited.executeQuery()) {
+                assertTrue(rows.next());
+                assertFalse(rows.next(), "setMaxRows(1) did not hold for its own use");
+            }
+            limited.close();
+            try (PreparedStatement next = connection.prepareStatement(sql)) {
+                assertEquals(0, next.getMaxRows(), "the use before's maxRows");
+                assertEquals(0, next.getQueryTimeout(), "the use before's query timeout");
+                assertEquals(0, next.getFetchSize(), "the use before's fetch size");
+                next.setInt(1, 3);
+                int count = 0;
+                try (ResultSet rows = next.executeQuery()) {
+                    while (rows.next()) {
+                        count++;
+                    }
+                }
+                assertEquals(3, count, "got the rows the use before allowed");
+            }
+        }
+    }
+
     /** A network timeout one borrower set does not reach the next one. */
     @Test
     void aNetworkTimeoutEndsWithTheBorrow() throws Exception {

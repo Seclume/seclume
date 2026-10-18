@@ -6,3 +6,4 @@ space.seclume.spring.SeclumeSslAutoConfiguration
 space.seclume.spring.SeclumeAwsAutoConfiguration
 space.seclume.spring.SeclumeLdapAutoConfiguration
 space.seclume.spring.SeclumeSshAutoConfiguration
+space.seclume.spring.SeclumeR2dbcAutoConfiguration

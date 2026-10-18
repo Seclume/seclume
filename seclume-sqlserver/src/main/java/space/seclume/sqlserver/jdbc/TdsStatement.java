@@ -73,8 +73,22 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
 
     @Override
     public boolean execute(String text) throws SQLException {
+        return execute(text, true);
+    }
+
+    /**
+     * The one way a text is run. {@code inOrder} only for the application's
+     * own execute: executeQuery, executeUpdate and a batch come through here
+     * too, and each reads the answer its own way.
+     */
+    private boolean execute(String text, boolean inOrder) throws SQLException {
         String sql = escaped(text);
-        underDeadline(sql, () -> executeNow(sql));
+        inOrderNext = inOrder;
+        try {
+            underDeadline(sql, () -> executeNow(sql));
+        } finally {
+            inOrderNext = false;
+        }
         return resultSet != null;
     }
 
@@ -143,7 +157,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         String sql = escaped(text);
         lazyWanted = true;
         try {
-            execute(sql);
+            execute(sql, false);
         } finally {
             lazyWanted = false;
         }
@@ -162,7 +176,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     @Override
     public long executeLargeUpdate(String text) throws SQLException {
         String sql = escaped(text);
-        if (execute(sql)) {
+        if (execute(sql, false)) {
         // JDBC requires a SQLException when the statement produced rows:
         // executeUpdate promises a count, and a caller that gets 0 back from a
         // select believes the statement ran and changed nothing. The rows are
@@ -223,6 +237,9 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     private long rowsCollected;
 
     private void collectInto(TdsSession session, Execution execution) throws SQLException {
+        inOrder = inOrderNext;
+        answered.clear();
+        answeredIndex = 0;
         if (lazy) {
             // This statement's previous answer is still paused: read it off
             // the wire - dropped - before the new one is asked for.
@@ -273,6 +290,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         }
         resultSet = block == null ? null : new TdsResultSet(block, this);
         updateCount = block != null ? -1 : stream.updateCount();
+        startInOrder();
     }
 
     /**
@@ -336,8 +354,68 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     private void finishResult() {
         if (collected != null && !results.contains(collected)) {
             results.add(collected);
+            answered.add(collected);
             collected = null;
         }
+    }
+
+    // ---- every result in the order it came - Statement.execute(String) ------
+
+    /**
+     * Results and update counts as the server sent them: a block, or a
+     * {@code Long}. Only {@code execute(String)} hands them out this way -
+     * {@code "insert ...; select ..."} is an update count first, then the
+     * rows, as JDBC and mssql-jdbc have it. Everything else keeps its own
+     * reading: executeQuery takes the rows, executeUpdate the count, and a
+     * procedure call through a prepared or callable statement its selects,
+     * whatever its statements counted before them.
+     */
+    private final List<Object> answered = new ArrayList<>(2);
+    private int answeredIndex;
+    /** This answer is handed out in order - set by execute(String) for its own run. */
+    private boolean inOrder;
+    private boolean inOrderNext;
+
+    @Override
+    public void counted(long count) {
+        // Only an in-order answer keeps its counts: closing the block being
+        // collected here would cut a paused executeQuery short.
+        if (!inOrder || refetching || discarding) {
+            return;
+        }
+        finishResult();
+        answered.add(count);
+    }
+
+    /** After an in-order execute: the first thing the server answered is the current result. */
+    private void startInOrder() {
+        if (!inOrder || answered.isEmpty() || !(answered.get(0) instanceof Long count)) {
+            return;
+        }
+        if (resultSet != null) {
+            resultSet.discard();
+            resultSet = null;
+        }
+        block = null;
+        updateCount = count;
+    }
+
+    /** getMoreResults for an in-order answer. */
+    private boolean nextInOrder() {
+        answeredIndex++;
+        if (answeredIndex >= answered.size()) {
+            block = null;
+            return false;
+        }
+        Object next = answered.get(answeredIndex);
+        if (next instanceof Long count) {
+            block = null;
+            updateCount = count;
+            return false;
+        }
+        block = (TdsResultBlock) next;
+        resultSet = new TdsResultSet(block, this);
+        return true;
     }
 
     /**
@@ -440,6 +518,9 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
             resultSet = null;
         }
         updateCount = -1;
+        if (inOrder) {
+            return nextInOrder();
+        }
         resultIndex++;
         if (resultIndex < results.size()) {
             block = results.get(resultIndex);
@@ -700,7 +781,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         }
         long[] counts = new long[batch.size()];
         batch = null;
-        execute(text.toString());
+        execute(text.toString(), false);
         java.util.Arrays.fill(counts, Statement.SUCCESS_NO_INFO);
         return counts;
     }

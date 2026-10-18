@@ -2,6 +2,7 @@ package space.seclume.crypto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.foreign.Arena;
@@ -136,6 +137,34 @@ class AesGcmCipherTest {
             double seconds = (System.nanoTime() - start) / 1e9;
             System.out.printf("  AES-GCM (%s): %.0f MB/s%n", cipher.implementation(),
                     records * 16384 / seconds / 1e6);
+        }
+    }
+
+    @Test
+    void outOfRangeLengthsAreRejectedWithIllegalArgumentException() {
+        try (Arena arena = Arena.ofConfined();
+             AesGcmCipher cipher = AesGcmCipher.of(arena.allocate(16), 0, 16)) {
+            MemorySegment nonce = arena.allocate(AesGcm.NONCE);
+            MemorySegment dummy = arena.allocate(16);
+            long tooLarge = (long) Integer.MAX_VALUE + 1;
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.encrypt(nonce, 0, dummy, 0, -1L, dummy, 0, 0, dummy, 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.encrypt(nonce, 0, dummy, 0, tooLarge, dummy, 0, 0, dummy, 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.encrypt(nonce, 0, dummy, 0, 0, dummy, 0, -1L, dummy, 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.encrypt(nonce, 0, dummy, 0, 0, dummy, 0, tooLarge, dummy, 0));
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.decrypt(nonce, 0, dummy, 0, -1L, dummy, 0, 0, dummy, 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.decrypt(nonce, 0, dummy, 0, tooLarge, dummy, 0, 0, dummy, 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.decrypt(nonce, 0, dummy, 0, 0, dummy, 0, -1L, dummy, 0));
+            assertThrows(IllegalArgumentException.class,
+                    () -> cipher.decrypt(nonce, 0, dummy, 0, 0, dummy, 0, tooLarge, dummy, 0));
         }
     }
 

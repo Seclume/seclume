@@ -42,6 +42,22 @@ jobs:
           -pl seclume-core,seclume-tck,seclume-postgresql,seclume-mysql,seclume-sqlserver,seclume-oracle
           -am test -Dtest='*Fuzz*,BoundaryContractTest'
           -Dsurefire.failIfNoSpecifiedTests=false
+      # The pool as a state machine: random sequences of borrows, returns,
+      # broken connections, late and refused resets, suspend and resume,
+      # checked after every step. The CI runs 150 sequences; this runs 20 000.
+      - name: The pool's promises, many sequences
+        run: >
+          ./mvnw -B -pl seclume-pool -am test
+          -Dtest='PoolStateMachineTest,ConcurrentPoolStateMachineTest'
+          -Dseclume.pool.stateMachine.seeds=20000 -Dseclume.pool.concurrent.seeds=2000
+          -Dsurefire.failIfNoSpecifiedTests=false
+      # Timing: whether comparisons, the GCM tag check and the Java AES take
+      # longer for some secrets than for others (dudect's method, with a
+      # negative control that must be found). Too noisy for every build.
+      - name: Constant time
+        run: >
+          ./mvnw -B -pl seclume-core -am test -Dtest=ConstantTimeLeakageTest
+          -Dseclume.constantTime=true -Dsurefire.failIfNoSpecifiedTests=false
       - name: What the run found
         if: failure()
         run: |

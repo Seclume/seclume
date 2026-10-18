@@ -53,12 +53,18 @@ sealed class Sha512Digest extends BlockDigest permits Sha384Digest {
         return 64;
     }
 
-    /** The starting values; SHA-384 differs only in these. */
+    private static final long[] IV = {
+        0x6a09e667f3bcc908L, 0xbb67ae8584caa73bL, 0x3c6ef372fe94f82bL, 0xa54ff53a5f1d36f1L,
+        0x510e527fade682d1L, 0x9b05688c2b3e6c1fL, 0x1f83d9abfb41bd6bL, 0x5be0cd19137e2179L,
+    };
+
+    /**
+     * The starting values; SHA-384 differs only in these. Shared and only
+     * read - public constants, and a new array on every digest was an
+     * allocation in each PBKDF2 round.
+     */
     long[] initialHash() {
-        return new long[] {
-            0x6a09e667f3bcc908L, 0xbb67ae8584caa73bL, 0x3c6ef372fe94f82bL, 0xa54ff53a5f1d36f1L,
-            0x510e527fade682d1L, 0x9b05688c2b3e6c1fL, 0x1f83d9abfb41bd6bL, 0x5be0cd19137e2179L,
-        };
+        return IV;
     }
 
     @Override
@@ -72,16 +78,16 @@ sealed class Sha512Digest extends BlockDigest permits Sha384Digest {
     @Override
     void compress(MemorySegment data, long offset) {
         for (int i = 0; i < 16; i++) {
-            state.set(BE_LONG, W_OFFSET + i * 8L, data.get(BE_LONG, offset + i * 8L));
+            state.set(NE_LONG, W_OFFSET + i * 8L, data.get(BE_LONG, offset + i * 8L));
         }
         for (int i = 16; i < 80; i++) {
-            long w15 = state.get(BE_LONG, W_OFFSET + (i - 15) * 8L);
-            long w2 = state.get(BE_LONG, W_OFFSET + (i - 2) * 8L);
+            long w15 = state.get(NE_LONG, W_OFFSET + (i - 15) * 8L);
+            long w2 = state.get(NE_LONG, W_OFFSET + (i - 2) * 8L);
             long s0 = Long.rotateRight(w15, 1) ^ Long.rotateRight(w15, 8) ^ (w15 >>> 7);
             long s1 = Long.rotateRight(w2, 19) ^ Long.rotateRight(w2, 61) ^ (w2 >>> 6);
-            long w = state.get(BE_LONG, W_OFFSET + (i - 16) * 8L) + s0
-                    + state.get(BE_LONG, W_OFFSET + (i - 7) * 8L) + s1;
-            state.set(BE_LONG, W_OFFSET + i * 8L, w);
+            long w = state.get(NE_LONG, W_OFFSET + (i - 16) * 8L) + s0
+                    + state.get(NE_LONG, W_OFFSET + (i - 7) * 8L) + s1;
+            state.set(NE_LONG, W_OFFSET + i * 8L, w);
         }
 
         long a = state.get(BE_LONG, H_OFFSET);
@@ -96,7 +102,7 @@ sealed class Sha512Digest extends BlockDigest permits Sha384Digest {
         for (int i = 0; i < 80; i++) {
             long s1 = Long.rotateRight(e, 14) ^ Long.rotateRight(e, 18) ^ Long.rotateRight(e, 41);
             long ch = (e & f) ^ (~e & g);
-            long temp1 = h + s1 + ch + K[i] + state.get(BE_LONG, W_OFFSET + i * 8L);
+            long temp1 = h + s1 + ch + K[i] + state.get(NE_LONG, W_OFFSET + i * 8L);
             long s0 = Long.rotateRight(a, 28) ^ Long.rotateRight(a, 34) ^ Long.rotateRight(a, 39);
             long maj = (a & b) ^ (a & c) ^ (b & c);
             long temp2 = s0 + maj;

@@ -173,18 +173,44 @@ public final class OpenSslSigningKey implements AutoCloseable {
      * public; this is only its other spelling.
      */
     public static byte[] rawEcdsa(byte[] der, int field) {
-        int at = 2;
-        if ((der[1] & 0x80) != 0) {
-            at = 2 + (der[1] & 0x7f);
+        if (der == null || der.length < 2 || der[0] != 0x30) {
+            throw new IllegalArgumentException("not a DER ECDSA signature");
+        }
+        int at;
+        if ((der[1] & 0x80) == 0) {
+            int seqLen = der[1] & 0xff;
+            if (2 + seqLen > der.length) {
+                throw new IllegalArgumentException("a DER sequence length exceeds input bounds");
+            }
+            at = 2;
+        } else {
+            int lengthBytes = der[1] & 0x7f;
+            if (lengthBytes <= 0 || lengthBytes > 4 || 2 + lengthBytes > der.length) {
+                throw new IllegalArgumentException("an invalid DER sequence length header");
+            }
+            int seqLen = 0;
+            for (int i = 0; i < lengthBytes; i++) {
+                seqLen = (seqLen << 8) | (der[2 + i] & 0xff);
+            }
+            at = 2 + lengthBytes;
+            if (seqLen < 0 || at + seqLen > der.length) {
+                throw new IllegalArgumentException("a DER sequence length exceeds input bounds");
+            }
         }
         byte[] raw = new byte[2 * field];
         for (int part = 0; part < 2; part++) {
-            if (der[at] != 0x02) {
+            if (at >= der.length || der[at] != 0x02) {
                 throw new IllegalArgumentException("not a DER ECDSA signature");
+            }
+            if (at + 1 >= der.length) {
+                throw new IllegalArgumentException("a DER integer length field is truncated");
             }
             int length = der[at + 1] & 0xff;
             int start = at + 2;
-            while (length > field && der[start] == 0) {
+            if (start + length > der.length) {
+                throw new IllegalArgumentException("a DER integer value exceeds input bounds");
+            }
+            while (length > field && start < der.length && der[start] == 0) {
                 start++;
                 length--;
             }

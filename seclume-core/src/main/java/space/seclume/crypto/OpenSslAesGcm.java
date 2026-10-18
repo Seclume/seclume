@@ -97,16 +97,25 @@ final class OpenSslAesGcm implements AesGcmCipher {
                             MemorySegment aad, long aadOffset, long aadLength,
                             MemorySegment in, long inOffset, long length,
                             MemorySegment out, long outOffset, MemorySegment written) {
+        int intLength = checkLength(length, "payload");
+        int intAad = checkLength(aadLength, "additional data");
         check(init(context, MemorySegment.NULL, MemorySegment.NULL,
                 nonce.asSlice(nonceOffset, AesGcm.NONCE), -1), "EVP_CipherInit_ex with the nonce");
-        if (aadLength > 0) {
+        if (intAad > 0) {
             check(update(context, MemorySegment.NULL, written, aad.asSlice(aadOffset, aadLength),
-                    (int) aadLength), "EVP_CipherUpdate with the additional data");
+                    intAad), "EVP_CipherUpdate with the additional data");
         }
-        if (length > 0) {
+        if (intLength > 0) {
             check(update(context, out.asSlice(outOffset, length), written,
-                    in.asSlice(inOffset, length), (int) length), "EVP_CipherUpdate");
+                    in.asSlice(inOffset, length), intLength), "EVP_CipherUpdate");
         }
+    }
+
+    private static int checkLength(long length, String name) {
+        if (length < 0 || length > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("the " + name + " length must be between 0 and 2^31-1: " + length);
+        }
+        return (int) length;
     }
 
     @Override

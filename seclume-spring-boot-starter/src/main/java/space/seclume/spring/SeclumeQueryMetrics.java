@@ -141,6 +141,7 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
                 .description("physical connections opened, including login and any handshake")
                 .tag("kind", string(event, "kind"))
                 .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .publishPercentileHistogram()
                 .register(registry)
                 .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
     }
@@ -171,6 +172,7 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
                 .tag("kind", string(event, "kind"))
                 .tag("method", string(event, "method"))
                 .tag("outcome", event.getBoolean("succeeded") ? "ok" : "failed")
+                .publishPercentileHistogram()
                 .register(registry)
                 .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
     }
@@ -217,6 +219,7 @@ public final class SeclumeQueryMetrics implements MeterBinder, AutoCloseable {
         Timer.builder("seclume.tls.handshakes")
                 .description("TLS handshakes, by the stack that made them")
                 .tag("stack", string(event, "stack"))
+                .publishPercentileHistogram()
                 .register(registry)
                 .record(event.getDuration().toNanos(), TimeUnit.NANOSECONDS);
     }

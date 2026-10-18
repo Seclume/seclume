@@ -129,6 +129,26 @@ public final class AwsSigV4 {
             } else if (c < 0x800) {
                 target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0xc0 | (c >> 6)));
                 target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | (c & 0x3f)));
+            } else if (Character.isSurrogate(c)) {
+                // A character beyond the BMP is two chars in Java and four
+                // bytes in UTF-8. Written as two three-byte halves (CESU-8)
+                // it hashed differently from what AWS and Azure compute, and
+                // a name with an emoji in it got a signature nobody accepted.
+                // Half a pair is no text at all, and is refused.
+                if (Character.isHighSurrogate(c) && i + 1 < text.length()) {
+                    char low = text.charAt(i + 1);
+                    if (Character.isLowSurrogate(low)) {
+                        i++;
+                        int cp = Character.toCodePoint(c, low);
+                        target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0xf0 | (cp >> 18)));
+                        target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | ((cp >> 12) & 0x3f)));
+                        target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | ((cp >> 6) & 0x3f)));
+                        target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | (cp & 0x3f)));
+                        continue;
+                    }
+                }
+                throw new IllegalArgumentException(
+                        "the text contains an unpaired surrogate character at index " + i);
             } else {
                 target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0xe0 | (c >> 12)));
                 target.set(ValueLayout.JAVA_BYTE, at++, (byte) (0x80 | ((c >> 6) & 0x3f)));

@@ -208,6 +208,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **Clusters** | Host lists, `targetServerType=primary`, `hostSelection=quality` | [FEATURES.md](FEATURES.md#several-servers-and-which-one-to-take) |
 | | Read replicas with `ReadWriteSplit`, read-your-writes on PostgreSQL | [FEATURES.md](FEATURES.md#several-servers-and-which-one-to-take) |
 | **Frameworks** | Spring Data JPA, Hibernate, Flyway, Liquibase, jOOQ, MyBatis, Spring Data JDBC, all tested on all four | [FRAMEWORKS.md](FRAMEWORKS.md) |
+| **R2DBC** | A reactive driver over the four, with each database's own placeholders; R2DBC's conformance suite passes; over the pool and its reset, Spring Boot's `ConnectionFactory` when it is on the class path: `seclume-r2dbc` | [FEATURES.md](FEATURES.md#r2dbc) |
 | | Testcontainers `@ServiceConnection` and Docker Compose: the pool comes from the container | [FEATURES.md](FEATURES.md#spring-data-and-jpa) |
 | **Observability** | JFR events, Micrometer meters, OpenTelemetry spans, all without values - for the databases and every module: logins, secrets written into requests, signatures, rotations | [OBSERVABILITY.md](OBSERVABILITY.md) |
 | | `/actuator/seclume`: login method, TLS, certificate expiry and server capacity per data source | [OBSERVABILITY.md](OBSERVABILITY.md#actuatorseclume-how-every-data-source-is-secured) |
@@ -281,7 +282,10 @@ It does **not** make the process a vault:
   heap whatever driver you use. The starter warns about plaintext passwords it can see, and
   `seclume-heapcheck` finds any secret you name in a running process.
 - **Someone who can read the process's memory, or the secret's source, has the secret.**
-  Root, `ptrace` or `/proc/<pid>/mem` read native memory as well. Someone who can read
+  Root, `ptrace` or `/proc/<pid>/mem` read native memory as well. What seclume does narrow
+  is *when*: once a login is done, the password is nowhere in the process - not in the heap
+  and not in native memory, which `ProcessMemoryTest` checks by reading all of it. During a
+  login it is. Someone who can read
   `/run/secrets/db` or the Vault token does not need a dump. seclume closes the leak through
   the dump, not a compromised host.
 
@@ -304,29 +308,43 @@ heap-dump endpoints anyway.
 
 ## Speed
 
-The aim is not "fast enough" but faster than the established Java drivers. The recorded rows
-come from JMH runs, written to [BENCHMARKS.md](BENCHMARKS.md) together with the machine,
-the JDK, the server and every iteration. That run used a quiet Linux host with 4 cores, the
-benchmark pinned to two of them, and MySQL on the same machine, so it shows what the driver
-costs rather than what the network does.
+The aim is not "fast enough" but faster than the established Java drivers. The rows come
+from JMH runs, written to [BENCHMARKS.md](BENCHMARKS.md#all-four-databases-13102026)
+together with the machine, the JDK and every iteration: a quiet Linux host with 4 cores, the
+benchmark pinned to two of them, each database in a container on the same machine and TLS on
+every connection, so it shows what the driver costs rather than what the network does.
 
-| Measurement | seclume | vendor driver | recorded |
-|---|---|---|---|
-| batch of 500 rows, both drivers as they come | **17.9 ms** ± 0.3 | 29.1 ms ± 0.4 (Connector/J) | [yes](BENCHMARKS.md#batches-with-fair-settings-25092026-two-runs) |
-| batch of 500 rows, both rewriting it into multi-row inserts | about 5 or about 12 ms | the same | [yes](BENCHMARKS.md#batches-with-fair-settings-25092026-two-runs) |
-| 1000 rows in one query | **0.73 ms** ± 0.02 | 0.91 ms ± 0.01 (Connector/J) | [yes](BENCHMARKS.md) |
-| one row | **42.2 µs** ± 0.9 | 45.1 µs ± 0.7 (Connector/J) | [yes](BENCHMARKS.md) |
-| `select 1` | 42.1 µs ± 0.5 | **41.4 µs** ± 1.0 (Connector/J) | [yes](BENCHMARKS.md) |
-| pool: borrow and return, nothing else | 0.54 µs ± 0.01 | **0.52 µs** ± 0.04 (HikariCP) | [yes](BENCHMARKS.md) |
-| pool: borrow, query, return | **124.6 µs** ± 12.5 | 125.5 µs ± 10.6 (HikariCP + Connector/J) | [yes](BENCHMARKS.md) |
+Each cell is **seclume / the vendor driver** (HikariCP over the vendor driver for the pool
+rows). The bracket is seclume's time against it - **−12 %** is 12 % less time - and "even"
+means the error bars overlap.
+
+| | PostgreSQL | MySQL | SQL Server | Oracle |
+|---|---|---|---|---|
+| `select 1` | 46 µs / 53 µs (**−12 %**) | 41 µs / 49 µs (**−15 %**) | 86 µs / 92 µs (even) | 37 µs / 61 µs (**−39 %**) |
+| one row | 42 µs / 42 µs (even) | 42 µs / 52 µs (**−21 %**) | 92 µs / 93 µs (even) | 40 µs / 40 µs (even) |
+| 1000 rows | 728 µs / 696 µs (even) | 708 µs / 950 µs (**−25 %**) | 10.5 ms / 10.3 ms (even) | 932 µs / 1.2 ms (**−20 %**) |
+| insert one row | 0.67 ms / 0.67 ms (even) | 6.14 ms / 7.14 ms (even) | 1.58 ms / 1.58 ms (even) | 2.17 ms / 2.27 ms (even) |
+| batch of 500, as they come | 2.99 ms / 3.04 ms (even) | 17.96 ms / 32.89 ms (**−45 %**) | 9.24 ms / 9.44 ms (even) | 1.43 ms / 1.57 ms (even) |
+| batch of 500, both rewriting | 1.53 ms / 1.51 ms (even) | 5.04 ms / 7.13 ms (even) | 9.37 ms / 9.35 ms (even) | 1.43 ms / 3.80 ms (even) |
+| pool: borrow and return | 0.42 µs / 0.66 µs (**−36 %**) | 0.44 µs / 0.53 µs (**−17 %**) | 0.46 µs / 0.60 µs (**−24 %**) | 0.44 µs / 0.51 µs (**−15 %**) |
+| pool: borrow, prepared query, return - no reset | 108 µs / 110 µs (even) | 128 µs / 139 µs (even) | 300 µs / 309 µs (even) | 105 µs / 169 µs (**−38 %**) |
+| pool: borrow, prepared query, return - seclume resets the session | 263 µs / 110 µs (+138 %) | 272 µs / 139 µs (+95 %) | 325 µs / 309 µs (even) | 17.4 ms / 169 µs (103× the time) |
+| the same, 4 threads with 2 ms between requests | 166 µs / 113 µs (+47 %) | 159 µs / 122 µs (+30 %) | 234 µs / 220 µs (+6 %) | 6.5 ms / 132 µs (49× the time) |
+
+**How to read the pool rows.** HikariCP hands a connection back as it is. seclume's pool over
+seclume's driver resets the session on every return, so the next borrower cannot see the last
+one's temporary tables, session variables, settings or prepared statements; on Oracle it logs
+the session off and on again. That reset is the difference in the last two rows: free on SQL
+Server, one round trip on PostgreSQL and MySQL, and on Oracle a login that Oracle Free cannot
+keep up with when eight threads borrow without a pause. The same pool without the reset is
+the row above them. Why the reset is not optional: [SECURITY.md](SECURITY.md).
 
 **How to read the batch rows.** Connector/J sends a batch row by row unless
 `rewriteBatchedStatements=true` is set, and seclume pipelines the rows. That is the first
-row, and it compares defaults. With both drivers told to rewrite a batch into multi-row
-inserts (seclume: `rewriteBatchedInserts=true`), **neither is ahead**. Every fork of either
-driver ran at about 5 or about 12 ms, a split that comes from the server, not the driver. An
-earlier version of this table compared seclume against Connector/J's default alone. That
-flattered seclume, and an outside review said so.
+batch row, and it compares defaults. With both drivers told to rewrite a batch into
+multi-row inserts (seclume: `rewriteBatchedInserts=true`), **neither is ahead**. An earlier
+version of this table compared seclume against Connector/J's default alone. That flattered
+seclume, and an outside review said so.
 
 Only rows recorded in BENCHMARKS.md are shown here. Figures measured without a recorded run
 (over a LAN, with PostgreSQL and eight threads, or counted in round trips) were removed until

@@ -450,16 +450,19 @@ public final class TdsChannel implements AutoCloseable {
      * cancellation happened at all.
      */
     public void sendAttention() throws IOException {
-        WireBuffer attention = new WireBuffer(Tds.HEADER_SIZE);
-        attention.putZeroes(Tds.HEADER_SIZE);
-        attention.putByteAt(0, (byte) Tds.TYPE_ATTENTION);
-        attention.putByteAt(1, (byte) Tds.STATUS_END_OF_MESSAGE);
-        attention.putByteAt(2, (byte) (Tds.HEADER_SIZE >>> 8));
-        attention.putByteAt(3, (byte) Tds.HEADER_SIZE);
-        attention.putByteAt(6, (byte) 1);
-        ByteBuffer view = attention.view();
-        view.clear().position(0).limit(Tds.HEADER_SIZE);
-        write(view);
+        // Closed again at once - see NsChannel.writeBreak: a shared arena is
+        // not collected, and every cancel and timeout kept its buffer.
+        try (WireBuffer attention = new WireBuffer(Tds.HEADER_SIZE)) {
+            attention.putZeroes(Tds.HEADER_SIZE);
+            attention.putByteAt(0, (byte) Tds.TYPE_ATTENTION);
+            attention.putByteAt(1, (byte) Tds.STATUS_END_OF_MESSAGE);
+            attention.putByteAt(2, (byte) (Tds.HEADER_SIZE >>> 8));
+            attention.putByteAt(3, (byte) Tds.HEADER_SIZE);
+            attention.putByteAt(6, (byte) 1);
+            ByteBuffer view = attention.view();
+            view.clear().position(0).limit(Tds.HEADER_SIZE);
+            write(view);
+        }
         attentionsPending.incrementAndGet();
     }
 

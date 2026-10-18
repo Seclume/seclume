@@ -78,6 +78,35 @@ class TtcBindQueryTest {
                 "insert into zl_bind (n, t) values (:1, :2)", 0, false, binds));
     }
 
+    /**
+     * The short call for a query run again on its cursor, byte for byte what
+     * the reference client sent for the same thing (ojdbc 23, captured
+     * 13.10.2026): cursor 1, ten rows with the answer, execute and fetch, the
+     * number 1 as the value.
+     */
+    private static final String AGAIN_WITH_BIND = "034E21000101010A0160000702C102";
+
+    @Test
+    void writesAQueryRunAgainWithoutDescribingItsVariables() throws Exception {
+        TtcBinds binds = new TtcBinds();
+        binds.set(1, 1);
+        try (WireBuffer shape = new WireBuffer(64)) {
+            binds.putDescriptors(shape);               // as the session does first
+        }
+        try (WireBuffer out = new WireBuffer(64)) {
+            TtcQuery.putAgain(out, 0x21, 1, 10, binds);
+            assertEquals(AGAIN_WITH_BIND, hex(out));
+        }
+    }
+
+    private static String hex(WireBuffer out) {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < out.position(); i++) {
+            text.append(String.format("%02X", out.getByte(i)));
+        }
+        return text.toString();
+    }
+
     private static String written(int sequence, String sql, int prefetch, boolean query,
                                   TtcBinds binds) {
         try (WireBuffer out = new WireBuffer(512)) {

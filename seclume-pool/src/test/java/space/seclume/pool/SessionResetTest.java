@@ -158,7 +158,7 @@ class SessionResetTest {
         }
     }
 
-    /** Oracle cannot undo an ALTER SESSION: that connection is not lent again. */
+    /** Oracle cannot undo an ALTER SESSION: the next borrower gets a new session. */
     @Test
     void anAlteredOracleSessionIsReplacedNotLent() throws Exception {
         Db db = databases().get(3);
@@ -185,7 +185,7 @@ class SessionResetTest {
 
     private static void assertSessionIdentity(Db db, String before, String after) {
         if (db.name().equals("Oracle")) {
-            assertNotEquals(before, after, "Oracle must retire an incompletely reset session");
+            assertNotEquals(before, after, "Oracle must give the next borrower a new session");
         } else {
             assertEquals(before, after, "the reset must allow the same physical session to be reused");
         }

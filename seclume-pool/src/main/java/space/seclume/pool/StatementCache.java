@@ -52,13 +52,65 @@ final class StatementCache {
     PreparedStatement take(Connection connection, String sql) throws SQLException {
         PreparedStatement cached = free.remove(sql);
         if (cached == null) {
-            return connection.prepareStatement(sql);
+            return fresh(connection, sql);
         }
         if (isUnusable(cached)) {
             closeQuietly(cached);
-            return connection.prepareStatement(sql);
+            return fresh(connection, sql);
         }
         return cached;
+    }
+
+    /**
+     * What a statement is set to when it is new - the driver's defaults,
+     * read once per statement and put back on every return.
+     *
+     * <p>The next borrower who prepares the same text gets this object, and
+     * JDBC promises a new statement: one borrower's setMaxRows(1) left in
+     * place gave the next one a single row of a result, silently, and a
+     * query timeout of one second cut the next one's query short.
+     */
+    private record Settings(int maxRows, int queryTimeout, int fetchSize, int maxFieldSize,
+                            int fetchDirection) {
+
+        static Settings of(PreparedStatement statement) throws SQLException {
+            return new Settings(statement.getMaxRows(), statement.getQueryTimeout(),
+                    statement.getFetchSize(), statement.getMaxFieldSize(),
+                    statement.getFetchDirection());
+        }
+
+        /** Puts back what differs - the getters are field reads, the setters may not be. */
+        void restore(PreparedStatement statement) throws SQLException {
+            if (statement.getMaxRows() != maxRows) {
+                statement.setMaxRows(maxRows);
+            }
+            if (statement.getQueryTimeout() != queryTimeout) {
+                statement.setQueryTimeout(queryTimeout);
+            }
+            if (statement.getFetchSize() != fetchSize) {
+                statement.setFetchSize(fetchSize);
+            }
+            if (statement.getMaxFieldSize() != maxFieldSize) {
+                statement.setMaxFieldSize(maxFieldSize);
+            }
+            if (statement.getFetchDirection() != fetchDirection) {
+                statement.setFetchDirection(fetchDirection);
+            }
+        }
+    }
+
+    private final Map<PreparedStatement, Settings> settings = new java.util.IdentityHashMap<>();
+
+    private PreparedStatement fresh(Connection connection, String sql) throws SQLException {
+        PreparedStatement statement = connection.prepareStatement(sql);
+        if (capacity > 0) {
+            try {
+                settings.put(statement, Settings.of(statement));
+            } catch (SQLException | RuntimeException e) {
+                // Not knowing its defaults, the cache will not keep it - see give.
+            }
+        }
+        return statement;
     }
 
     /**
@@ -76,12 +128,19 @@ final class StatementCache {
             // it - so a statement that was told it would close under the
             // next borrower as soon as that one's result closed.
             if (statement.isCloseOnCompletion()) {
+                settings.remove(statement);
                 return false;
+            }
+            Settings fresh = settings.get(statement);
+            if (fresh == null) {
+                return false;                 // its defaults are not known
             }
             statement.clearParameters();
             statement.clearWarnings();
             statement.clearBatch();
-        } catch (SQLException e) {
+            fresh.restore(statement);
+        } catch (SQLException | RuntimeException e) {
+            settings.remove(statement);
             // A statement that cannot even be reset has nothing to do in a
             // cache - it goes, and the next call prepares a fresh one.
             return false;
@@ -134,7 +193,8 @@ final class StatementCache {
         }
     }
 
-    private static void closeQuietly(PreparedStatement statement) {
+    private void closeQuietly(PreparedStatement statement) {
+        settings.remove(statement);
         try {
             statement.close();
         } catch (SQLException e) {

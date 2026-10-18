@@ -112,6 +112,33 @@ class CanonicalRequestTest {
         }
     }
 
+    /**
+     * If text() runs out of room mid-write, closing wipes the whole buffer,
+     * not only the bytes recorded in length (which stays 0).
+     */
+    @Test
+    void closingWipesEntireBufferEvenAfterOverflow() {
+        try (Arena arena = Arena.ofConfined()) {
+            CanonicalRequest request = new CanonicalRequest(arena, 16);
+            assertThrows(IndexOutOfBoundsException.class,
+                    () -> request.text("this is longer than 16 bytes"));
+            assertEquals(0, request.length());
+            boolean hadNonZero = false;
+            for (int i = 0; i < 16; i++) {
+                if (request.rawAt(i) != 0) {
+                    hadNonZero = true;
+                    break;
+                }
+            }
+            assertTrue(hadNonZero, "expected partial write before overflow");
+
+            request.close();
+            for (int i = 0; i < 16; i++) {
+                assertEquals(0, request.rawAt(i), "byte " + i + " was not wiped");
+            }
+        }
+    }
+
     private static String digestOf(Arena arena, String token) {
         try (CanonicalRequest request = new CanonicalRequest(arena, 256)) {
             request.text("x-amz-security-token:");

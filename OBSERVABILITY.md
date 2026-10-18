@@ -94,6 +94,29 @@ meters worth having, and it is also the classic way to bring a metrics backend d
 the bound, shapes are counted together under `other`: the totals stay right, and only the
 attribution stops.
 
+### The pool's meters
+
+With Micrometer on the class path the starter registers each pool's numbers, tagged by
+`pool`:
+
+| Meter | Type | What |
+|---|---|---|
+| `seclume.pool.connections`, `.active`, `.idle`, `.pending` | gauge | connections held, in use, free; threads waiting |
+| `seclume.pool.connections.max` | gauge | the configured maximum |
+| `seclume.pool.acquire` | timer, histogram | from asking to holding a connection, opening one included |
+| `seclume.pool.usage` | timer, histogram | how long the application held it |
+| `seclume.pool.creation` | timer, histogram | opening a connection: TCP, TLS and login |
+| `seclume.pool.borrowed`, `.created`, `.retired` | counter | handed out, opened, thrown away |
+| `seclume.pool.timeouts`, `.leaks`, `.renewed` | counter | borrows that gave up, connections held too long, rebuilt under the application |
+| `seclume.pool.resets.refused` | counter | session resets that failed; each closed its connection |
+| `seclume.pool.secret.rotations` | counter | rotations the pool took up |
+
+The three timers come from `PoolListener`, which the pool calls only when somebody listens: a
+pool without one reads no extra clock. With `seclume.metrics.hikari-names=true` the same
+numbers also appear as `hikaricp.connections.*`, timers included.
+
+`demo/grafana` has a dashboard built on these and on the event meters above.
+
 ## Tracing
 
 **Tracing is the one thing that needed a hook.** A span belongs to the request that caused it,
@@ -139,6 +162,21 @@ For each pool it reports:
 
 It never reports a password, a statement or a value. `Version.current()` gives the same
 version to an application that wants to log it at start.
+
+**An assessment per data source.** Facts need someone who knows which of them matter, so the
+endpoint and the health details also grade each data source: `ok`, `note`, `warning` or
+`critical`, the worst of its findings, and the findings themselves, worst first.
+
+| Level | Finding |
+|---|---|
+| critical | no TLS; the server's certificate has expired or expires within 7 days |
+| warning | the certificate expires within 30 days; a login that sends the password or a hash standing for it (`trust`, `password`, `md5`, `mysql_native_password`, `mysql_clear_password`); borrows that timed out; all connections in use with threads waiting; leaks; refused resets |
+| note | TLS 1.2 where the server offers no 1.3; a SQL Server login with a password |
+
+The grade never takes the health status down. Health is what a load balancer acts on, and a
+certificate expiring next week taking every instance out of service at once would turn a
+warning into the outage it warns of. Whether the database can be reached stays the health
+check's question alone; alert on the grade instead.
 
 ## Diagnostics for specific defects
 

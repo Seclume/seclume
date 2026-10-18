@@ -25,6 +25,14 @@ abstract sealed class BlockDigest implements Digest
             ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
     static final ValueLayout.OfLong LE_LONG =
             ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+    /**
+     * The machine's own order, for the message schedule: it is read and
+     * written only inside the compression function and never copied out, so
+     * its byte order is nobody's business - and in big-endian each of its
+     * several hundred accesses per block was a byte swap.
+     */
+    static final ValueLayout.OfInt NE_INT = ValueLayout.JAVA_INT_UNALIGNED;
+    static final ValueLayout.OfLong NE_LONG = ValueLayout.JAVA_LONG_UNALIGNED;
 
     private final Arena arena = Arena.ofConfined();
     private final int blockLength;
@@ -142,6 +150,32 @@ abstract sealed class BlockDigest implements Digest
 
     @Override
     public final void digest(MemorySegment out, long offset) {
+        finish(out, offset);
+        reset();
+    }
+
+    /**
+     * Finishes the hash into {@code out} and takes up a chaining value saved
+     * by {@link #saveChain} - {@link #digest} and {@link #restoreChain} in
+     * one, without setting the initial values that the restore overwrites
+     * again. The block and the message schedule are wiped as by a reset.
+     *
+     * <p>For HMAC, twice in every PBKDF2 round.
+     */
+    final void digestAndRestore(MemorySegment out, long offset, MemorySegment chain,
+                                long count) {
+        finish(out, offset);
+        // Wiped as reset() wipes them: the last block and the message
+        // schedule were derived from the message, and a long-lived HMAC would
+        // otherwise keep them until it is closed.
+        block.fill((byte) 0);
+        state.asSlice(chainLength()).fill((byte) 0);
+        MemorySegment.copy(chain, 0, state, 0, chainLength());
+        blockUsed = 0;
+        byteCount = count;
+    }
+
+    private void finish(MemorySegment out, long offset) {
         checkOpen();
         if (offset < 0 || offset + digestLength() > out.byteSize()) {
             throw new IndexOutOfBoundsException("digest does not fit into the target");
@@ -159,7 +193,6 @@ abstract sealed class BlockDigest implements Digest
         compress(block, 0);
 
         writeResult(out, offset);
-        reset();
     }
 
     /** Writes the bit length in the byte order of the respective algorithm. */

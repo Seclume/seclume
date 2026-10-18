@@ -80,6 +80,19 @@ public final class TokenStream {
         }
 
         /**
+         * A statement without a result of its own reported how many rows it
+         * changed - an insert between two selects, say. JDBC hands such a
+         * count out as a result of its own, in its place among the others.
+         *
+         * <p>Not called for the count that closes a select (that is the
+         * number of rows it returned), nor for the {@code DONE_PROC} that
+         * closes a procedure call, whose statements have reported theirs
+         * already. Default empty.
+         */
+        default void counted(long count) throws SQLException {
+        }
+
+        /**
          * Asked after every packet: whether the reading may stop here and go
          * on later, because the application can already work on what came.
          * Default no - most answers are read whole.
@@ -91,6 +104,8 @@ public final class TokenStream {
 
     private List<TdsColumn> columns = List.of();
     private TdsRow row;
+    /** A result's description arrived and its DONE has not - see RowHandler#counted. */
+    private boolean resultOpen;
     private long updateCount = -1;
     /** Whether the server said it stopped because it was asked to. */
     private boolean attention;
@@ -204,6 +219,9 @@ public final class TokenStream {
                     columns = parsed.columns();
                     row = columns.isEmpty() ? null : new TdsRow(in, columns);
                     p = parsed.end();
+                    if (!columns.isEmpty()) {
+                        resultOpen = true;
+                    }
                     if (handler != null && refused == null && !columns.isEmpty()) {
                         handler.nextResult(columns);
                     }
@@ -258,7 +276,16 @@ public final class TokenStream {
                         if (firstUpdateCount < 0) {
                             firstUpdateCount = count;
                         }
+                        if (!resultOpen && token != Tds.TOKEN_DONE_PROC
+                                && handler != null && refused == null) {
+                            try {
+                                handler.counted(count);
+                            } catch (SQLException e) {
+                                refused = e;
+                            }
+                        }
                     }
+                    resultOpen = false;
                     p += DONE_SIZE;
                 }
                 case Tds.TOKEN_RETURN_VALUE -> p = readReturnValue(in, p);

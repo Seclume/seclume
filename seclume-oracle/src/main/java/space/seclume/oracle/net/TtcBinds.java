@@ -183,6 +183,16 @@ public final class TtcBinds {
         set(index, new Output(type, true));
     }
 
+    /** Whether any bind carries a value in - not every one an output. */
+    public boolean hasInput() {
+        for (Object value : values) {
+            if (!(value instanceof Output)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Whether this list has an output bind in it. */
     public boolean hasOutput() {
         for (Object value : values) {
@@ -339,6 +349,18 @@ public final class TtcBinds {
                 }
             }
         }
+    }
+
+    /** Whether the last description had a long value in it - read after putDescriptors. */
+    public boolean hasLong() {
+        if (described != null) {
+            for (boolean isLong : described) {
+                if (isLong) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private boolean isLong(int index) {

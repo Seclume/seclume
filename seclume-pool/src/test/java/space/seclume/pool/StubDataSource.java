@@ -188,7 +188,7 @@ final class StubDataSource implements DataSource {
     }
 
     private volatile RuntimeException uncheckedFailure;
-    private volatile Runnable beforeReturn;
+    private volatile java.util.function.Consumer<StubConnection> beforeReturn;
 
     /**
      * From now on every connect fails unchecked - the way a secret provider
@@ -200,6 +200,15 @@ final class StubDataSource implements DataSource {
 
     /** Runs {@code hook} after each login, just before the connection is handed back. */
     void beforeReturn(Runnable hook) {
+        this.beforeReturn = connection -> hook.run();
+    }
+
+    /**
+     * Runs {@code hook} with each new connection after its login, just before
+     * it is handed back - the connection itself, since with logins in parallel
+     * the last one in {@link #handedOut()} may be another thread's.
+     */
+    void beforeReturn(java.util.function.Consumer<StubConnection> hook) {
         this.beforeReturn = hook;
     }
 
@@ -233,9 +242,9 @@ final class StubDataSource implements DataSource {
         opened.incrementAndGet();
         StubConnection connection = new StubConnection();
         handedOut.add(connection);
-        Runnable hook = beforeReturn;
+        java.util.function.Consumer<StubConnection> hook = beforeReturn;
         if (hook != null) {
-            hook.run();
+            hook.accept(connection);
         }
         return connection.proxy;
     }

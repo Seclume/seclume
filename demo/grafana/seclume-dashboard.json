@@ -1,0 +1,425 @@
+{
+  "title": "seclume",
+  "uid": "seclume-overview",
+  "description": "seclume pools, logins, TLS and secrets - from the Spring Boot starter's Micrometer meters via Prometheus. No panel shows a user, a host or a value.",
+  "tags": [
+    "seclume",
+    "jdbc",
+    "database"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus"
+      },
+      {
+        "name": "application",
+        "label": "Application",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(seclume_pool_connections_active, application)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".*"
+      },
+      {
+        "name": "pool",
+        "label": "Pool",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "query": "label_values(seclume_pool_connections_active{application=~\"$application\"}, pool)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2,
+        "allValue": ".*"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Pool",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "gauge",
+      "title": "Saturation",
+      "description": "Connections in use against the configured maximum. Near 100 % with threads waiting is the moment before timeouts.",
+      "gridPos": {
+        "h": 7,
+        "w": 5,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.95
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (pool) (seclume_pool_connections_active{application=~\"$application\", pool=~\"$pool\"} / seclume_pool_connections_max{application=~\"$application\", pool=~\"$pool\"})",
+          "legendFormat": "{{pool}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections",
+      "gridPos": {
+        "h": 7,
+        "w": 10,
+        "x": 5,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (pool) (seclume_pool_connections_active{application=~\"$application\", pool=~\"$pool\"})",
+          "legendFormat": "{{pool}} in use"
+        },
+        {
+          "expr": "sum by (pool) (seclume_pool_connections_idle{application=~\"$application\", pool=~\"$pool\"})",
+          "legendFormat": "{{pool}} free"
+        },
+        {
+          "expr": "sum by (pool) (seclume_pool_connections_pending{application=~\"$application\", pool=~\"$pool\"})",
+          "legendFormat": "{{pool}} threads waiting"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Problems in the last hour",
+      "description": "Each of these should be zero. A timeout is a request that failed; a refused reset closed a connection; a leak is a connection held past the threshold.",
+      "gridPos": {
+        "h": 7,
+        "w": 9,
+        "x": 15,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(seclume_pool_timeouts_total{application=~\"$application\", pool=~\"$pool\"}[1h]))",
+          "legendFormat": "timeouts"
+        },
+        {
+          "expr": "sum(increase(seclume_pool_resets_refused_total{application=~\"$application\", pool=~\"$pool\"}[1h]))",
+          "legendFormat": "resets refused"
+        },
+        {
+          "expr": "sum(increase(seclume_pool_leaks_total{application=~\"$application\", pool=~\"$pool\"}[1h]))",
+          "legendFormat": "leaks"
+        },
+        {
+          "expr": "sum(increase(seclume_pool_renewed_total{application=~\"$application\", pool=~\"$pool\"}[1h]))",
+          "legendFormat": "renewed under the application"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Waiting for a connection (p50, p99)",
+      "description": "seclume.pool.acquire - from asking to holding a connection, opening one included.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, pool) (rate(seclume_pool_acquire_seconds_bucket{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval])))",
+          "legendFormat": "{{pool}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, pool) (rate(seclume_pool_acquire_seconds_bucket{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval])))",
+          "legendFormat": "{{pool}} p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Held by the application (p50, p99)",
+      "description": "seclume.pool.usage - how long a borrow lasts. Long holds starve the pool.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, pool) (rate(seclume_pool_usage_seconds_bucket{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval])))",
+          "legendFormat": "{{pool}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, pool) (rate(seclume_pool_usage_seconds_bucket{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval])))",
+          "legendFormat": "{{pool}} p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Borrows and new connections per second",
+      "description": "Many new connections relative to borrows means connections are being thrown away - lifetime, rotation or failures.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (pool) (rate(seclume_pool_borrowed_total{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval]))",
+          "legendFormat": "{{pool}} borrows"
+        },
+        {
+          "expr": "sum by (pool) (rate(seclume_pool_created_total{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval]))",
+          "legendFormat": "{{pool}} opened"
+        },
+        {
+          "expr": "sum by (pool) (rate(seclume_pool_retired_total{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval]))",
+          "legendFormat": "{{pool}} retired"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Logins, TLS and secrets",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Opening a connection (p99)",
+      "description": "seclume.pool.creation - TCP, TLS and the login together. A rise is the server, the network or the secret source.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, pool) (rate(seclume_pool_creation_seconds_bucket{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval])))",
+          "legendFormat": "{{pool}} p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Logins by outcome",
+      "description": "seclume.authentications. Failures after a rotation mean the server and the secret source disagree.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (kind, method, outcome) (rate(seclume_authentications_seconds_count{application=~\"$application\"}[$__rate_interval]))",
+          "legendFormat": "{{kind}} {{method}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Secret reads and rotations",
+      "description": "seclume.secret.reads by provider and outcome, and rotations seen by the pools.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 17
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "expr": "sum by (provider, outcome) (rate(seclume_secret_reads_seconds_count{application=~\"$application\"}[$__rate_interval]))",
+          "legendFormat": "read {{provider}} {{outcome}}"
+        },
+        {
+          "expr": "sum by (pool) (increase(seclume_pool_secret_rotations_total{application=~\"$application\", pool=~\"$pool\"}[$__rate_interval]))",
+          "legendFormat": "rotation {{pool}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "TLS handshakes (p99) by stack",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, stack) (rate(seclume_tls_handshakes_seconds_bucket{application=~\"$application\"}[$__rate_interval])))",
+          "legendFormat": "{{stack}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Slow statements by shape",
+      "description": "seclume.query.slow, tagged by fingerprint - the statement's shape, never its values. Needs seclume.metrics.queries=true.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 25
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (fingerprint) (rate(seclume_query_slow_seconds_count{application=~\"$application\"}[$__rate_interval])))",
+          "legendFormat": "{{fingerprint}}"
+        }
+      ]
+    }
+  ]
+}

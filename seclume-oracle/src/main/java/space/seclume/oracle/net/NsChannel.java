@@ -606,25 +606,29 @@ public final class NsChannel implements AutoCloseable {
             // A transport without urgent data. The marker below still reaches
             // a listener with DISABLE_OOB=ON.
         }
-        WireBuffer marker = new WireBuffer(NsPacket.HEADER_SIZE + 3);
-        marker.putZeroes(NsPacket.HEADER_SIZE);
-        marker.putByte((byte) 1);
-        marker.putByte((byte) 0);
-        marker.putByte((byte) NsPacket.MARKER_TYPE_BREAK);
-        int length = marker.position();
-        if (NsPacket.hasLargeLength(protocolVersion)) {
-            marker.putByteAt(0, (byte) (length >>> 24));
-            marker.putByteAt(1, (byte) (length >>> 16));
-            marker.putByteAt(2, (byte) (length >>> 8));
-            marker.putByteAt(3, (byte) length);
-        } else {
-            marker.putByteAt(0, (byte) (length >>> 8));
-            marker.putByteAt(1, (byte) length);
+        // Closed again at once: a WireBuffer is native memory in a shared
+        // arena, which no collector frees - left open, every cancel and
+        // every query timeout kept a few bytes for good.
+        try (WireBuffer marker = new WireBuffer(NsPacket.HEADER_SIZE + 3)) {
+            marker.putZeroes(NsPacket.HEADER_SIZE);
+            marker.putByte((byte) 1);
+            marker.putByte((byte) 0);
+            marker.putByte((byte) NsPacket.MARKER_TYPE_BREAK);
+            int length = marker.position();
+            if (NsPacket.hasLargeLength(protocolVersion)) {
+                marker.putByteAt(0, (byte) (length >>> 24));
+                marker.putByteAt(1, (byte) (length >>> 16));
+                marker.putByteAt(2, (byte) (length >>> 8));
+                marker.putByteAt(3, (byte) length);
+            } else {
+                marker.putByteAt(0, (byte) (length >>> 8));
+                marker.putByteAt(1, (byte) length);
+            }
+            marker.putByteAt(4, (byte) NsPacket.TYPE_MARKER);
+            java.nio.ByteBuffer view = marker.view();
+            view.clear().position(0).limit(length);
+            writeAll(view);
         }
-        marker.putByteAt(4, (byte) NsPacket.TYPE_MARKER);
-        java.nio.ByteBuffer view = marker.view();
-        view.clear().position(0).limit(length);
-        writeAll(view);
         return true;
     }
 
@@ -1287,6 +1291,10 @@ public final class NsChannel implements AutoCloseable {
         released = true;
         if (tls != null && !keepEncryption) {
             tls.discard();
+        }
+        if (sealed != null) {
+            sealed.close();          // a scratch buffer, not part of what is handed over
+            sealed = null;
         }
         out.close();
         in.close();

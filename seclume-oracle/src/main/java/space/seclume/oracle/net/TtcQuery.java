@@ -196,7 +196,9 @@ public final class TtcQuery {
     public static void put(WireBuffer out, int sequence, String sql, int prefetchRows,
                            boolean query, TtcBinds binds, int cursorId, int iterations,
                            Rows rows, boolean autoCommit, boolean plsql, int fieldVersion) {
-        byte[] text = sql.getBytes(java.nio.charset.StandardCharsets.UTF_8); // seclume-allow: statement text, never a secret
+        byte[] text = cursorId == 0
+                ? sql.getBytes(java.nio.charset.StandardCharsets.UTF_8) // seclume-allow: statement text, never a secret
+                : null;
 
         out.putByte((byte) TtcMessage.TYPE_FUNCTION);
         out.putByte((byte) FUNCTION);
@@ -227,7 +229,7 @@ public final class TtcQuery {
         TtcParameters.putNumber(out, options);
         TtcParameters.putNumber(out, cursorId);
         out.putByte((byte) (cursorId == 0 ? 1 : 0));      // pointer: statement text
-        TtcParameters.putNumber(out, cursorId == 0 ? text.length : 0);
+        TtcParameters.putNumber(out, text != null ? text.length : 0);
         out.putByte((byte) 1);                            // pointer: vector
         TtcParameters.putNumber(out, AL8I4_LENGTH);
         out.putByte((byte) 0);                            // pointer: al8o4
@@ -270,7 +272,15 @@ public final class TtcQuery {
                     }
                 }
                 binds.putDescriptors(out, sizes, fieldVersion);
-                for (int row = 0; row < iterations; row++) {
+                // Outputs only in a statement - "insert ... returning id into
+                // :1" with no value of its own: then there is no row of
+                // values to send, and an empty one is what the server refused
+                // with ORA-03146. Not so for a PL/SQL call: its outputs have
+                // slots in the row - a cursor's carries the number 0 - and a
+                // call with nothing but a cursor out, sent without them, left
+                // the server waiting for a row that never came.
+                boolean values = plsql || binds.hasInput();
+                for (int row = 0; row < iterations && values; row++) {
                     if (rows != null) {
                         rows.bind(row);
                     }
@@ -447,6 +457,48 @@ public final class TtcQuery {
             }
         }
         channel.sendData();
+    }
+
+    /** Execute an open cursor again and bring the first rows - the short call. */
+    public static final int FUNCTION_AGAIN_AND_FETCH = 78;
+
+    /**
+     * A query run again on the cursor it ran on before, with variables of the
+     * same description: the cursor number, how many rows may come with the
+     * answer, and the values.
+     *
+     * <p>The full call ({@link #put}) describes every variable again - type,
+     * size, character set - and the server reads all of it again. This one
+     * leaves that out, which is what the reference client sends for a
+     * prepared query from its second execution on: 15 bytes instead of 87 for
+     * a query with one number, and less work on the server. It is only right
+     * where the server's description of the variables still holds, which the
+     * caller decides - see OracleSession#sameShape.
+     */
+    public static void sendAgain(NsChannel channel, int sequence, int cursorId,
+                                 int prefetchRows, TtcBinds binds) throws IOException {
+        putAgain(channel.beginData(), sequence, cursorId, prefetchRows, binds);
+        channel.sendData();
+    }
+
+    /** The short call into {@code out} - see {@link #sendAgain}. */
+    public static void putAgain(WireBuffer out, int sequence, int cursorId, int prefetchRows,
+                                TtcBinds binds) {
+        out.putByte((byte) TtcMessage.TYPE_FUNCTION);
+        out.putByte((byte) FUNCTION_AGAIN_AND_FETCH);
+        out.putByte((byte) sequence);
+        TtcParameters.putNumber(out, 0);                  // token number
+        TtcParameters.putNumber(out, cursorId);
+        TtcParameters.putNumber(out, prefetchRows);
+        TtcParameters.putNumber(out, OPTION_EXECUTE | OPTION_FETCH);
+        TtcParameters.putNumber(out, 0);                  // the second options, none
+        if (binds != null && binds.count() > 0) {
+            try {
+                binds.putValues(out);
+            } catch (java.sql.SQLException e) {
+                throw new IllegalArgumentException(e.getMessage(), e);
+            }
+        }
     }
 
     /** The same, saying whether the statement is an anonymous PL/SQL block. */

@@ -67,8 +67,11 @@ public final class GcpSecretManagerSecretProvider implements SecretProvider {
         this.port = port;
         this.verify = verify;
         this.timeoutMillis = timeoutMillis;
-        this.resource = "projects/" + project + "/secrets/" + name + "/versions/"
-                + (version == null || version.isEmpty() ? "latest" : version);
+        // Into the request path as they are - see SecretNames.
+        this.resource = "projects/" + SecretNames.require("the project", project, false)
+                + "/secrets/" + SecretNames.require("the secret name", name, false)
+                + "/versions/" + (version == null || version.isEmpty() ? "latest"
+                        : SecretNames.require("the version", version, false));
         this.token = token;
         this.maxLength = maxLength;
     }

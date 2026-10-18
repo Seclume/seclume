@@ -180,6 +180,11 @@ public final class PgConnection
     }
 
     @Override
+    public boolean resetAnswered() {
+        return session.discardAnswered();
+    }
+
+    @Override
     public void settleReset() throws SQLException {
         session.settleDiscard();
     }

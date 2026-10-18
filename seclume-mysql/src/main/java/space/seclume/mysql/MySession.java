@@ -1960,6 +1960,11 @@ public final class MySession implements AutoCloseable {
         return resetOwed;
     }
 
+    /** Whether that answer, if one is owed, has arrived - see MyChannel.hasInput. */
+    public boolean resetAnswered() {
+        return !resetOwed || channel.hasInput();
+    }
+
     /**
      * Reads the answer to a reset sent at the last return. A refused reset
      * ends the session: whatever the last borrower left in it is still there,

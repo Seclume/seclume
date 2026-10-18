@@ -109,7 +109,12 @@ public final class FrameworkMatrix {
                     + "cursor - SQL Server and Oracle with SQLDialect.DEFAULT, because "
                     + "jOOQ's free edition has no dialect for either"),
             new Framework("MyBatis", "MyBatisOn",
-                    "generated keys, dynamic SQL, the batch executor, a typed null"));
+                    "generated keys, dynamic SQL, the batch executor, a typed null"),
+            new Framework("R2DBC (seclume-r2dbc)", "R2dbcTckOn",
+                    "R2DBC's own conformance suite, r2dbc-spi-test, against each server - "
+                    + "where a server has no text of several statements (Oracle) or refuses "
+                    + "it on purpose (MySQL), that case checks the refusal; on Oracle "
+                    + "generated keys are asked for by name and NUMBER is read as a number"));
 
     private static final Pattern SET = Pattern.compile("Test set: (\\S+)");
     private static final Pattern COUNTS = Pattern.compile(

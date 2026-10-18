@@ -125,13 +125,19 @@ public final class CanonicalRequest implements AutoCloseable {
             return;
         }
         closed = true;
-        buffer.asSlice(0, length).fill((byte) 0);
+        // The whole buffer, not only what length says was written: a write
+        // that failed half way - the buffer too small - put bytes past it.
+        buffer.fill((byte) 0);
         length = 0;
     }
 
     /** For a caller that wants to check the shape in a test. */
     public byte at(int index) {
         checkOpen();
+        return rawAt(index);
+    }
+
+    byte rawAt(int index) {
         return buffer.get(ValueLayout.JAVA_BYTE, index);
     }
 }

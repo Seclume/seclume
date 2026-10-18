@@ -119,6 +119,16 @@ public class PoolBenchmark {
         return new SeclumePool(source, settings);
     }
 
+    /** The pool under test - for {@link PacedPoolBenchmark}. */
+    DataSource pool() {
+        return pool;
+    }
+
+    /** The query every borrow runs. */
+    String selectOne() {
+        return selectOne;
+    }
+
     @TearDown(Level.Trial)
     public void close() throws Exception {
         if (pool instanceof AutoCloseable closeable) {

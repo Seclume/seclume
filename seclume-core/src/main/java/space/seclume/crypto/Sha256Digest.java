@@ -48,16 +48,16 @@ final class Sha256Digest extends BlockDigest {
     @Override
     void compress(MemorySegment data, long offset) {
         for (int i = 0; i < 16; i++) {
-            state.set(BE_INT, W_OFFSET + i * 4L, data.get(BE_INT, offset + i * 4L));
+            state.set(NE_INT, W_OFFSET + i * 4L, data.get(BE_INT, offset + i * 4L));
         }
         for (int i = 16; i < 64; i++) {
-            int w15 = state.get(BE_INT, W_OFFSET + (i - 15) * 4L);
-            int w2 = state.get(BE_INT, W_OFFSET + (i - 2) * 4L);
+            int w15 = state.get(NE_INT, W_OFFSET + (i - 15) * 4L);
+            int w2 = state.get(NE_INT, W_OFFSET + (i - 2) * 4L);
             int s0 = Integer.rotateRight(w15, 7) ^ Integer.rotateRight(w15, 18) ^ (w15 >>> 3);
             int s1 = Integer.rotateRight(w2, 17) ^ Integer.rotateRight(w2, 19) ^ (w2 >>> 10);
-            int w = state.get(BE_INT, W_OFFSET + (i - 16) * 4L) + s0
-                    + state.get(BE_INT, W_OFFSET + (i - 7) * 4L) + s1;
-            state.set(BE_INT, W_OFFSET + i * 4L, w);
+            int w = state.get(NE_INT, W_OFFSET + (i - 16) * 4L) + s0
+                    + state.get(NE_INT, W_OFFSET + (i - 7) * 4L) + s1;
+            state.set(NE_INT, W_OFFSET + i * 4L, w);
         }
 
         int a = state.get(BE_INT, H_OFFSET);
@@ -72,7 +72,7 @@ final class Sha256Digest extends BlockDigest {
         for (int i = 0; i < 64; i++) {
             int s1 = Integer.rotateRight(e, 6) ^ Integer.rotateRight(e, 11) ^ Integer.rotateRight(e, 25);
             int ch = (e & f) ^ (~e & g);
-            int temp1 = h + s1 + ch + K[i] + state.get(BE_INT, W_OFFSET + i * 4L);
+            int temp1 = h + s1 + ch + K[i] + state.get(NE_INT, W_OFFSET + i * 4L);
             int s0 = Integer.rotateRight(a, 2) ^ Integer.rotateRight(a, 13) ^ Integer.rotateRight(a, 22);
             int maj = (a & b) ^ (a & c) ^ (b & c);
             int temp2 = s0 + maj;

@@ -574,6 +574,113 @@ class PoolTest {
         }
     }
 
+    /**
+     * A listener that throws - a metrics registry closing during shutdown -
+     * costs a data point, never a permit, a handle or an open session.
+     */
+    @Test
+    void aListenerThatThrowsCostsNothing() throws Exception {
+        StubDataSource source = new StubDataSource();
+        try (SeclumePool pool = new SeclumePool(source, settings(1))) {
+            pool.listen(new PoolListener() {
+                @Override
+                public void acquired(long waitedNanos) {
+                    throw new IllegalStateException("registry closed");
+                }
+
+                @Override
+                public void released(long heldNanos) {
+                    throw new IllegalStateException("registry closed");
+                }
+
+                @Override
+                public void opened(long tookNanos) {
+                    throw new IllegalStateException("registry closed");
+                }
+            });
+            for (int i = 0; i < 5; i++) {
+                try (Connection connection = pool.getConnection()) {
+                    assertFalse(connection.isClosed());
+                }
+            }
+            assertEquals(0, pool.activeCount());
+            assertEquals(1, source.openedCount(), "a connection was lost and opened again");
+        }
+    }
+
+    /** Several listeners - one per metrics registry - are all told. */
+    @Test
+    void everyListenerIsTold() throws Exception {
+        StubDataSource source = new StubDataSource();
+        try (SeclumePool pool = new SeclumePool(source, settings(1))) {
+            AtomicInteger first = new AtomicInteger();
+            AtomicInteger second = new AtomicInteger();
+            PoolListener one = new PoolListener() {
+                @Override
+                public void acquired(long waitedNanos) {
+                    first.incrementAndGet();
+                }
+            };
+            pool.listen(one);
+            pool.listen(new PoolListener() {
+                @Override
+                public void acquired(long waitedNanos) {
+                    second.incrementAndGet();
+                }
+            });
+            pool.getConnection().close();
+            pool.unlisten(one);
+            pool.getConnection().close();
+            assertEquals(1, first.get());
+            assertEquals(2, second.get());
+        }
+    }
+
+    /**
+     * A server that refuses for now - no free server process, too many
+     * connections - is waited out within the connection timeout, not passed
+     * on to the borrower at once.
+     */
+    @Test
+    void aTransientRefusalIsWaitedOut() throws Exception {
+        StubDataSource source = new StubDataSource();
+        source.failWith(new java.sql.SQLTransientConnectionException(
+                "ORA-12516: no free server process at the moment", "08004"));
+        try (SeclumePool pool = new SeclumePool(source, settings(1))) {
+            Thread.ofVirtual().start(() -> {
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                source.succeedAgain();
+            });
+            try (Connection connection = pool.getConnection()) {
+                assertFalse(connection.isClosed());
+            }
+            assertEquals(0, pool.activeCount());
+        }
+    }
+
+    /** A refusal that outlasts the timeout is named as the cause of it. */
+    @Test
+    void aTransientRefusalUntilTheDeadlineIsTheCauseOfTheTimeout() throws Exception {
+        StubDataSource source = new StubDataSource();
+        java.sql.SQLTransientConnectionException refusal =
+                new java.sql.SQLTransientConnectionException("too many connections", "08004");
+        source.failWith(refusal);
+        try (SeclumePool pool = new SeclumePool(source, settings(1))) {
+            long start = System.nanoTime();
+            SQLException e = assertThrows(java.sql.SQLTransientConnectionException.class,
+                    pool::getConnection);
+            assertTrue(System.nanoTime() - start >= TimeUnit.MILLISECONDS.toNanos(450),
+                    "gave up before the connection timeout");
+            assertSame(refusal, e.getCause());
+            assertTrue(e.getMessage().contains("too many connections"), e.getMessage());
+            assertEquals(0, pool.activeCount(), "a permit was lost");
+        }
+    }
+
     @Test
     void closingThePoolClosesEveryConnection() throws Exception {
         StubDataSource source = new StubDataSource();

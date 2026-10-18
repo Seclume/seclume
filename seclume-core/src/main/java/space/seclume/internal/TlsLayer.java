@@ -143,6 +143,15 @@ public interface TlsLayer extends AutoCloseable {
     void replaceTransport(Transport replacement);
 
     /**
+     * Whether something has arrived to be read: plaintext already opened, or
+     * bytes on the transport - see {@link Transport#bytesWaiting()}. {@code -1}
+     * when this layer cannot tell.
+     */
+    default int bytesWaiting() {
+        return -1;
+    }
+
+    /**
      * Releases this layer without closing the transport underneath.
      *
      * <p>Separate from {@link #close()} because the two implementations

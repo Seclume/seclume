@@ -287,7 +287,10 @@ public final class OpenSshPrivateKey {
         /** A length or a count - checked against what is there. */
         int uint32() {
             int value = raw32();
-            if (value < 0 || value > length) {
+            // Against what is left after this field, not against the whole
+            // key: a length that fits the key but not the rest of it sent the
+            // reader past its section.
+            if (value < 0 || value > length - at) {
                 throw new IllegalArgumentException("a length in the OpenSSH key is out of range");
             }
             return value;

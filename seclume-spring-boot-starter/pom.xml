@@ -204,6 +204,15 @@
       <optional>true</optional>
     </dependency>
 
+    <!-- R2DBC, optional: with seclume-r2dbc on the class path the
+         ConnectionFactory borrows from the seclume pool. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-r2dbc</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-jdbc</artifactId>
