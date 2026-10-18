@@ -127,9 +127,7 @@ class ConcurrentPoolStateMachineTest {
         Queue<String> violations = new ConcurrentLinkedQueue<>();
         StubDataSource source = new StubDataSource();
         Map<StubDataSource.StubConnection, SlowReset> resets = new ConcurrentHashMap<>();
-        source.beforeReturn(() -> {
-            List<StubDataSource.StubConnection> all = source.handedOut();
-            StubDataSource.StubConnection newest = all.get(all.size() - 1);
+        source.beforeReturn((StubDataSource.StubConnection newest) -> {
             SlowReset reset = new SlowReset(newest, violations);
             newest.sessionReset = reset;
             resets.put(newest, reset);

@@ -105,9 +105,7 @@ class PoolStateMachineTest {
         int size = 1 + random.nextInt(4);
         StubDataSource source = new StubDataSource();
         Map<StubDataSource.StubConnection, ModelReset> resets = new LinkedHashMap<>();
-        source.beforeReturn(() -> {
-            List<StubDataSource.StubConnection> all = source.handedOut();
-            StubDataSource.StubConnection newest = all.get(all.size() - 1);
+        source.beforeReturn((StubDataSource.StubConnection newest) -> {
             ModelReset reset = new ModelReset();
             newest.sessionReset = reset;
             resets.put(newest, reset);
