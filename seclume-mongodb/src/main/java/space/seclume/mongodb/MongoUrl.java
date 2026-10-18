@@ -41,7 +41,11 @@ public record MongoUrl(String host, int port, String user, String authSource,
             "connecttimeout", "timeout", "sockettimeout"
     );
 
-    static MongoUrl parse(String url) {
+    /**
+     * Parses a URL; public for seclume's own MongoDB driver, which takes the
+     * same URLs.
+     */
+    public static MongoUrl parse(String url) {
         if (url == null || url.isEmpty()) {
             throw new IllegalArgumentException("MongoDB URL must not be null or empty");
         }
