@@ -1,6 +1,9 @@
 package space.seclume.oracle.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.List;
 
@@ -97,6 +100,43 @@ class TtcRowCarryTest {
             assertEquals("ZL_TICKET", row.text(0), "still, two blocks later");
             assertEquals("HOLDER", row.text(1));
             row.release();
+        }
+    }
+
+    /**
+     * The next answer's row takes the buffers over instead of making new ones
+     * - closing one stops every thread of the JVM - and finds nothing of the
+     * answer before in them.
+     */
+    @Test
+    void theNextAnswerTakesTheBuffersOverWiped() {
+        try (WireBuffer first = new WireBuffer(64);
+                WireBuffer second = new WireBuffer(64)) {
+            putRow(first, "ZL_SECRET", "CARD_NO");
+            TtcRow before = new TtcRow(first, COLUMNS);
+            before.read(0, null);
+            before.carryOver();
+            WireBuffer buffer = before.carryBuffer();
+            assertNotNull(buffer);
+
+            TtcRow next = new TtcRow(second, COLUMNS);
+            next.adoptBuffers(before);
+
+            assertSame(buffer, next.carryBuffer(), "a new buffer after all");
+            assertNull(before.carryBuffer(), "two rows own one buffer");
+            for (int i = 0; i < buffer.capacity(); i++) {
+                assertEquals(0, buffer.segment().get(java.lang.foreign.ValueLayout.JAVA_BYTE, i),
+                        "a byte of the answer before is still there, at " + i);
+            }
+
+            putRow(second, "ZL_TICKET", "HOLDER");
+            next.read(0, null);
+            next.carryOver();
+            assertEquals("ZL_TICKET", next.text(0));
+            assertEquals("HOLDER", next.text(1));
+            before.release();                  // owns nothing any more
+            assertEquals("HOLDER", next.text(1));
+            next.release();
         }
     }
 }

@@ -537,6 +537,16 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
         if (description.isXml()) {
             return sqlXmlAt(column);
         }
+        // A LOB column is a Blob or a Clob, as ojdbc and getColumnClassName
+        // have it. It fell through to the text below, and a BLOB answered
+        // getObject with "a BLOB is not text" - found by R2DBC's test kit,
+        // and so by anything that reads a row generically.
+        if (description.type() == OracleColumn.TYPE_BLOB) {
+            return blobAt(column);
+        }
+        if (description.type() == OracleColumn.TYPE_CLOB) {
+            return clobAt(column);
+        }
         if (description.type() == OracleColumn.TYPE_NUMBER) {
             // BigDecimal for every NUMBER, as ojdbc hands it out: code that
             // casts getObject - Spring's queryForList, a row mapper - was

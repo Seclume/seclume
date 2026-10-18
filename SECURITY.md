@@ -38,3 +38,23 @@ git verify-tag v0.11.0
 ```
 
 Compare the full fingerprint, not just the name or the short key id.
+
+## What is proven, and how
+
+Claims about secrets in memory are easy to make. These are the ones the test suite proves,
+each with a negative control that has to fail (see [TESTING.md](TESTING.md#proving-the-promises-not-only-the-paths)):
+
+- **No password in a heap dump** (`HeapDumpTest`), and **none anywhere in the process**
+  after a TLS login with SCRAM, with the connection closed or still open
+  (`ProcessMemoryTest`, Linux: every readable region through `/proc/<pid>/mem`, about 400 MB).
+  While a login runs, the password is in native memory for that moment; that moment is not
+  what these tests cover.
+- **No timing leak** in the comparisons of server proofs and TLS Finished, in the Java AES-GCM
+  tag check, or in the Java AES (`ConstantTimeLeakageTest`, dudect's method).
+- **No session state handed to the next borrower** (`SessionResetTest` on all four databases,
+  and the pool as a state machine, single- and multi-threaded).
+- **The own TLS agrees with OpenSSL, GnuTLS, Go, rustls and JSSE**, and refuses what it must
+  (`TlsInteropTest`, and TLS-Anvil weekly).
+
+What is not proven here is listed in the README under *What it protects, and what it does
+not*.

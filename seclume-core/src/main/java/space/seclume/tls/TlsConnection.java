@@ -88,7 +88,7 @@ public final class TlsConnection implements Transport {
      * give away the XOR of their plaintexts and the authentication key, and
      * with it the power to forge records. Found in review, 25.09.2026.
      */
-    private boolean copyOutstanding;
+    private volatile boolean copyOutstanding;
     private boolean endOfStream;
 
     /**
@@ -164,6 +164,16 @@ public final class TlsConnection implements Transport {
         } finally {
             reading.unlock();
         }
+    }
+
+    /**
+     * Plaintext opened and not yet taken, or else what the transport holds -
+     * see {@link Transport#bytesWaiting()}. Records are read exactly, header
+     * then body, so nothing sits between the two.
+     */
+    public int bytesWaiting() {
+        int opened = pendingLength;
+        return opened > 0 ? opened : records.transport().bytesWaiting();
     }
 
     private int readLocked(ByteBuffer into) throws IOException {
@@ -466,10 +476,21 @@ public final class TlsConnection implements Transport {
             throw new IllegalStateException("half of a post-handshake message is buffered - "
                     + "freezing now would lose it");
         }
-        int length = TlsMigration.encode(out, offset,
-                records.readProtection(), records.writeProtection());
-        frozen = true;
-        return length;
+        // Under the write lock: a cancel sends from a timer thread, and a
+        // record written while the write state is copied would leave the
+        // copy one sequence number behind - the nonce the next record from
+        // it would use again. Not the read lock: a reader blocked waiting for
+        // the peer would hold this up, and a stale read state only fails the
+        // copy's first tag, which is safe.
+        writing.lock();
+        try {
+            int length = TlsMigration.encode(out, offset,
+                    records.readProtection(), records.writeProtection());
+            frozen = true;
+            return length;
+        } finally {
+            writing.unlock();
+        }
     }
 
     /**
@@ -498,10 +519,17 @@ public final class TlsConnection implements Transport {
         if (postHandshake.buffered() > 0) {
             throw new IllegalStateException("half of a post-handshake message is buffered");
         }
-        int length = TlsMigration.encode(out, offset, records.readProtection(),
-                records.writeProtection());
-        copyOutstanding = true;
-        return length;
+        // Under the write lock, as freeze: the copy's write state and the
+        // refusal to write after it are one step, with no record between.
+        writing.lock();
+        try {
+            int length = TlsMigration.encode(out, offset, records.readProtection(),
+                    records.writeProtection());
+            copyOutstanding = true;
+            return length;
+        } finally {
+            writing.unlock();
+        }
     }
 
     /**

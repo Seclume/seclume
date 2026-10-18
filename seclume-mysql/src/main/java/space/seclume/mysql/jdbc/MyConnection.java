@@ -163,6 +163,11 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
     }
 
     @Override
+    public boolean resetAnswered() {
+        return session.resetAnswered();
+    }
+
+    @Override
     public void settleReset() throws SQLException {
         session.settleReset();
     }

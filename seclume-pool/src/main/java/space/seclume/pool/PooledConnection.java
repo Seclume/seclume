@@ -222,16 +222,15 @@ final class PooledConnection implements Connection {
         }
         front(null);
         if (!is(BROKEN) && settling != null && settling.resetOwed()) {
-            // The reset is on its way; the connection goes back to the pool
-            // once its answer is read - see SeclumePool.releaseAfterReset.
-            pool.releaseAfterReset(entry, settling);
-        } else {
-            pool.release(entry, is(BROKEN));
+            // The reset is on its way; its answer is read before the
+            // connection is lent again - see SeclumePool.settle.
+            entry.owe(settling);
         }
+        pool.release(entry, is(BROKEN));
         settling = null;
     }
 
-    /** The reset sent by the last restore(), whose answer the pool reads before lending. */
+    /** The reset sent by the last restore(), whose answer is read before lending. */
     private space.seclume.SessionReset settling;
 
     /**

@@ -105,6 +105,18 @@ public interface Transport extends AutoCloseable {
         return false;
     }
 
+    /**
+     * How many bytes have arrived and wait to be read, looked at without
+     * reading or waiting; {@code -1} when this transport cannot tell.
+     *
+     * <p>Only a hint, for choosing among connections - whether the answer to
+     * something sent earlier is probably there - never a guarantee that a
+     * read will not wait.
+     */
+    default int bytesWaiting() {
+        return -1;
+    }
+
     /** Whether this transport can still carry bytes. */
     boolean isOpen();
 

@@ -96,6 +96,35 @@ final class ResultBlock implements AutoCloseable {
     }
 
     /**
+     * Takes a row over by copying its bytes into this block's own memory.
+     *
+     * <p>For the results after the first of a text of several statements:
+     * the first takes the receive buffer over (see {@link #append}), and one
+     * buffer cannot be taken over twice. Such texts are scripts, not the
+     * hot path, so the copy is the price of keeping each result apart.
+     */
+    void appendCopy(Row row) {
+        int needed = (rowCount + 1) * columns * 2;
+        if (needed > cells.length) {
+            cells = Arrays.copyOf(cells, Math.max(needed, cells.length * 2));
+        }
+        int base = rowCount * columns * 2;
+        for (int column = 0; column < columns; column++) {
+            int index = base + column * 2;
+            int length = row.length(column);
+            if (length > 0) {
+                cells[index] = data.position();
+                data.putBytes(row.source(), row.offset(column), length);
+                bytes += length;
+            } else {
+                cells[index] = 0;
+            }
+            cells[index + 1] = length;
+        }
+        rowCount++;
+    }
+
+    /**
      * Takes the buffer with the rows over and gives back the empty one.
      *
      * <p>The two swap places: what the session read into becomes the memory of

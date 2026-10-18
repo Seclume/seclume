@@ -18,8 +18,10 @@ import java.sql.SQLException;
  * <p>The pool resets every used session, regardless of SQL text. Functions and
  * stored procedures can change session state without the driver noticing.
  * PostgreSQL uses {@code DISCARD ALL}, MySQL {@code COM_RESET_CONNECTION},
- * and SQL Server the RESETCONNECTION bit on the next request. Oracle reports
- * that a complete reset is unavailable, so the pool retires that session.
+ * and SQL Server the RESETCONNECTION bit on the next request. Oracle has no
+ * complete reset; its driver logs off and logs in again on the same
+ * connection, which gives a new session, and where it cannot (a Kerberos or
+ * Windows login) reports that, so the pool retires that session.
  * Prepared statement caches must be invalidated along with server state.
  *
  * <p>This boundary is the return of a borrow, not migration. Detaching and
@@ -58,13 +60,24 @@ public interface SessionReset {
 
     /**
      * Reads the answer to the reset sent at the return, waiting for it. A
-     * pool calls this before it lends the connection again - off the
-     * returning thread, so that the round trip is spent while the connection
-     * waits in the pool rather than by the next borrower.
+     * pool calls this before it lends the connection again - when it takes it
+     * out, by which time the round trip has usually passed while the
+     * connection waited in the pool (see {@link #resetAnswered}).
      *
      * @throws SQLException when the reset was refused or the connection broke:
      *                      the session must then not be lent again
      */
     default void settleReset() throws SQLException {
+    }
+
+    /**
+     * Whether the answer {@link #resetOwed} speaks of has arrived, so that
+     * {@link #settleReset} reads it without waiting - looked at without
+     * reading. A hint: a pool takes such a connection before one it would
+     * wait a round trip for. {@code true} when nothing is owed, and when the
+     * driver cannot tell.
+     */
+    default boolean resetAnswered() {
+        return true;
     }
 }

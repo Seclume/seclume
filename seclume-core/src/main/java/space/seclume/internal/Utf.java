@@ -40,6 +40,12 @@ public final class Utf {
                     i += 2;
                 }
             }
+            if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+                // Half a pair: written on, it would be CESU-8, which no
+                // server takes for the password it was meant to be. The
+                // position only - never the content.
+                throw new IllegalArgumentException("an unpaired UTF-16 surrogate at byte " + (i - 2));
+            }
             out = writeUtf8(target, out, codePoint);
         }
         return (int) (out - targetOffset);
@@ -67,15 +73,31 @@ public final class Utf {
             } else if ((first & 0xf0) == 0xe0) {
                 codePoint = first & 0x0f;
                 size = 3;
-            } else {
+            } else if ((first & 0xf8) == 0xf0) {
                 codePoint = first & 0x07;
                 size = 4;
+            } else {
+                // A continuation byte where a character should start, or a
+                // byte UTF-8 never uses: taken as a start, it swallowed the
+                // bytes after it, and a mistyped secret became another one.
+                throw new IllegalArgumentException("not UTF-8 at byte " + i);
             }
             if (i + size > lengthInBytes) {
                 throw new IllegalArgumentException("truncated UTF-8 sequence");
             }
             for (int k = 1; k < size; k++) {
-                codePoint = (codePoint << 6) | (byteAt(source, offset + i + k) & 0x3f);
+                int next = byteAt(source, offset + i + k) & 0xff;
+                if ((next & 0xc0) != 0x80) {
+                    throw new IllegalArgumentException("not UTF-8 at byte " + (i + k));
+                }
+                codePoint = (codePoint << 6) | (next & 0x3f);
+            }
+            // Overlong forms (C0 80 for a NUL), surrogates and what lies
+            // beyond Unicode are not UTF-8 either - RFC 3629.
+            int smallest = size == 2 ? 0x80 : size == 3 ? 0x800 : size == 4 ? 0x10000 : 0;
+            if (codePoint < smallest || codePoint > 0x10ffff
+                    || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+                throw new IllegalArgumentException("not UTF-8 at byte " + i);
             }
             i += size;
 

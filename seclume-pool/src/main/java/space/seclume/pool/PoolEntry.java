@@ -262,6 +262,11 @@ final class PoolEntry {
         return now - borrowedAt;
     }
 
+    /** Whether the borrow was timed - see markBorrowed; not every one is. */
+    boolean borrowedSince() {
+        return borrowedAt != 0;
+    }
+
     /**
      * Notes when this went out - and only then, when somebody is watching.
      *
@@ -316,6 +321,36 @@ final class PoolEntry {
 
     boolean isRetiringOnReturn() {
         return retiring;
+    }
+
+    /**
+     * A session reset sent at the return whose answer has not been read -
+     * read by whoever takes this connection next, before it is lent. See
+     * SeclumePool.settle.
+     */
+    private volatile space.seclume.SessionReset owedReset;
+
+    void owe(space.seclume.SessionReset reset) {
+        this.owedReset = reset;
+    }
+
+    /**
+     * Whether a borrower is reading this connection's reset answer right now -
+     * close() leaves it to that thread rather than closing the session under
+     * the read ("Session is acquired by 1 clients").
+     */
+    private volatile boolean settling;
+
+    void settling(boolean now) {
+        this.settling = now;
+    }
+
+    boolean isSettling() {
+        return settling;
+    }
+
+    space.seclume.SessionReset owedReset() {
+        return owedReset;
     }
 
     Throwable borrowTrace() {

@@ -69,6 +69,10 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     /** Longest a waiting thread parks before it looks again by itself. */
     private static final long PARK_NANOS = 2_000_000L;
 
+    /** The first and the longest pause before opening again after a transient refusal. */
+    private static final long REFUSED_PAUSE_MIN_NANOS = 1_000_000L;
+    private static final long REFUSED_PAUSE_MAX_NANOS = 100_000_000L;
+
     /** How much room the free slots get per connection, to spread the hashes. */
     private static final int SLOTS_PER_CONNECTION = 4;
 
@@ -163,6 +167,33 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     private final LongAdder retired = new LongAdder();
     private final LongAdder renewed = new LongAdder();
     private final LongAdder timeouts = new LongAdder();
+    /** Resets refused or broken when a connection was taken out - see settle. */
+    private final LongAdder resetsRefused = new LongAdder();
+
+    /** Every listener as one, or {@code null}, which costs nothing - see {@link #listen}. */
+    private volatile PoolListener listener;
+    private final List<PoolListener> listeners = new CopyOnWriteArrayList<>();
+
+    /**
+     * Reports waits, holds, openings and refused resets to {@code listener}
+     * from now on - for timers that the statistics cannot give. Several may
+     * listen, one per metrics registry; each is told in turn.
+     */
+    public void listen(PoolListener added) {
+        listeners.add(java.util.Objects.requireNonNull(added, "listener"));
+        listener = Listeners.of(listeners);
+    }
+
+    /** Stops telling {@code removed} - for a registry that closes. */
+    public void unlisten(PoolListener removed) {
+        listeners.remove(removed);
+        listener = Listeners.of(listeners);
+    }
+
+    /** How many resets were refused or broke - each closed a connection. */
+    public long resetsRefused() {
+        return resetsRefused.sum();
+    }
     private final LongAdder leaksReported = new LongAdder();
     /** Replacements opened before the connection they replace was retired. */
     private final LongAdder prewarmed = new LongAdder();
@@ -263,7 +294,12 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         entry.setQuietly(PoolEntry.State.IN_USE);
         boolean withContext = settings.getSessionContext() != null && applySessionContext(entry);
         boolean watched = !settings.getLeakDetectionThreshold().isZero();
-        entry.markBorrowed(watched ? now : 0,
+        PoolListener told = listener;
+        if (told != null) {
+            long waited = System.nanoTime() - now;
+            tell(l -> l.acquired(waited));
+        }
+        entry.markBorrowed(watched || told != null ? now : 0,
                 watched ? new Throwable("this connection was borrowed here") : null);
         borrowed.increment();
         PooledConnection handle = new PooledConnection(this, entry,
@@ -367,14 +403,29 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         Thread self = Thread.currentThread();
         waiters.add(self);
         waiting.incrementAndGet();
+        // A server that refuses for now - Oracle's listener with no free
+        // server process (ORA-12516), a "too many connections" - is waited
+        // out until the deadline: a returned connection is taken, or another
+        // is opened after a pause that doubles. Throwing at once turned a
+        // moment of load into a failed request (8 threads on Oracle Free, where
+        // every return retires its session). A refusal that is not transient
+        // - a wrong password, an unknown database - still ends the borrow.
+        SQLException refused = null;
+        long retryAt = 0;
+        long pause = REFUSED_PAUSE_MIN_NANOS;
         try {
             while (true) {
                 if (closed) {
                     throw new SQLException("this pool is closed", "08003");
                 }
-                if (permits.tryAcquire()) {
+                if ((refused == null || System.nanoTime() - retryAt >= 0) && permits.tryAcquire()) {
                     try {
                         return newEntry();
+                    } catch (java.sql.SQLTransientException e) {
+                        permits.release();
+                        refused = e;
+                        retryAt = System.nanoTime() + pause;
+                        pause = Math.min(pause * 2, REFUSED_PAUSE_MAX_NANOS);
                     } catch (SQLException | RuntimeException e) {
                         permits.release();
                         throw e;
@@ -387,6 +438,11 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 long left = deadline - System.nanoTime();
                 if (left <= 0) {
                     timeouts.increment();
+                    if (refused != null) {
+                        throw new SQLTransientConnectionException(timedOut()
+                                + " - the server refused a new one: " + refused.getMessage(),
+                                "08003", refused);
+                    }
                     throw new SQLTransientConnectionException(timedOut(), "08003");
                 }
                 if (Thread.interrupted()) {
@@ -415,16 +471,95 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      */
     private PoolEntry takeUsable(long now, long deadline) {
         PoolEntry entry;
-        while ((entry = claimIdle()) != null) {
-            if (usable(entry, now)) {
-                return entry;
+        // A connection whose reset answer has not arrived yet is put aside
+        // while another is looked for: reading it would wait a round trip.
+        // Usually it is the one this thread just gave back - the slots are
+        // per thread - so without this the overlap would be lost.
+        PoolEntry waiting = null;
+        try {
+            while ((entry = claimIdle()) != null) {
+                if (waiting == null && !answered(entry)) {
+                    waiting = entry;
+                    continue;
+                }
+                if (settle(entry) && usable(entry, now)) {
+                    return entry;
+                }
+                retire(entry);
+                if (System.nanoTime() > deadline) {
+                    return null;
+                }
             }
-            retire(entry);
-            if (System.nanoTime() > deadline) {
-                return null;
+            if (waiting != null) {
+                entry = waiting;
+                waiting = null;
+                if (settle(entry) && usable(entry, now)) {
+                    return entry;
+                }
+                retire(entry);
+            }
+            return null;
+        } finally {
+            if (waiting != null) {
+                park(waiting);
             }
         }
-        return null;
+    }
+
+    /** Whether the reset owed by this connection, if any, can be read without waiting. */
+    private static boolean answered(PoolEntry entry) {
+        space.seclume.SessionReset owed = entry.owedReset();
+        return owed == null || owed.resetAnswered();
+    }
+
+    /**
+     * Reads the answer to the reset sent when this connection was returned -
+     * on the borrower's thread, before the connection is lent: no statement
+     * ever reaches a session whose reset was not confirmed. False when it was
+     * refused or the connection broke; the caller retires it.
+     *
+     * <p>Read here rather than on a thread of its own, as it was: a virtual
+     * thread per return, parked on the socket and woken by the poller, was a
+     * fifth of the client's CPU under load (JFR, 8 threads on PostgreSQL).
+     * By the time a connection is taken again its answer has usually
+     * arrived, and reading it is a copy out of a buffer.
+     */
+    private boolean settle(PoolEntry entry) {
+        space.seclume.SessionReset owed = entry.owedReset();
+        if (owed == null) {
+            return true;
+        }
+        entry.owe(null);
+        entry.settling(true);
+        try {
+            owed.settleReset();
+            // Closed meanwhile: close() left this one to us - see close().
+            return !closed;
+        } catch (SQLException | RuntimeException refused) {
+            resetsRefused.increment();
+            tell(PoolListener::resetRefused);
+            return false;
+        } finally {
+            entry.settling(false);
+        }
+    }
+
+    /**
+     * Calls the listener, if there is one, and keeps whatever it throws away
+     * from the pool: a listener failing on the hot path must not cost a
+     * permit, a handle or an open session. A metrics registry closing during
+     * shutdown is enough to make one throw.
+     */
+    private void tell(java.util.function.Consumer<PoolListener> event) {
+        PoolListener told = listener;
+        if (told == null) {
+            return;
+        }
+        try {
+            event.accept(told);
+        } catch (RuntimeException ignored) {
+            // The pool's work is done either way; a lost data point is all it costs.
+        }
     }
 
     /**
@@ -516,6 +651,11 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     }
 
     private boolean isAlive(PoolEntry entry) {
+        // An owed reset answer is read first: a check sent ahead of it would
+        // be answered out of turn by a driver that does not settle by itself.
+        if (!settle(entry)) {
+            return false;
+        }
         try {
             return entry.connection().isValid(
                     (int) Math.max(1, settings.getValidationTimeout().toSeconds()));
@@ -692,7 +832,12 @@ public final class SeclumePool implements DataSource, AutoCloseable {
 
     private PoolEntry newEntry() throws SQLException {
         // This is where the call to the secret source happens - every time anew.
+        long opening = listener != null ? System.nanoTime() : 0;
         Connection connection = source.getConnection();
+        if (opening != 0) {
+            long took = System.nanoTime() - opening;
+            tell(l -> l.opened(took));
+        }
         PoolEntry entry;
         try {
             if (!capacityChecked) {
@@ -920,6 +1065,10 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         // One reading of the clock for the return - it used to be three, and
         // with the borrow's one they were most of what a handout cost.
         long now = System.nanoTime();
+        if (listener != null && entry.borrowedSince()) {
+            long held = entry.borrowedNanos(now);
+            tell(l -> l.released(held));
+        }
         entry.markReturned(now);
         // The deadline (a margin before the end) is left to prewarm and the
         // return-mark, so that the replacement is opened first. The end itself
@@ -943,49 +1092,6 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             }
         }
     }
-
-    /**
-     * Returns a connection whose session reset is still on its way: lent again
-     * only once the answer has been read, and retired if the reset was refused.
-     *
-     * <p>The driver reads that answer before its next statement anyway, so the
-     * guarantee is the same - no statement reaches a session whose reset was
-     * not confirmed. What changes is who waits: before, the next borrower of
-     * this connection spent the round trip; now it is spent here, on a virtual
-     * thread, while the borrower takes another connection that is ready. A
-     * borrower with nothing else to take waits as before.
-     */
-    void releaseAfterReset(PoolEntry entry, space.seclume.SessionReset session) {
-        // Nobody's any more, not yet anybody's: housekeeping, and not counted
-        // as active - the borrower has given it back.
-        entry.setQuietly(PoolEntry.State.RESERVED);
-        settling.add(entry);
-        Thread.ofVirtual().name("seclume-pool-reset").start(() -> {
-            boolean refused = false;
-            try {
-                session.settleReset();
-            } catch (SQLException | RuntimeException e) {
-                refused = true;
-            }
-            try {
-                release(entry, refused);
-            } finally {
-                settling.remove(entry);
-            }
-        });
-    }
-
-    /**
-     * Connections whose reset answer is being read - see releaseAfterReset.
-     * Their thread owns them until it releases them: closing one under it
-     * pulled the session out from under a read in progress ("Session is
-     * acquired by 1 clients", a pool closed right after a return).
-     */
-    private final java.util.Set<PoolEntry> settling =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
-
-    /** How long close() waits for the resets on their way back - one round trip each, normally. */
-    private static final long SETTLE_WAIT_MILLIS = 5_000;
 
     private boolean isPastLifetime(PoolEntry entry, long now) {
         return !settings.getMaxLifetime().isZero()
@@ -1326,10 +1432,22 @@ public final class SeclumePool implements DataSource, AutoCloseable {
 
     // ---- Zustand ---------------------------------------------------------
 
+    /** How long close() waits for reset answers being read - a round trip, or an Oracle login. */
+    private static final long SETTLE_WAIT_NANOS = 5_000_000_000L;
+
+    private boolean anySettling() {
+        for (PoolEntry entry : entries) {
+            if (entry.isSettling()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** How many connections are borrowed right now. */
     public int activeCount() {
-        // Borrowed ones only: a connection being checked, or whose reset is on
-        // its way back (releaseAfterReset), is neither free nor anybody's.
+        // Borrowed ones only: a connection being checked, or whose reset
+        // answer is being read before it is lent, is not anybody's yet.
         int count = 0;
         for (PoolEntry entry : entries) {
             if (entry.state() == PoolEntry.State.IN_USE) {
@@ -1538,10 +1656,11 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 break;
             }
         }
-        // The resets on their way back finish, and their threads retire the
-        // connections - the pool is closed, so release() does.
-        long settled = System.nanoTime() + SETTLE_WAIT_MILLIS * 1_000_000L;
-        while (!settling.isEmpty() && System.nanoTime() - settled < 0) {
+        // A borrower reading a connection's reset answer finishes the read;
+        // the session is not closed under it. settle() sees the pool closed
+        // and retires the connection itself.
+        long settled = System.nanoTime() + SETTLE_WAIT_NANOS;
+        while (anySettling() && System.nanoTime() - settled < 0) {
             try {
                 Thread.sleep(5);
             } catch (InterruptedException e) {
@@ -1551,8 +1670,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         }
         int cut = 0;
         for (PoolEntry entry : List.copyOf(entries)) {
-            if (settling.contains(entry)) {
-                continue;                    // its own thread retires it
+            if (entry.isSettling()) {
+                continue;                        // its borrower retires it
             }
             if (entry.state() == PoolEntry.State.IN_USE) {
                 cut++;
@@ -1587,7 +1706,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             }
         }
         for (PoolEntry entry : List.copyOf(entries)) {
-            if (entry.state() == PoolEntry.State.IN_USE || settling.contains(entry)) {
+            if (entry.state() == PoolEntry.State.IN_USE) {
                 entry.retireOnReturn();
             }
         }

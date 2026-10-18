@@ -261,6 +261,15 @@ public final class BenchDatabase {
         return user;
     }
 
+    public String database() {
+        return database;
+    }
+
+    /** Whether both sides encrypt - {@code -Dbench.tls}, on unless it says off. */
+    public boolean tls() {
+        return tls;
+    }
+
     /**
      * The password as the vendor driver needs it - as a {@code String}.
      *

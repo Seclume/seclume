@@ -109,13 +109,15 @@ public final class Hmac implements AutoCloseable {
     public void doFinal(MemorySegment out, long offset) {
         checkOpen();
         try {
-            inner.digest(scratch, 0);
-            outer.restoreChain(outerChain, outerCount);
+            inner.digestAndRestore(scratch, 0, innerChain, innerCount);
             outer.update(scratch, 0, digestLength);
-            outer.digest(out, offset);
+            outer.digestAndRestore(out, offset, outerChain, outerCount);
+        } catch (RuntimeException | Error failure) {
+            inner.restoreChain(innerChain, innerCount);
+            outer.restoreChain(outerChain, outerCount);
+            throw failure;
         } finally {
             scratch.fill((byte) 0);
-            inner.restoreChain(innerChain, innerCount);
         }
     }
 

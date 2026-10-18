@@ -343,54 +343,95 @@ class PgPreparedStatement extends PgStatement
         int width = shape.parameters();
         int most = Integer.highestOneBit(Math.max(1, Math.min(MOST_ROWS,
                 MOST_PLACEHOLDERS / width)));
-        long[] counts = new long[rows.size()]; // seclume-allow: update counts, not a secret
-        int at = 0;
-        while (at < rows.size()) {
-            int left = rows.size() - at;
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).length != width) {
+                throw new SQLException("batch row " + (i + 1) + " has " + rows.get(i).length
+                        + " values, the insert takes " + width, "07001");
+            }
+        }
+        // The blocks: full ones of the most rows, then the rest in falling
+        // powers of two. All of them go out pipelined together - see
+        // PgSession.bindAndExecuteMixed - not one group per shape.
+        List<Integer> sizes = new java.util.ArrayList<>();
+        for (int left = rows.size(); left > 0; ) {
             int size = Integer.highestOneBit(Math.min(most, left));
-            int blocks = size == most ? left / size : 1;
-            int base = at;
+            sizes.add(size);
+            left -= size;
+        }
+        int blocks = sizes.size();
+        String[] names = new String[blocks];
+        space.seclume.postgresql.PgParameters[] parameterSets =
+                new space.seclume.postgresql.PgParameters[blocks];
+        int[] firstRow = new int[blocks]; // seclume-allow: row positions, not a secret
+        java.util.Map<Integer, PgPreparedStatement> statements = new java.util.HashMap<>();
+        long[] counts = new long[rows.size()]; // seclume-allow: update counts, not a secret
+        try {
+            int row = 0;
+            for (int b = 0; b < blocks; b++) {
+                int size = sizes.get(b);
+                PgPreparedStatement statement = statements.get(size);
+                if (statement == null) {
+                    statement = (PgPreparedStatement) connection.prepareStatement(shape.sql(size));
+                    statement.prepare();
+                    statements.put(size, statement);
+                }
+                names[b] = statement.name;
+                parameterSets[b] = statement.parameters;
+                firstRow[b] = row;
+                row += size;
+            }
             long[] affected;
             java.sql.BatchUpdateException failed = null;
-            try (PgPreparedStatement block = (PgPreparedStatement) connection.prepareStatement(
-                    shape.sql(size))) {
-                for (int b = 0; b < blocks; b++) {
-                    for (int row = 0; row < size; row++) {
-                        Object[] values = rows.get(base + b * size + row);
-                        if (values.length != width) {
-                            throw new SQLException("batch row " + (base + b * size + row + 1)
-                                    + " has " + values.length + " values, the insert takes "
-                                    + width, "07001");
-                        }
+            try {
+                affected = connection.session().bindAndExecuteMixed(names, parameterSets, b -> {
+                    space.seclume.postgresql.PgParameters target = parameterSets[b];
+                    target.clear();
+                    int size = sizes.get(b);
+                    for (int r = 0; r < size; r++) {
+                        Object[] values = rows.get(firstRow[b] + r);
                         for (int p = 0; p < width; p++) {
-                            block.parameters.set(row * width + p + 1, values[p]);
+                            target.set(r * width + p + 1, values[p]);
                         }
                     }
-                    block.addBatch();
-                }
-                try {
-                    affected = block.executeLargeBatch();
-                } catch (java.sql.BatchUpdateException blockFailed) {
-                    failed = blockFailed;
-                    affected = blockFailed.getLargeUpdateCounts();
+                });
+            } catch (java.sql.BatchUpdateException blockFailed) {
+                failed = blockFailed;
+                affected = blockFailed.getLargeUpdateCounts();
+            }
+            if (failed == null) {
+                // Parsed and run: the plans are on the server and answer no
+                // columns - InsertBatch takes no RETURNING. Said here, they
+                // go back into the connection's cache on close; unsaid, every
+                // batch parsed its blocks again (server log: a Parse for
+                // seven of ten Executes).
+                for (PgPreparedStatement statement : statements.values()) {
+                    if (statement.described == null) {
+                        statement.described = List.of();
+                    }
                 }
             }
             int done = Math.min(blocks, affected.length);
-            for (int b = 0; b < blocks; b++) {
-                long each = b >= done || affected[b] == java.sql.Statement.EXECUTE_FAILED
+            int sentRows = 0;
+            for (int b = 0; b < done; b++) {
+                int size = sizes.get(b);
+                long each = affected[b] == java.sql.Statement.EXECUTE_FAILED
                         ? java.sql.Statement.EXECUTE_FAILED
                         : affected[b] == size ? 1 : java.sql.Statement.SUCCESS_NO_INFO;
-                java.util.Arrays.fill(counts, base + b * size, base + (b + 1) * size, each);
+                java.util.Arrays.fill(counts, firstRow[b], firstRow[b] + size, each);
+                sentRows = firstRow[b] + size;
             }
-            at += blocks * size;
             if (failed != null) {
                 // Per row, and only the rows that were sent: the rest never ran.
                 throw new java.sql.BatchUpdateException(failed.getMessage(),
                         failed.getSQLState(), failed.getErrorCode(),
-                        java.util.Arrays.copyOf(counts, at), failed.getCause());
+                        java.util.Arrays.copyOf(counts, sentRows), failed.getCause());
+            }
+            return counts;
+        } finally {
+            for (PgPreparedStatement statement : statements.values()) {
+                statement.close();
             }
         }
-        return counts;
     }
 
     @Override

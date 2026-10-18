@@ -601,7 +601,16 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
         checkOpen();
         requireManualCommit("set a savepoint");
         String safe = requirePlainName(name);
-        session.execute("save tran " + safe);
+        // With auto-commit off this connection runs with implicit
+        // transactions, and those begin with the next statement that needs
+        // one - which SAVE TRAN is not: right after setAutoCommit(false) the
+        // server answered "cannot issue SAVE TRANSACTION when there is no
+        // active transaction" (628). So a transaction is begun first where
+        // none is open; with implicit transactions on, BEGIN TRAN can count
+        // two levels, and the one too many is closed again. mssql-jdbc sends
+        // the same.
+        session.execute("if @@trancount = 0 begin begin tran if @@trancount = 2 commit tran end "
+                + "save tran " + safe);
         return new NamedSavepoint(safe);
     }
 

@@ -168,6 +168,23 @@ class SeclumeSslEngineTest {
         assertEquals(SSLEngineResult.Status.CLOSED, atServer.getStatus());
     }
 
+    /**
+     * closeInbound frees the keys after the close_notify, so the outbound
+     * side is done as well: a wrap after it says CLOSED. It used to write to
+     * a layer without keys and fail.
+     */
+    @Test
+    void afterCloseInboundAWrapSaysClosed() throws Exception {
+        Pair pair = new Pair(new SeclumeSslEngine(HOSTNAME, 9093, trust, null));
+        pair.handshake();
+        pair.client.closeInbound();
+        assertTrue(pair.client.isInboundDone());
+        ByteBuffer out = ByteBuffer.allocate(pair.client.getSession().getPacketBufferSize());
+        SSLEngineResult result = pair.client.wrap(ByteBuffer.wrap(new byte[] {1, 2, 3}), out);
+        assertEquals(SSLEngineResult.Status.CLOSED, result.getStatus());
+        assertEquals(0, result.bytesConsumed(), "application data went out after the close");
+    }
+
     private static int indexOf(ByteBuffer in, byte[] what) {
         outer:
         for (int i = in.position(); i <= in.limit() - what.length; i++) {

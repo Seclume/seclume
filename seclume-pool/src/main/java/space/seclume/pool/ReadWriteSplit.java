@@ -467,7 +467,16 @@ public final class ReadWriteSplit implements DataSource {
             Duration wait = readYourWrites;
             if (readOnly) {
                 Connection candidate = replica.getConnection();
-                if (wait == null || caughtUp(candidate, wait)) {
+                boolean current;
+                try {
+                    current = wait == null || caughtUp(candidate, wait);
+                } catch (SQLException | RuntimeException e) {
+                    // The replica could not say how far it is: its connection
+                    // goes back, or the replica pool loses one per failure.
+                    candidate.close();
+                    throw e;
+                }
+                if (current) {
                     target = candidate;
                     toThePrimary = false;
                     toReplica.increment();

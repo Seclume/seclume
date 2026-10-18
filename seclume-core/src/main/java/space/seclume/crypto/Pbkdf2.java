@@ -38,6 +38,26 @@ public final class Pbkdf2 {
         if (blocks > 0xffffffffL) {
             throw new IllegalArgumentException("derived key too long");
         }
+        // The operating system's library where there is one - several times
+        // faster, and equally off-heap. See NativePbkdf2.
+        if (NativePbkdf2.derive(algorithm, password, salt, iterations, out)) {
+            return;
+        }
+        deriveInJava(algorithm, password, salt, iterations, out, hashLength, blocks);
+    }
+
+    /** The same in this library's own code - where no native one is there, and for the tests. */
+    static void deriveInJava(HashAlgorithm algorithm, MemorySegment password,
+                             MemorySegment salt, int iterations, MemorySegment out) {
+        int hashLength = algorithm.digestLength();
+        deriveInJava(algorithm, password, salt, iterations, out, hashLength,
+                (out.byteSize() + hashLength - 1) / hashLength);
+    }
+
+    private static void deriveInJava(HashAlgorithm algorithm, MemorySegment password,
+                                     MemorySegment salt, int iterations, MemorySegment out,
+                                     int hashLength, long blocks) {
+        long outputLength = out.byteSize();
 
         try (Arena arena = Arena.ofConfined();
              Hmac hmac = new Hmac(algorithm, password)) {

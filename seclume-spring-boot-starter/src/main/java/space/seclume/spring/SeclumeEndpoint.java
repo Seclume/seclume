@@ -65,6 +65,9 @@ public final class SeclumeEndpoint {
             String tls = secured.tlsDescription();
             source.put("tls", tls == null ? "none - the connection is in the clear" : tls);
             X509Certificate certificate = secured.serverCertificate();
+            source.put("assessment", SeclumeAssessment.of(secured.authenticationMethod(), tls,
+                    certificate == null ? null : certificate.getNotAfter().toInstant(), statistics, pool.settings().getMaximumPoolSize(),
+                    pool.resetsRefused(), java.time.Instant.now()).asMap());
             if (certificate != null) {
                 Map<String, Object> shown = new LinkedHashMap<>();
                 shown.put("subject", certificate.getSubjectX500Principal().getName());

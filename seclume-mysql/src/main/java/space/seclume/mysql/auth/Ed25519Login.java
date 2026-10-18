@@ -3,11 +3,11 @@ package space.seclume.mysql.auth;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.security.SecureRandom;
 
 import space.seclume.crypto.Ed25519;
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Pbkdf2;
+import space.seclume.internal.Entropy;
 
 /**
  * MariaDB's two logins by signature, where the server stores only a public
@@ -43,7 +43,6 @@ public final class Ed25519Login {
     public static final int PARSEC_RESPONSE_LENGTH = SCRAMBLE_LENGTH + Ed25519.SIGNATURE_LENGTH;
 
     private static final int SEED_LENGTH = 32;
-    private static final SecureRandom RANDOM = new SecureRandom();
 
     private Ed25519Login() {
     }
@@ -107,12 +106,9 @@ public final class Ed25519Login {
                 MemorySegment secret = password.asSlice(passwordOffset, passwordLength);
                 MemorySegment salt = extSalt.asSlice(extSaltOffset + 2, saltLength);
                 Pbkdf2.derive(HashAlgorithm.SHA_512, secret, salt, iterations, seed);
-                byte[] own = new byte[SCRAMBLE_LENGTH]; // seclume-allow: the client's scramble, sent in the clear
-                RANDOM.nextBytes(own);
+                Entropy.fill(out, outOffset, SCRAMBLE_LENGTH);
                 MemorySegment.copy(scramble, scrambleOffset, scrambles, 0, SCRAMBLE_LENGTH);
-                MemorySegment.copy(own, 0, scrambles, ValueLayout.JAVA_BYTE, SCRAMBLE_LENGTH,
-                        SCRAMBLE_LENGTH);
-                MemorySegment.copy(own, 0, out, ValueLayout.JAVA_BYTE, outOffset, SCRAMBLE_LENGTH);
+                MemorySegment.copy(out, outOffset, scrambles, SCRAMBLE_LENGTH, SCRAMBLE_LENGTH);
                 Ed25519.sign(seed, 0, SEED_LENGTH, scrambles, 0, 2 * SCRAMBLE_LENGTH,
                         out, outOffset + SCRAMBLE_LENGTH);
                 return PARSEC_RESPONSE_LENGTH;

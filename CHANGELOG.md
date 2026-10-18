@@ -5,6 +5,111 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Pool metrics**: `seclume.pool.acquire`, `.usage` and `.creation` as timers with
+  histograms - how long a borrower waited, how long a connection was held, how long opening
+  one took - through the new `PoolListener`, which costs nothing when nobody listens.
+  `seclume.pool.resets.refused` counts failed resets. **Changed:** `seclume.pool.connections.max`
+  reported the connections held and now reports the configured maximum; the numbers that only
+  grow (`borrowed`, `created`, `retired`, `timeouts`, `leaks`, `renewed`, `secret.rotations`)
+  are counters instead of gauges, so Prometheus names them `..._total` - dashboards and
+  alerts on the old names need the suffix.
+- **An assessment per data source** in `/actuator/seclume` and the health details: a grade
+  and its findings (certificate expiry, TLS, login method, timeouts, saturation, leaks,
+  refused resets). It never takes the health status down. **Changed:** the health details of
+  a pool are a map now (`pool`, `grade`, `findings`) instead of one line of text.
+- **A Grafana dashboard** in `demo/grafana`.
+- **The pool reads a reset's answer when it lends the connection**, not on a thread of its
+  own: under load the virtual thread per return was a fifth of the client's CPU. A connection
+  whose answer has not arrived is passed over for one whose has. PostgreSQL pool, 8 threads:
+  329 to 253 µs per borrow with a prepared statement.
+- **PostgreSQL `rewriteBatchedInserts`**: the blocks of every size go out in one pipeline,
+  and their plans stay cached; 500 rows went from 3.04 to 1.53 ms, level with pgjdbc. A
+  failing block now rolls back its whole group, as with pgjdbc, and the counts say so per
+  row.
+
+- **Oracle and the pool**: a used session is replaced by logging off and in
+  again on the same connection, instead of closing the connection and opening a
+  new one. The new session carries nothing of the old: package state,
+  application contexts, client identifier, NLS settings, current schema, roles
+  and temporary table rows are all at their defaults, and an open transaction
+  is rolled back. Under load, the new connections ran Oracle out of server
+  processes (ORA-12516 with 8 threads on Oracle Free); this needs none.
+- **Pool**: a server that refuses a new connection for now (no free server
+  process, too many connections: `SQLTransientException`) is waited out until
+  the connection timeout, as a returned connection or a retry after a pause
+  that doubles. The timeout then names the refusal as its cause. A refusal
+  that is not transient still ends the borrow at once.
+- **PBKDF2** runs in OpenSSL on Linux and in CNG on Windows (SHA-1 and SHA-256
+  there), off-heap as before, with this library's own code as the fallback. A
+  SCRAM-SHA-256 login's 4096 rounds took 2.8 ms and take 0.8 ms on Windows. The
+  own SHA-256 and SHA-512 are faster too.
+- **Proofs that run**: the own TLS against OpenSSL, GnuTLS, Go, rustls and JSSE, including
+  X25519MLKEM768 and seven servers that must be refused (`tls-interop` workflow);
+  `ConstantTimeLeakageTest` (dudect-style timing of the comparisons and AES-GCM);
+  `ProcessMemoryTest`, which searches the process's own memory for the password after a
+  login over TLS; `ApmAgentHeapDumpTest`, the same with the OpenTelemetry Java agent
+  instrumenting JDBC in the process; seeded state-machine tests of the pool, alone and with
+  threads. See TESTING.md.
+- **BENCHMARKS.md and the README's speed table** cover all four databases from one run each,
+  including the rows where seclume is behind: the pool's reset on PostgreSQL, MySQL and
+  Oracle.
+- **MongoDB** (`seclume-mongodb`, new): off-heap TLS 1.3 and SCRAM-SHA-256 pre-authentication for the
+  official MongoDB Java sync driver (`mongodb-driver-sync` 5.x). The driver holds no `MongoCredential`;
+  seclume opens the TLS connection, checks the certificate and host name (`tlsRootCert=`, `tlsPin=`),
+  reads the password into native memory from any configured `SecretProvider`, computes SCRAM-SHA-256
+  off-heap via `space.seclume.internal.Scram`, and hands an already-authenticated `SSLSocket` to the
+  driver. Standard MongoDB URL options (`replicaSet`, multiple hosts, timeouts, `readPreference`) are
+  forwarded to the driver. A password in the URL, `tls=false`/`ssl=false`, passwords with non-ASCII
+  characters, and server iteration counts under 4096 are strictly refused. The connect timeout bounds the
+  login. Tested against MongoDB 8 with `NoSecretInHeap` proving neither password nor client proof reaches the JVM heap.
+- **R2DBC** (`seclume-r2dbc`, new): an R2DBC driver over the four JDBC drivers, each
+  connection's calls in order on a virtual thread, with each database's own placeholders.
+  `r2dbc:seclume:<database>://user@host/db?provider=...`; a password in the URL is refused.
+  R2DBC's conformance suite passes in full against all four databases (on MySQL and Oracle
+  the case of several statements in one text checks that it is refused). With Spring Boot it is the application's `ConnectionFactory`, over the seclume
+  pool and its reset.
+- **Pool: the methods JDBC gives a default** - `getLargeUpdateCount`, `executeLargeUpdate`,
+  `setLargeMaxRows`, `setObject` with a `SQLType`, the `enquote` methods - are passed on to
+  the driver by a cached statement. **Fixed:** they went to the interface's own body, and
+  `getLargeUpdateCount` threw `UnsupportedOperationException`.
+- **Statement and connection fixes found by R2DBC's test kit and by review:**
+  - SQL Server: a savepoint as the first thing after `setAutoCommit(false)` failed with 628,
+    "no active transaction"; a transaction is begun first now, as mssql-jdbc does.
+  - Oracle: `getObject` on a BLOB or CLOB column answered "a BLOB is not text"; it is a
+    `Blob` / `Clob`, as `getColumnClassName` says.
+  - Oracle: generated keys of an insert with no value of its own to bind
+    (`insert ... values ('x')` with `new String[] {"id"}`) failed with ORA-03146.
+  - Pool: a statement prepared again in the same borrow came back with the settings of the
+    use before - `setMaxRows`, the query timeout, the fetch size; they are reset now.
+  - Pool: a read-write split whose replica could not say how far it was lost that replica
+    connection.
+  - Oracle and SQL Server: every cancel and query timeout kept a few bytes of native memory
+    for good; the buffer is freed now.
+- **Hardening:** a header, path or secret header with a line break or NUL is refused before
+  a request to a secret store is written; secret, project and version names for Key Vault
+  and Secret Manager are checked; UTF-8 and UTF-16 that are not valid (overlong forms,
+  lone surrogates, stray continuation bytes) are refused instead of read as something
+  else; `freeze` and `snapshot` copy the write state under the write lock; after
+  `SSLEngine.closeInbound` a `wrap` says CLOSED.
+- **AWS and Azure signatures** of a name with a character beyond the BMP (an emoji in an
+  object or blob name) were computed over CESU-8 and refused; they are UTF-8 now, and half a
+  surrogate pair is refused. Smaller: a canonical request is wiped whole on close, an
+  OpenSSH key's lengths are checked against what is left of it, AES-GCM lengths beyond an
+  `int` are refused before the native call, and a DER signature is read with every bound
+  checked.
+- **SQL Server: `Statement.execute` on a batch** hands out every result in the order it came,
+  update counts included - `insert ...; select ...` is a count, then the rows, as with
+  mssql-jdbc. **Fixed:** a count between two results was not a result of its own.
+  `executeQuery`, `executeUpdate` and procedure calls read their answers as before.
+- **PostgreSQL: a text of several statements** (`select 1; select 2`, plain statement) has
+  one result per statement, through `getMoreResults`, as with pgjdbc. **Fixed:** before, the
+  rows of all of them went into one result under the first statement's columns.
+- **Oracle queries**: a prepared query run again goes out as the short call that leaves the
+  variables' description out (function 78, as ojdbc sends it), whenever the description is
+  the same byte for byte; and the buffers that carry a row from one answer to the next are
+  wiped and handed on instead of closed, which stopped every thread of the JVM once per
+  query. One row: 63 to 40 µs (ojdbc 40); `select 1`: 59 to 37 µs (ojdbc 61).
+
 ## [0.12.0] - 2026-10-12
 
 Faster where the benchmark showed seclume behind, and client keys that never

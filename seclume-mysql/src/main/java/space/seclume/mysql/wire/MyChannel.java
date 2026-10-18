@@ -168,6 +168,20 @@ public final class MyChannel implements AutoCloseable {
     }
 
     /**
+     * Whether something has arrived that is not read yet - in the buffer, in
+     * TLS or on the socket - looked at without reading. Unknown counts as
+     * yes. A hint for the pool, which prefers a connection whose reset answer
+     * is there over one it would have to wait for.
+     */
+    public boolean hasInput() {
+        if (in.position() < filled) {
+            return true;
+        }
+        int waiting = tls != null ? tls.bytesWaiting() : channel.bytesWaiting();
+        return waiting != 0;
+    }
+
+    /**
      * Whether the channel has nothing of its own in flight.
      *
      * <p>Nothing written and not yet flushed, and nothing received and not yet

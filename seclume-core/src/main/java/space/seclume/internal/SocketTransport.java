@@ -244,6 +244,23 @@ public final class SocketTransport implements Transport, NetworkTimeouts.Watched
         return channel.isOpen();
     }
 
+    /** The socket's input stream, for {@link #bytesWaiting} only: FIONREAD, nothing read. */
+    private java.io.InputStream probe;
+
+    @Override
+    public int bytesWaiting() {
+        try {
+            java.io.InputStream in = probe;
+            if (in == null) {
+                in = channel.socket().getInputStream();
+                probe = in;
+            }
+            return in.available();
+        } catch (IOException | RuntimeException e) {
+            return -1;
+        }
+    }
+
     /**
      * One read that does not wait: nothing to read means the peer is still
      * there. Three system calls, and only after {@code quietMillis} of

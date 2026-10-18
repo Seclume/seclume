@@ -78,8 +78,11 @@ public final class AzureKeyVaultSecretProvider implements SecretProvider, Expiri
         this.port = uri.getPort() > 0 ? uri.getPort() : 443;
         this.verify = verify;
         this.timeoutMillis = timeoutMillis;
-        this.name = name;
-        this.version = version;
+        // Names go into the request path as they are: letters, digits and
+        // dashes are all Key Vault allows, and anything else - a slash, a
+        // '?', a line break - would make it another request.
+        this.name = SecretNames.require("the secret name", name, false);
+        this.version = SecretNames.require("the version", version, true);
         this.token = token;
         this.maxLength = maxLength;
     }

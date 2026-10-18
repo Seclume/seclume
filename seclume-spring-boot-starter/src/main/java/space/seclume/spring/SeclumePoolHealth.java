@@ -2,11 +2,15 @@ package space.seclume.spring;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
 
+import space.seclume.Secured;
 import space.seclume.pool.PoolStatistics;
 import space.seclume.pool.SeclumePool;
 
@@ -37,17 +41,45 @@ public final class SeclumePoolHealth implements HealthIndicator {
         for (SeclumePool pool : pools) {
             PoolStatistics statistics = pool.statistics();
             String name = statistics.name();
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("pool", describe(statistics));
             try (Connection connection = pool.getConnection()) {
                 if (connection.isClosed()) {
                     return down(health, name, statistics, "the pool handed out a closed "
                             + "connection");
                 }
+                // The grade goes along and never decides the status - see
+                // SeclumeAssessment: a warning must not take the instance out.
+                assess(pool, statistics, connection, detail);
             } catch (SQLException e) {
                 return down(health, name, statistics, e.getMessage());
             }
-            health.withDetail(name, describe(statistics));
+            health.withDetail(name, detail);
         }
         return health.build();
+    }
+
+    /**
+     * The grade, where the driver can say how it is secured. A driver that
+     * cannot - or answers the question wrongly - costs the grade, never the
+     * health check: whether the database is reachable was already answered.
+     */
+    private static void assess(SeclumePool pool, PoolStatistics statistics,
+                               Connection connection, Map<String, Object> detail) {
+        try {
+            if (!connection.isWrapperFor(Secured.class)) {
+                return;
+            }
+            Secured secured = connection.unwrap(Secured.class);
+            java.security.cert.X509Certificate shown = secured.serverCertificate();
+            detail.putAll(SeclumeAssessment.of(secured.authenticationMethod(),
+                    secured.tlsDescription(),
+                    shown == null ? null : shown.getNotAfter().toInstant(), statistics,
+                    pool.settings().getMaximumPoolSize(), pool.resetsRefused(),
+                    Instant.now()).asMap());
+        } catch (SQLException | RuntimeException unknown) {
+            detail.put("grade", "unknown - the driver cannot say how it is secured");
+        }
     }
 
     private static Health down(Health.Builder health, String name,

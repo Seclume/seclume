@@ -135,6 +135,18 @@ public final class PgSession implements AutoCloseable {
     @FunctionalInterface
     public interface RowHandler {
         void row(Row row) throws SQLException;
+
+        /**
+         * A result with columns begins - {@link #fields()} describes it. Only
+         * the simple protocol says this, where one text may hold several
+         * statements and each answers on its own.
+         */
+        default void described() throws SQLException {
+        }
+
+        /** A statement of the text is done, with its command tag. Simple protocol only. */
+        default void completed(String commandTag) throws SQLException {
+        }
     }
 
     /** How many rows of a batch go out before a Sync closes the group. */
@@ -980,7 +992,16 @@ public final class PgSession implements AutoCloseable {
             while (true) {
                 byte tag = channel.nextMessage();
                 switch (tag) {
-                    case PgProtocol.ROW_DESCRIPTION -> readRowDescription();
+                    case PgProtocol.ROW_DESCRIPTION -> {
+                        readRowDescription();
+                        if (handler != null && failure == null) {
+                            try {
+                                handler.described();
+                            } catch (SQLException e) {
+                                failure = e;
+                            }
+                        }
+                    }
                     case PgProtocol.DATA_ROW -> {
                         Row row = readDataRow();
                         if (handler != null && failure == null) {
@@ -1000,6 +1021,13 @@ public final class PgSession implements AutoCloseable {
                     case PgProtocol.COMMAND_COMPLETE -> {
                         lastCommandTag = channel.message().readCString();
                         channel.endMessage();
+                        if (handler != null && failure == null) {
+                            try {
+                                handler.completed(lastCommandTag);
+                            } catch (SQLException e) {
+                                failure = e;
+                            }
+                        }
                     }
                     case PgProtocol.EMPTY_QUERY -> channel.endMessage();
                     case PgProtocol.ERROR_RESPONSE -> {
@@ -2041,6 +2069,69 @@ public final class PgSession implements AutoCloseable {
         return counts;
     }
 
+    /**
+     * Executions of several prepared statements, pipelined together - the
+     * blocks of a rewritten insert batch, which come in up to eight shapes.
+     *
+     * <p>{@link #bindAndExecuteBatch} pipelines the executions of one
+     * statement; called once per shape, a batch of 500 rows went out as five
+     * groups one after another (128 three times, then 64, 32, 16, 4), five
+     * round trips where pgjdbc needs one. Here every block goes into the same
+     * groups, each statement's Parse ahead of its first Bind.
+     *
+     * <p>As with the batch: a group is one implicit transaction, and after a
+     * failure the server rolls the whole group back and runs nothing more of
+     * it; the groups before it stand. The {@link java.sql.BatchUpdateException}
+     * says that per execution.
+     *
+     * @param statements the statement of each execution, in order
+     * @param parameters the parameters of each execution - shared between
+     *                   executions of one statement, filled by {@code binder}
+     *                   just before each is written
+     */
+    public long[] bindAndExecuteMixed(String[] statements, PgParameters[] parameters,
+                                      BatchBinder binder) throws SQLException {
+        flushPipeline();
+        int count = statements.length;
+        long[] counts = new long[count]; // seclume-allow: update counts, not a secret
+        int at = 0;
+        try {
+            while (at < count) {
+                int start = at;
+                int sent = 0;
+                int carried = at == 0 ? writePending() : 0;
+                int parses = 0;
+                while (at < count && sent < PIPELINE_ROWS
+                        && (sent == 0 || channel.pending() < PIPELINE_BYTES)) {
+                    parses += writePendingParse(statements[at], carried);
+                    binder.bind(at);
+                    writeBindAndExecute(statements[at], parameters[at]);
+                    at++;
+                    sent++;
+                }
+                carried += parses;
+                command(PgProtocol.SYNC);
+                channel.end();
+                channel.flush();
+                for (int i = 0; i < carried; i++) {
+                    runUntilReady(null);          // the answers to what rode along
+                }
+                try {
+                    readBatchAnswers(counts, start, sent);
+                } catch (SQLException refused) {
+                    long[] sentCounts = java.util.Arrays.copyOf(counts, start + sent);
+                    java.util.Arrays.fill(sentCounts, start, start + sent,
+                            java.sql.Statement.EXECUTE_FAILED);
+                    throw new java.sql.BatchUpdateException(refused.getMessage(),
+                            refused.getSQLState(), refused.getErrorCode(), sentCounts, refused);
+                }
+            }
+        } catch (IOException | WireBuffer.Truncated e) {
+            throw brokenConnection("the connection broke while running a batch", e);
+        }
+        return counts;
+    }
+
     /** Bind and Execute for one row - without the Sync that would end the group. */
     private void writeBindAndExecute(String statement, PgParameters parameters)
             throws SQLException {
@@ -2282,6 +2373,11 @@ public final class PgSession implements AutoCloseable {
     /** Whether a {@code DISCARD ALL} sent at the last return still owes its answer. */
     public boolean discardOwed() {
         return discardOwed;
+    }
+
+    /** Whether that answer, if one is owed, has arrived - see PgChannel.hasInput. */
+    public boolean discardAnswered() {
+        return !discardOwed || channel.hasInput();
     }
 
     /**

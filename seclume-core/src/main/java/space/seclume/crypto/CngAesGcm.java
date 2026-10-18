@@ -61,12 +61,14 @@ final class CngAesGcm implements AesGcmCipher {
     public void encrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad, long aadOffset,
                         long aadLength, MemorySegment in, long inOffset, long length,
                         MemorySegment out, long outOffset) {
+        int intLength = checkLength(length, "payload");
+        int intAad = checkLength(aadLength, "additional data");
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment info = modeInfo(arena, nonce, nonceOffset, aad, aadOffset, aadLength,
+            MemorySegment info = modeInfo(arena, nonce, nonceOffset, aad, aadOffset, intAad,
                     out.asSlice(outOffset + length, AesGcm.TAG));
             MemorySegment written = arena.allocate(JAVA_INT);
-            check(call(ENCRYPT, key, in.asSlice(inOffset, length), (int) length, info,
-                    MemorySegment.NULL, 0, out.asSlice(outOffset, length), (int) length,
+            check(call(ENCRYPT, key, in.asSlice(inOffset, length), intLength, info,
+                    MemorySegment.NULL, 0, out.asSlice(outOffset, length), intLength,
                     written, 0), "BCryptEncrypt");
         }
     }
@@ -75,12 +77,14 @@ final class CngAesGcm implements AesGcmCipher {
     public boolean decrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad,
                            long aadOffset, long aadLength, MemorySegment in, long inOffset,
                            long length, MemorySegment out, long outOffset) {
+        int intLength = checkLength(length, "payload");
+        int intAad = checkLength(aadLength, "additional data");
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment info = modeInfo(arena, nonce, nonceOffset, aad, aadOffset, aadLength,
+            MemorySegment info = modeInfo(arena, nonce, nonceOffset, aad, aadOffset, intAad,
                     in.asSlice(inOffset + length, AesGcm.TAG));
             MemorySegment written = arena.allocate(JAVA_INT);
-            int status = call(DECRYPT, key, in.asSlice(inOffset, length), (int) length, info,
-                    MemorySegment.NULL, 0, out.asSlice(outOffset, length), (int) length,
+            int status = call(DECRYPT, key, in.asSlice(inOffset, length), intLength, info,
+                    MemorySegment.NULL, 0, out.asSlice(outOffset, length), intLength,
                     written, 0);
             if (status == TAG_MISMATCH) {
                 if (length > 0) {
@@ -95,7 +99,7 @@ final class CngAesGcm implements AesGcmCipher {
 
     /** BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO, version 1, for one message. */
     private static MemorySegment modeInfo(Arena arena, MemorySegment nonce, long nonceOffset,
-                                          MemorySegment aad, long aadOffset, long aadLength,
+                                          MemorySegment aad, long aadOffset, int aadLength,
                                           MemorySegment tag) {
         MemorySegment info = arena.allocate(MODE_INFO_SIZE, 8);
         info.fill((byte) 0);
@@ -105,12 +109,19 @@ final class CngAesGcm implements AesGcmCipher {
         info.set(JAVA_INT, 16, AesGcm.NONCE);                        // cbNonce
         if (aadLength > 0) {
             info.set(ADDRESS, 24, aad.asSlice(aadOffset, aadLength));   // pbAuthData
-            info.set(JAVA_INT, 32, (int) aadLength);                 // cbAuthData
+            info.set(JAVA_INT, 32, aadLength);                          // cbAuthData
         }
         info.set(ADDRESS, 40, tag);                                  // pbTag
         info.set(JAVA_INT, 48, AesGcm.TAG);                          // cbTag
         info.set(JAVA_LONG, 72, 0L);                                 // cbData
         return info;
+    }
+
+    private static int checkLength(long length, String name) {
+        if (length < 0 || length > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("the " + name + " length must be between 0 and 2^31-1: " + length);
+        }
+        return (int) length;
     }
 
     @Override

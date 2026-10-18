@@ -599,4 +599,87 @@ final class CachedPreparedStatement implements PreparedStatement {
     public <T> T unwrap(Class<T> a0) throws SQLException {
         return open().unwrap(a0);
     }
+
+    // ---- the methods the interfaces give a default -------------------------
+    //
+    // A default compiles without being written out, and so a missing one is
+    // not javac's to notice: getLargeUpdateCount went to the interface's own
+    // body, which throws UnsupportedOperationException, and every caller of it
+    // through the pool failed - R2DBC's update count among them. The
+    // enquote methods go to the driver too, which knows its own quoting.
+
+    @Override
+    public boolean isSimpleIdentifier(String a0) throws SQLException {
+        return open().isSimpleIdentifier(a0);
+    }
+
+    @Override
+    public String enquoteNCharLiteral(String a0) throws SQLException {
+        return open().enquoteNCharLiteral(a0);
+    }
+
+    @Override
+    public String enquoteLiteral(String a0) throws SQLException {
+        return open().enquoteLiteral(a0);
+    }
+
+    @Override
+    public String enquoteIdentifier(String a0, boolean a1) throws SQLException {
+        return open().enquoteIdentifier(a0, a1);
+    }
+
+    @Override
+    public long getLargeUpdateCount() throws SQLException {
+        return open().getLargeUpdateCount();
+    }
+
+    @Override
+    public long getLargeMaxRows() throws SQLException {
+        return open().getLargeMaxRows();
+    }
+
+    @Override
+    public void setLargeMaxRows(long a0) throws SQLException {
+        open().setLargeMaxRows(a0);
+    }
+
+    @Override
+    public long[] executeLargeBatch() throws SQLException {
+        return open().executeLargeBatch();
+    }
+
+    @Override
+    public long executeLargeUpdate() throws SQLException {
+        return open().executeLargeUpdate();
+    }
+
+    @Override
+    public long executeLargeUpdate(String a0) throws SQLException {
+        return open().executeLargeUpdate(a0);
+    }
+
+    @Override
+    public long executeLargeUpdate(String a0, int a1) throws SQLException {
+        return open().executeLargeUpdate(a0, a1);
+    }
+
+    @Override
+    public long executeLargeUpdate(String a0, int[] a1) throws SQLException {
+        return open().executeLargeUpdate(a0, a1);
+    }
+
+    @Override
+    public long executeLargeUpdate(String a0, String[] a1) throws SQLException {
+        return open().executeLargeUpdate(a0, a1);
+    }
+
+    @Override
+    public void setObject(int a0, Object a1, java.sql.SQLType a2) throws SQLException {
+        open().setObject(a0, a1, a2);
+    }
+
+    @Override
+    public void setObject(int a0, Object a1, java.sql.SQLType a2, int a3) throws SQLException {
+        open().setObject(a0, a1, a2, a3);
+    }
 }

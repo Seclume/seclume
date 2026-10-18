@@ -316,6 +316,32 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
       - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
+      # The password is nowhere in the process after a TLS login - searched in
+      # all of its memory, not only the heap (ProcessMemoryTest). It needs a
+      # server with TLS, which the service above is not: a second one, here.
+      - name: No password anywhere in the process
+        env:
+          PG_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+        run: |
+          docker run -d --name pgtls -p 5433:5432 -e POSTGRES_USER=seclume_test \
+            -e POSTGRES_PASSWORD="$PG_PASSWORD" -e POSTGRES_DB=seclume_test \
+            -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
+            postgres:${{ matrix.version }} postgres -c ssl=on \
+            -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem \
+            -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+          # Over TCP: the server initdb runs first listens on the socket only,
+          # so a check there says ready before the real one is up.
+          for i in $(seq 1 60); do docker exec pgtls pg_isready -q -h 127.0.0.1 && break; sleep 1; done
+          printf '%s' "$PG_PASSWORD" > .local-pgtls-password
+          ./mvnw -B -pl seclume-postgresql -am test -Dtest=ProcessMemoryTest \
+            -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.pgtls.host=127.0.0.1
+          # Skipped is not passed: a missing server must not look like a proof.
+          grep -q 'Tests run: 3, Failures: 0, Errors: 0, Skipped: 0' \
+            seclume-postgresql/target/surefire-reports/*ProcessMemoryTest.txt
+      - if: always()
+        run: |
+          rm -f .local-pgtls-password
+          docker rm -f pgtls || true
       - name: Verify framework edge cases
         run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests

@@ -60,4 +60,42 @@ class UtfTest {
                 Utf.utf8UpperBound(utf16.length) >= utf8.length,
                 "UTF-8 upper bound too small for " + text);
     }
+
+    /**
+     * What is not UTF-8 is refused, not read as something else: a lone
+     * continuation byte, a byte UTF-8 never uses, a sequence cut short by a
+     * start byte, an overlong NUL, a surrogate written as UTF-8 and a code
+     * point beyond Unicode. Taken leniently, a mistyped secret became a
+     * different one.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"80", "41BF42", "F8888080", "FF", "C341", "C080", "E0808F",
+        "EDA080", "F4908080"})
+    void whatIsNotUtf8IsRefused(String hex) {
+        byte[] bytes = java.util.HexFormat.of().parseHex(hex);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment source = Segments.bytes(arena, bytes);
+            MemorySegment wide = arena.allocate(Utf.utf16LeUpperBound(bytes.length) + 4);
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> Utf.utf8ToUtf16Le(source, 0, bytes.length, wide, 0), hex);
+        }
+    }
+
+    /** Half a surrogate pair is refused rather than written as CESU-8. */
+    @ParameterizedTest
+    @ValueSource(strings = {"00D8", "4100", "00DC4100"})
+    void anUnpairedSurrogateIsRefused(String hex) {
+        byte[] bytes = java.util.HexFormat.of().parseHex(hex);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment source = Segments.bytes(arena, bytes);
+            MemorySegment narrow = arena.allocate(Utf.utf8UpperBound(bytes.length) + 4);
+            if (hex.equals("4100")) {
+                assertEquals(1, Utf.utf16LeToUtf8(source, 0, bytes.length, narrow, 0),
+                        "a plain 'A' is not a surrogate");
+                return;
+            }
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> Utf.utf16LeToUtf8(source, 0, bytes.length, narrow, 0), hex);
+        }
+    }
 }

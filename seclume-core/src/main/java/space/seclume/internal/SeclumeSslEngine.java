@@ -366,6 +366,11 @@ public final class SeclumeSslEngine extends SSLEngine {
     @Override
     public synchronized void closeInbound() {
         inboundDone = true;
+        // release() ends both directions - it frees the keys after the
+        // close_notify - so the outbound side is closed too. Left open, a
+        // wrap() after this wrote to a layer that no longer had keys and
+        // failed, where it should say CLOSED.
+        outboundClosed = true;
         release();
     }
 

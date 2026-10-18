@@ -1,0 +1,97 @@
+# seclume's own TLS client against TLS servers written by others: OpenSSL,
+# GnuTLS, Go's crypto/tls, rustls and the JDK's JSSE - TLS 1.3 and 1.2,
+# ECDSA and RSA keys, the groups and suites each offers, a HelloRetryRequest
+# - and the servers that must be refused: an expired certificate, the wrong
+# name, a stranger's CA, TLS 1.1, static RSA, CBC, ChaCha20 only.
+# See tls-interop/ and TlsInteropTest.
+#
+# Weekly, on demand, and on every change to the TLS code.
+name: tls-interop
+
+on:
+  schedule:
+    - cron: '23 4 * * 2'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'seclume-core/src/main/java/space/seclume/tls/**'
+      - 'seclume-core/src/main/java/space/seclume/crypto/**'
+      - 'tls-interop/**'
+      - '.github/workflows/tls-interop.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  interop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.m2/wrapper
+            ~/.cargo/bin/miniserve
+          key: interop-tools-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}-miniserve-0.35.0
+      - name: The servers' tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gnutls-bin >/dev/null
+          # rustls, through a small static file server built on it.
+          command -v miniserve || cargo install miniserve --locked --version 0.35.0
+          go version && openssl version && gnutls-serv --version | head -1
+      - name: Start the servers
+        run: |
+          bash tls-interop/run.sh "$RUNNER_TEMP/interop"
+          # Every implementation, or the run proves less than it says.
+          for name in openssl gnutls go rustls jsse; do
+            grep -qx "$name" "$RUNNER_TEMP/interop/implementations" \
+              || { echo "missing: $name"; exit 1; }
+          done
+      - name: seclume against each of them
+        run: |
+          . "$RUNNER_TEMP/interop/env"
+          ./mvnw -B -pl seclume-core -am test -Dtest=TlsInteropTest \
+            -Dsurefire.failIfNoSpecifiedTests=false
+          grep -q 'Skipped: 0' seclume-core/target/surefire-reports/*TlsInteropTest.txt
+      - name: The servers' side of it
+        if: failure()
+        run: tail -n 20 "$RUNNER_TEMP"/interop/*.log
+      - if: always()
+        run: bash tls-interop/run.sh stop "$RUNNER_TEMP/interop"
+
+  # Ubuntu's OpenSSL 3.0 has no ML-KEM; Fedora's 3.5 has, so the
+  # post-quantum group is shown against it here.
+  post-quantum:
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:43
+    timeout-minutes: 30
+    steps:
+      - run: dnf -y -q install openssl git tar gzip findutils
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - name: Start the servers
+        run: |
+          openssl version
+          bash tls-interop/run.sh "$RUNNER_TEMP/interop"
+          grep -qx openssl-mlkem "$RUNNER_TEMP/interop/implementations"             || { echo "missing: openssl-mlkem"; exit 1; }
+      - name: seclume against it
+        run: |
+          . "$RUNNER_TEMP/interop/env"
+          ./mvnw -B -pl seclume-core -am test -Dtest=TlsInteropTest             -Dsurefire.failIfNoSpecifiedTests=false
+          grep -q 'Skipped: 0' seclume-core/target/surefire-reports/*TlsInteropTest.txt
+      - name: The servers' side of it
+        if: failure()
+        run: tail -n 20 "$RUNNER_TEMP"/interop/*.log
+      - if: always()
+        run: bash tls-interop/run.sh stop "$RUNNER_TEMP/interop"

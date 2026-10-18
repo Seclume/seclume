@@ -243,6 +243,26 @@ public final class SecretFetch {
 
     private static void writeRequest(ByteBuffer request, String host, String method, String path,
             Map<String, String> headers, List<SecretHeader> secretHeaders, String body) {
+        // Nothing of what goes into a line may end it: a line break in a
+        // path, a header or a token - a token file with a second line, say -
+        // would start a header or a request of its own.
+        requireOneLine("the path", path);
+        requireOneLine("the host", host);
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            requireOneLine("a header name", header.getKey());
+            requireOneLine("the value of " + header.getKey(), header.getValue());
+        }
+        for (SecretHeader header : secretHeaders) {
+            requireOneLine("a header name", header.name());
+            for (int i = 0; i < header.length(); i++) {
+                byte b = header.value().get(ValueLayout.JAVA_BYTE, i);
+                if (b == '\r' || b == '\n' || b == 0) {
+                    // Which header, never what is in it.
+                    throw new IllegalArgumentException("the secret for " + header.name()
+                            + " has a line break or a NUL in it - one line is expected");
+                }
+            }
+        }
         ascii(request, method + " " + path + " HTTP/1.1\r\n");
         ascii(request, "Host: " + host + "\r\n");
         ascii(request, "Connection: close\r\n");
@@ -523,6 +543,15 @@ public final class SecretFetch {
             }
         }
         return -1;
+    }
+
+    private static void requireOneLine(String what, String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\r' || c == '\n' || c == 0) {
+                throw new IllegalArgumentException(what + " has a line break or a NUL in it");
+            }
+        }
     }
 
     private static void ascii(ByteBuffer buffer, String text) {

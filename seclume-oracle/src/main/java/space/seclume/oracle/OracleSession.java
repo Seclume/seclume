@@ -787,6 +787,9 @@ public final class OracleSession implements AutoCloseable {
                 channel.answerRead();
                 OracleSession session = new OracleSession(channel);
                 session.setResultLimit(settings.resultLimit());
+                if (osLogin == null) {
+                    session.loginSettings = settings;
+                }
                 loggedIn = true;
                 return session;
             } finally {
@@ -907,9 +910,19 @@ public final class OracleSession implements AutoCloseable {
                 inTransaction = true;
             }
             long answerStart = channel.bytesReceived();
-            TtcQuery.send(channel, nextCall(), sql, query ? PREFETCH_ROWS : 0, query, binds,
-                    cursorId, iterations, batch, autoCommit, plsql);
+            int shape = query && !plsql && iterations == 1 && batch == null
+                    && returningCount == 0 && (binds == null || !binds.hasOutput())
+                    && !needsDefine(known) ? shapeOf(binds) : -1;
+            boolean again = shape >= 0 && cursorId != 0 && sameShape(cursorId, shape);
+            if (again) {
+                shortCalls++;
+                TtcQuery.sendAgain(channel, nextCall(), cursorId, PREFETCH_ROWS, binds);
+            } else {
+                TtcQuery.send(channel, nextCall(), sql, query ? PREFETCH_ROWS : 0, query, binds,
+                        cursorId, iterations, batch, autoCommit, plsql);
+            }
             TtcResult result = readAnswer(handler, known, returningCount);
+            rememberShape(cursorId, result, again ? -1 : shape, again);
             returningCount = 0;
             returningFromCall = false;
             returningCursors = null;
@@ -1317,6 +1330,17 @@ public final class OracleSession implements AutoCloseable {
     private void keep(TtcResult result) {
         space.seclume.oracle.net.TtcRow row = result.row();
         if (row != null) {
+            if (row != carried) {
+                // The buffers of the answer before, rather than new ones -
+                // see TtcRow#adoptBuffers.
+                space.seclume.oracle.net.TtcRow donor = carried != null ? carried : idle;
+                if (donor != null) {
+                    row.adoptBuffers(donor);
+                    if (donor == idle) {
+                        idle = null;
+                    }
+                }
+            }
             row.carryOver();
         }
         if (row != carried) {
@@ -1328,9 +1352,18 @@ public final class OracleSession implements AutoCloseable {
         }
     }
 
+    /**
+     * Lets go of what was carried over: wiped at once, and the buffers kept
+     * for the next answer instead of closed - see TtcRow#adoptBuffers.
+     */
     private void releaseCarried() {
         if (carried != null) {
-            carried.release();
+            carried.wipeCarry();
+            if (idle == null) {
+                idle = carried;
+            } else {
+                carried.release();
+            }
             carried = null;
         }
         carriedCursor = 0;
@@ -1338,6 +1371,8 @@ public final class OracleSession implements AutoCloseable {
 
     /** The row window that the last answer left behind - see {@link #keep}. */
     private space.seclume.oracle.net.TtcRow carried;
+    /** A finished row whose wiped buffers wait for the next answer, or null. */
+    private space.seclume.oracle.net.TtcRow idle;
     /** Which cursor it belongs to; another one must not read it. */
     private int carriedCursor;
 
@@ -1469,6 +1504,108 @@ public final class OracleSession implements AutoCloseable {
             return;
         }
         endTransaction(TtcMessage.FUNCTION_ROLLBACK, "rollback");
+    }
+
+    /** Log off: ends the session, keeps the connection and its server process. */
+    private static final int FUNCTION_LOGOFF = 9;
+
+    /**
+     * How this session logged in, to log in again on the same connection -
+     * the secret source, not a secret. {@code null} where that is not done:
+     * a Kerberos or Windows login (the ticket was spent on the first), a
+     * session that was handed over.
+     */
+    private Settings loginSettings;
+
+    /** Whether {@link #logInAgain} can give this connection a new session. */
+    public boolean canLogInAgain() {
+        return loginSettings != null && channel.isOpen() && !pipelining;
+    }
+
+    /**
+     * A new session on the same connection: log off, log in again.
+     *
+     * <p><b>Why.</b> Oracle has no complete reset of a session - neither
+     * package reinitialisation nor {@code RESET_STATE} clears the client
+     * identifier or {@code ALTER SESSION} settings - so a used session was
+     * closed and a new connection opened in its place: TCP, TLS, and a
+     * server process the listener had to start. Under load the server could
+     * not keep up with starting them (ORA-12516 with 8 threads on Oracle
+     * Free). Logging off ends the session and nothing else; the login after
+     * it creates a new one in the same process, with everything at its
+     * defaults - package state, application contexts, client identifier,
+     * NLS settings, current schema, roles, temporary table rows - which
+     * {@code LocalLogInAgainTest} checks one by one. About 8 ms instead of
+     * 28 for a new connection, without TLS.
+     *
+     * <p>An open transaction is rolled back first: a logoff commits it.
+     * Everything this side knew about the old session goes with it - parsed
+     * cursors, the row window, the session's zone. On any failure the
+     * connection is closed; it is not to be used again.
+     */
+    public void logInAgain() throws SQLException {
+        Settings settings = loginSettings;
+        if (!canLogInAgain()) {
+            throw new SQLException("this session cannot log in again on its connection",
+                    "08003");
+        }
+        try {
+            rollback();
+            WireBuffer out = channel.beginData();
+            out.putByte((byte) TtcMessage.TYPE_FUNCTION);
+            out.putByte((byte) FUNCTION_LOGOFF);
+            out.putByte((byte) sequence++);
+            TtcParameters.putNumber(out, 0);                  // token number
+            channel.sendData();
+            TtcResult result = readAnswer(null, java.util.List.of());
+            if (result.isFailure()) {
+                throw new SQLException("the server refused the logoff (ORA-"
+                        + String.format("%05d", result.errorNumber()) + ")", "08003",
+                        result.errorNumber());
+            }
+            forgetTheSession();
+            space.seclume.jfr.SeclumeEvents.Authentication event =
+                    space.seclume.jfr.Observed.beginLogin();
+            boolean loggedIn = false;
+            try {
+                channel.nextPacketCarriesTheCredential();
+                TtcAuth.Challenge challenge = TtcAuth.phaseOne(channel, settings.user());
+                channel.nextPacketCarriesTheCredential();
+                TtcLogin.phaseTwo(channel, settings.user(), settings.secret(), challenge,
+                        settings.connectString(), settings.legacyVerifier11g());
+                channel.answerRead();
+                loggedIn = true;
+            } finally {
+                space.seclume.jfr.Observed.endLogin(event, "oracle",
+                        settings.host() + ":" + settings.port(), "o5logon-again", loggedIn);
+            }
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            close();
+            throw new SQLNonTransientConnectionException(
+                    "the connection broke while logging in again", "08006", e);
+        } catch (SQLException | RuntimeException e) {
+            close();
+            throw e;
+        }
+    }
+
+    /** What belonged to the session that just ended. */
+    private void forgetTheSession() {
+        cursors.clear();
+        shapes.clear();
+        closingCount = 0;
+        reservedForCursors = -1;
+        releaseCarried();
+        openCursor = 0;
+        moreRows = false;
+        returningCount = 0;
+        returningFromCall = false;
+        returningCursors = null;
+        reportedLobValue = -1;
+        zones = null;
+        autoCommit = true;
+        inTransaction = false;
+        readOnlyTransactions = false;
     }
 
     private void endTransaction(int function, String what) throws SQLException {
@@ -1754,11 +1891,93 @@ public final class OracleSession implements AutoCloseable {
         closingCount = 0;
     }
 
+    // ---- running a cursor again with the short call -------------------------
+
+    /**
+     * How the variables were described when each cursor last ran with the
+     * full call - type, size and character set, never a value. The short call
+     * (TtcQuery#sendAgain) leaves the description out and the server uses the
+     * one it has, so it is only sent when the description would be the same
+     * byte for byte.
+     */
+    private final java.util.HashMap<Integer, byte[]> shapes = new java.util.HashMap<>();
+    /** How many statements went out as the short call - for the tests. */
+    private long shortCalls;
+
+    public long shortCalls() {
+        return shortCalls;
+    }
+
+    /** Where a description is written to be compared; one per connection. */
+    private space.seclume.internal.WireBuffer shapeScratch;
+
+    /**
+     * Writes the description of {@code binds} into the scratch buffer and
+     * says how long it is - or -1 where the short call is not for them: a
+     * long value, which the server reads in a place of its own.
+     */
+    private int shapeOf(space.seclume.oracle.net.TtcBinds binds) {
+        if (shapeScratch == null) {
+            shapeScratch = new space.seclume.internal.WireBuffer(256);
+        }
+        shapeScratch.rewind();
+        if (binds == null || binds.count() == 0) {
+            return 0;
+        }
+        try {
+            binds.putDescriptors(shapeScratch, null, channel.ttcFieldVersion());
+        } catch (SQLException e) {
+            return -1;                       // the full call will say what is wrong
+        }
+        return binds.hasLong() ? -1 : shapeScratch.position();
+    }
+
+    /** Whether the cursor last ran with the description now in the scratch buffer. */
+    private boolean sameShape(int cursorId, int length) {
+        byte[] known = shapes.get(cursorId);
+        return known != null && known.length == length
+                && java.lang.foreign.MemorySegment.mismatch(shapeScratch.segment(), 0, length,
+                        java.lang.foreign.MemorySegment.ofArray(known), 0, length) == -1;
+    }
+
+    /**
+     * After an answer: the description the cursor now has on the server, or
+     * none known. Any full call that is not remembered here - a batch, a
+     * statement with outputs, a failure - leaves the server with another
+     * description than the one recorded, so the record goes.
+     */
+    private void rememberShape(int sent, TtcResult result, int shape, boolean again) {
+        int cursor = result.cursorId() != 0 ? result.cursorId() : sent;
+        if (result.isFailure()) {
+            shapes.remove(sent);
+            shapes.remove(cursor);
+            return;
+        }
+        if (again) {
+            return;                          // the server's description stands
+        }
+        if (sent != 0 && sent != cursor) {
+            shapes.remove(sent);
+        }
+        if (cursor == 0) {
+            return;
+        }
+        if (shape < 0) {
+            shapes.remove(cursor);
+            return;
+        }
+        byte[] copy = new byte[shape]; // seclume-allow: types and sizes of variables, never a value
+        java.lang.foreign.MemorySegment.copy(shapeScratch.segment(),
+                java.lang.foreign.ValueLayout.JAVA_BYTE, 0, copy, 0, shape);
+        shapes.put(cursor, copy);
+    }
+
     /** Queues a cursor number the server should have back. */
     private void giveCursorBack(int id) {
         if (id == 0) {
             return;
         }
+        shapes.remove(id);
         if (closingCount == closing.length) {
             closing = java.util.Arrays.copyOf(closing, closing.length * 2);
         }
@@ -2060,6 +2279,14 @@ public final class OracleSession implements AutoCloseable {
     @Override
     public void close() {
         releaseCarried();
+        if (idle != null) {
+            idle.release();
+            idle = null;
+        }
+        if (shapeScratch != null) {
+            shapeScratch.close();
+            shapeScratch = null;
+        }
         channel.close();
     }
 }

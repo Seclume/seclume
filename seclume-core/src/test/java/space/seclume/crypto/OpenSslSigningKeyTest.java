@@ -18,7 +18,6 @@ import java.security.spec.PSSParameterSpec;
 import java.util.Base64;
 
 import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -30,8 +29,7 @@ class OpenSslSigningKeyTest {
 
     private static final byte[] MESSAGE = "header.payload".getBytes(StandardCharsets.US_ASCII);
 
-    @BeforeAll
-    static void openSsl() {
+    private static void assumeOpenSsl() {
         Assumptions.assumeTrue(OpenSslSigningKey.available(), "no OpenSSL 3 here");
     }
 
@@ -55,6 +53,7 @@ class OpenSslSigningKeyTest {
 
     @Test
     void rsaPkcs1AndPssFromPemAndDer() throws Exception {
+        assumeOpenSsl();
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
         generator.initialize(2048);
         KeyPair pair = generator.generateKeyPair();
@@ -76,6 +75,7 @@ class OpenSslSigningKeyTest {
 
     @Test
     void ecdsaOnAllThreeCurvesAndItsRawForm() throws Exception {
+        assumeOpenSsl();
         String[][] curves = {{"secp256r1", "SHA256", "SHA256withECDSA", "32"},
                 {"secp384r1", "SHA384", "SHA384withECDSA", "48"},
                 {"secp521r1", "SHA512", "SHA512withECDSA", "66"}};
@@ -101,6 +101,7 @@ class OpenSslSigningKeyTest {
 
     @Test
     void theKeyTypeIsKnownAndAMismatchedAlgorithmRefused() throws Exception {
+        assumeOpenSsl();
         KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
         generator.initialize(new ECGenParameterSpec("secp256r1"));
         byte[] encoded = generator.generateKeyPair().getPrivate().getEncoded();
@@ -119,11 +120,70 @@ class OpenSslSigningKeyTest {
 
     @Test
     void garbageIsRefusedWithAReason() {
+        assumeOpenSsl();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment junk = arena.allocateFrom("not a key");
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                     () -> OpenSslSigningKey.decode(junk, 9));
             assertTrue(e.getMessage().contains("could not be read"), e.getMessage());
         }
+    }
+
+    @Test
+    void rawEcdsaConvertsValidDerSignature() {
+        byte[] r = new byte[32];
+        byte[] s = new byte[32];
+        r[31] = 1;
+        s[31] = 2;
+        byte[] der = new byte[2 + 2 + 32 + 2 + 32];
+        der[0] = 0x30;
+        der[1] = (byte) (der.length - 2);
+        der[2] = 0x02;
+        der[3] = 32;
+        System.arraycopy(r, 0, der, 4, 32);
+        der[36] = 0x02;
+        der[37] = 32;
+        System.arraycopy(s, 0, der, 38, 32);
+
+        byte[] raw = OpenSslSigningKey.rawEcdsa(der, 32);
+        assertEquals(64, raw.length);
+        assertEquals(1, raw[31]);
+        assertEquals(2, raw[63]);
+    }
+
+    @Test
+    void rawEcdsaRejectsNonDerSequenceTag() {
+        byte[] der = new byte[] {0x31, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(der, 32));
+
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(null, 32));
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(new byte[1], 32));
+    }
+
+    @Test
+    void rawEcdsaRejectsTruncatedSequenceOrInvalidLengthHeader() {
+        byte[] truncatedHeader = new byte[] {0x30, (byte) 0x82, 0x01};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(truncatedHeader, 32));
+
+        byte[] seqTooLong = new byte[] {0x30, 20, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(seqTooLong, 32));
+    }
+
+    @Test
+    void rawEcdsaRejectsInvalidIntegerTagsAndBounds() {
+        byte[] badTag = new byte[] {0x30, 6, 0x03, 1, 1, 0x02, 1, 1};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(badTag, 32));
+
+        byte[] truncatedIntLen = new byte[] {0x30, 1, 0x02};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(truncatedIntLen, 32));
+
+        byte[] intTooLong = new byte[] {0x30, 12, 0x02, 10, 1};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(intTooLong, 32));
+
+        byte[] badSecondTag = new byte[] {0x30, 6, 0x02, 1, 1, 0x03, 1, 1};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(badSecondTag, 32));
+
+        byte[] tooLongForField = new byte[] {0x30, 7, 0x02, 2, 1, 1, 0x02, 1, 1};
+        assertThrows(IllegalArgumentException.class, () -> OpenSslSigningKey.rawEcdsa(tooLongForField, 1));
     }
 }

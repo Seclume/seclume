@@ -334,6 +334,9 @@ class PgStatement implements Statement, PgSession.RowHandler {
 
     private void collectInto(PgSession session, Execution execution) throws SQLException {
         closeResult();
+        dropMoreResults();
+        answers = 0;
+        firstDescribed = false;
         // The statement is the handler itself. A lambda here would capture the
         // session, a one-element array for the block and another for the
         // counter - four objects per query, and a query that returns one row
@@ -344,6 +347,9 @@ class PgStatement implements Statement, PgSession.RowHandler {
         session.beginCollect();
         try {
             execution.run(this);
+        } catch (SQLException | RuntimeException e) {
+            dropMoreResults();
+            throw e;
         } finally {
             session.endCollect();
             if (collected != null) {
@@ -352,7 +358,11 @@ class PgStatement implements Statement, PgSession.RowHandler {
                 collected.adopt(session::exchangeBuffer);
             }
         }
-        List<PgSession.Field> fields = session.fields();
+        // A text of several statements answers once per statement; this
+        // result is the first one's, and the session by now describes the
+        // last. The others wait in moreResults - see getMoreResults.
+        List<PgSession.Field> fields = answers > 0 ? firstFields : session.fields();
+        String tag = answers > 0 ? firstTag : session.lastCommandTag();
         if (collected == null && !fields.isEmpty()) {
             collected = blockFor(fields);
         }
@@ -360,8 +370,78 @@ class PgStatement implements Statement, PgSession.RowHandler {
         rowsCollected = collectedRows;
         collecting = null;
         collected = null;
+        firstFields = null;
         resultSet = block == null ? null : new PgResultSet(block, this);
-        updateCount = block != null ? -1 : affectedRows(session.lastCommandTag());
+        updateCount = block != null ? -1 : affectedRows(tag);
+    }
+
+    // ---- several statements in one text --------------------------------------
+
+    /**
+     * The results after the first, in order: a {@link ResultBlock} for one
+     * with rows, a {@code Long} for an update count. Only a plain statement
+     * whose text holds several statements has any; the simple protocol
+     * answers each of them on its own.
+     *
+     * <p>Before, the rows of every statement went into one block under the
+     * first one's columns - {@code select 1; select 'a', 'b'} came back as
+     * one result, the second statement's row read with the first one's
+     * description.
+     */
+    private java.util.ArrayDeque<Object> moreResults;
+    /** How many statements of the text have answered so far. */
+    private int answers;
+    private boolean firstDescribed;
+    private List<PgSession.Field> firstFields;
+    private String firstTag;
+    /** The block of a later result being filled, or null. */
+    private ResultBlock laterBlock;
+    private int laterRows;
+    /** A later result's block on show; it is this statement's to close. */
+    private ResultBlock shownLater;
+
+    @Override
+    public void described() {
+        if (answers == 0) {
+            firstDescribed = true;
+            return;
+        }
+        if (laterBlock != null) {
+            laterBlock.close();
+        }
+        laterBlock = new ResultBlock(collecting.fields());
+        laterRows = 0;
+    }
+
+    @Override
+    public void completed(String commandTag) {
+        if (answers == 0) {
+            firstTag = commandTag;
+            firstFields = firstDescribed ? collecting.fields() : List.of();
+        } else {
+            if (moreResults == null) {
+                moreResults = new java.util.ArrayDeque<>();
+            }
+            moreResults.add(laterBlock != null ? laterBlock : (Object) affectedRows(commandTag));
+            laterBlock = null;
+        }
+        answers++;
+    }
+
+    /** Frees the later results that are waiting or being filled. */
+    private void dropMoreResults() {
+        if (laterBlock != null) {
+            laterBlock.close();
+            laterBlock = null;
+        }
+        if (moreResults != null) {
+            for (Object waiting : moreResults) {
+                if (waiting instanceof ResultBlock later) {
+                    later.close();
+                }
+            }
+            moreResults.clear();
+        }
     }
 
     /**
@@ -372,6 +452,19 @@ class PgStatement implements Statement, PgSession.RowHandler {
      */
     @Override
     public void row(space.seclume.postgresql.Row row) throws SQLException {
+        if (answers > 0) {
+            // A later statement of the text: its own block, copied - the
+            // receive buffer goes to the first result.
+            if (maxRows == 0 || laterRows < maxRows) {
+                laterBlock.appendCopy(row);
+                laterRows++;
+                ResultLimit limit = collecting.resultLimit();
+                if (limit.isSet()) {
+                    limit.check(laterBlock.bytes(), laterRows, collectingSql);
+                }
+            }
+            return;
+        }
         if (collected == null) {
             collected = blockFor(collecting.fields());
         }
@@ -454,12 +547,25 @@ class PgStatement implements Statement, PgSession.RowHandler {
         return updateCount;
     }
 
-    /** This driver returns exactly one result per execution. */
+    /**
+     * The next result of a text of several statements - or none, which is
+     * what every other execution has.
+     */
     @Override
     public boolean getMoreResults() throws SQLException {
         checkOpen();
         closeResult();
         updateCount = -1;
+        Object next = moreResults == null ? null : moreResults.poll();
+        if (next instanceof ResultBlock later) {
+            shownLater = later;
+            block = later;
+            resultSet = new PgResultSet(later, this);
+            return true;
+        }
+        if (next instanceof Long count) {
+            updateCount = count;
+        }
         return false;
     }
 
@@ -499,6 +605,10 @@ class PgStatement implements Statement, PgSession.RowHandler {
             resultSet = null;
         }
         block = null;
+        if (shownLater != null) {
+            shownLater.close();
+            shownLater = null;
+        }
     }
 
     // ---- batches ---------------------------------------------------------
@@ -901,6 +1011,7 @@ class PgStatement implements Statement, PgSession.RowHandler {
         if (!closed) {
             closed = true;
             closeResult();
+            dropMoreResults();
             if (reusable != null) {
                 // Not freed: the connection keeps it for the next statement.
                 // See PgConnection#takeSpareBlock for what that is worth.

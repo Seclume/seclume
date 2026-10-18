@@ -116,6 +116,11 @@ public final class SeclumeTls implements TlsLayer {
     }
 
     @Override
+    public int bytesWaiting() {
+        return connection.bytesWaiting();
+    }
+
+    @Override
     public X509Certificate peerCertificate() {
         return connection.peerCertificate();
     }

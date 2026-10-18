@@ -40,7 +40,9 @@ class DelegationIsCompleteTest {
     void everyMethodOfPreparedStatementIsOverridden() {
         List<String> missing = new ArrayList<>();
         for (Method wanted : PreparedStatement.class.getMethods()) {
-            if (wanted.isDefault() || Modifier.isStatic(wanted.getModifiers())) {
+            // Defaults included: they compile without being written out, and
+            // getLargeUpdateCount's default throws - through the pool it did.
+            if (Modifier.isStatic(wanted.getModifiers())) {
                 continue;
             }
             try {

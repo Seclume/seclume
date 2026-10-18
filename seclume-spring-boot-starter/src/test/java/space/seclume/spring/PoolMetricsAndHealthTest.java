@@ -102,8 +102,75 @@ class PoolMetricsAndHealthTest {
 
     private static double value(MeterRegistry registry, String name) {
         Gauge gauge = registry.find(name).gauge();
-        assertNotNull(gauge, "no gauge named " + name);
-        return gauge.value();
+        if (gauge != null) {
+            return gauge.value();
+        }
+        io.micrometer.core.instrument.FunctionCounter counter =
+                registry.find(name).functionCounter();
+        assertNotNull(counter, "no gauge or counter named " + name);
+        return counter.count();
+    }
+
+    /**
+     * Closing the binder - Spring does it when the context closes - takes its
+     * timers off the pool: a pool that outlives the context records nothing
+     * more into the old registry.
+     */
+    @Test
+    void closingTheBinderStopsTheTimers() throws Exception {
+        try (SeclumePool pool = pool("refreshed")) {
+            MeterRegistry registry = new SimpleMeterRegistry();
+            SeclumePoolMetrics metrics = new SeclumePoolMetrics(List.of(pool), false);
+            metrics.bindTo(registry);
+            pool.getConnection().close();
+            io.micrometer.core.instrument.Timer acquire =
+                    registry.find("seclume.pool.acquire").timer();
+            assertEquals(1, acquire.count());
+
+            metrics.close();
+            pool.getConnection().close();
+            assertEquals(1, acquire.count(), "the closed binder's timer still records");
+        }
+    }
+
+    /**
+     * The durations as timers, the maximum as configured, and what only grows
+     * as a counter - the three things a dashboard built on these got wrong
+     * or could not have.
+     */
+    @Test
+    void theTimersTheMaximumAndTheCounters() throws Exception {
+        try (SeclumePool pool = pool("timed")) {
+            MeterRegistry registry = new SimpleMeterRegistry();
+            new SeclumePoolMetrics(List.of(pool), true).bindTo(registry);
+            assertEquals(2, value(registry, "seclume.pool.connections.max"),
+                    "the maximum is the configured one, not the connections held");
+
+            try (Connection held = pool.getConnection()) {
+                assertNotNull(held);
+                Thread.sleep(5);
+            }
+            try (Connection again = pool.getConnection()) {
+                assertNotNull(again);
+            }
+            io.micrometer.core.instrument.Timer acquire =
+                    registry.find("seclume.pool.acquire").timer();
+            io.micrometer.core.instrument.Timer usage =
+                    registry.find("seclume.pool.usage").timer();
+            io.micrometer.core.instrument.Timer creation =
+                    registry.find("seclume.pool.creation").timer();
+            assertEquals(2, acquire.count());
+            assertEquals(2, usage.count());
+            assertEquals(1, creation.count(), "one connection was opened, then reused");
+            assertTrue(usage.max(java.util.concurrent.TimeUnit.MILLISECONDS) >= 4,
+                    "the hold of five milliseconds was not timed");
+            assertEquals(2, registry.find("hikaricp.connections.acquire").timer().count());
+
+            assertNotNull(registry.find("seclume.pool.borrowed").functionCounter(),
+                    "a number that only grows is a counter");
+            assertEquals(2, value(registry, "seclume.pool.borrowed"));
+            assertEquals(0, value(registry, "seclume.pool.resets.refused"));
+        }
     }
 
     /** A data source that hands out connections which do nothing. */
