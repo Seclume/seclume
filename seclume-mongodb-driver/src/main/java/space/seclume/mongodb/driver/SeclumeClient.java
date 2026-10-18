@@ -239,34 +239,33 @@ final class SeclumeClient implements MongoClient {
                 timeoutMillis);
     }
 
-    private static UnsupportedOperationException clientBulkWrite() {
-        return new UnsupportedOperationException("the client-level bulkWrite (MongoDB 8) is "
-                + "not supported by seclume's MongoDB driver yet; MongoCollection.bulkWrite is");
-    }
-
     @Override
     public ClientBulkWriteResult bulkWrite(List<? extends ClientNamespacedWriteModel> models)
             throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        return bulkWrite(null, models, null);
     }
 
     @Override
     public ClientBulkWriteResult bulkWrite(List<? extends ClientNamespacedWriteModel> models,
             ClientBulkWriteOptions options) throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        return bulkWrite(null, models, options);
     }
 
     @Override
     public ClientBulkWriteResult bulkWrite(ClientSession session,
             List<? extends ClientNamespacedWriteModel> models) throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        return bulkWrite(session, models, null);
     }
 
+    /** Writes to any collections in one command (MongoDB 8); see {@link ClientBulkWrites}. */
     @Override
     public ClientBulkWriteResult bulkWrite(ClientSession session,
             List<? extends ClientNamespacedWriteModel> models, ClientBulkWriteOptions options)
             throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return ClientBulkWrites.run(topology, s, registry, writeConcern, models, options);
+        }
     }
 
     @Override

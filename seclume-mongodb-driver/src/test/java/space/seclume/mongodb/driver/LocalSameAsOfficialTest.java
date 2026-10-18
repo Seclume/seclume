@@ -303,6 +303,71 @@ class LocalSameAsOfficialTest {
         });
     }
 
+    /** The client-level bulkWrite of MongoDB 8: two collections in one command. */
+    @Test
+    void clientBulkWriteIsTheSame() {
+        String base = "zl_cbw_" + new ObjectId().toHexString();
+        assertEquals(clientBulk(official, base + "_o"), clientBulk(seclume, base + "_s"));
+    }
+
+    private static List<Object> clientBulk(MongoClient client, String base) {
+        com.mongodb.MongoNamespace a = new com.mongodb.MongoNamespace("seclume_test", base + "_a");
+        com.mongodb.MongoNamespace b = new com.mongodb.MongoNamespace("seclume_test", base + "_b");
+        List<Object> seen = new ArrayList<>();
+        try {
+            var result = client.bulkWrite(List.of(
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(a,
+                            new Document("_id", 1).append("v", 1)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(b,
+                            new Document("_id", 1).append("v", 1)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(a,
+                            new Document("_id", 2).append("v", 2)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.updateOne(a,
+                            Filters.eq("_id", 1), Updates.inc("v", 10)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.replaceOne(b,
+                            Filters.eq("_id", 1), new Document("w", 5)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.updateOne(b,
+                            Filters.eq("_id", 9), Updates.set("v", 9),
+                            com.mongodb.client.model.bulk.ClientUpdateOneOptions
+                                    .clientUpdateOneOptions().upsert(true)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.deleteMany(a,
+                            Filters.gte("v", 2))),
+                    com.mongodb.client.model.bulk.ClientBulkWriteOptions.clientBulkWriteOptions()
+                            .verboseResults(true));
+            seen.add(List.of(result.getInsertedCount(), result.getUpsertedCount(),
+                    result.getMatchedCount(), result.getModifiedCount(),
+                    result.getDeletedCount()));
+            var verbose = result.getVerboseResults().orElseThrow();
+            seen.add(new java.util.TreeMap<>(verbose.getInsertResults()).keySet());
+            seen.add(verbose.getInsertResults().get(2).getInsertedId().orElseThrow());
+            seen.add(verbose.getUpdateResults().get(5).getUpsertedId().orElseThrow());
+            seen.add(verbose.getUpdateResults().get(3).getModifiedCount());
+            seen.add(verbose.getDeleteResults().get(6).getDeletedCount());
+            seen.add(client.getDatabase("seclume_test").getCollection(b.getCollectionName())
+                    .find().sort(Sorts.ascending("_id")).into(new ArrayList<>()));
+            for (boolean ordered : List.of(true, false)) {
+                try {
+                    client.bulkWrite(List.of(
+                            com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(b,
+                                    new Document("_id", 1)),
+                            com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(b,
+                                    new Document("_id", 20))),
+                            com.mongodb.client.model.bulk.ClientBulkWriteOptions
+                                    .clientBulkWriteOptions().ordered(ordered));
+                    seen.add("no error");
+                } catch (com.mongodb.ClientBulkWriteException e) {
+                    seen.add(List.of(ordered, new java.util.TreeMap<>(e.getWriteErrors()).keySet(),
+                            e.getWriteErrors().get(0).getCode(),
+                            e.getPartialResult().map(r -> r.getInsertedCount()).orElse(-1L)));
+                }
+            }
+        } finally {
+            client.getDatabase("seclume_test").getCollection(a.getCollectionName()).drop();
+            client.getDatabase("seclume_test").getCollection(b.getCollectionName()).drop();
+        }
+        return seen;
+    }
+
     @Test
     void databaseLevel() throws Exception {
         MongoDatabase officialDb = official.getDatabase("seclume_test");
