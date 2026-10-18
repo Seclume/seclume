@@ -137,7 +137,8 @@ final class Bsons {
         }
     }
 
-    static void maxTime(BsonDocument command, Long millis) {
+    /** The same for an option that may not be set at all. */
+    static void maxTimeIfSet(BsonDocument command, Long millis) {
         if (millis != null) {
             maxTime(command, millis.longValue());
         }

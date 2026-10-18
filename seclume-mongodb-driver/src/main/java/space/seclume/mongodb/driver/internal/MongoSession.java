@@ -398,11 +398,17 @@ public final class MongoSession implements AutoCloseable {
      * is the caller's.
      */
     public Detached detach() {
-        Detached detached = describe("handed over");
-        handedOver = true;
-        closed = true;
-        lock.unlock();
-        return detached;
+        if (!lock.tryLock()) {
+            throw inFlight("handed over");
+        }
+        try {
+            Detached detached = describe();
+            handedOver = true;
+            closed = true;
+            return detached;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -411,23 +417,27 @@ public final class MongoSession implements AutoCloseable {
      * described, never used. Exact until the next command.
      */
     public Detached snapshot() {
-        Detached described = describe("described");
-        lock.unlock();
-        return described;
+        if (!lock.tryLock()) {
+            throw inFlight("described");
+        }
+        try {
+            return describe();
+        } finally {
+            lock.unlock();
+        }
     }
 
-    /** Under the lock, which the caller releases: no command can start in between. */
-    private Detached describe(String what) {
-        if (!lock.tryLock()) {
-            throw new IllegalStateException("this session has a command in flight - it can "
-                    + "only be " + what + " between two commands");
-        }
+    private static IllegalStateException inFlight(String what) {
+        return new IllegalStateException("this session has a command in flight - it can only "
+                + "be " + what + " between two commands");
+    }
+
+    /** Under the lock: no command can start in between. */
+    private Detached describe() {
         if (closed || aborted) {
-            lock.unlock();
             throw new IllegalStateException("this session is closed");
         }
         if (!tls.movable()) {
-            lock.unlock();
             throw new IllegalStateException("this session's TLS state cannot leave its layer");
         }
         return new Detached(transport, tls, hello, address);

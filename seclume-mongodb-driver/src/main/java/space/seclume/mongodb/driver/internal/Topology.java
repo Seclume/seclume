@@ -219,8 +219,9 @@ public final class Topology implements AutoCloseable {
             }
             lock.lock();
             try {
-                if (!checkRequested && !closed) {
-                    checkNow.await(heartbeatMillis, TimeUnit.MILLISECONDS);
+                if (!checkRequested && !closed
+                        && !checkNow.await(heartbeatMillis, TimeUnit.MILLISECONDS)) {
+                    // the heartbeat interval passed without a request: the next round anyway
                 }
                 checkRequested = false;
             } catch (InterruptedException e) {
@@ -550,7 +551,9 @@ public final class Topology implements AutoCloseable {
                     throw new MongoTimeoutException("no server for " + preference + " within "
                             + selectionMillis + " ms: " + summary());
                 }
-                changed.awaitNanos(left);
+                if (changed.awaitNanos(left) <= 0) {
+                    continue;                          // the deadline: the loop says so
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

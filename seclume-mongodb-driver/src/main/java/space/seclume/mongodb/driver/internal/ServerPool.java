@@ -122,7 +122,9 @@ public final class ServerPool implements AutoCloseable {
                             + maxWaitMillis + " ms: all " + maxSize + " are in use");
                 }
                 try {
-                    returned.awaitNanos(left);
+                    if (returned.awaitNanos(left) <= 0) {
+                        continue;                      // the deadline: the loop says so
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new MongoInterruptedException("interrupted while waiting for a "

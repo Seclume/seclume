@@ -274,8 +274,8 @@ final class SeclumeDatabase implements MongoDatabase {
                     new BsonString(validation.getValidationAction().getValue()));
         }
         Bsons.put(command, "collation", options.getCollation());
-        Long expire = options.getExpireAfter(TimeUnit.SECONDS);
-        if (expire != null && expire > 0) {          // 0 is "not set" here, and refused by the server
+        long expire = options.getExpireAfter(TimeUnit.SECONDS);
+        if (expire > 0) {          // 0 is "not set" here, and refused by the server
             command.put("expireAfterSeconds", new BsonInt64(expire));
         }
         TimeSeriesOptions timeSeries = options.getTimeSeriesOptions();

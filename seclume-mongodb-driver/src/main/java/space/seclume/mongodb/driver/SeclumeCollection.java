@@ -277,7 +277,7 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
         BsonDocument command = new BsonDocument("aggregate", new BsonString(name()))
                 .append("pipeline", pipeline).append("cursor", new BsonDocument());
         Bsons.hint(command, options.getHint(), options.getHintString(), documentClass, registry);
-        Bsons.maxTime(command, options.getMaxTime(TimeUnit.MILLISECONDS));
+        Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
         Bsons.put(command, "collation", options.getCollation());
         Bsons.put(command, "comment", options.getComment());
         Bsons.readConcern(command, readConcern);
@@ -295,7 +295,7 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public long estimatedDocumentCount(EstimatedDocumentCountOptions options) {
         BsonDocument command = new BsonDocument("count", new BsonString(name()));
-        Bsons.maxTime(command, options.getMaxTime(TimeUnit.MILLISECONDS));
+        Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
         Bsons.put(command, "comment", options.getComment());
         Bsons.readConcern(command, readConcern);
         try {
@@ -1247,7 +1247,7 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
         }
         BsonDocument command = new BsonDocument("createIndexes", new BsonString(name()))
                 .append("indexes", specifications);
-        Bsons.maxTime(command, options.getMaxTime(TimeUnit.MILLISECONDS));
+        Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
         if (options.getCommitQuorum() != null) {
             command.put("commitQuorum", options.getCommitQuorum().toBsonValue());
         }
@@ -1341,7 +1341,7 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
         LogicalSession s = session(session);
         BsonDocument command = new BsonDocument("dropIndexes", new BsonString(name()))
                 .append("index", index);
-        Bsons.maxTime(command, options.getMaxTime(TimeUnit.MILLISECONDS));
+        Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
         Bsons.writeConcern(command, writeConcern);
         primary(s, db(), command);
     }
