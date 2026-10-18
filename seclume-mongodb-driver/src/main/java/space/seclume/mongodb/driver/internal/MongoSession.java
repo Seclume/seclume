@@ -138,12 +138,15 @@ public final class MongoSession implements AutoCloseable {
             try {
                 if (url.mechanism().equals(MongoUrl.X509)) {
                     session.x509(url);
+                } else if (url.mechanism().equals(MongoUrl.AWS)) {
+                    space.seclume.mongodb.internal.MongoAws.authenticate(tls, url.aws(), host,
+                            port);
                 } else if (url.mechanism().equals(MongoUrl.SCRAM_SHA_256)) {
                     MongoHandshake.authenticate(tls, url, host, port);
                 } else {
                     throw new MongoSecurityException(null, "authMechanism=" + url.mechanism()
-                            + " is not supported by seclume's MongoDB driver: SCRAM-SHA-256 "
-                            + "and MONGODB-X509 are");
+                            + " is not supported by seclume's MongoDB driver: SCRAM-SHA-256, "
+                            + "MONGODB-X509 and MONGODB-AWS are");
                 }
             } catch (javax.net.ssl.SSLException | IllegalArgumentException e) {
                 throw new MongoSecurityException(null, e.getMessage(), e);

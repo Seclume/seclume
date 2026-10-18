@@ -28,11 +28,13 @@ import space.seclume.secret.SecretProviders;
 public record MongoUrl(String host, int port, String user, String authSource,
                 TrustChoice.Choice trust, int connectTimeout, int timeout,
                 SecretProvider secret, String driverConnectionString, String transport,
-                space.seclume.tls.ClientIdentity identity, String mechanism) {
+                space.seclume.tls.ClientIdentity identity, String mechanism,
+                space.seclume.mongodb.internal.MongoAws.Credentials aws) {
 
     /** The login seclume's own driver does by default; X.509 when authMechanism says so. */
     public static final String SCRAM_SHA_256 = "SCRAM-SHA-256";
     public static final String X509 = "MONGODB-X509";
+    public static final String AWS = "MONGODB-AWS";
 
     private static final int DEFAULT_PORT = 27017;
     private static final int DEFAULT_CONNECT_TIMEOUT = 10_000;
@@ -155,7 +157,8 @@ public record MongoUrl(String host, int port, String user, String authSource,
         if (user == null || user.isEmpty()) {
             user = userFromUri;
         }
-        if ((user == null || user.isEmpty()) && !mechanism.equals(X509)) {
+        if ((user == null || user.isEmpty()) && !mechanism.equals(X509)
+                && !mechanism.equals(AWS)) {
             throw new IllegalArgumentException(
                     "a MongoDB URL requires a user name: mongodb://user@host/?... or ?user=...");
         }
@@ -163,7 +166,8 @@ public record MongoUrl(String host, int port, String user, String authSource,
         String authSource = allOptions.get("authSource");
         if (authSource == null || authSource.isEmpty()) {
             // X.509 users live in $external; the others in admin unless said otherwise.
-            authSource = mechanism.equals(X509) ? "$external" : DEFAULT_AUTH_SOURCE;
+            authSource = mechanism.equals(X509) || mechanism.equals(AWS) ? "$external"
+                    : DEFAULT_AUTH_SOURCE;
         }
 
         String rootCert = allOptions.get(TrustChoice.ROOT_CERT);
@@ -233,7 +237,9 @@ public record MongoUrl(String host, int port, String user, String authSource,
             throw new IllegalArgumentException("authMechanism=MONGODB-X509 needs a client "
                     + "certificate: clientCert and clientKey-provider (or a certificate store)");
         }
-        SecretProvider secret = mechanism.equals(X509) ? null
+        space.seclume.mongodb.internal.MongoAws.Credentials aws = mechanism.equals(AWS)
+                ? awsCredentials(seclumeSettings) : null;
+        SecretProvider secret = mechanism.equals(X509) || mechanism.equals(AWS) ? null
                 : SecretProviders.of(withoutIdentity(seclumeSettings));
 
         // Build clean connection string for driver
@@ -253,7 +259,43 @@ public record MongoUrl(String host, int port, String user, String authSource,
 
         String transport = allOptions.get("transport");
         return new MongoUrl(firstHost, firstPort, user, authSource, trust, connectTimeout,
-                timeout, secret, driverConnectionString, transport, identity, mechanism);
+                timeout, secret, driverConnectionString, transport, identity, mechanism, aws);
+    }
+
+    /**
+     * The AWS credentials of a MONGODB-AWS login, named as for rds-iam: the
+     * workload's role ({@code credentials=instance|container|web-identity}),
+     * or {@code access-key-id} with the secret key's provider under
+     * {@code key-} and an optional session token's under {@code session-token-}.
+     */
+    private static space.seclume.mongodb.internal.MongoAws.Credentials awsCredentials(
+            Map<String, String> settings) {
+        space.seclume.secret.AwsInstanceRole role = space.seclume.secret.AwsInstanceRole.of(
+                settings);
+        if (role != null) {
+            return new space.seclume.mongodb.internal.MongoAws.Credentials(role, null, null,
+                    null);
+        }
+        String accessKeyId = settings.get("access-key-id");
+        Map<String, String> key = prefixed(settings, "key-");
+        if (accessKeyId == null || key.isEmpty()) {
+            throw new IllegalArgumentException("authMechanism=MONGODB-AWS needs credentials: "
+                    + "credentials=instance|container|web-identity, or access-key-id and "
+                    + "key-provider (with session-token-provider for temporary ones)");
+        }
+        Map<String, String> token = prefixed(settings, "session-token-");
+        return new space.seclume.mongodb.internal.MongoAws.Credentials(null, accessKeyId,
+                SecretProviders.of(key), token.isEmpty() ? null : SecretProviders.of(token));
+    }
+
+    private static Map<String, String> prefixed(Map<String, String> settings, String prefix) {
+        Map<String, String> nested = new LinkedHashMap<>();
+        settings.forEach((name, value) -> {
+            if (name.startsWith(prefix)) {
+                nested.put(name.substring(prefix.length()), value);
+            }
+        });
+        return nested;
     }
 
     /** The settings that describe a client certificate, for ClientIdentities. */
