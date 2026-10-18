@@ -41,8 +41,8 @@ public final class SeclumeMongoClients {
     /** A client with the application's codecs - POJOs, records, its own types. */
     public static MongoClient create(String url, CodecRegistry codecs) {
         MongoUrl parsed = MongoUrl.parse(url);
-        ConnectionString options = new ConnectionString(parsed.driverConnectionString());
         Topology topology = Topology.of(parsed);
+        ConnectionString options = topology.options();
         ReadPreference preference = options.getReadPreference() != null
                 ? options.getReadPreference() : ReadPreference.primary();
         WriteConcern concern = options.getWriteConcern() != null

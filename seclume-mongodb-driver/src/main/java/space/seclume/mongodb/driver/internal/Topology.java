@@ -106,8 +106,12 @@ public final class Topology implements AutoCloseable {
     private final Map<ServerAddress, Server> servers = new LinkedHashMap<>();
     private final ArrayDeque<LogicalSession> sessionPool = new ArrayDeque<>();
     private final Thread monitor;
+    private static final long RESCAN_NANOS = TimeUnit.SECONDS.toNanos(60);
     private Kind kind;
     private String setName;
+    private String srv;
+    private Srv.Resolver resolver;
+    private long nextScan;
     private Integer maxSetVersion;
     private org.bson.types.ObjectId maxElectionId;
     private BsonDocument clusterTime;
@@ -182,11 +186,13 @@ public final class Topology implements AutoCloseable {
 
     /** No connection is opened here: the monitor starts, and commands wait for what it finds. */
     public static Topology of(MongoUrl url) {
-        ConnectionString options = new ConnectionString(url.driverConnectionString());
-        if (options.isSrvProtocol()) {
-            throw new MongoClientException("mongodb+srv:// is not supported by seclume's "
-                    + "MongoDB driver yet; list the hosts");
-        }
+        return of(url, Srv.dns());
+    }
+
+    /** The same, with the DNS lookups of a {@code mongodb+srv://} URL done by {@code resolver}. */
+    public static Topology of(MongoUrl url, Srv.Resolver resolver) {
+        String given = url.driverConnectionString();
+        ConnectionString options = new ConnectionString(Srv.expand(given, resolver));
         if (options.getCompressorList() != null && !options.getCompressorList().isEmpty()) {
             throw new MongoClientException("compression is not supported by seclume's MongoDB "
                     + "driver; remove 'compressors' from the URL");
@@ -196,14 +202,64 @@ public final class Topology implements AutoCloseable {
                     + "MongoDB driver yet");
         }
         Topology topology = new Topology(url, options);
+        if (given.startsWith("mongodb+srv://")) {
+            topology.srv = given;
+            topology.resolver = resolver;
+            topology.nextScan = System.nanoTime() + RESCAN_NANOS;
+        }
         topology.monitor.start();
         return topology;
+    }
+
+    /** The URL's options, a {@code mongodb+srv://} URL's after its DNS lookups. */
+    public ConnectionString options() {
+        return options;
+    }
+
+    /**
+     * A sharded cluster behind {@code mongodb+srv://} may gain or lose mongos:
+     * its SRV records are asked again every minute and the routers follow
+     * them (the polling SRV records for mongos discovery specification). A
+     * replica set is followed by its own member lists instead.
+     */
+    private void rescan() {
+        if (srv == null || System.nanoTime() < nextScan
+                || (kind != Kind.SHARDED && kind != Kind.UNKNOWN)) {
+            return;
+        }
+        nextScan = System.nanoTime() + RESCAN_NANOS;
+        List<String> seeds;
+        try {
+            Srv.Name name = Srv.Name.of(srv);
+            seeds = Srv.seeds(name.host(), name.service(), resolver);
+        } catch (RuntimeException failed) {
+            return;                      // DNS down or empty: keep what is known, as specified
+        }
+        Set<ServerAddress> wanted = new HashSet<>();
+        for (String seed : seeds) {
+            wanted.add(new ServerAddress(seed));
+        }
+        lock.lock();
+        try {
+            for (ServerAddress address : wanted) {
+                servers.computeIfAbsent(address, a -> new Server(pool(a)));
+            }
+            for (Server server : new ArrayList<>(servers.values())) {
+                if (!wanted.contains(server.pool.address())) {
+                    remove(server);
+                }
+            }
+            changed.signalAll();
+        } finally {
+            lock.unlock();
+        }
     }
 
     // ---- monitoring ---------------------------------------------------------
 
     private void monitor() {
         while (!closed) {
+            rescan();
             List<Server> now;
             lock.lock();
             try {
