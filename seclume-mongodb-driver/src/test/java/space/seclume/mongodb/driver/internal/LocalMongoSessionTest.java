@@ -119,6 +119,31 @@ class LocalMongoSessionTest {
         }
     }
 
+    /**
+     * compressors=zlib: agreed in hello, and the server's own counters show
+     * that what it received came compressed.
+     */
+    @Test
+    void zlibIsAgreedAndUsed() {
+        try (MongoSession session = open("&compressors=zlib")) {
+            assertTrue(session.compressed(), "the server did not agree to zlib");
+            long before = zlibBytesIn(session);
+            BsonDocument big = new BsonDocument("ping", new BsonInt32(1))
+                    .append("comment", new BsonString("z".repeat(20_000)));
+            session.command("admin", big);
+            assertTrue(zlibBytesIn(session) > before, "nothing reached the server compressed");
+        }
+        try (MongoSession plain = open("")) {
+            assertTrue(!plain.compressed());
+        }
+    }
+
+    private static long zlibBytesIn(MongoSession session) {
+        return session.command("admin", new BsonDocument("serverStatus", new BsonInt32(1)))
+                .getDocument("network").getDocument("compression").getDocument("zlib")
+                .getDocument("decompressor").getNumber("bytesIn").longValue();
+    }
+
     /** A refused command is the API's exception with the server's code; the session goes on. */
     @Test
     void aRefusedCommandKeepsTheSession() {

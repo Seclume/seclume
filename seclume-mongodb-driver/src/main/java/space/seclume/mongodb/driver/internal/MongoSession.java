@@ -78,6 +78,16 @@ public final class MongoSession implements AutoCloseable {
     private int timeoutMillis;
     private BsonDocument hello;
     private int maxMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
+    /** zlib's level when the server agreed to zlib in hello, else null: no compression. */
+    private Integer zlibLevel;
+
+    /**
+     * Never compressed, whatever was agreed (compression specification): the
+     * handshake and everything that carries a credential.
+     */
+    private static final java.util.Set<String> NEVER_COMPRESSED = java.util.Set.of("hello",
+            "ismaster", "saslstart", "saslcontinue", "getnonce", "authenticate", "createuser",
+            "updateuser", "copydbsaslstart", "copydbgetnonce", "copydb");
 
     private MongoSession(ServerAddress address, Transport transport, TlsLayer tls) {
         this.address = address;
@@ -152,6 +162,10 @@ public final class MongoSession implements AutoCloseable {
                 .append("helloOk", org.bson.BsonBoolean.TRUE)
                 .append("client", client)
                 .append("saslSupportedMechs", new BsonString(url.authSource() + "." + url.user()));
+        Compression wanted = Compression.of(url.driverConnectionString());
+        if (wanted.zlib()) {
+            command.put("compression", new org.bson.BsonArray(List.of(new BsonString("zlib"))));
+        }
         BsonDocument reply = command("admin", command);
         int wire = intOf(reply.get("maxWireVersion"), 0);
         if (wire < MIN_WIRE_VERSION) {
@@ -170,6 +184,10 @@ public final class MongoSession implements AutoCloseable {
                     + "; seclume logs in with SCRAM-SHA-256 only");
         }
         maxMessageSize = intOf(reply.get("maxMessageSizeBytes"), DEFAULT_MAX_MESSAGE_SIZE);
+        if (wanted.zlib() && reply.get("compression") instanceof org.bson.BsonArray agreed
+                && agreed.contains(new BsonString("zlib"))) {
+            zlibLevel = wanted.level();
+        }
         return reply;
     }
 
@@ -240,6 +258,10 @@ public final class MongoSession implements AutoCloseable {
             int requestId = REQUEST_IDS.incrementAndGet();
             ByteBuffer request = OpMsg.encode(requestId, command, db, sequenceId, sequence,
                     maxMessageSize);
+            if (zlibLevel != null && !command.isEmpty() && !NEVER_COMPRESSED.contains(
+                    command.getFirstKey().toLowerCase(Locale.ROOT))) {
+                request = OpMsg.compress(request, zlibLevel);
+            }
             try {
                 tls.write(request);
             } catch (IOException e) {
@@ -293,7 +315,16 @@ public final class MongoSession implements AutoCloseable {
         ByteBuffer message = ByteBuffer.allocate(length); // seclume-allow: a command reply, decoded into a BsonDocument on the heap for the API; the login's replies are read off the heap by MongoHandshake
         message.put(header.flip());
         readFully(message);
-        return message.flip();
+        message.flip();
+        int opCode = message.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt(12);
+        if (opCode == OpMsg.OP_COMPRESSED) {
+            if (zlibLevel == null) {
+                throw new com.mongodb.MongoInternalException("the server sent a compressed "
+                        + "reply, though no compression was agreed");
+            }
+            return OpMsg.decompress(message, maxMessageSize);
+        }
+        return message;
     }
 
     private void readFully(ByteBuffer into) throws IOException {
@@ -369,6 +400,43 @@ public final class MongoSession implements AutoCloseable {
         }
         aborted = true;
         transport.close();          // the keys go with close(), under the session's lock
+    }
+
+    /** Whether commands on this connection go compressed. */
+    public boolean compressed() {
+        return zlibLevel != null;
+    }
+
+    /** {@code compressors} and {@code zlibCompressionLevel} from a URL. */
+    record Compression(boolean zlib, int level) {
+
+        static Compression of(String url) {
+            int question = url.indexOf('?');
+            boolean zlib = false;
+            int level = -1;
+            if (question < 0) {
+                return new Compression(false, level);
+            }
+            for (String pair : url.substring(question + 1).split("&")) {
+                int equals = pair.indexOf('=');
+                if (equals < 0) {
+                    continue;
+                }
+                String key = pair.substring(0, equals).toLowerCase(Locale.ROOT);
+                String value = java.net.URLDecoder.decode(pair.substring(equals + 1),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                if (key.equals("compressors")) {
+                    for (String name : value.split(",")) {
+                        if (name.trim().equalsIgnoreCase("zlib")) {
+                            zlib = true;
+                        }
+                    }
+                } else if (key.equals("zlibcompressionlevel")) {
+                    level = Integer.parseInt(value.trim());
+                }
+            }
+            return new Compression(zlib, level);
+        }
     }
 
     /** The server's {@code hello} reply from the login. */

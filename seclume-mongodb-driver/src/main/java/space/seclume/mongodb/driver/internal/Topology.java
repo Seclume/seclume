@@ -193,9 +193,12 @@ public final class Topology implements AutoCloseable {
     public static Topology of(MongoUrl url, Srv.Resolver resolver) {
         String given = url.driverConnectionString();
         ConnectionString options = new ConnectionString(Srv.expand(given, resolver));
-        if (options.getCompressorList() != null && !options.getCompressorList().isEmpty()) {
-            throw new MongoClientException("compression is not supported by seclume's MongoDB "
-                    + "driver; remove 'compressors' from the URL");
+        for (com.mongodb.MongoCompressor compressor : options.getCompressorList()) {
+            if (!compressor.getName().equalsIgnoreCase("zlib")) {
+                throw new MongoClientException("compressor '" + compressor.getName()
+                        + "' is not supported by seclume's MongoDB driver - only zlib, which "
+                        + "needs no native library");
+            }
         }
         if (Boolean.TRUE.equals(options.isLoadBalanced())) {
             throw new MongoClientException("loadBalanced is not supported by seclume's "

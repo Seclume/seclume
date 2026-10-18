@@ -47,7 +47,8 @@ class OpMsgFuzzTest {
                 OpMsgTest.reply(5, 0, OpMsgTest.concat(OpMsgTest.body(new BsonDocument("ok",
                         new BsonInt32(1))), OpMsgTest.sequence("batch", rich(), rich()))),
                 OpMsgTest.withChecksum(OpMsgTest.reply(5, OpMsg.CHECKSUM_PRESENT,
-                        OpMsgTest.body(rich())), false));
+                        OpMsgTest.body(rich())), false),
+                OpMsg.compress(OpMsgTest.reply(5, 0, OpMsgTest.body(rich())), -1));
         Random random = new Random(0x5EC1_0DB);
         for (int round = 0; round < ROUNDS; round++) {
             ByteBuffer seed = seeds.get(round % seeds.size());
@@ -60,6 +61,10 @@ class OpMsgFuzzTest {
                 message.order(ByteOrder.LITTLE_ENDIAN).putInt(0, bytes.length);
             }
             try {
+                // A compressed one is inflated first, as the session does.
+                if (message.order(ByteOrder.LITTLE_ENDIAN).getInt(12) == OpMsg.OP_COMPRESSED) {
+                    message = OpMsg.decompress(message, 1 << 20);
+                }
                 OpMsg.parse(message, 5);
             } catch (MongoInternalException refused) {
                 // what it should do with garbage
