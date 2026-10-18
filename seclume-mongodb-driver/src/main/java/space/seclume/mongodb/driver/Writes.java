@@ -65,9 +65,7 @@ final class Writes {
             boolean retryable, int offset, Outcome into) {
         int maxBatch = topology.writableHello().getNumber("maxWriteBatchSize",
                 new org.bson.BsonInt32(100_000)).intValue();
-        boolean acknowledged = !command.containsKey("writeConcern")
-                || !command.getDocument("writeConcern").getNumber("w", new org.bson.BsonInt32(1))
-                        .equals(new org.bson.BsonInt32(0));
+        boolean acknowledged = acknowledged(command);
         int at = 0;
         while (at < items.size()) {
             int count = Math.min(items.size() - at, maxBatch);
@@ -110,6 +108,22 @@ final class Writes {
             }
         }
         return into;
+    }
+
+    /**
+     * Whether the write's concern wants an answer: not with {@code w: 0} - a
+     * number, where {@code w} may also be a tag or "majority" - unless
+     * {@code j: true} asks for the journal, which needs one.
+     */
+    static boolean acknowledged(BsonDocument command) {
+        if (!command.containsKey("writeConcern")) {
+            return true;
+        }
+        BsonDocument concern = command.getDocument("writeConcern");
+        BsonValue w = concern.get("w");
+        boolean zero = w != null && w.isNumber() && w.asNumber().intValue() == 0;
+        boolean journal = concern.getBoolean("j", org.bson.BsonBoolean.FALSE).getValue();
+        return !zero || journal;
     }
 
     static void read(BsonDocument reply, int offset, Outcome into) {

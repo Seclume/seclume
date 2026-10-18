@@ -36,16 +36,18 @@ final class SeclumeClientSession implements ClientSession {
 
     SeclumeClientSession(Topology topology, ClientSessionOptions options, Object originator,
             TransactionOptions clientDefaults) {
-        if (Boolean.TRUE.equals(options.isSnapshot())) {
-            throw new UnsupportedOperationException("snapshot sessions are not supported by "
-                    + "seclume's MongoDB driver yet");
+        boolean snapshot = Boolean.TRUE.equals(options.isSnapshot());
+        if (snapshot && Boolean.TRUE.equals(options.isCausallyConsistent())) {
+            throw new IllegalArgumentException("a session is either causally consistent or a "
+                    + "snapshot session, not both");
         }
         this.topology = topology;
         this.options = options;
         this.originator = originator;
         this.clientDefaults = clientDefaults;
-        this.session = topology.acquire(true, options.isCausallyConsistent() == null
-                || options.isCausallyConsistent());
+        this.session = topology.acquire(true, !snapshot
+                && (options.isCausallyConsistent() == null || options.isCausallyConsistent()));
+        this.session.snapshot(snapshot);
     }
 
     /** The session behind an API argument; {@code null} for none. */
@@ -271,13 +273,12 @@ final class SeclumeClientSession implements ClientSession {
 
     @Override
     public void setSnapshotTimestamp(BsonTimestamp snapshotTimestamp) {
-        throw new UnsupportedOperationException("snapshot sessions are not supported by "
-                + "seclume's MongoDB driver yet");
+        session.snapshotTime(snapshotTimestamp);
     }
 
     @Override
     public BsonTimestamp getSnapshotTimestamp() {
-        return null;
+        return session.snapshotTime();
     }
 
     @Override

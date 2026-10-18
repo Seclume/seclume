@@ -40,6 +40,8 @@ public final class LogicalSession {
     private BsonDocument clusterTime;
     private BsonDocument recoveryToken;
     private ServerPool pinned;
+    private boolean snapshot;
+    private BsonTimestamp snapshotTime;
     private final java.util.Set<AutoCloseable> cursors = new java.util.LinkedHashSet<>();
 
     /**
@@ -68,6 +70,32 @@ public final class LogicalSession {
         clusterTime = null;
         recoveryToken = null;
         pinned = null;
+        snapshot = false;
+        snapshotTime = null;
+    }
+
+    /**
+     * A snapshot session (sessions specification, "Snapshot reads"): every
+     * read sees the data as of one point in time - the first read's, which
+     * the server names in its reply ({@code atClusterTime}).
+     */
+    public synchronized void snapshot(boolean on) {
+        snapshot = on;
+        snapshotTime = null;
+    }
+
+    public synchronized boolean isSnapshot() {
+        return snapshot;
+    }
+
+    public synchronized BsonTimestamp snapshotTime() {
+        return snapshotTime;
+    }
+
+    public synchronized void snapshotTime(BsonTimestamp time) {
+        if (snapshot && snapshotTime == null) {
+            snapshotTime = time;
+        }
     }
 
     /**
@@ -188,6 +216,10 @@ public final class LogicalSession {
     }
 
     public synchronized void startTransaction(TransactionOptions options) {
+        if (snapshot) {
+            throw new IllegalStateException("transactions are not supported in a snapshot "
+                    + "session");
+        }
         if (inTransaction()) {
             throw new IllegalStateException("a transaction is already in progress");
         }
@@ -272,6 +304,15 @@ public final class LogicalSession {
                     command.put("readConcern", readConcern);
                 }
             }
+            return;
+        }
+        if (read && snapshot) {
+            BsonDocument readConcern = new BsonDocument("level",
+                    new org.bson.BsonString("snapshot"));
+            if (snapshotTime != null) {
+                readConcern.put("atClusterTime", snapshotTime);
+            }
+            command.put("readConcern", readConcern);
             return;
         }
         if (read && causallyConsistent && operationTime != null) {

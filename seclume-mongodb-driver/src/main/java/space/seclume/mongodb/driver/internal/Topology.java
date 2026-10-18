@@ -932,6 +932,15 @@ public final class Topology implements AutoCloseable {
         if (reply == null) {
             return;
         }
+        if (session != null && session.isSnapshot()) {
+            // find and aggregate name the point in their cursor, distinct at the top
+            BsonValue at = reply.containsKey("cursor")
+                    ? reply.getDocument("cursor").get("atClusterTime")
+                    : reply.get("atClusterTime");
+            if (at != null && at.isTimestamp()) {
+                session.snapshotTime(at.asTimestamp());
+            }
+        }
         if (reply.containsKey("$clusterTime")) {
             BsonDocument time = reply.getDocument("$clusterTime");
             lock.lock();
