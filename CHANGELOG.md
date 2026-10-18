@@ -65,7 +65,8 @@ All notable changes to seclume are recorded here. Versions follow
 - **seclume's own MongoDB driver** (`seclume-mongodb-driver`, new, in progress):
   `SeclumeMongoClients.create(url)` returns a `MongoClient` of the official sync API - CRUD,
   cursors, aggregation, bulk writes, indexes; replica sets and mongos with server selection;
-  sessions, causal consistency, transactions, retryable writes and reads (FEATURES.md lists
+  sessions, causal consistency, transactions, retryable writes and reads; Spring Data MongoDB
+  on Spring Boot; a pool that leaves nothing of one borrower to the next (FEATURES.md lists
   what is there). Under it the session core - TCP, seclume's TLS 1.3, `hello` with the client's metadata and
   `saslSupportedMechs` (a user the server would log in only with SCRAM-SHA-1 is refused
   before anything is sent), SCRAM-SHA-256 off the heap, then commands as OP_MSG with document

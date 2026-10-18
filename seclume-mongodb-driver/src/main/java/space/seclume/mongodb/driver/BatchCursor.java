@@ -65,6 +65,9 @@ final class BatchCursor<T> implements MongoCursor<T> {
         this.database = namespace.substring(0, dot);
         this.collection = namespace.substring(dot + 1);
         this.batch = cursor.getArray("firstBatch");
+        if (id != 0 && session != null && session.explicit()) {
+            session.opened(this);
+        }
     }
 
     @Override
@@ -123,10 +126,16 @@ final class BatchCursor<T> implements MongoCursor<T> {
         id = cursor.getNumber("id").longValue();
         batch = cursor.getArray("nextBatch");
         at = 0;
+        if (id == 0 && session != null) {
+            session.ended(this);
+        }
     }
 
     @Override
     public void close() {
+        if (session != null) {
+            session.ended(this);
+        }
         if (id == 0) {
             return;
         }

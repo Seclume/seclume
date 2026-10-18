@@ -33,6 +33,8 @@ public final class ServerPool implements AutoCloseable {
     private final ServerAddress address;
     private final int maxSize;
     private final long maxWaitMillis;
+    private final long maxIdleNanos;
+    private final long maxLifeNanos;
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition returned = lock.newCondition();
     private final ArrayDeque<Pooled> idle = new ArrayDeque<>();
@@ -40,14 +42,35 @@ public final class ServerPool implements AutoCloseable {
     private int generation;
     private boolean closed;
 
-    private record Pooled(MongoSession session, int generation) {
+    /** A connection, the generation it belongs to, when it was opened and last given back. */
+    private record Pooled(MongoSession session, int generation, long bornNanos,
+                          long returnedNanos) {
+
+        Pooled returned() {
+            return new Pooled(session, generation, bornNanos, System.nanoTime());
+        }
     }
 
-    ServerPool(MongoUrl url, ServerAddress address, int maxSize, long maxWaitMillis) {
+    /**
+     * @param maxIdleMillis  {@code maxIdleTimeMS}: an idle connection older than this is
+     *                       closed rather than lent; 0 for no limit
+     * @param maxLifeMillis  {@code maxLifeTimeMS}: the same from when it was opened
+     */
+    ServerPool(MongoUrl url, ServerAddress address, int maxSize, long maxWaitMillis,
+            long maxIdleMillis, long maxLifeMillis) {
         this.url = url;
         this.address = address;
         this.maxSize = maxSize;
         this.maxWaitMillis = maxWaitMillis;
+        this.maxIdleNanos = TimeUnit.MILLISECONDS.toNanos(maxIdleMillis);
+        this.maxLifeNanos = TimeUnit.MILLISECONDS.toNanos(maxLifeMillis);
+    }
+
+    private boolean usable(Pooled pooled) {
+        long now = System.nanoTime();
+        return !pooled.session().isClosed() && pooled.generation() == generation
+                && (maxIdleNanos == 0 || now - pooled.returnedNanos() < maxIdleNanos)
+                && (maxLifeNanos == 0 || now - pooled.bornNanos() < maxLifeNanos);
     }
 
     public ServerAddress address() {
@@ -81,7 +104,7 @@ public final class ServerPool implements AutoCloseable {
                 }
                 Pooled pooled = idle.pollFirst();
                 if (pooled != null) {
-                    if (!pooled.session().isClosed() && pooled.generation() == generation) {
+                    if (usable(pooled)) {
                         return pooled;
                     }
                     open--;
@@ -110,7 +133,8 @@ public final class ServerPool implements AutoCloseable {
             lock.unlock();
         }
         try {
-            return new Pooled(openOwn(), born);
+            long now = System.nanoTime();
+            return new Pooled(openOwn(), born, now, now);
         } catch (RuntimeException e) {
             lock.lock();
             try {
@@ -130,9 +154,53 @@ public final class ServerPool implements AutoCloseable {
                 open--;
                 pooled.session().close();
             } else {
-                idle.addFirst(pooled);
+                idle.addFirst(pooled.returned());
             }
             returned.signal();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * An idle connection taken out of the pool, which no longer counts it:
+     * a session between two commands, to be described or handed over (see
+     * {@link MongoSession#detach}). {@code null} when none is idle.
+     */
+    public MongoSession takeIdle() {
+        lock.lock();
+        try {
+            while (!idle.isEmpty()) {
+                Pooled pooled = idle.pollFirst();
+                open--;
+                if (usable(pooled)) {
+                    returned.signal();
+                    return pooled.session();
+                }
+                pooled.session().close();
+            }
+            return null;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Takes a logged-in session into the pool - one {@link MongoSession#resume}
+     * made - as an idle connection of the current generation. Refused when the
+     * pool is full or closed; the session is then the caller's to close.
+     */
+    public boolean adopt(MongoSession session) {
+        lock.lock();
+        try {
+            if (closed || open >= maxSize || session.isClosed()) {
+                return false;
+            }
+            open++;
+            long now = System.nanoTime();
+            idle.addFirst(new Pooled(session, generation, now, now));
+            returned.signal();
+            return true;
         } finally {
             lock.unlock();
         }

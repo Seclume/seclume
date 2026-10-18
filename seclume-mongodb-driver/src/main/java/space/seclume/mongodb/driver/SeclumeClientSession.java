@@ -297,6 +297,7 @@ final class SeclumeClientSession implements ClientSession {
             }
         } finally {
             closed = true;
+            session.closeCursors();
             topology.release(session);
         }
     }

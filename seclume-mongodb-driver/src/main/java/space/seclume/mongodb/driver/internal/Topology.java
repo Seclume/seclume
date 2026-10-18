@@ -93,6 +93,8 @@ public final class Topology implements AutoCloseable {
     private final ConnectionString options;
     private final int maxPool;
     private final long maxWaitMillis;
+    private final long maxIdleMillis;
+    private final long maxLifeMillis;
     private final long selectionMillis;
     private final long heartbeatMillis;
     private final long localThresholdMillis;
@@ -135,6 +137,10 @@ public final class Topology implements AutoCloseable {
         this.maxPool = max == null || max == 0 ? DEFAULT_MAX_POOL : max;
         Integer wait = options.getMaxWaitTime();
         this.maxWaitMillis = wait == null ? DEFAULT_MAX_WAIT_MILLIS : wait;
+        Integer idleTime = options.getMaxConnectionIdleTime();
+        this.maxIdleMillis = idleTime == null ? 0 : idleTime;
+        Integer lifeTime = options.getMaxConnectionLifeTime();
+        this.maxLifeMillis = lifeTime == null ? 0 : lifeTime;
         Integer selection = options.getServerSelectionTimeout();
         this.selectionMillis = selection == null ? DEFAULT_SELECTION_MILLIS : selection;
         Integer heartbeat = options.getHeartbeatFrequency();
@@ -152,11 +158,26 @@ public final class Topology implements AutoCloseable {
         this.kind = direct ? Kind.SINGLE : setName != null ? Kind.REPLICA_SET : Kind.UNKNOWN;
         for (String host : options.getHosts()) {
             ServerAddress address = new ServerAddress(host);
-            servers.put(address, new Server(new ServerPool(url, address, maxPool,
-                    maxWaitMillis)));
+            servers.put(address, new Server(pool(address)));
         }
         this.monitor = Thread.ofPlatform().daemon().name("seclume-mongodb-monitor")
                 .unstarted(this::monitor);
+    }
+
+    private ServerPool pool(ServerAddress address) {
+        return new ServerPool(url, address, maxPool, maxWaitMillis, maxIdleMillis,
+                maxLifeMillis);
+    }
+
+    /** The connections to a server the topology knows, or {@code null}. */
+    public ServerPool poolOf(ServerAddress address) {
+        lock.lock();
+        try {
+            Server server = servers.get(address);
+            return server == null ? null : server.pool;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /** No connection is opened here: the monitor starts, and commands wait for what it finds. */
@@ -320,8 +341,7 @@ public final class Topology implements AutoCloseable {
             }
             Set<ServerAddress> members = members(description);
             for (ServerAddress member : members) {
-                servers.computeIfAbsent(member, address -> new Server(new ServerPool(url,
-                        address, maxPool, maxWaitMillis)));
+                servers.computeIfAbsent(member, address -> new Server(pool(address)));
             }
             for (Server other : new ArrayList<>(servers.values())) {
                 if (!members.contains(other.pool.address())) {
@@ -332,8 +352,7 @@ public final class Topology implements AutoCloseable {
                 || type == ServerType.REPLICA_SET_OTHER) {
             if (primary() == null) {
                 for (ServerAddress member : members(description)) {
-                    servers.computeIfAbsent(member, address -> new Server(new ServerPool(url,
-                            address, maxPool, maxWaitMillis)));
+                    servers.computeIfAbsent(member, address -> new Server(pool(address)));
                 }
             }
         }
@@ -730,9 +749,24 @@ public final class Topology implements AutoCloseable {
         });
     }
 
+    /**
+     * Commands that would change who a pooled connection is logged in as. The
+     * login is seclume's - once, off the heap, as the URL's user - and a
+     * borrower that logged the connection in as someone else, or out, would
+     * leave that to whoever borrows it next.
+     */
+    private static final Set<String> LOGIN_COMMANDS = Set.of("saslstart", "saslcontinue",
+            "authenticate", "logout", "getnonce");
+
     /** A command as given - {@code runCommand}, DDL: no retry. */
     public Reply command(LogicalSession session, ReadPreference preference, String db,
             BsonDocument command) {
+        if (!command.isEmpty()
+                && LOGIN_COMMANDS.contains(command.getFirstKey().toLowerCase(java.util.Locale.ROOT))) {
+            throw new IllegalArgumentException("'" + command.getFirstKey() + "' is refused: "
+                    + "the connections are logged in by seclume, as the URL's user, and a "
+                    + "pooled connection is not logged in again or out");
+        }
         return withImplicit(session, s -> once(s, preference, db, command, null, null, false));
     }
 

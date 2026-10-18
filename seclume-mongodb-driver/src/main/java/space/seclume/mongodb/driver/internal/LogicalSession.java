@@ -40,6 +40,7 @@ public final class LogicalSession {
     private BsonDocument clusterTime;
     private BsonDocument recoveryToken;
     private ServerPool pinned;
+    private final java.util.Set<AutoCloseable> cursors = new java.util.LinkedHashSet<>();
 
     /**
      * A new server session. Sessions are pooled and reused (see
@@ -103,6 +104,36 @@ public final class LogicalSession {
         this.lsid = lsid;
         this.explicit = true;
         this.causallyConsistent = causallyConsistent;
+    }
+
+    /**
+     * A cursor opened under this session. A cursor belongs to its
+     * {@code lsid}, and the session is pooled: one left open would be
+     * reachable to the next user of the same server session, so the session
+     * closes what is still open when it ends ({@link #closeCursors}).
+     */
+    public synchronized void opened(AutoCloseable cursor) {
+        cursors.add(cursor);
+    }
+
+    public synchronized void ended(AutoCloseable cursor) {
+        cursors.remove(cursor);
+    }
+
+    /** Closes - kills on the server - every cursor still open under this session. */
+    public void closeCursors() {
+        java.util.List<AutoCloseable> open;
+        synchronized (this) {
+            open = new java.util.ArrayList<>(cursors);
+            cursors.clear();
+        }
+        for (AutoCloseable cursor : open) {
+            try {
+                cursor.close();
+            } catch (Exception ignored) {
+                // killCursors is best effort; the server ends the cursor with the session
+            }
+        }
     }
 
     public BsonDocument lsid() {

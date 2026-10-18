@@ -544,6 +544,15 @@ The URL is the same as above.
 - **Retryable writes and reads:** a single-document write gets a `txnNumber` and is sent once
   more after a dropped connection or an error the server labels `RetryableWriteError`; the
   server applies it once (`LocalReplicaSetTest`, with the server's `failCommand` fail point).
+- **Nothing of one borrower reaches the next:** a pooled connection is not logged in again or
+  out through `runCommand` (`saslStart`, `authenticate`, `logout` are refused - the login is
+  seclume's); a cursor left open in a session is killed when the session ends, since the
+  pooled server session goes on under the same `lsid`; a reused server session starts without
+  the last transaction; `maxIdleTimeMS` and `maxLifeTimeMS` retire connections
+  (`LocalNothingCarriesOverTest`).
+- **Spring Data MongoDB:** a Spring Boot application gets seclume's client as its
+  `MongoClient` bean; repositories, `MongoTemplate` and `@Transactional` run on it, with the
+  MongoDB driver version Spring Boot manages (FRAMEWORKS.md).
 - **Not yet, and refused rather than imitated:** change streams, the client-level `bulkWrite`,
   snapshot sessions, unacknowledged writes (`w: 0`), client-side operation timeouts
   (`timeoutMS`), `mongodb+srv://`, load balancers, compression, Atlas Search indexes.

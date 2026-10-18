@@ -116,6 +116,23 @@ class LocalCarryOnTest {
         }
     }
 
+    /** A quiet connection out of the pool, taken up anew, and back in: the same server connection. */
+    @Test
+    void aConnectionLeavesThePoolAndComesBack() {
+        reachable(27017);
+        try (Topology topology = Topology.of(url(HOST + ":27017", ".local-mongo-ca.pem", ""))) {
+            BsonDocument hello = new BsonDocument("hello", new BsonInt32(1));
+            Topology.Reply first = topology.command(null, ReadPreference.primary(), "admin", hello);
+            long id = first.document().getNumber("connectionId").longValue();
+            ServerPool pool = topology.poolOf(first.server().address());
+            MongoSession quiet = pool.takeIdle();
+            MongoSession.Detached detached = quiet.detach();
+            assertTrue(pool.adopt(MongoSession.resume(detached)));
+            assertEquals(id, topology.command(null, ReadPreference.primary(), "admin", hello)
+                    .document().getNumber("connectionId").longValue());
+        }
+    }
+
     /** A transaction begun by one client is committed by another, which never logged that session in. */
     @Test
     void aTransactionIsCarriedOnByAnotherClient() {
