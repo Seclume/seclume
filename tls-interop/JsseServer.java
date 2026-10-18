@@ -26,7 +26,9 @@ public class JsseServer {
         }
         KeyManagerFactory keys = KeyManagerFactory.getInstance("PKIX");
         keys.init(store, password);
-        SSLContext context = SSLContext.getInstance("TLS");
+        // A TLSv1.3 context, which speaks 1.2 as well: the protocol each case
+        // offers is set below, one per server, and nothing older is possible.
+        SSLContext context = SSLContext.getInstance("TLSv1.3");
         context.init(keys.getKeyManagers(), null, null);
         try (SSLServerSocket server = (SSLServerSocket) context.getServerSocketFactory()
                 .createServerSocket(port)) {
