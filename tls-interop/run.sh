@@ -44,6 +44,11 @@ if has openssl; then
   serve openssl-1.3-aes256         9005 ok "" -- ossl -accept 9005 -tls1_3 -ciphersuites TLS_AES_256_GCM_SHA384 -cert $c/ecdsa256.pem -key $c/ecdsa256.key -cert_chain $c/ca.pem
   serve openssl-1.2-ecdsa-gcm      9006 ok "" -- ossl -accept 9006 -tls1_2 -cipher ECDHE-ECDSA-AES128-GCM-SHA256 -cert $c/ecdsa256.pem -key $c/ecdsa256.key -cert_chain $c/ca.pem
   serve openssl-1.2-rsa-gcm256     9007 ok "" -- ossl -accept 9007 -tls1_2 -cipher ECDHE-RSA-AES256-GCM-SHA384 -cert $c/rsa2048.pem -key $c/rsa2048.key -cert_chain $c/ca.pem
+  # The flight in records of 512 bytes: the certificate alone spans several
+  # (RFC 5246 6.2.1, RFC 8446 5.1). TLS-Anvil cannot show this for TLS 1.2 -
+  # its fragmentation probe sends an ECDHE flight without ServerKeyExchange.
+  serve openssl-1.2-fragmented     9009 ok "" -- ossl -accept 9009 -tls1_2 -max_send_frag 512 -cipher ECDHE-RSA-AES128-GCM-SHA256 -cert $c/rsa2048.pem -key $c/rsa2048.key -cert_chain $c/ca.pem
+  serve openssl-1.3-fragmented     9010 ok "" -- ossl -accept 9010 -tls1_3 -max_send_frag 512 -cert $c/rsa2048.pem -key $c/rsa2048.key -cert_chain $c/ca.pem
   if openssl list -kem-algorithms 2>/dev/null | grep -qi mlkem768; then
     echo openssl-mlkem >> "$work/implementations"
     serve openssl-1.3-x25519mlkem768 9008 ok "" -- ossl -accept 9008 -tls1_3 -groups X25519MLKEM768 -cert $c/ecdsa256.pem -key $c/ecdsa256.key -cert_chain $c/ca.pem

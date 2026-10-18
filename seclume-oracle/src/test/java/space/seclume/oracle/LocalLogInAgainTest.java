@@ -62,25 +62,36 @@ class LocalLogInAgainTest {
             Assumptions.abort("no Oracle listener on " + HOST + ":" + PORT);
         }
         try (OracleSession setup = open()) {
-            setup.query("begin execute immediate 'create global temporary table zl_again_gtt "
-                    + "(n number) on commit preserve rows'; exception when others then null; end;",
-                    row -> { });
-            setup.query("begin execute immediate 'create table zl_again_rows (n number)'; "
-                    + "exception when others then null; end;", row -> { });
-            setup.query("create or replace package zl_again_pkg as n number := 0; "
-                    + "function get_n return number; procedure set_ctx(v varchar2); end;",
-                    row -> { });
-            setup.query("create or replace package body zl_again_pkg as "
+            run(setup, "begin execute immediate 'create global temporary table zl_again_gtt "
+                    + "(n number) on commit preserve rows'; exception when others then null; end;");
+            run(setup, "begin execute immediate 'create table zl_again_rows (n number)'; "
+                    + "exception when others then null; end;");
+            run(setup, "create or replace package zl_again_pkg as n number := 0; "
+                    + "function get_n return number; procedure set_ctx(v varchar2); end;");
+            run(setup, "create or replace package body zl_again_pkg as "
                     + "function get_n return number is begin return n; end; "
                     + "procedure set_ctx(v varchar2) is begin "
-                    + "dbms_session.set_context('zl_again_ctx', 'k', v); end; end;", row -> { });
+                    + "dbms_session.set_context('zl_again_ctx', 'k', v); end; end;");
             try {
-                setup.query("create or replace context zl_again_ctx using zl_again_pkg",
-                        row -> { });
+                run(setup, "create or replace context zl_again_ctx using zl_again_pkg");
             } catch (java.sql.SQLException e) {
                 Assumptions.abort("seclume_test may not create a context "
                         + "(grant create any context): " + e.getMessage());
             }
+        }
+    }
+
+    /**
+     * Runs a statement and fails on a server error. OracleSession.query hands
+     * an error back as its result rather than throwing - the JDBC layer reads
+     * it - so a setup step that failed went unnoticed: on a server where the
+     * user may not create a context, the context was never set and the test
+     * said only that its state was missing.
+     */
+    private static void run(OracleSession session, String sql) throws java.sql.SQLException {
+        space.seclume.oracle.net.TtcResult result = session.query(sql, row -> { });
+        if (result.isFailure()) {
+            throw new java.sql.SQLException(result.errorText(), "HY000", result.errorNumber());
         }
     }
 
@@ -115,13 +126,13 @@ class LocalLogInAgainTest {
             String before = session.askOneValue(
                     "select sys_context('userenv','sessionid') from dual");
 
-            session.query("begin dbms_session.set_identifier('tenant-A'); end;", row -> { });
-            session.query("begin seclume_test.zl_again_pkg.set_ctx('tenant-A'); end;", row -> { });
-            session.query("begin seclume_test.zl_again_pkg.n := 42; end;", row -> { });
-            session.query("insert into seclume_test.zl_again_gtt values (1)", row -> { });
-            session.query("alter session set nls_date_format = 'YYYY'", row -> { });
-            session.query("set role none", row -> { });
-            session.query("alter session set current_schema = sys", row -> { });
+            run(session, "begin dbms_session.set_identifier('tenant-A'); end;");
+            run(session, "begin seclume_test.zl_again_pkg.set_ctx('tenant-A'); end;");
+            run(session, "begin seclume_test.zl_again_pkg.n := 42; end;");
+            run(session, "insert into seclume_test.zl_again_gtt values (1)");
+            run(session, "alter session set nls_date_format = 'YYYY'");
+            run(session, "set role none");
+            run(session, "alter session set current_schema = sys");
             assertEquals("tenant-A | tenant-A | 42 | YYYY | SYS | 0 | 1", state(session),
                     "the state was not set - the test would prove nothing");
 
@@ -137,9 +148,9 @@ class LocalLogInAgainTest {
     @Test
     void anOpenTransactionIsRolledBackNotCommitted() throws Exception {
         try (OracleSession session = open()) {
-            session.query("delete from zl_again_rows", row -> { });
+            run(session, "delete from zl_again_rows");
             session.setAutoCommit(false);
-            session.query("insert into zl_again_rows values (7)", row -> { });
+            run(session, "insert into zl_again_rows values (7)");
             session.logInAgain();
             assertEquals("0", session.askOneValue("select to_char(count(*)) from zl_again_rows"),
                     "the logoff committed the open transaction");

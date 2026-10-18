@@ -109,7 +109,17 @@ class ProcessMemoryTest {
                 ProcessMemoryProbe.class.getName(),
                 mode, HOST, Integer.toString(PORT), passwordFile.toString(),
                 Integer.toString(logins)));
-        Process child = new ProcessBuilder(command).redirectErrorStream(true).start();
+        // The child inherits this environment, and the kernel puts it at the
+        // top of the child's stack: a password there would be found, and it
+        // would say something about how the test was started, not about seclume.
+        ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+        String utf8 = new String(needles.get("UTF-8"), StandardCharsets.UTF_8); // seclume-allow: the test's own process
+        for (Map.Entry<String, String> variable : builder.environment().entrySet()) {
+            assertFalse(variable.getValue().contains(utf8), "the environment variable "
+                    + variable.getKey() + " holds the password, and the probe would inherit "
+                    + "it - start the test without it");
+        }
+        Process child = builder.start();
         try {
             long pid = awaitReady(child);
             Scan scan = scan(pid, needles);

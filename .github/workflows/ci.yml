@@ -333,6 +333,9 @@ jobs:
           # so a check there says ready before the real one is up.
           for i in $(seq 1 60); do docker exec pgtls pg_isready -q -h 127.0.0.1 && break; sleep 1; done
           printf '%s' "$PG_PASSWORD" > .local-pgtls-password
+          # Out of the environment before Maven: the probe would inherit it,
+          # and a process's environment lies at the top of its stack.
+          unset PG_PASSWORD
           ./mvnw -B -pl seclume-postgresql -am test -Dtest=ProcessMemoryTest \
             -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.pgtls.host=127.0.0.1
           # Skipped is not passed: a missing server must not look like a proof.
@@ -600,6 +603,13 @@ jobs:
           done
           docker logs oracle | tail -50
           exit 1
+      # LocalLogInAgainTest proves the reset clears an application context;
+      # creating one needs this privilege, which APP_USER does not get.
+      - name: Grant create any context
+        run: |
+          echo 'alter session set container=FREEPDB1;
+          grant create any context to seclume_test;
+          exit' | docker exec -i oracle sqlplus -s / as sysdba
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
       - run: ./mvnw -B -pl seclume-oracle -am test
       - name: Verify framework edge cases

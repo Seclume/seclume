@@ -98,7 +98,7 @@ class LocalRunAgainTest {
             }
             String longText = "x".repeat(3000);
             try (Statement ddl = connection.createStatement()) {
-                ddl.execute("insert into zl_again values (4, '" + longText + "', null)");
+                ddl.execute("insert into zl_again values (4, rpad('x', 3000, 'x'), null)");
             }
             try (PreparedStatement query = connection.prepareStatement(
                     "select count(*) from zl_again where n = ? or t = ?")) {
