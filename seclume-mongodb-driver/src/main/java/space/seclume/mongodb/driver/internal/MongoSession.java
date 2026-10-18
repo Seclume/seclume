@@ -104,7 +104,9 @@ public final class MongoSession implements AutoCloseable {
         }
         TlsLayer tls = null;
         try {
-            transport.networkTimeout(connectTimeout);
+            // Transports.open has set the connect timeout as the bound on the
+            // login, where the transport has one; a transport that carries
+            // the connection elsewhere may not.
             tls = TrustChoice.using(url.trust(), () -> {
                 try {
                     return TlsLayers.start(TlsStack.SECLUME, transport, host, port, true);
@@ -112,7 +114,7 @@ public final class MongoSession implements AutoCloseable {
                     throw new SQLException(e.getMessage(), "08001", e);
                 }
             });
-        } catch (IOException | SQLException e) {
+        } catch (SQLException e) {
             transport.close();
             throw new MongoSocketOpenException("TLS with " + address + " failed: "
                     + e.getMessage(), address, e);
@@ -315,7 +317,10 @@ public final class MongoSession implements AutoCloseable {
             transport.networkTimeout(millis);
             timeoutMillis = millis;
         } catch (IOException e) {
-            throw new IllegalArgumentException(e.getMessage(), e);
+            if (millis != 0) {
+                throw new IllegalArgumentException(e.getMessage(), e);
+            }
+            timeoutMillis = 0;            // none asked for, and the transport has none
         }
     }
 
