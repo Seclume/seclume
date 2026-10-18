@@ -88,6 +88,17 @@ public final class ServerPool implements AutoCloseable {
         }
     }
 
+    /** A write with no reply asked for; see {@link MongoSession#send}. */
+    void send(String db, BsonDocument command, String sequenceId,
+            List<? extends BsonDocument> sequence) {
+        Pooled pooled = borrow();
+        try {
+            pooled.session().send(db, command, sequenceId, sequence);
+        } finally {
+            giveBack(pooled);
+        }
+    }
+
     /** A new connection, for the monitor: it is not the pool's. */
     MongoSession openOwn() {
         return MongoSession.open(url, address.getHost(), address.getPort());

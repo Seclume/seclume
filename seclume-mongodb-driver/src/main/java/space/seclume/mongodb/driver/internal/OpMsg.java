@@ -42,7 +42,7 @@ public final class OpMsg {
     static final int OP_REPLY = 1;
 
     static final int CHECKSUM_PRESENT = 1;
-    static final int MORE_TO_COME = 1 << 1;
+    public static final int MORE_TO_COME = 1 << 1;
     /**
      * Bits 0 to 15 are required: a receiver that does not know one must
      * refuse the message. 0 and 1 are the two known; 16 and up are optional.
@@ -67,6 +67,16 @@ public final class OpMsg {
      */
     public static ByteBuffer encode(int requestId, BsonDocument command, String db,
             String sequenceId, List<? extends BsonDocument> sequence, int maxMessageSize) {
+        return encode(requestId, command, db, sequenceId, sequence, maxMessageSize, 0);
+    }
+
+    /**
+     * The same with flag bits: {@link #MORE_TO_COME} on a request means the
+     * server sends no reply - an unacknowledged write.
+     */
+    public static ByteBuffer encode(int requestId, BsonDocument command, String db,
+            String sequenceId, List<? extends BsonDocument> sequence, int maxMessageSize,
+            int flags) {
         if (command.containsKey("$db")) {
             throw new IllegalArgumentException("the command names its database itself ($db)");
         }
@@ -83,7 +93,7 @@ public final class OpMsg {
         out.writeInt32(requestId);
         out.writeInt32(0);                                   // responseTo
         out.writeInt32(OP_MSG);
-        out.writeInt32(0);                                   // flag bits
+        out.writeInt32(flags);
         out.writeByte(0);
         writeDocument(out, body);
         if (sequenceId != null) {

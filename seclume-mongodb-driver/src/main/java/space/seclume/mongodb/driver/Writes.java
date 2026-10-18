@@ -65,9 +65,30 @@ final class Writes {
             boolean retryable, int offset, Outcome into) {
         int maxBatch = topology.writableHello().getNumber("maxWriteBatchSize",
                 new org.bson.BsonInt32(100_000)).intValue();
+        boolean acknowledged = !command.containsKey("writeConcern")
+                || !command.getDocument("writeConcern").getNumber("w", new org.bson.BsonInt32(1))
+                        .equals(new org.bson.BsonInt32(0));
         int at = 0;
         while (at < items.size()) {
             int count = Math.min(items.size() - at, maxBatch);
+            if (!acknowledged) {
+                // Unordered or not, nothing comes back to stop at: each batch goes.
+                int sent = count;
+                while (true) {
+                    try {
+                        topology.writeUnacknowledged(session, database, command, field,
+                                items.subList(at, at + sent));
+                        break;
+                    } catch (BsonMaximumSizeExceededException tooLarge) {
+                        if (sent == 1) {
+                            throw tooLarge;
+                        }
+                        sent = (sent + 1) / 2;
+                    }
+                }
+                at += sent;
+                continue;
+            }
             BsonDocument reply = null;
             while (reply == null) {
                 try {

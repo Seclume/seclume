@@ -761,6 +761,33 @@ public final class Topology implements AutoCloseable {
     private static final Set<String> LOGIN_COMMANDS = Set.of("saslstart", "saslcontinue",
             "authenticate", "logout", "getnonce");
 
+    /**
+     * A write with {@code w: 0}: sent, and nothing read. Not in an explicit
+     * session - the sessions specification forbids it, since nothing would
+     * say whether the session's state on the server moved - and with no
+     * implicit session or retry either: there is no answer to retry on.
+     */
+    public void writeUnacknowledged(LogicalSession session, String db, BsonDocument command,
+            String sequenceId, List<? extends BsonDocument> sequence) {
+        if (session != null) {
+            throw new IllegalArgumentException("an unacknowledged write (w: 0) cannot be part "
+                    + "of a session");
+        }
+        ServerPool server = select(ReadPreference.primary());
+        BsonDocument sent = command;
+        BsonDocument gossip = clusterTime(null);
+        if (gossip != null && kind != Kind.SINGLE) {
+            sent = command.clone();
+            sent.put("$clusterTime", gossip);
+        }
+        try {
+            server.send(db, sent, sequenceId, sequence);
+        } catch (MongoSocketException e) {
+            failed(server, e);
+            throw e;
+        }
+    }
+
     /** A command as given - {@code runCommand}, DDL: no retry. */
     public Reply command(LogicalSession session, ReadPreference preference, String db,
             BsonDocument command) {

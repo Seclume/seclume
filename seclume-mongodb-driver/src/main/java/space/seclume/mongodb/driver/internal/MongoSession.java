@@ -197,6 +197,33 @@ public final class MongoSession implements AutoCloseable {
     }
 
     /**
+     * Sends a write and reads nothing: {@code moreToCome} tells the server
+     * not to answer. Nothing is known afterwards about what it did - that is
+     * what {@code w: 0} asks for.
+     */
+    public void send(String db, BsonDocument command, String sequenceId,
+            List<? extends BsonDocument> sequence) {
+        lock.lock();
+        try {
+            if (closed || aborted) {
+                boolean wasAborted = aborted;
+                close();
+                throw new MongoSocketClosedException(wasAborted ? "the session was aborted"
+                        : "the session is closed", address);
+            }
+            ByteBuffer request = OpMsg.encode(REQUEST_IDS.incrementAndGet(), command, db,
+                    sequenceId, sequence, maxMessageSize, OpMsg.MORE_TO_COME);
+            try {
+                tls.write(request);
+            } catch (IOException e) {
+                throw broke(e, "sending a command");
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
      * Runs a command with one document sequence, the way {@code insert},
      * {@code update} and {@code delete} send their documents.
      */

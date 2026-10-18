@@ -544,6 +544,9 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
                 options.getBypassDocumentValidation(), options.getComment(), null);
         Writes.Outcome outcome = Writes.run(topology, s, db(), command, "documents",
                 List.of(encoded), true, true, 0, new Writes.Outcome());
+        if (!writeConcern.isAcknowledged()) {
+            return InsertOneResult.unacknowledged();
+        }
         Writes.throwSingle(outcome, false);
         return InsertOneResult.acknowledged(encoded.get("_id"));
     }
@@ -578,6 +581,9 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
                 options.getBypassDocumentValidation(), options.getComment(), null);
         Writes.Outcome outcome = Writes.run(topology, s, db(), command, "documents", encoded,
                 options.isOrdered(), true, 0, new Writes.Outcome());
+        if (!writeConcern.isAcknowledged()) {
+            return InsertManyResult.unacknowledged();
+        }
         Map<Integer, BsonValue> ids = new LinkedHashMap<>();
         List<BulkWriteInsert> inserts = new ArrayList<>();
         for (int i = 0; i < encoded.size(); i++) {
@@ -662,6 +668,9 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
         Writes.Outcome outcome = Writes.run(topology, s, db(), command, "deletes",
                 List.of(deleteStatement(filter, options, limit)), true, limit == 1, 0,
                 new Writes.Outcome());
+        if (!writeConcern.isAcknowledged()) {
+            return DeleteResult.unacknowledged();
+        }
         Writes.throwSingle(outcome, false);
         return DeleteResult.acknowledged(outcome.n);
     }
@@ -837,6 +846,9 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
             boolean retryable) {
         Writes.Outcome outcome = Writes.run(topology, s, db(), command, "updates",
                 List.of(statement), true, retryable, 0, new Writes.Outcome());
+        if (!writeConcern.isAcknowledged()) {
+            return UpdateResult.unacknowledged();
+        }
         Writes.throwSingle(outcome, true);
         // n counts the upserted document as matched; the API does not.
         long matched = outcome.n - outcome.upserts.size();
@@ -1090,6 +1102,9 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
             if (ordered && all.errors.size() > errorsBefore) {
                 break;
             }
+        }
+        if (!writeConcern.isAcknowledged()) {
+            return BulkWriteResult.unacknowledged();
         }
         BulkWriteResult result = Writes.result(inserted, matched, deleted, modified, upserts,
                 inserts);
