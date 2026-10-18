@@ -514,6 +514,33 @@ answers TCP and then says nothing does not hold the connection. Only SCRAM-SHA-2
 a user the server offers SCRAM-SHA-1 alone is refused, never logged in with the weaker one.
 The reactive driver (Netty, `SSLEngine`) is not covered yet.
 
+### seclume's own MongoDB driver (`seclume-mongodb-driver`, in progress)
+
+A driver of its own, from the socket to the API: `SeclumeMongoClients.create(url)` returns a
+`com.mongodb.client.MongoClient` (the official sync API, `mongodb-driver-sync` 5.13), with
+`org.mongodb:bson` and the application's `CodecRegistry` for documents, POJOs and records.
+The URL is the same as above.
+
+- **There so far:** `insertOne`/`insertMany` (in batches within the server's limits, the
+  documents as an OP_MSG document sequence), `find` with all its options, cursors with
+  `getMore` and `killCursors` on an early close, `first` in one batch without a cursor,
+  `countDocuments`, `estimatedDocumentCount`, `distinct`, `aggregate` (with `$out`/`$merge`
+  and database-level pipelines), `updateOne`/`updateMany` (operators and pipelines),
+  `replaceOne`, `deleteOne`/`deleteMany`, `findOneAndUpdate`/`Replace`/`Delete`, the
+  collection's `bulkWrite`, indexes, `createCollection`, `createView`, `listCollections`,
+  `listDatabases`, `runCommand`, `explain`, read and write concerns.
+- **Errors as the official driver raises them:** `MongoCommandException`,
+  `MongoWriteException`, `MongoWriteConcernException`, `MongoBulkWriteException` with what got
+  through. `LocalSameAsOfficialTest` runs the same operations through both drivers against the
+  same server and compares every result and every refusal.
+- **Not yet, and refused rather than imitated:** explicit `ClientSession`s and transactions,
+  replica sets and several hosts, change streams, the client-level `bulkWrite`, unacknowledged
+  writes (`w: 0`), client-side operation timeouts (`timeoutMS`), compression, Atlas Search
+  indexes. `mapReduce` is not offered (deprecated by MongoDB).
+- **The reply parser is strict and fuzzed** (`OpMsgFuzzTest`): it checks every length in a
+  reply's documents before the bson library reads them, whose reader allocated whatever a
+  length announced.
+
 ## Reports: JasperReports, embedded
 
 JasperReports needs nothing of its own: it fills a report from a `java.sql.Connection`, and a
