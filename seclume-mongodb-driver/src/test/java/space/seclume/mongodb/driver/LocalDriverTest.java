@@ -183,11 +183,8 @@ class LocalDriverTest {
     @Test
     void whatIsNotSupportedYetSaysSo() {
         assertThrows(MongoClientException.class, () -> SeclumeMongoClients.create(
-                url.replace("@", "@a.example:1,b.example:2,")));
+                url.replace("mongodb://", "mongodb+srv://").replaceAll(":[0-9]+/", "/")));
         try (MongoClient client = SeclumeMongoClients.create(url)) {
-            UnsupportedOperationException sessions = assertThrows(
-                    UnsupportedOperationException.class, client::startSession);
-            assertTrue(sessions.getMessage().contains("sessions"), sessions.getMessage());
             UnsupportedOperationException unacknowledged = assertThrows(
                     UnsupportedOperationException.class, () -> client.getDatabase("seclume_test")
                             .getCollection(fresh())

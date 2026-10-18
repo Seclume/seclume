@@ -32,6 +32,7 @@ import com.mongodb.ServerAddress;
 
 import space.seclume.Version;
 import space.seclume.internal.SocketTransport;
+import space.seclume.internal.Transport;
 import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
@@ -68,16 +69,17 @@ public final class MongoSession implements AutoCloseable {
     private static final AtomicInteger REQUEST_IDS = new AtomicInteger();
 
     private final ServerAddress address;
-    private final SocketTransport transport;
+    private final Transport transport;
     private final TlsLayer tls;
     private final ReentrantLock lock = new ReentrantLock();
     private volatile boolean closed;
     private volatile boolean aborted;
+    private volatile boolean handedOver;
     private int timeoutMillis;
     private BsonDocument hello;
     private int maxMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
 
-    private MongoSession(ServerAddress address, SocketTransport transport, TlsLayer tls) {
+    private MongoSession(ServerAddress address, Transport transport, TlsLayer tls) {
         this.address = address;
         this.transport = transport;
         this.tls = tls;
@@ -221,12 +223,31 @@ public final class MongoSession implements AutoCloseable {
                 throw e;
             }
             if (!isOk(reply)) {
-                throw new MongoCommandException(reply, address);
+                throw refused(reply, address);
             }
             return reply;
         } finally {
             lock.unlock();
         }
+    }
+
+    /**
+     * A refused command as the API's exception, with the server's error
+     * labels on it: the exception's constructor does not take them from the
+     * reply, and without {@code RetryableWriteError} or
+     * {@code TransientTransactionError} nothing is retried that should be.
+     */
+    public static MongoCommandException refused(BsonDocument reply, ServerAddress address) {
+        MongoCommandException refused = new MongoCommandException(reply, address);
+        BsonValue labels = reply.get("errorLabels");
+        if (labels instanceof BsonArray array) {
+            for (BsonValue label : array) {
+                if (label.isString()) {
+                    refused.addLabel(label.asString().getValue());
+                }
+            }
+        }
+        return refused;
     }
 
     private ByteBuffer readMessage() throws IOException {
@@ -272,7 +293,7 @@ public final class MongoSession implements AutoCloseable {
         }
         if (e instanceof SocketTimeoutException) {
             return new MongoSocketReadTimeoutException("no answer from " + address + " within "
-                    + transport.timeoutMillis() + " ms while " + doing, address, e);
+                    + timeoutMillis + " ms while " + doing, address, e);
         }
         if (e instanceof ClosedByInterruptException || e instanceof InterruptedIOException) {
             return new MongoInterruptedException("interrupted while " + doing, e);
@@ -308,6 +329,9 @@ public final class MongoSession implements AutoCloseable {
      * is gone.
      */
     public void abort() {
+        if (handedOver) {
+            return;                       // the stream is someone else's now
+        }
         aborted = true;
         transport.close();          // the keys go with close(), under the session's lock
     }
@@ -339,6 +363,79 @@ public final class MongoSession implements AutoCloseable {
 
     public boolean isClosed() {
         return closed;
+    }
+
+    /**
+     * What a logged-in connection consists of besides the socket: the TLS
+     * layer that is live on it and the server's {@code hello} from the login
+     * - its limits and what it is. Nothing else lives on a MongoDB
+     * connection: the login does, and stays with the socket; a logical
+     * session, a transaction and a cursor are named in each command and are
+     * not the connection's.
+     *
+     * @param stream the socket, still logged in, between two messages
+     */
+    public record Detached(Transport stream, TlsLayer tls, BsonDocument hello,
+                           ServerAddress address) {
+    }
+
+    /**
+     * Hands the logged-in connection over and finishes this session: the
+     * login happens once, where the credential is, and whoever takes the
+     * stream up with {@link #resume} never needs one.
+     *
+     * <p>Only between two commands - with a reply half read nobody else could
+     * take over - and only on seclume's own TLS, whose state can leave the
+     * layer; afterwards this session reports itself closed and the transport
+     * is the caller's.
+     */
+    public Detached detach() {
+        Detached detached = describe("handed over");
+        handedOver = true;
+        closed = true;
+        lock.unlock();
+        return detached;
+    }
+
+    /**
+     * What {@link #detach} hands out, without handing anything out: the
+     * session goes on, and the stream and the layer are the live ones - to be
+     * described, never used. Exact until the next command.
+     */
+    public Detached snapshot() {
+        Detached described = describe("described");
+        lock.unlock();
+        return described;
+    }
+
+    /** Under the lock, which the caller releases: no command can start in between. */
+    private Detached describe(String what) {
+        if (!lock.tryLock()) {
+            throw new IllegalStateException("this session has a command in flight - it can "
+                    + "only be " + what + " between two commands");
+        }
+        if (closed || aborted) {
+            lock.unlock();
+            throw new IllegalStateException("this session is closed");
+        }
+        if (!tls.movable()) {
+            lock.unlock();
+            throw new IllegalStateException("this session's TLS state cannot leave its layer");
+        }
+        return new Detached(transport, tls, hello, address);
+    }
+
+    /**
+     * Takes a logged-in connection up: what {@link #detach} handed out. The
+     * server is told nothing and notices nothing.
+     */
+    public static MongoSession resume(Detached detached) {
+        MongoSession session = new MongoSession(detached.address(), detached.stream(),
+                detached.tls());
+        session.hello = detached.hello();
+        session.maxMessageSize = intOf(detached.hello().get("maxMessageSizeBytes"),
+                DEFAULT_MAX_MESSAGE_SIZE);
+        return session;
     }
 
     /**

@@ -64,8 +64,9 @@ All notable changes to seclume are recorded here. Versions follow
   login. Tested against MongoDB 8 with `NoSecretInHeap` proving neither password nor client proof reaches the JVM heap.
 - **seclume's own MongoDB driver** (`seclume-mongodb-driver`, new, in progress):
   `SeclumeMongoClients.create(url)` returns a `MongoClient` of the official sync API - CRUD,
-  cursors, aggregation, bulk writes, indexes on one server; sessions, transactions and replica
-  sets come next (FEATURES.md lists what is there). Under it the session core - TCP, seclume's TLS 1.3, `hello` with the client's metadata and
+  cursors, aggregation, bulk writes, indexes; replica sets and mongos with server selection;
+  sessions, causal consistency, transactions, retryable writes and reads (FEATURES.md lists
+  what is there). Under it the session core - TCP, seclume's TLS 1.3, `hello` with the client's metadata and
   `saslSupportedMechs` (a user the server would log in only with SCRAM-SHA-1 is refused
   before anything is sent), SCRAM-SHA-256 off the heap, then commands as OP_MSG with document
   sequences. A refused command is a `MongoCommandException` and the session goes on; a read

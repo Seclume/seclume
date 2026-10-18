@@ -10,7 +10,7 @@ import com.mongodb.WriteConcern;
 import com.mongodb.client.MongoClient;
 
 import space.seclume.mongodb.MongoUrl;
-import space.seclume.mongodb.driver.internal.Cluster;
+import space.seclume.mongodb.driver.internal.Topology;
 
 /**
  * seclume's own MongoDB driver, in place of {@code MongoClients}: the client
@@ -42,13 +42,13 @@ public final class SeclumeMongoClients {
     public static MongoClient create(String url, CodecRegistry codecs) {
         MongoUrl parsed = MongoUrl.parse(url);
         ConnectionString options = new ConnectionString(parsed.driverConnectionString());
-        Cluster cluster = Cluster.of(parsed);
+        Topology topology = Topology.of(parsed);
         ReadPreference preference = options.getReadPreference() != null
                 ? options.getReadPreference() : ReadPreference.primary();
         WriteConcern concern = options.getWriteConcern() != null
                 ? options.getWriteConcern() : WriteConcern.ACKNOWLEDGED;
         ReadConcern readConcern = options.getReadConcern() != null
                 ? options.getReadConcern() : ReadConcern.DEFAULT;
-        return new SeclumeClient(cluster, codecs, preference, concern, readConcern);
+        return new SeclumeClient(topology, codecs, preference, concern, readConcern);
     }
 }

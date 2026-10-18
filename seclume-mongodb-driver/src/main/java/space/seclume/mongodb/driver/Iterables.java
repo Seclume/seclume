@@ -33,7 +33,10 @@ import com.mongodb.client.MongoIterable;
 import com.mongodb.client.cursor.TimeoutMode;
 import com.mongodb.client.model.Collation;
 
-import space.seclume.mongodb.driver.internal.Cluster;
+import com.mongodb.ReadPreference;
+
+import space.seclume.mongodb.driver.internal.LogicalSession;
+import space.seclume.mongodb.driver.internal.Topology;
 
 /**
  * The iterables of the API: each builds its command when it is iterated, so
@@ -51,12 +54,17 @@ final class Iterables {
 
     /** What every iterable shares: running, first, into, map. */
     abstract static class Base<T> implements MongoIterable<T> {
-        final Cluster cluster;
+        final Topology topology;
+        final LogicalSession session;
+        final ReadPreference preference;
         final Decoder<T> decoder;
         int batchSize;
 
-        Base(Cluster cluster, Decoder<T> decoder) {
-            this.cluster = cluster;
+        Base(Topology topology, LogicalSession session, ReadPreference preference,
+                Decoder<T> decoder) {
+            this.topology = topology;
+            this.session = session;
+            this.preference = preference;
             this.decoder = decoder;
         }
 
@@ -105,8 +113,9 @@ final class Iterables {
         BsonValue comment;
         long maxTimeMillis;
 
-        Command(Cluster cluster, Decoder<T> decoder, String database) {
-            super(cluster, decoder);
+        Command(Topology topology, LogicalSession session, ReadPreference preference,
+                Decoder<T> decoder, String database) {
+            super(topology, session, preference, decoder);
             this.database = database;
         }
 
@@ -118,9 +127,9 @@ final class Iterables {
 
         @Override
         public MongoCursor<T> iterator() {
-            BsonDocument reply = cluster.command(database, command());
-            return new BatchCursor<>(cluster, reply, decoder, batchSize, maxAwaitMillis(),
-                    comment);
+            Topology.Reply reply = topology.read(session, preference, database, command());
+            return new BatchCursor<>(topology, reply, session, decoder, batchSize,
+                    maxAwaitMillis(), comment);
         }
 
         BsonDocument cursorOptions() {
@@ -295,10 +304,11 @@ final class Iterables {
         private boolean showRecordId;
         private Boolean allowDiskUse;
 
-        Find(Cluster cluster, Decoder<T> decoder, String database, String collection,
+        Find(Topology topology, LogicalSession session, ReadPreference preference,
+                Decoder<T> decoder, String database, String collection,
                 Class<?> documentClass, CodecRegistry registry, Bson filter,
                 Supplier<BsonDocument> readConcern) {
-            super(cluster, decoder, database);
+            super(topology, session, preference, decoder, database);
             this.collection = collection;
             this.documentClass = documentClass;
             this.registry = registry;
@@ -356,8 +366,9 @@ final class Iterables {
         @Override
         MongoCursor<T> firstOnly() {
             // One document in one batch, and no cursor left open on the server.
-            BsonDocument reply = cluster.command(database, command(1, true));
-            return new BatchCursor<>(cluster, reply, decoder, 0, 0, comment);
+            Topology.Reply reply = topology.read(session, preference, database,
+                    command(1, true));
+            return new BatchCursor<>(topology, reply, session, decoder, 0, 0, comment);
         }
 
         @Override
@@ -519,7 +530,8 @@ final class Iterables {
 
         @Override
         public <E> E explain(Class<E> type, ExplainVerbosity verbosity) {
-            return Explain.run(cluster, database, command(), verbosity, registry.get(type));
+            return Explain.run(topology, session, preference, database, command(), verbosity,
+                    registry.get(type));
         }
     }
 
@@ -528,8 +540,9 @@ final class Iterables {
         private Explain() {
         }
 
-        static <E> E run(Cluster cluster, String database, BsonDocument command,
-                ExplainVerbosity verbosity, Decoder<E> decoder) {
+        static <E> E run(Topology topology, LogicalSession session, ReadPreference preference,
+                String database, BsonDocument command, ExplainVerbosity verbosity,
+                Decoder<E> decoder) {
             BsonDocument explain = new BsonDocument("explain", command);
             if (verbosity != null) {
                 explain.put("verbosity", new BsonString(switch (verbosity) {
@@ -538,7 +551,8 @@ final class Iterables {
                     case ALL_PLANS_EXECUTIONS -> "allPlansExecution";
                 }));
             }
-            return Bsons.decode(cluster.command(database, explain), decoder);
+            return Bsons.decode(topology.read(session, preference, database, explain)
+                    .document(), decoder);
         }
     }
 
@@ -559,10 +573,11 @@ final class Iterables {
         private String hintString;
         private Bson let;
 
-        Aggregate(Cluster cluster, Decoder<T> decoder, String database, BsonValue target,
+        Aggregate(Topology topology, LogicalSession session, ReadPreference preference,
+                Decoder<T> decoder, String database, BsonValue target,
                 List<? extends Bson> pipeline, Class<?> documentClass, CodecRegistry registry,
                 Supplier<BsonDocument> readConcern, Supplier<BsonDocument> writeConcern) {
-            super(cluster, decoder, database);
+            super(topology, session, preference, decoder, database);
             this.target = target;
             this.pipeline = pipeline;
             this.documentClass = documentClass;
@@ -629,14 +644,16 @@ final class Iterables {
             if (!writes(stages)) {
                 return super.iterator();
             }
-            cluster.command(database, command(stages, new BsonDocument()));
+            topology.write(session, database, command(stages, new BsonDocument()), null, null,
+                    false);
             String[] written = writtenTo(stages);
             BsonDocument find = new BsonDocument("find", new BsonString(written[1]));
             if (batchSize > 0) {
                 find.put("batchSize", new BsonInt32(batchSize));
             }
-            BsonDocument reply = cluster.command(written[0], find);
-            return new BatchCursor<>(cluster, reply, decoder, batchSize, 0, null);
+            Topology.Reply reply = topology.read(session, ReadPreference.primary(), written[0],
+                    find);
+            return new BatchCursor<>(topology, reply, session, decoder, batchSize, 0, null);
         }
 
         private String[] writtenTo(BsonArray stages) {
@@ -658,7 +675,8 @@ final class Iterables {
                 throw new IllegalStateException("toCollection needs $out or $merge as the "
                         + "last stage of the pipeline");
             }
-            cluster.command(database, command(stages, new BsonDocument()));
+            topology.write(session, database, command(stages, new BsonDocument()), null, null,
+                    false);
         }
 
         @Override
@@ -756,7 +774,8 @@ final class Iterables {
         public <E> E explain(Class<E> type, ExplainVerbosity verbosity) {
             BsonDocument command = command();
             command.remove("writeConcern");
-            return Explain.run(cluster, database, command, verbosity, registry.get(type));
+            return Explain.run(topology, session, preference, database, command, verbosity,
+                    registry.get(type));
         }
     }
 
@@ -776,10 +795,11 @@ final class Iterables {
         private Bson hint;
         private String hintString;
 
-        Distinct(Cluster cluster, Decoder<T> decoder, String database, String collection,
+        Distinct(Topology topology, LogicalSession session, ReadPreference preference,
+                Decoder<T> decoder, String database, String collection,
                 String field, Bson filter, Class<?> documentClass, CodecRegistry registry,
                 Supplier<BsonDocument> readConcern) {
-            super(cluster, decoder);
+            super(topology, session, preference, decoder);
             this.database = database;
             this.collection = collection;
             this.field = field;
@@ -802,12 +822,13 @@ final class Iterables {
             if (concern != null) {
                 command.put("readConcern", concern);
             }
-            BsonArray values = cluster.command(database, command).getArray("values");
+            Topology.Reply reply = topology.read(session, preference, database, command);
+            BsonArray values = reply.document().getArray("values");
             // Each value is decoded as the one field of a document, so that the
             // application's codec for the type does the decoding.
             return new ArrayCursor<>(values, value -> Bsons.decode(
                     new BsonDocument("v", value), new ValueDecoder<>(decoder)),
-                    cluster.address());
+                    reply.server().address());
         }
 
         @Override
@@ -897,9 +918,9 @@ final class Iterables {
         Bson filter;
         Boolean authorizedCollections;
 
-        ListCollections(Cluster cluster, Decoder<T> decoder, String database, boolean nameOnly,
-                CodecRegistry registry) {
-            super(cluster, decoder, database);
+        ListCollections(Topology topology, LogicalSession session, Decoder<T> decoder,
+                String database, boolean nameOnly, CodecRegistry registry) {
+            super(topology, session, ReadPreference.primary(), decoder, database);
             this.nameOnly = nameOnly;
             this.registry = registry;
         }
@@ -955,8 +976,9 @@ final class Iterables {
     static final class ListCollectionNames implements ListCollectionNamesIterable {
         private final ListCollections<BsonDocument> collections;
 
-        ListCollectionNames(Cluster cluster, String database, CodecRegistry registry) {
-            this.collections = new ListCollections<>(cluster,
+        ListCollectionNames(Topology topology, LogicalSession session, String database,
+                CodecRegistry registry) {
+            this.collections = new ListCollections<>(topology, session,
                     registry.get(BsonDocument.class), database, true, registry);
         }
 
@@ -1029,8 +1051,9 @@ final class Iterables {
     static final class ListIndexes<T> extends Command<T> implements ListIndexesIterable<T> {
         private final String collection;
 
-        ListIndexes(Cluster cluster, Decoder<T> decoder, String database, String collection) {
-            super(cluster, decoder, database);
+        ListIndexes(Topology topology, LogicalSession session, Decoder<T> decoder,
+                String database, String collection) {
+            super(topology, session, ReadPreference.primary(), decoder, database);
             this.collection = collection;
         }
 
@@ -1082,9 +1105,9 @@ final class Iterables {
         private Boolean authorizedDatabasesOnly;
         private BsonValue comment;
 
-        ListDatabases(Cluster cluster, Decoder<T> decoder, CodecRegistry registry,
-                boolean namesOnly) {
-            super(cluster, decoder);
+        ListDatabases(Topology topology, LogicalSession session, Decoder<T> decoder,
+                CodecRegistry registry, boolean namesOnly) {
+            super(topology, session, ReadPreference.primary(), decoder);
             this.registry = registry;
             this.namesOnly = namesOnly;
         }
@@ -1097,9 +1120,10 @@ final class Iterables {
             Bsons.put(command, "nameOnly", namesOnly ? Boolean.TRUE : nameOnly);
             Bsons.put(command, "authorizedDatabases", authorizedDatabasesOnly);
             Bsons.put(command, "comment", comment);
-            BsonArray databases = cluster.command("admin", command).getArray("databases");
+            Topology.Reply reply = topology.read(session, preference, "admin", command);
+            BsonArray databases = reply.document().getArray("databases");
             return new ArrayCursor<>(databases,
-                    value -> Bsons.decode(value.asDocument(), decoder), cluster.address());
+                    value -> Bsons.decode(value.asDocument(), decoder), reply.server().address());
         }
 
         @Override

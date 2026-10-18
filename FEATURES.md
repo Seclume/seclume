@@ -533,10 +533,21 @@ The URL is the same as above.
   `MongoWriteException`, `MongoWriteConcernException`, `MongoBulkWriteException` with what got
   through. `LocalSameAsOfficialTest` runs the same operations through both drivers against the
   same server and compares every result and every refusal.
-- **Not yet, and refused rather than imitated:** explicit `ClientSession`s and transactions,
-  replica sets and several hosts, change streams, the client-level `bulkWrite`, unacknowledged
-  writes (`w: 0`), client-side operation timeouts (`timeoutMS`), compression, Atlas Search
-  indexes. `mapReduce` is not offered (deprecated by MongoDB).
+- **Replica sets and mongos:** the set is found from any one member and followed by a
+  monitor (`hello` every `heartbeatFrequencyMS`); reads go where the read preference chooses,
+  tags and staleness included, within the latency window; a primary that steps down is noticed
+  from the error and from `topologyVersion`, and writes go on once the next one is elected.
+- **Sessions and transactions:** `startSession`, causal consistency (a secondary read waits
+  for the session's own write), `startTransaction`/`commitTransaction`/`abortTransaction`,
+  `withTransaction` with its retries, and a session closed with a transaction open aborts it.
+  Server sessions are pooled and ended on close.
+- **Retryable writes and reads:** a single-document write gets a `txnNumber` and is sent once
+  more after a dropped connection or an error the server labels `RetryableWriteError`; the
+  server applies it once (`LocalReplicaSetTest`, with the server's `failCommand` fail point).
+- **Not yet, and refused rather than imitated:** change streams, the client-level `bulkWrite`,
+  snapshot sessions, unacknowledged writes (`w: 0`), client-side operation timeouts
+  (`timeoutMS`), `mongodb+srv://`, load balancers, compression, Atlas Search indexes.
+  `mapReduce` is not offered (deprecated by MongoDB).
 - **The reply parser is strict and fuzzed** (`OpMsgFuzzTest`): it checks every length in a
   reply's documents before the bson library reads them, whose reader allocated whatever a
   length announced.

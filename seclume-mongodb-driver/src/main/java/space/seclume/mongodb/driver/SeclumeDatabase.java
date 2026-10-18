@@ -27,21 +27,22 @@ import com.mongodb.client.model.CreateViewOptions;
 import com.mongodb.client.model.TimeSeriesOptions;
 import com.mongodb.client.model.ValidationOptions;
 
-import space.seclume.mongodb.driver.internal.Cluster;
+import space.seclume.mongodb.driver.internal.LogicalSession;
+import space.seclume.mongodb.driver.internal.Topology;
 
 final class SeclumeDatabase implements MongoDatabase {
 
-    private final Cluster cluster;
+    private final Topology topology;
     private final String name;
     private final CodecRegistry registry;
     private final ReadPreference readPreference;
     private final WriteConcern writeConcern;
     private final ReadConcern readConcern;
 
-    SeclumeDatabase(Cluster cluster, String name, CodecRegistry registry,
+    SeclumeDatabase(Topology topology, String name, CodecRegistry registry,
             ReadPreference readPreference, WriteConcern writeConcern, ReadConcern readConcern) {
         MongoNamespace.checkDatabaseNameValidity(name);
-        this.cluster = cluster;
+        this.topology = topology;
         this.name = name;
         this.registry = registry;
         this.readPreference = readPreference;
@@ -49,10 +50,8 @@ final class SeclumeDatabase implements MongoDatabase {
         this.readConcern = readConcern;
     }
 
-    private static void noSession(ClientSession session) {
-        if (session != null) {
-            throw SeclumeCollection.sessions();
-        }
+    private LogicalSession session(ClientSession session) {
+        return SeclumeClientSession.of(session, topology);
     }
 
     @Override
@@ -87,25 +86,25 @@ final class SeclumeDatabase implements MongoDatabase {
 
     @Override
     public MongoDatabase withCodecRegistry(CodecRegistry codecRegistry) {
-        return new SeclumeDatabase(cluster, name, codecRegistry, readPreference, writeConcern,
+        return new SeclumeDatabase(topology, name, codecRegistry, readPreference, writeConcern,
                 readConcern);
     }
 
     @Override
     public MongoDatabase withReadPreference(ReadPreference preference) {
-        return new SeclumeDatabase(cluster, name, registry, preference, writeConcern,
+        return new SeclumeDatabase(topology, name, registry, preference, writeConcern,
                 readConcern);
     }
 
     @Override
     public MongoDatabase withWriteConcern(WriteConcern concern) {
-        return new SeclumeDatabase(cluster, name, registry, readPreference, concern,
+        return new SeclumeDatabase(topology, name, registry, readPreference, concern,
                 readConcern);
     }
 
     @Override
     public MongoDatabase withReadConcern(ReadConcern concern) {
-        return new SeclumeDatabase(cluster, name, registry, readPreference, writeConcern,
+        return new SeclumeDatabase(topology, name, registry, readPreference, writeConcern,
                 concern);
     }
 
@@ -122,7 +121,7 @@ final class SeclumeDatabase implements MongoDatabase {
     @Override
     public <T> MongoCollection<T> getCollection(String collection, Class<T> type) {
         MongoNamespace.checkCollectionNameValidity(collection);
-        return new SeclumeCollection<>(cluster, new MongoNamespace(name, collection), type,
+        return new SeclumeCollection<>(topology, new MongoNamespace(name, collection), type,
                 registry, readPreference, writeConcern, readConcern);
     }
 
@@ -171,9 +170,9 @@ final class SeclumeDatabase implements MongoDatabase {
     @Override
     public <R> R runCommand(ClientSession session, Bson command, ReadPreference preference,
             Class<R> type) {
-        noSession(session);
-        BsonDocument reply = cluster.command(name, command.toBsonDocument(BsonDocument.class,
-                registry));
+        LogicalSession s = session(session);
+        BsonDocument reply = topology.command(s, preference, name,
+                command.toBsonDocument(BsonDocument.class, registry)).document();
         return Bsons.decode(reply, registry.get(type));
     }
 
@@ -184,10 +183,10 @@ final class SeclumeDatabase implements MongoDatabase {
 
     @Override
     public void drop(ClientSession session) {
-        noSession(session);
+        LogicalSession s = session(session);
         BsonDocument command = new BsonDocument("dropDatabase", new BsonInt32(1));
         Bsons.writeConcern(command, writeConcern);
-        cluster.command(name, command);
+        topology.command(s, ReadPreference.primary(), name, command);
     }
 
     // ---- collections --------------------------------------------------------
@@ -209,8 +208,8 @@ final class SeclumeDatabase implements MongoDatabase {
 
     @Override
     public ListCollectionNamesIterable listCollectionNames(ClientSession session) {
-        noSession(session);
-        return new Iterables.ListCollectionNames(cluster, name, registry);
+        LogicalSession s = session(session);
+        return new Iterables.ListCollectionNames(topology, s, name, registry);
     }
 
     @Override
@@ -220,8 +219,8 @@ final class SeclumeDatabase implements MongoDatabase {
 
     @Override
     public <R> ListCollectionsIterable<R> listCollections(ClientSession session, Class<R> type) {
-        noSession(session);
-        return new Iterables.ListCollections<>(cluster, registry.get(type), name, false,
+        LogicalSession s = session(session);
+        return new Iterables.ListCollections<>(topology, s, registry.get(type), name, false,
                 registry);
     }
 
@@ -243,7 +242,7 @@ final class SeclumeDatabase implements MongoDatabase {
     @Override
     public void createCollection(ClientSession session, String collection,
             CreateCollectionOptions options) {
-        noSession(session);
+        LogicalSession s = session(session);
         MongoNamespace.checkCollectionNameValidity(collection);
         if (options.getEncryptedFields() != null) {
             throw new UnsupportedOperationException("queryable encryption is not supported by "
@@ -312,7 +311,7 @@ final class SeclumeDatabase implements MongoDatabase {
                             options.getChangeStreamPreAndPostImagesOptions().isEnabled())));
         }
         Bsons.writeConcern(command, writeConcern);
-        cluster.command(name, command);
+        topology.command(s, ReadPreference.primary(), name, command);
     }
 
     @Override
@@ -335,13 +334,13 @@ final class SeclumeDatabase implements MongoDatabase {
     @Override
     public void createView(ClientSession session, String view, String on,
             List<? extends Bson> pipeline, CreateViewOptions options) {
-        noSession(session);
+        LogicalSession s = session(session);
         BsonDocument command = new BsonDocument("create", new BsonString(view))
                 .append("viewOn", new BsonString(on))
                 .append("pipeline", Bsons.toArray(pipeline, Document.class, registry));
         Bsons.put(command, "collation", options.getCollation());
         Bsons.writeConcern(command, writeConcern);
-        cluster.command(name, command);
+        topology.command(s, ReadPreference.primary(), name, command);
     }
 
     // ---- aggregation and change streams -------------------------------------
@@ -408,8 +407,9 @@ final class SeclumeDatabase implements MongoDatabase {
     @Override
     public <R> AggregateIterable<R> aggregate(ClientSession session, List<? extends Bson> pipeline,
             Class<R> type) {
-        noSession(session);
-        return new Iterables.Aggregate<>(cluster, registry.get(type), name, new BsonInt32(1),
+        LogicalSession s = session(session);
+        return new Iterables.Aggregate<>(topology, s, readPreference, registry.get(type), name,
+                new BsonInt32(1),
                 pipeline, Document.class, registry,
                 () -> readConcern.isServerDefault() ? null : readConcern.asDocument(),
                 () -> {

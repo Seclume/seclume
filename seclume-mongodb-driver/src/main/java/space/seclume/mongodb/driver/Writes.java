@@ -21,7 +21,10 @@ import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.bulk.WriteConcernError;
 
-import space.seclume.mongodb.driver.internal.Cluster;
+import com.mongodb.ServerAddress;
+
+import space.seclume.mongodb.driver.internal.LogicalSession;
+import space.seclume.mongodb.driver.internal.Topology;
 
 /**
  * The write commands - {@code insert}, {@code update}, {@code delete} - in
@@ -48,6 +51,7 @@ final class Writes {
         WriteConcernError concernError;
         final Set<String> labels = new HashSet<>();
         BsonValue upsertedId;
+        ServerAddress address;
     }
 
     /**
@@ -56,16 +60,21 @@ final class Writes {
      *
      * @param offset the index of the first item in the whole operation
      */
-    static Outcome run(Cluster cluster, String database, BsonDocument command, String field,
-            List<BsonDocument> items, boolean ordered, int offset, Outcome into) {
-        Cluster.Limits limits = cluster.limits();
+    static Outcome run(Topology topology, LogicalSession session, String database,
+            BsonDocument command, String field, List<BsonDocument> items, boolean ordered,
+            boolean retryable, int offset, Outcome into) {
+        int maxBatch = topology.writableHello().getNumber("maxWriteBatchSize",
+                new org.bson.BsonInt32(100_000)).intValue();
         int at = 0;
         while (at < items.size()) {
-            int count = Math.min(items.size() - at, limits.maxWriteBatchSize());
+            int count = Math.min(items.size() - at, maxBatch);
             BsonDocument reply = null;
             while (reply == null) {
                 try {
-                    reply = cluster.command(database, command, field, items.subList(at, at + count));
+                    Topology.Reply sent = topology.write(session, database, command, field,
+                            items.subList(at, at + count), retryable);
+                    into.address = sent.server().address();
+                    reply = sent.document();
                 } catch (BsonMaximumSizeExceededException tooLarge) {
                     if (count == 1) {
                         throw tooLarge;            // one document alone too large: the server's limit
@@ -122,25 +131,25 @@ final class Writes {
     }
 
     /** For one write: its error as the single-write exceptions. */
-    static void throwSingle(Outcome outcome, Cluster cluster, boolean update) {
+    static void throwSingle(Outcome outcome, boolean update) {
         if (!outcome.errors.isEmpty()) {
             BulkWriteError error = outcome.errors.get(0);
             throw new MongoWriteException(new WriteError(error.getCode(), error.getMessage(),
-                    error.getDetails()), cluster.address(), outcome.labels);
+                    error.getDetails()), outcome.address, outcome.labels);
         }
         if (outcome.concernError != null) {
             boolean existing = update && outcome.n > 0 && outcome.upserts.isEmpty();
             throw new MongoWriteConcernException(outcome.concernError,
                     WriteConcernResult.acknowledged(outcome.n, existing, outcome.upsertedId),
-                    cluster.address(), outcome.labels);
+                    outcome.address, outcome.labels);
         }
     }
 
     /** For several: what got through and what did not. */
-    static void throwBulk(Outcome outcome, Cluster cluster, BulkWriteResult partial) {
+    static void throwBulk(Outcome outcome, BulkWriteResult partial) {
         if (!outcome.errors.isEmpty() || outcome.concernError != null) {
             throw new MongoBulkWriteException(partial, outcome.errors, outcome.concernError,
-                    cluster.address(), outcome.labels);
+                    outcome.address, outcome.labels);
         }
     }
 

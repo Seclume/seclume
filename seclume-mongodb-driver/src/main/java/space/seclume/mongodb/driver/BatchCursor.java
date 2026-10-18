@@ -15,7 +15,9 @@ import com.mongodb.ServerAddress;
 import com.mongodb.ServerCursor;
 import com.mongodb.client.MongoCursor;
 
-import space.seclume.mongodb.driver.internal.Cluster;
+import space.seclume.mongodb.driver.internal.LogicalSession;
+import space.seclume.mongodb.driver.internal.ServerPool;
+import space.seclume.mongodb.driver.internal.Topology;
 
 /**
  * A server cursor read batch by batch: the first batch comes with the
@@ -24,11 +26,14 @@ import space.seclume.mongodb.driver.internal.Cluster;
  * stay open there until the server's ten-minute idle timeout.
  *
  * <p>A cursor is not tied to the connection that opened it, so each
- * {@code getMore} borrows whichever connection is free.
+ * {@code getMore} borrows whichever connection to its server is free - a
+ * cursor lives on the server that opened it.
  */
 final class BatchCursor<T> implements MongoCursor<T> {
 
-    private final Cluster cluster;
+    private final Topology topology;
+    private final ServerPool server;
+    private final LogicalSession session;
     private final Decoder<T> decoder;
     private final String database;
     private final String collection;
@@ -44,14 +49,16 @@ final class BatchCursor<T> implements MongoCursor<T> {
      * @param maxAwaitMillis for a tailable cursor that awaits data: how long a
      *                       {@code getMore} waits; 0 for the server's default
      */
-    BatchCursor(Cluster cluster, BsonDocument reply, Decoder<T> decoder, int batchSize,
-            long maxAwaitMillis, BsonValue comment) {
-        this.cluster = cluster;
+    BatchCursor(Topology topology, Topology.Reply reply, LogicalSession session,
+            Decoder<T> decoder, int batchSize, long maxAwaitMillis, BsonValue comment) {
+        this.topology = topology;
+        this.server = reply.server();
+        this.session = session;
         this.decoder = decoder;
         this.batchSize = batchSize;
         this.maxAwaitMillis = maxAwaitMillis;
         this.comment = comment;
-        BsonDocument cursor = reply.getDocument("cursor");
+        BsonDocument cursor = reply.document().getDocument("cursor");
         this.id = cursor.getNumber("id").longValue();
         String namespace = cursor.getString("ns").getValue();
         int dot = namespace.indexOf('.');
@@ -107,7 +114,7 @@ final class BatchCursor<T> implements MongoCursor<T> {
         }
         BsonDocument reply;
         try {
-            reply = cluster.command(database, command);
+            reply = topology.on(server, session, database, command);
         } catch (MongoException e) {
             id = 0;                        // a cursor the server refused is gone there
             throw e;
@@ -128,7 +135,7 @@ final class BatchCursor<T> implements MongoCursor<T> {
         batch = new BsonArray();
         at = 0;
         try {
-            cluster.command(database, new BsonDocument("killCursors", new BsonString(collection))
+            topology.on(server, session, database, new BsonDocument("killCursors", new BsonString(collection))
                     .append("cursors", new BsonArray(java.util.List.of(new BsonInt64(open)))));
         } catch (MongoException | IllegalStateException ignored) {
             // the server ends the cursor after its idle timeout; nothing else to do
@@ -137,11 +144,11 @@ final class BatchCursor<T> implements MongoCursor<T> {
 
     @Override
     public ServerCursor getServerCursor() {
-        return id == 0 ? null : new ServerCursor(id, cluster.address());
+        return id == 0 ? null : new ServerCursor(id, server.address());
     }
 
     @Override
     public ServerAddress getServerAddress() {
-        return cluster.address();
+        return server.address();
     }
 }
