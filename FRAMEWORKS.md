@@ -1,6 +1,6 @@
 # Frameworks
 
-Produced by `space.seclume.verify.FrameworkMatrix` on 2026-10-15 by reading the test reports of the run that made it, not by hand.
+Produced by `space.seclume.verify.FrameworkMatrix` on 2026-10-18 by reading the test reports of the run that made it, not by hand.
 
 **`unsupported` means nobody has run it**, not that it fails. The only way to change a cell is to write the test: a framework has to name a test class per server, and that class has to appear in a report with tests in it.
 
@@ -27,6 +27,18 @@ Produced by `space.seclume.verify.FrameworkMatrix` on 2026-10-15 by reading the 
 - **jOOQ** - inserts, a batch, a typed read, a rolled-back transaction, a lazy cursor - SQL Server and Oracle with SQLDialect.DEFAULT, because jOOQ's free edition has no dialect for either
 - **MyBatis** - generated keys, dynamic SQL, the batch executor, a typed null
 - **R2DBC (seclume-r2dbc)** - R2DBC's own conformance suite, r2dbc-spi-test, against each server - where a server has no text of several statements (Oracle) or refuses it on purpose (MySQL), that case checks the refusal; on Oracle generated keys are asked for by name and NUMBER is read as a number
+
+## Document databases
+
+| | MongoDB |
+|---|---|
+| **Spring Data MongoDB repositories (seclume-mongodb-driver)** | verified (8) |
+| **MongoTemplate (seclume-mongodb-driver)** | verified (6) |
+| **Spring transactions on MongoDB (seclume-mongodb-driver)** | verified (1) |
+
+- **Spring Data MongoDB repositories (seclume-mongodb-driver)** - derived queries, paging and sorting, @Query, @Aggregation, a unique index and DuplicateKeyException, @Version - on Spring Boot with the MongoDB driver version Spring Boot manages
+- **MongoTemplate (seclume-mongodb-driver)** - queries, distinct, updates and upserts, findAndModify, bulk operations, aggregation, the indexes Spring Data creates
+- **Spring transactions on MongoDB (seclume-mongodb-driver)** - @Transactional through MongoTransactionManager on a replica set: both writes, or neither
 
 ## What this table does not say
 

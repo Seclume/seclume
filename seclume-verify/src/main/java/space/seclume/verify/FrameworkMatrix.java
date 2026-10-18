@@ -116,6 +116,27 @@ public final class FrameworkMatrix {
                     + "it on purpose (MySQL), that case checks the refusal; on Oracle "
                     + "generated keys are asked for by name and NUMBER is read as a number"));
 
+    /**
+     * MongoDB has a table of its own: the frameworks above are SQL's, and a
+     * column of {@code unsupported} for each of them would say nothing.
+     */
+    private static final List<Server> DOCUMENT_SERVERS = List.of(
+            new Server("MongoDB", "Mongo"));
+
+    private static final List<Framework> DOCUMENT_FRAMEWORKS = List.of(
+            new Framework("Spring Data MongoDB repositories (seclume-mongodb-driver)",
+                    "SpringDataMongoRepositoriesOn",
+                    "derived queries, paging and sorting, @Query, @Aggregation, a unique "
+                    + "index and DuplicateKeyException, @Version - on Spring Boot with the "
+                    + "MongoDB driver version Spring Boot manages"),
+            new Framework("MongoTemplate (seclume-mongodb-driver)", "SpringDataMongoTemplateOn",
+                    "queries, distinct, updates and upserts, findAndModify, bulk operations, "
+                    + "aggregation, the indexes Spring Data creates"),
+            new Framework("Spring transactions on MongoDB (seclume-mongodb-driver)",
+                    "SpringDataMongoTransactionsOn",
+                    "@Transactional through MongoTransactionManager on a replica set: both "
+                    + "writes, or neither"));
+
     private static final Pattern SET = Pattern.compile("Test set: (\\S+)");
     private static final Pattern COUNTS = Pattern.compile(
             "Tests run: (\\d+), Failures: (\\d+), Errors: (\\d+), Skipped: (\\d+)");
@@ -204,30 +225,36 @@ public final class FrameworkMatrix {
             .append("name a test class per server, and that class has to appear in a report ")
             .append("with tests in it.\n\n");
 
-        page.append('|');
-        for (Server server : SERVERS) {
-            page.append(" | ").append(server.label());
-        }
-        page.append(" |\n|---|");
-        page.append("---|".repeat(SERVERS.size()));
-        page.append('\n');
-
-        List<String> notes = new ArrayList<>();
-        for (Framework framework : FRAMEWORKS) {
-            page.append("| **").append(framework.label()).append("** |");
-            for (Server server : SERVERS) {
-                page.append(' ').append(cell(framework, server, reports)).append(" |");
-            }
-            page.append('\n');
-            notes.add("- **" + framework.label() + "** - " + framework.note());
-        }
-
-        page.append("\n").append(String.join("\n", notes)).append('\n');
+        table(page, SERVERS, FRAMEWORKS, reports);
+        page.append("\n## Document databases\n\n");
+        table(page, DOCUMENT_SERVERS, DOCUMENT_FRAMEWORKS, reports);
         page.append("\n## What this table does not say\n\n")
             .append("That a verified cell covers everything the framework can do. It covers ")
             .append("what its test class asks of it, which is written down beside each row ")
             .append("above and is less than the whole of any of these libraries.\n");
         return page.toString();
+    }
+
+    private static void table(StringBuilder page, List<Server> servers,
+            List<Framework> frameworks, Map<String, Outcome> reports) {
+        page.append('|');
+        for (Server server : servers) {
+            page.append(" | ").append(server.label());
+        }
+        page.append(" |\n|---|");
+        page.append("---|".repeat(servers.size()));
+        page.append('\n');
+
+        List<String> notes = new ArrayList<>();
+        for (Framework framework : frameworks) {
+            page.append("| **").append(framework.label()).append("** |");
+            for (Server server : servers) {
+                page.append(' ').append(cell(framework, server, reports)).append(" |");
+            }
+            page.append('\n');
+            notes.add("- **" + framework.label() + "** - " + framework.note());
+        }
+        page.append("\n").append(String.join("\n", notes)).append('\n');
     }
 
     private static String cell(Framework framework, Server server, Map<String, Outcome> reports) {
