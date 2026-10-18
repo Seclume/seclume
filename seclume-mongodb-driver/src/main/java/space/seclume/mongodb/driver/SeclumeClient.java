@@ -189,44 +189,54 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public ChangeStreamIterable<Document> watch() {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, List.of(), Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, List.of(), type);
     }
 
     @Override
     public ChangeStreamIterable<Document> watch(List<? extends Bson> pipeline) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, pipeline, Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(List<? extends Bson> pipeline, Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, pipeline, type);
     }
 
     @Override
     public ChangeStreamIterable<Document> watch(ClientSession session) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, List.of(), Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(ClientSession session, Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, List.of(), type);
     }
 
     @Override
     public ChangeStreamIterable<Document> watch(ClientSession session,
             List<? extends Bson> pipeline) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, pipeline, Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(ClientSession session, List<? extends Bson> pipeline,
             Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, pipeline, type);
+    }
+
+    /** A change stream on the whole cluster ({@code allChangesForCluster}). */
+    private <R> ChangeStreamIterable<R> watchOn(ClientSession session,
+            List<? extends Bson> pipeline, Class<R> type) {
+        LogicalSession s = session(session);
+        return new ChangeStreams.Stream<>(topology, s, readPreference, registry, type,
+                ChangeStreams.Target.cluster(), pipeline,
+                () -> readConcern.isServerDefault() ? null : readConcern.asDocument(),
+                timeoutMillis);
     }
 
     private static UnsupportedOperationException clientBulkWrite() {

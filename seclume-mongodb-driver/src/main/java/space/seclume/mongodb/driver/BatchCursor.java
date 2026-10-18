@@ -43,6 +43,8 @@ final class BatchCursor<T> implements MongoCursor<T> {
     private final BsonValue comment;
     private long id;
     private BsonArray batch;
+    /** A change stream's position after the last batch, when the server says it. */
+    private BsonDocument postBatchResumeToken;
     /** CURSOR_LIFETIME: the end of the cursor's time; ITERATION: the time per batch. */
     private Long lifetimeEnd;
     private Long iterationMillis;
@@ -69,6 +71,7 @@ final class BatchCursor<T> implements MongoCursor<T> {
         this.database = namespace.substring(0, dot);
         this.collection = namespace.substring(dot + 1);
         this.batch = cursor.getArray("firstBatch");
+        this.postBatchResumeToken = cursor.getDocument("postBatchResumeToken", null);
         if (id != 0 && session != null && session.explicit()) {
             session.opened(this);
         }
@@ -108,6 +111,15 @@ final class BatchCursor<T> implements MongoCursor<T> {
         return at < batch.size() ? Bsons.decode(batch.get(at++).asDocument(), decoder) : null;
     }
 
+    BsonDocument postBatchResumeToken() {
+        return postBatchResumeToken;
+    }
+
+    /** Whether the current batch is read to its end. */
+    boolean batchDone() {
+        return at >= batch.size();
+    }
+
     @Override
     public int available() {
         return batch.size() - at;
@@ -143,6 +155,7 @@ final class BatchCursor<T> implements MongoCursor<T> {
         BsonDocument cursor = reply.getDocument("cursor");
         id = cursor.getNumber("id").longValue();
         batch = cursor.getArray("nextBatch");
+        postBatchResumeToken = cursor.getDocument("postBatchResumeToken", null);
         at = 0;
         if (id == 0 && session != null) {
             session.ended(this);

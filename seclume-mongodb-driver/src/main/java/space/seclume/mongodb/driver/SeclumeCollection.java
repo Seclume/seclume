@@ -421,50 +421,54 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     // ---- not in this driver yet ---------------------------------------------
 
-    static UnsupportedOperationException changeStreams() {
-        return new UnsupportedOperationException("change streams are not supported by "
-                + "seclume's MongoDB driver yet");
+    /** A change stream on this collection; see {@link ChangeStreams}. */
+    private <R> ChangeStreamIterable<R> watchOn(ClientSession session,
+            List<? extends Bson> pipeline, Class<R> type) {
+        LogicalSession s = session(session);
+        return new ChangeStreams.Stream<>(topology, s, readPreference, registry, type,
+                ChangeStreams.Target.collection(db(), name()), pipeline,
+                this::readConcernDocument, timeoutMillis);
     }
 
     @Override
     public ChangeStreamIterable<T> watch() {
-        throw changeStreams();
+        return watchOn(null, List.of(), documentClass);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(Class<R> type) {
-        throw changeStreams();
+        return watchOn(null, List.of(), type);
     }
 
     @Override
     public ChangeStreamIterable<T> watch(List<? extends Bson> pipeline) {
-        throw changeStreams();
+        return watchOn(null, pipeline, documentClass);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(List<? extends Bson> pipeline, Class<R> type) {
-        throw changeStreams();
+        return watchOn(null, pipeline, type);
     }
 
     @Override
     public ChangeStreamIterable<T> watch(ClientSession session) {
-        throw changeStreams();
+        return watchOn(session, List.of(), documentClass);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(ClientSession session, Class<R> type) {
-        throw changeStreams();
+        return watchOn(session, List.of(), type);
     }
 
     @Override
     public ChangeStreamIterable<T> watch(ClientSession session, List<? extends Bson> pipeline) {
-        throw changeStreams();
+        return watchOn(session, pipeline, documentClass);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(ClientSession session,
             List<? extends Bson> pipeline, Class<R> type) {
-        throw changeStreams();
+        return watchOn(session, pipeline, type);
     }
 
     private static UnsupportedOperationException mapReduce() {
