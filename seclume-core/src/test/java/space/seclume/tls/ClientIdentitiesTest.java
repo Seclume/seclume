@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -14,6 +15,7 @@ import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.AfterAll;
@@ -97,6 +99,41 @@ class ClientIdentitiesTest {
         assertTrue(identity != null, "the settings describe an identity");
         assertEquals(1, identity.chain().size(), "the chain should be the leaf alone");
         assertEquals(HandshakeSignature.ECDSA_SECP256R1_SHA256, identity.signatureScheme());
+    }
+
+    /**
+     * The identity is shared by every connection configured with it, and a
+     * pool opens them on whichever thread asks: loaded on one thread, it has
+     * to sign on others - at once - and every signature has to verify. The
+     * signer used to belong to the thread that loaded the key, and the second
+     * thread's handshake failed (found by the MongoDB driver's X.509 login,
+     * whose monitor and pool connect on threads of their own).
+     */
+    @Test
+    void anIdentitySignsOnEveryThreadThatUsesIt(@TempDir Path dir) throws Exception {
+        assumeTrue(space.seclume.crypto.EcdsaSigner.available(), "no native EC signing here");
+        ClientIdentity identity = ClientIdentities.of(settings(dir));
+        java.util.concurrent.ExecutorService threads =
+                java.util.concurrent.Executors.newFixedThreadPool(8);
+        try {
+            List<java.util.concurrent.Future<Boolean>> verified = new java.util.ArrayList<>();
+            for (int i = 0; i < 64; i++) {
+                byte[] content = ("handshake " + i).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                verified.add(threads.submit(() -> {
+                    byte[] signature = identity.sign(content);
+                    java.security.Signature check = java.security.Signature
+                            .getInstance("SHA256withECDSA");
+                    check.initVerify(client.certificate().getPublicKey());
+                    check.update(content);
+                    return check.verify(signature);
+                }));
+            }
+            for (java.util.concurrent.Future<Boolean> one : verified) {
+                assertTrue(one.get(), "a signature made on another thread does not verify");
+            }
+        } finally {
+            threads.shutdownNow();
+        }
     }
 
     /** The same configuration is the same identity - and therefore one key. */

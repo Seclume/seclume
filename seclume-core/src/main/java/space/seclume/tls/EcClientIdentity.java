@@ -107,7 +107,9 @@ public final class EcClientIdentity implements ClientIdentity {
             byte[] point = publicPoint(certificateKey, field);
             MemorySegment publicPoint = arena.allocate(point.length);
             MemorySegment.copy(point, 0, publicPoint, ValueLayout.JAVA_BYTE, 0, point.length);
-            return EcdsaSigner.of(curve, publicPoint, scalar.segment());
+            // Shared: one identity serves every connection configured with it, on
+            // whichever thread a pool opens them (ClientIdentities).
+            return EcdsaSigner.shared(curve, publicPoint, scalar.segment());
         } catch (IllegalArgumentException | IllegalStateException e) {
             throw new SecretUnavailableException("the client certificate's private key could "
                     + "not be loaded: " + e.getMessage(), e);
