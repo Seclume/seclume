@@ -62,6 +62,18 @@ All notable changes to seclume are recorded here. Versions follow
   forwarded to the driver. A password in the URL, `tls=false`/`ssl=false`, passwords with non-ASCII
   characters, and server iteration counts under 4096 are strictly refused. The connect timeout bounds the
   login. Tested against MongoDB 8 with `NoSecretInHeap` proving neither password nor client proof reaches the JVM heap.
+- **seclume's own MongoDB driver** (`seclume-mongodb-driver`, new, in progress):
+  `SeclumeMongoClients.create(url)` returns a `MongoClient` of the official sync API - CRUD,
+  cursors, aggregation, bulk writes, indexes; replica sets and mongos with server selection;
+  sessions, causal consistency, transactions, retryable writes and reads; Spring Data MongoDB
+  on Spring Boot; a pool that leaves nothing of one borrower to the next (FEATURES.md lists
+  what is there). Under it the session core - TCP, seclume's TLS 1.3, `hello` with the client's metadata and
+  `saslSupportedMechs` (a user the server would log in only with SCRAM-SHA-1 is refused
+  before anything is sent), SCRAM-SHA-256 off the heap, then commands as OP_MSG with document
+  sequences. A refused command is a `MongoCommandException` and the session goes on; a read
+  timeout, a reply that cannot be parsed and `abort` from another thread close it. The reply
+  parser is fuzzed; it checks every length in a document before the bson library reads it,
+  whose reader allocated what a length announced - 2^31 bytes from a 200-byte reply.
 - **R2DBC** (`seclume-r2dbc`, new): an R2DBC driver over the four JDBC drivers, each
   connection's calls in order on a virtual thread, with each database's own placeholders.
   `r2dbc:seclume:<database>://user@host/db?provider=...`; a password in the URL is refused.

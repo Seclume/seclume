@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.13.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-mongodb-driver</artifactId>
+  <name>seclume MongoDB driver</name>
+  <description>
+    seclume's own MongoDB driver: the wire protocol from the socket up, on
+    seclume's TLS 1.3 and SCRAM-SHA-256 in native memory, behind the
+    interfaces of the official sync API (com.mongodb.client) and with
+    org.mongodb:bson for documents and codecs.
+  </description>
+
+  <properties>
+    <mongodb.version>5.13.0</mongodb.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- MongoUrl and the SCRAM conversation are shared with the
+         pre-authenticated socket. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The interfaces this driver implements and the exceptions it throws:
+         an application written against them needs them at run time too. -->
+    <dependency>
+      <groupId>org.mongodb</groupId>
+      <artifactId>mongodb-driver-sync</artifactId>
+      <version>${mongodb.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

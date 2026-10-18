@@ -277,6 +277,37 @@ jobs:
           SECLUME_RABBITMQ_PASSWORD_FILE: ${{ runner.temp }}/rabbit-password
           SECLUME_RABBITMQCTL: sudo rabbitmqctl close_all_connections recovery-test
 
+  # seclume's own MongoDB driver, the pre-authenticated socket for the official
+  # one, and Spring Data on the driver - against a standalone and a replica set
+  # of three, both with TLS required. Without this job every MongoDB test skips
+  # itself, and a green build would say nothing about them.
+  mongodb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: MongoDB standalone and replica set
+        run: bash .github/scripts/mongo_fixtures.sh "$RUNNER_TEMP/mongo"
+      - run: >-
+          ./mvnw -B -pl seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-spring-test -am
+          test -Dseclume.mongo.host=127.0.0.1
+      # Skipped is not passed: a test that found no server proves nothing.
+      - name: Require executed MongoDB tests
+        if: always()
+        run: python3 .github/scripts/require_mongo_tests.py
+      - if: always()
+        run: |
+          rm -f .local-mongo-password
+          docker rm -f mongo mongo-rs1 mongo-rs2 mongo-rs3 || true
+
   postgresql:
     runs-on: ubuntu-latest
     services:

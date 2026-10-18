@@ -514,6 +514,53 @@ answers TCP and then says nothing does not hold the connection. Only SCRAM-SHA-2
 a user the server offers SCRAM-SHA-1 alone is refused, never logged in with the weaker one.
 The reactive driver (Netty, `SSLEngine`) is not covered yet.
 
+### seclume's own MongoDB driver (`seclume-mongodb-driver`, in progress)
+
+A driver of its own, from the socket to the API: `SeclumeMongoClients.create(url)` returns a
+`com.mongodb.client.MongoClient` (the official sync API, `mongodb-driver-sync` 5.13), with
+`org.mongodb:bson` and the application's `CodecRegistry` for documents, POJOs and records.
+The URL is the same as above.
+
+- **There so far:** `insertOne`/`insertMany` (in batches within the server's limits, the
+  documents as an OP_MSG document sequence), `find` with all its options, cursors with
+  `getMore` and `killCursors` on an early close, `first` in one batch without a cursor,
+  `countDocuments`, `estimatedDocumentCount`, `distinct`, `aggregate` (with `$out`/`$merge`
+  and database-level pipelines), `updateOne`/`updateMany` (operators and pipelines),
+  `replaceOne`, `deleteOne`/`deleteMany`, `findOneAndUpdate`/`Replace`/`Delete`, the
+  collection's `bulkWrite`, indexes, `createCollection`, `createView`, `listCollections`,
+  `listDatabases`, `runCommand`, `explain`, read and write concerns.
+- **Errors as the official driver raises them:** `MongoCommandException`,
+  `MongoWriteException`, `MongoWriteConcernException`, `MongoBulkWriteException` with what got
+  through. `LocalSameAsOfficialTest` runs the same operations through both drivers against the
+  same server and compares every result and every refusal.
+- **Replica sets and mongos:** the set is found from any one member and followed by a
+  monitor (`hello` every `heartbeatFrequencyMS`); reads go where the read preference chooses,
+  tags and staleness included, within the latency window; a primary that steps down is noticed
+  from the error and from `topologyVersion`, and writes go on once the next one is elected.
+- **Sessions and transactions:** `startSession`, causal consistency (a secondary read waits
+  for the session's own write), `startTransaction`/`commitTransaction`/`abortTransaction`,
+  `withTransaction` with its retries, and a session closed with a transaction open aborts it.
+  Server sessions are pooled and ended on close.
+- **Retryable writes and reads:** a single-document write gets a `txnNumber` and is sent once
+  more after a dropped connection or an error the server labels `RetryableWriteError`; the
+  server applies it once (`LocalReplicaSetTest`, with the server's `failCommand` fail point).
+- **Nothing of one borrower reaches the next:** a pooled connection is not logged in again or
+  out through `runCommand` (`saslStart`, `authenticate`, `logout` are refused - the login is
+  seclume's); a cursor left open in a session is killed when the session ends, since the
+  pooled server session goes on under the same `lsid`; a reused server session starts without
+  the last transaction; `maxIdleTimeMS` and `maxLifeTimeMS` retire connections
+  (`LocalNothingCarriesOverTest`).
+- **Spring Data MongoDB:** a Spring Boot application gets seclume's client as its
+  `MongoClient` bean; repositories, `MongoTemplate` and `@Transactional` run on it, with the
+  MongoDB driver version Spring Boot manages (FRAMEWORKS.md).
+- **Not yet, and refused rather than imitated:** change streams, the client-level `bulkWrite`,
+  snapshot sessions, unacknowledged writes (`w: 0`), client-side operation timeouts
+  (`timeoutMS`), `mongodb+srv://`, load balancers, compression, Atlas Search indexes.
+  `mapReduce` is not offered (deprecated by MongoDB).
+- **The reply parser is strict and fuzzed** (`OpMsgFuzzTest`): it checks every length in a
+  reply's documents before the bson library reads them, whose reader allocated whatever a
+  length announced.
+
 ## Reports: JasperReports, embedded
 
 JasperReports needs nothing of its own: it fills a report from a `java.sql.Connection`, and a
