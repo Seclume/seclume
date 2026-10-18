@@ -49,6 +49,9 @@ public final class SeclumeMongoClients {
                 ? options.getWriteConcern() : WriteConcern.ACKNOWLEDGED;
         ReadConcern readConcern = options.getReadConcern() != null
                 ? options.getReadConcern() : ReadConcern.DEFAULT;
-        return new SeclumeClient(topology, codecs, preference, concern, readConcern);
+        SeclumeClient client = new SeclumeClient(topology, codecs, preference, concern,
+                readConcern);
+        client.timeoutMillis = options.getTimeout();
+        return client;
     }
 }

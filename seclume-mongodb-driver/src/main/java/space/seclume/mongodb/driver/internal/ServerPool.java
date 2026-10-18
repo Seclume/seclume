@@ -81,9 +81,22 @@ public final class ServerPool implements AutoCloseable {
     BsonDocument run(String db, BsonDocument command, String sequenceId,
             List<? extends BsonDocument> sequence) {
         Pooled pooled = borrow();
+        MongoSession session = pooled.session();
+        int before = session.networkTimeout();
+        boolean bounded = Deadline.active();
         try {
-            return pooled.session().command(db, command, sequenceId, sequence);
+            if (bounded) {
+                // No longer than the operation has left; at least a millisecond,
+                // since 0 would mean no limit at all.
+                long left = Math.max(1, Deadline.remainingMillis());
+                int limit = (int) Math.min(Integer.MAX_VALUE, left);
+                session.networkTimeout(before > 0 ? Math.min(before, limit) : limit);
+            }
+            return session.command(db, command, sequenceId, sequence);
         } finally {
+            if (bounded && !session.isClosed()) {
+                session.networkTimeout(before);
+            }
             giveBack(pooled);
         }
     }
@@ -105,7 +118,8 @@ public final class ServerPool implements AutoCloseable {
     }
 
     private Pooled borrow() {
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(maxWaitMillis);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+                Deadline.bounded(maxWaitMillis));
         int born;
         lock.lock();
         try {
@@ -129,8 +143,13 @@ public final class ServerPool implements AutoCloseable {
                 }
                 long left = deadline - System.nanoTime();
                 if (left <= 0) {
-                    throw new MongoTimeoutException("no connection to " + address + " within "
-                            + maxWaitMillis + " ms: all " + maxSize + " are in use");
+                    MongoTimeoutException none = new MongoTimeoutException("no connection to "
+                            + address + " within " + maxWaitMillis + " ms: all " + maxSize
+                            + " are in use");
+                    if (Deadline.active() && Deadline.remainingMillis() == 0) {
+                        throw Deadline.expired("waiting for a connection", none);
+                    }
+                    throw none;
                 }
                 try {
                     if (returned.awaitNanos(left) <= 0) {

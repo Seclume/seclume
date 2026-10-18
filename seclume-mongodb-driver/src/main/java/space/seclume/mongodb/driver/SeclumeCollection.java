@@ -65,6 +65,7 @@ import com.mongodb.client.result.InsertManyResult;
 import com.mongodb.client.result.InsertOneResult;
 import com.mongodb.client.result.UpdateResult;
 
+import space.seclume.mongodb.driver.internal.Deadline;
 import space.seclume.mongodb.driver.internal.LogicalSession;
 import space.seclume.mongodb.driver.internal.Topology;
 
@@ -87,6 +88,8 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     private final ReadPreference readPreference;
     private final WriteConcern writeConcern;
     private final ReadConcern readConcern;
+    /** {@code timeoutMS} for each operation; null for none set. */
+    Long timeoutMillis;
 
     SeclumeCollection(Topology topology, MongoNamespace namespace, Class<T> documentClass,
             CodecRegistry registry, ReadPreference readPreference, WriteConcern writeConcern,
@@ -191,42 +194,50 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     @Override
     public Long getTimeout(TimeUnit unit) {
-        return null;
+        return timeoutMillis == null ? null : unit.convert(timeoutMillis, TimeUnit.MILLISECONDS);
+    }
+
+    private <N> SeclumeCollection<N> inherit(SeclumeCollection<N> other) {
+        other.timeoutMillis = timeoutMillis;
+        return other;
     }
 
     @Override
     public <N> MongoCollection<N> withDocumentClass(Class<N> type) {
-        return new SeclumeCollection<>(topology, namespace, type, registry, readPreference,
-                writeConcern, readConcern);
+        return inherit(new SeclumeCollection<>(topology, namespace, type, registry, readPreference,
+                writeConcern, readConcern));
     }
 
     @Override
     public MongoCollection<T> withCodecRegistry(CodecRegistry codecRegistry) {
-        return new SeclumeCollection<>(topology, namespace, documentClass, codecRegistry,
-                readPreference, writeConcern, readConcern);
+        return inherit(new SeclumeCollection<>(topology, namespace, documentClass, codecRegistry,
+                readPreference, writeConcern, readConcern));
     }
 
     @Override
     public MongoCollection<T> withReadPreference(ReadPreference preference) {
-        return new SeclumeCollection<>(topology, namespace, documentClass, registry, preference,
-                writeConcern, readConcern);
+        return inherit(new SeclumeCollection<>(topology, namespace, documentClass, registry, preference,
+                writeConcern, readConcern));
     }
 
     @Override
     public MongoCollection<T> withWriteConcern(WriteConcern concern) {
-        return new SeclumeCollection<>(topology, namespace, documentClass, registry,
-                readPreference, concern, readConcern);
+        return inherit(new SeclumeCollection<>(topology, namespace, documentClass, registry,
+                readPreference, concern, readConcern));
     }
 
     @Override
     public MongoCollection<T> withReadConcern(ReadConcern concern) {
-        return new SeclumeCollection<>(topology, namespace, documentClass, registry,
-                readPreference, writeConcern, concern);
+        return inherit(new SeclumeCollection<>(topology, namespace, documentClass, registry,
+                readPreference, writeConcern, concern));
     }
 
     @Override
     public MongoCollection<T> withTimeout(long timeout, TimeUnit unit) {
-        throw Iterables.noTimeoutMode();
+        SeclumeCollection<T> copy = inherit(new SeclumeCollection<>(topology, namespace,
+                documentClass, registry, readPreference, writeConcern, readConcern));
+        copy.timeoutMillis = Iterables.millis(timeout, unit);
+        return copy;
     }
 
     // ---- counting -----------------------------------------------------------
@@ -263,28 +274,30 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
      */
     @Override
     public long countDocuments(ClientSession session, Bson filter, CountOptions options) {
-        LogicalSession s = session(session);
-        BsonArray pipeline = new BsonArray();
-        pipeline.add(new BsonDocument("$match", filter(filter)));
-        if (options.getSkip() > 0) {
-            pipeline.add(new BsonDocument("$skip", new BsonInt32(options.getSkip())));
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonArray pipeline = new BsonArray();
+            pipeline.add(new BsonDocument("$match", filter(filter)));
+            if (options.getSkip() > 0) {
+                pipeline.add(new BsonDocument("$skip", new BsonInt32(options.getSkip())));
+            }
+            if (options.getLimit() > 0) {
+                pipeline.add(new BsonDocument("$limit", new BsonInt32(options.getLimit())));
+            }
+            pipeline.add(new BsonDocument("$group", new BsonDocument("_id", new BsonInt32(1))
+                    .append("n", new BsonDocument("$sum", new BsonInt32(1)))));
+            BsonDocument command = new BsonDocument("aggregate", new BsonString(name()))
+                    .append("pipeline", pipeline).append("cursor", new BsonDocument());
+            Bsons.hint(command, options.getHint(), options.getHintString(), documentClass, registry);
+            Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
+            Bsons.put(command, "collation", options.getCollation());
+            Bsons.put(command, "comment", options.getComment());
+            Bsons.readConcern(command, readConcern);
+            BsonArray batch = topology.read(s, readPreference, db(), command).document()
+                    .getDocument("cursor")
+                    .getArray("firstBatch");
+            return batch.isEmpty() ? 0 : batch.get(0).asDocument().getNumber("n").longValue();
         }
-        if (options.getLimit() > 0) {
-            pipeline.add(new BsonDocument("$limit", new BsonInt32(options.getLimit())));
-        }
-        pipeline.add(new BsonDocument("$group", new BsonDocument("_id", new BsonInt32(1))
-                .append("n", new BsonDocument("$sum", new BsonInt32(1)))));
-        BsonDocument command = new BsonDocument("aggregate", new BsonString(name()))
-                .append("pipeline", pipeline).append("cursor", new BsonDocument());
-        Bsons.hint(command, options.getHint(), options.getHintString(), documentClass, registry);
-        Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
-        Bsons.put(command, "collation", options.getCollation());
-        Bsons.put(command, "comment", options.getComment());
-        Bsons.readConcern(command, readConcern);
-        BsonArray batch = topology.read(s, readPreference, db(), command).document()
-                .getDocument("cursor")
-                .getArray("firstBatch");
-        return batch.isEmpty() ? 0 : batch.get(0).asDocument().getNumber("n").longValue();
     }
 
     @Override
@@ -298,7 +311,7 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
         Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
         Bsons.put(command, "comment", options.getComment());
         Bsons.readConcern(command, readConcern);
-        try {
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
             return topology.read(null, readPreference, db(), command).document()
                     .getNumber("n").longValue();
         } catch (MongoCommandException e) {
@@ -329,9 +342,11 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public <R> DistinctIterable<R> distinct(ClientSession session, String field, Bson filter,
             Class<R> type) {
-        LogicalSession s = session(session);
-        return new Iterables.Distinct<>(topology, s, readPreference, registry.get(type), db(), name(), field, filter,
-                documentClass, registry, this::readConcernDocument);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.Distinct<>(topology, s, readPreference, registry.get(type), db(), name(), field, filter,
+                    documentClass, registry, this::readConcernDocument), timeoutMillis);
+        }
     }
 
     @Override
@@ -371,9 +386,11 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     @Override
     public <R> FindIterable<R> find(ClientSession session, Bson filter, Class<R> type) {
-        LogicalSession s = session(session);
-        return new Iterables.Find<>(topology, s, readPreference, registry.get(type), db(), name(), documentClass,
-                registry, filter, this::readConcernDocument);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.Find<>(topology, s, readPreference, registry.get(type), db(), name(), documentClass,
+                    registry, filter, this::readConcernDocument), timeoutMillis);
+        }
     }
 
     @Override
@@ -394,10 +411,12 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public <R> AggregateIterable<R> aggregate(ClientSession session,
             List<? extends Bson> pipeline, Class<R> type) {
-        LogicalSession s = session(session);
-        return new Iterables.Aggregate<>(topology, s, readPreference, registry.get(type), db(),
-                new BsonString(name()), pipeline, documentClass, registry,
-                this::readConcernDocument, this::writeConcernDocument);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.Aggregate<>(topology, s, readPreference, registry.get(type), db(),
+                    new BsonString(name()), pipeline, documentClass, registry,
+                    this::readConcernDocument, this::writeConcernDocument), timeoutMillis);
+        }
     }
 
     // ---- not in this driver yet ---------------------------------------------
@@ -538,17 +557,19 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public InsertOneResult insertOne(ClientSession session, T document,
             InsertOneOptions options) {
-        LogicalSession s = session(session);
-        BsonDocument encoded = Bsons.encode(document, codec(), true);
-        BsonDocument command = writeCommand("insert", null,
-                options.getBypassDocumentValidation(), options.getComment(), null);
-        Writes.Outcome outcome = Writes.run(topology, s, db(), command, "documents",
-                List.of(encoded), true, true, 0, new Writes.Outcome());
-        if (!writeConcern.isAcknowledged()) {
-            return InsertOneResult.unacknowledged();
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument encoded = Bsons.encode(document, codec(), true);
+            BsonDocument command = writeCommand("insert", null,
+                    options.getBypassDocumentValidation(), options.getComment(), null);
+            Writes.Outcome outcome = Writes.run(topology, s, db(), command, "documents",
+                    List.of(encoded), true, true, 0, new Writes.Outcome());
+            if (!writeConcern.isAcknowledged()) {
+                return InsertOneResult.unacknowledged();
+            }
+            Writes.throwSingle(outcome, false);
+            return InsertOneResult.acknowledged(encoded.get("_id"));
         }
-        Writes.throwSingle(outcome, false);
-        return InsertOneResult.acknowledged(encoded.get("_id"));
     }
 
     @Override
@@ -569,30 +590,32 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public InsertManyResult insertMany(ClientSession session, List<? extends T> documents,
             InsertManyOptions options) {
-        LogicalSession s = session(session);
-        if (documents.isEmpty()) {
-            throw new IllegalArgumentException("insertMany needs at least one document");
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            if (documents.isEmpty()) {
+                throw new IllegalArgumentException("insertMany needs at least one document");
+            }
+            List<BsonDocument> encoded = new ArrayList<>(documents.size());
+            for (T document : documents) {
+                encoded.add(Bsons.encode(document, codec(), true));
+            }
+            BsonDocument command = writeCommand("insert", options.isOrdered(),
+                    options.getBypassDocumentValidation(), options.getComment(), null);
+            Writes.Outcome outcome = Writes.run(topology, s, db(), command, "documents", encoded,
+                    options.isOrdered(), true, 0, new Writes.Outcome());
+            if (!writeConcern.isAcknowledged()) {
+                return InsertManyResult.unacknowledged();
+            }
+            Map<Integer, BsonValue> ids = new LinkedHashMap<>();
+            List<BulkWriteInsert> inserts = new ArrayList<>();
+            for (int i = 0; i < encoded.size(); i++) {
+                ids.put(i, encoded.get(i).get("_id"));
+                inserts.add(new BulkWriteInsert(i, encoded.get(i).get("_id")));
+            }
+            Writes.throwBulk(outcome, Writes.result(outcome.n, 0, 0, 0, List.of(),
+                    succeeded(inserts, outcome)));
+            return InsertManyResult.acknowledged(ids);
         }
-        List<BsonDocument> encoded = new ArrayList<>(documents.size());
-        for (T document : documents) {
-            encoded.add(Bsons.encode(document, codec(), true));
-        }
-        BsonDocument command = writeCommand("insert", options.isOrdered(),
-                options.getBypassDocumentValidation(), options.getComment(), null);
-        Writes.Outcome outcome = Writes.run(topology, s, db(), command, "documents", encoded,
-                options.isOrdered(), true, 0, new Writes.Outcome());
-        if (!writeConcern.isAcknowledged()) {
-            return InsertManyResult.unacknowledged();
-        }
-        Map<Integer, BsonValue> ids = new LinkedHashMap<>();
-        List<BulkWriteInsert> inserts = new ArrayList<>();
-        for (int i = 0; i < encoded.size(); i++) {
-            ids.put(i, encoded.get(i).get("_id"));
-            inserts.add(new BulkWriteInsert(i, encoded.get(i).get("_id")));
-        }
-        Writes.throwBulk(outcome, Writes.result(outcome.n, 0, 0, 0, List.of(),
-                succeeded(inserts, outcome)));
-        return InsertManyResult.acknowledged(ids);
     }
 
     /** The inserts that are not among the errors - and, ordered, not after the first. */
@@ -662,17 +685,19 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     private DeleteResult delete(ClientSession session, Bson filter, DeleteOptions options,
             int limit) {
-        LogicalSession s = session(session);
-        BsonDocument command = writeCommand("delete", null, null, options.getComment(),
-                options.getLet());
-        Writes.Outcome outcome = Writes.run(topology, s, db(), command, "deletes",
-                List.of(deleteStatement(filter, options, limit)), true, limit == 1, 0,
-                new Writes.Outcome());
-        if (!writeConcern.isAcknowledged()) {
-            return DeleteResult.unacknowledged();
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument command = writeCommand("delete", null, null, options.getComment(),
+                    options.getLet());
+            Writes.Outcome outcome = Writes.run(topology, s, db(), command, "deletes",
+                    List.of(deleteStatement(filter, options, limit)), true, limit == 1, 0,
+                    new Writes.Outcome());
+            if (!writeConcern.isAcknowledged()) {
+                return DeleteResult.unacknowledged();
+            }
+            Writes.throwSingle(outcome, false);
+            return DeleteResult.acknowledged(outcome.n);
         }
-        Writes.throwSingle(outcome, false);
-        return DeleteResult.acknowledged(outcome.n);
     }
 
     // ---- updating -----------------------------------------------------------
@@ -695,10 +720,12 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public UpdateResult replaceOne(ClientSession session, Bson filter, T replacement,
             ReplaceOptions options) {
-        LogicalSession s = session(session);
-        BsonDocument command = writeCommand("update", null,
-                options.getBypassDocumentValidation(), options.getComment(), options.getLet());
-        return update(s, command, replaceStatement(filter, replacement, options), true);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument command = writeCommand("update", null,
+                    options.getBypassDocumentValidation(), options.getComment(), options.getLet());
+            return update(s, command, replaceStatement(filter, replacement, options), true);
+        }
     }
 
     private BsonDocument replaceStatement(Bson filter, T replacement, ReplaceOptions options) {
@@ -835,11 +862,13 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     private UpdateResult update(ClientSession session, Bson filter, Bson update,
             List<? extends Bson> pipeline, UpdateOptions options, boolean multi) {
-        LogicalSession s = session(session);
-        BsonDocument command = writeCommand("update", null,
-                options.getBypassDocumentValidation(), options.getComment(), options.getLet());
-        return update(s, command, updateStatement(filter, update, pipeline, options, multi),
-                !multi);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument command = writeCommand("update", null,
+                    options.getBypassDocumentValidation(), options.getComment(), options.getLet());
+            return update(s, command, updateStatement(filter, update, pipeline, options, multi),
+                    !multi);
+        }
     }
 
     private UpdateResult update(LogicalSession s, BsonDocument command, BsonDocument statement,
@@ -904,13 +933,15 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public T findOneAndDelete(ClientSession session, Bson filter,
             FindOneAndDeleteOptions options) {
-        LogicalSession s = session(session);
-        BsonDocument command = findAndModifyCommand(filter, options.getProjection(),
-                options.getSort(), options.getMaxTime(TimeUnit.MILLISECONDS),
-                options.getCollation(), options.getHint(), options.getHintString(),
-                options.getComment(), options.getLet());
-        command.put("remove", BsonBoolean.TRUE);
-        return findAndModify(s, command);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument command = findAndModifyCommand(filter, options.getProjection(),
+                    options.getSort(), options.getMaxTime(TimeUnit.MILLISECONDS),
+                    options.getCollation(), options.getHint(), options.getHintString(),
+                    options.getComment(), options.getLet());
+            command.put("remove", BsonBoolean.TRUE);
+            return findAndModify(s, command);
+        }
     }
 
     @Override
@@ -931,18 +962,20 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public T findOneAndReplace(ClientSession session, Bson filter, T replacement,
             FindOneAndReplaceOptions options) {
-        LogicalSession s = session(session);
-        BsonDocument encoded = Bsons.encode(replacement, codec(), false);
-        Bsons.checkReplacement(encoded);
-        BsonDocument command = findAndModifyCommand(filter, options.getProjection(),
-                options.getSort(), options.getMaxTime(TimeUnit.MILLISECONDS),
-                options.getCollation(), options.getHint(), options.getHintString(),
-                options.getComment(), options.getLet());
-        command.put("update", encoded);
-        Bsons.putTrue(command, "new", options.getReturnDocument() == ReturnDocument.AFTER);
-        Bsons.putTrue(command, "upsert", options.isUpsert());
-        Bsons.put(command, "bypassDocumentValidation", options.getBypassDocumentValidation());
-        return findAndModify(s, command);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument encoded = Bsons.encode(replacement, codec(), false);
+            Bsons.checkReplacement(encoded);
+            BsonDocument command = findAndModifyCommand(filter, options.getProjection(),
+                    options.getSort(), options.getMaxTime(TimeUnit.MILLISECONDS),
+                    options.getCollation(), options.getHint(), options.getHintString(),
+                    options.getComment(), options.getLet());
+            command.put("update", encoded);
+            Bsons.putTrue(command, "new", options.getReturnDocument() == ReturnDocument.AFTER);
+            Bsons.putTrue(command, "upsert", options.isUpsert());
+            Bsons.put(command, "bypassDocumentValidation", options.getBypassDocumentValidation());
+            return findAndModify(s, command);
+        }
     }
 
     @Override
@@ -990,20 +1023,22 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     private T findOneAndUpdate(ClientSession session, Bson filter, Bson update,
             List<? extends Bson> pipeline, FindOneAndUpdateOptions options) {
-        LogicalSession s = session(session);
-        BsonDocument command = findAndModifyCommand(filter, options.getProjection(),
-                options.getSort(), options.getMaxTime(TimeUnit.MILLISECONDS),
-                options.getCollation(), options.getHint(), options.getHintString(),
-                options.getComment(), options.getLet());
-        command.put("update", updateValue(update, pipeline));
-        Bsons.putTrue(command, "new", options.getReturnDocument() == ReturnDocument.AFTER);
-        Bsons.putTrue(command, "upsert", options.isUpsert());
-        Bsons.put(command, "bypassDocumentValidation", options.getBypassDocumentValidation());
-        if (options.getArrayFilters() != null) {
-            command.put("arrayFilters", Bsons.toArray(options.getArrayFilters(), documentClass,
-                    registry));
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument command = findAndModifyCommand(filter, options.getProjection(),
+                    options.getSort(), options.getMaxTime(TimeUnit.MILLISECONDS),
+                    options.getCollation(), options.getHint(), options.getHintString(),
+                    options.getComment(), options.getLet());
+            command.put("update", updateValue(update, pipeline));
+            Bsons.putTrue(command, "new", options.getReturnDocument() == ReturnDocument.AFTER);
+            Bsons.putTrue(command, "upsert", options.isUpsert());
+            Bsons.put(command, "bypassDocumentValidation", options.getBypassDocumentValidation());
+            if (options.getArrayFilters() != null) {
+                command.put("arrayFilters", Bsons.toArray(options.getArrayFilters(), documentClass,
+                        registry));
+            }
+            return findAndModify(s, command);
         }
-        return findAndModify(s, command);
     }
 
     // ---- bulk ---------------------------------------------------------------
@@ -1034,82 +1069,84 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @SuppressWarnings("unchecked")
     public BulkWriteResult bulkWrite(ClientSession session,
             List<? extends WriteModel<? extends T>> requests, BulkWriteOptions options) {
-        LogicalSession s = session(session);
-        if (requests.isEmpty()) {
-            throw new IllegalArgumentException("bulkWrite needs at least one write");
-        }
-        boolean ordered = options.isOrdered();
-        int inserted = 0;
-        int matched = 0;
-        int deleted = 0;
-        int modified = 0;
-        List<BulkWriteUpsert> upserts = new ArrayList<>();
-        List<BulkWriteInsert> inserts = new ArrayList<>();
-        Writes.Outcome all = new Writes.Outcome();
-        int at = 0;
-        while (at < requests.size()) {
-            String verb = verb(requests.get(at));
-            int end = at;
-            List<BsonDocument> statements = new ArrayList<>();
-            List<BulkWriteInsert> theseInserts = new ArrayList<>();
-            while (end < requests.size() && verb(requests.get(end)).equals(verb)) {
-                WriteModel<? extends T> request = requests.get(end);
-                BsonDocument statement = statement((WriteModel<T>) request);
-                if (verb.equals("insert")) {
-                    theseInserts.add(new BulkWriteInsert(end, statement.get("_id")));
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            if (requests.isEmpty()) {
+                throw new IllegalArgumentException("bulkWrite needs at least one write");
+            }
+            boolean ordered = options.isOrdered();
+            int inserted = 0;
+            int matched = 0;
+            int deleted = 0;
+            int modified = 0;
+            List<BulkWriteUpsert> upserts = new ArrayList<>();
+            List<BulkWriteInsert> inserts = new ArrayList<>();
+            Writes.Outcome all = new Writes.Outcome();
+            int at = 0;
+            while (at < requests.size()) {
+                String verb = verb(requests.get(at));
+                int end = at;
+                List<BsonDocument> statements = new ArrayList<>();
+                List<BulkWriteInsert> theseInserts = new ArrayList<>();
+                while (end < requests.size() && verb(requests.get(end)).equals(verb)) {
+                    WriteModel<? extends T> request = requests.get(end);
+                    BsonDocument statement = statement((WriteModel<T>) request);
+                    if (verb.equals("insert")) {
+                        theseInserts.add(new BulkWriteInsert(end, statement.get("_id")));
+                    }
+                    statements.add(statement);
+                    end++;
                 }
-                statements.add(statement);
-                end++;
-            }
-            BsonDocument command = writeCommand(verb, ordered,
-                    options.getBypassDocumentValidation(), options.getComment(),
-                    verb.equals("insert") ? null : options.getLet());
-            String field = switch (verb) {
-                case "insert" -> "documents";
-                case "update" -> "updates";
-                default -> "deletes";
-            };
-            int errorsBefore = all.errors.size();
-            // A statement for many documents cannot be retried: the server would
-            // not know which of them the first attempt changed.
-            boolean retryable = statements.stream().noneMatch(statement ->
-                    statement.getBoolean("multi", BsonBoolean.FALSE).getValue()
-                            || (statement.containsKey("limit")
-                                    && statement.getNumber("limit").intValue() == 0));
-            Writes.Outcome outcome = Writes.run(topology, s, db(), command, field, statements,
-                    ordered, retryable, at, new Writes.Outcome());
-            if (outcome.address != null) {
-                all.address = outcome.address;
-            }
-            all.errors.addAll(outcome.errors);
-            all.labels.addAll(outcome.labels);
-            if (outcome.concernError != null) {
-                all.concernError = outcome.concernError;
-            }
-            switch (verb) {
-                case "insert" -> {
-                    inserted += outcome.n;
-                    inserts.addAll(succeeded(theseInserts, outcome));
+                BsonDocument command = writeCommand(verb, ordered,
+                        options.getBypassDocumentValidation(), options.getComment(),
+                        verb.equals("insert") ? null : options.getLet());
+                String field = switch (verb) {
+                    case "insert" -> "documents";
+                    case "update" -> "updates";
+                    default -> "deletes";
+                };
+                int errorsBefore = all.errors.size();
+                // A statement for many documents cannot be retried: the server would
+                // not know which of them the first attempt changed.
+                boolean retryable = statements.stream().noneMatch(statement ->
+                        statement.getBoolean("multi", BsonBoolean.FALSE).getValue()
+                                || (statement.containsKey("limit")
+                                        && statement.getNumber("limit").intValue() == 0));
+                Writes.Outcome outcome = Writes.run(topology, s, db(), command, field, statements,
+                        ordered, retryable, at, new Writes.Outcome());
+                if (outcome.address != null) {
+                    all.address = outcome.address;
                 }
-                case "update" -> {
-                    matched += outcome.n - outcome.upserts.size();
-                    modified += outcome.modified;
-                    upserts.addAll(outcome.upserts);
+                all.errors.addAll(outcome.errors);
+                all.labels.addAll(outcome.labels);
+                if (outcome.concernError != null) {
+                    all.concernError = outcome.concernError;
                 }
-                default -> deleted += outcome.n;
+                switch (verb) {
+                    case "insert" -> {
+                        inserted += outcome.n;
+                        inserts.addAll(succeeded(theseInserts, outcome));
+                    }
+                    case "update" -> {
+                        matched += outcome.n - outcome.upserts.size();
+                        modified += outcome.modified;
+                        upserts.addAll(outcome.upserts);
+                    }
+                    default -> deleted += outcome.n;
+                }
+                at = end;
+                if (ordered && all.errors.size() > errorsBefore) {
+                    break;
+                }
             }
-            at = end;
-            if (ordered && all.errors.size() > errorsBefore) {
-                break;
+            if (!writeConcern.isAcknowledged()) {
+                return BulkWriteResult.unacknowledged();
             }
+            BulkWriteResult result = Writes.result(inserted, matched, deleted, modified, upserts,
+                    inserts);
+            Writes.throwBulk(all, result);
+            return result;
         }
-        if (!writeConcern.isAcknowledged()) {
-            return BulkWriteResult.unacknowledged();
-        }
-        BulkWriteResult result = Writes.result(inserted, matched, deleted, modified, upserts,
-                inserts);
-        Writes.throwBulk(all, result);
-        return result;
     }
 
     private static String verb(WriteModel<?> request) {
@@ -1168,18 +1205,20 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     @Override
     public void drop(ClientSession session, DropCollectionOptions options) {
-        LogicalSession s = session(session);
-        if (options.getEncryptedFields() != null) {
-            throw new UnsupportedOperationException("queryable encryption is not supported by "
-                    + "seclume's MongoDB driver");
-        }
-        BsonDocument command = new BsonDocument("drop", new BsonString(name()));
-        Bsons.writeConcern(command, writeConcern);
-        try {
-            primary(s, db(), command);
-        } catch (MongoCommandException e) {
-            if (e.getErrorCode() != NAMESPACE_NOT_FOUND) {
-                throw e;
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            if (options.getEncryptedFields() != null) {
+                throw new UnsupportedOperationException("queryable encryption is not supported by "
+                        + "seclume's MongoDB driver");
+            }
+            BsonDocument command = new BsonDocument("drop", new BsonString(name()));
+            Bsons.writeConcern(command, writeConcern);
+            try {
+                primary(s, db(), command);
+            } catch (MongoCommandException e) {
+                if (e.getErrorCode() != NAMESPACE_NOT_FOUND) {
+                    throw e;
+                }
             }
         }
     }
@@ -1202,13 +1241,15 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public void renameCollection(ClientSession session, MongoNamespace target,
             RenameCollectionOptions options) {
-        LogicalSession s = session(session);
-        BsonDocument command = new BsonDocument("renameCollection",
-                new BsonString(namespace.getFullName()))
-                .append("to", new BsonString(target.getFullName()));
-        Bsons.putTrue(command, "dropTarget", options.isDropTarget());
-        Bsons.writeConcern(command, writeConcern);
-        primary(s, "admin", command);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument command = new BsonDocument("renameCollection",
+                    new BsonString(namespace.getFullName()))
+                    .append("to", new BsonString(target.getFullName()));
+            Bsons.putTrue(command, "dropTarget", options.isDropTarget());
+            Bsons.writeConcern(command, writeConcern);
+            primary(s, "admin", command);
+        }
     }
 
     // ---- indexes ------------------------------------------------------------
@@ -1252,23 +1293,25 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     @Override
     public List<String> createIndexes(ClientSession session, List<IndexModel> indexes,
             CreateIndexOptions options) {
-        LogicalSession s = session(session);
-        BsonArray specifications = new BsonArray();
-        List<String> names = new ArrayList<>();
-        for (IndexModel index : indexes) {
-            BsonDocument specification = Indexes.specification(index, documentClass, registry);
-            names.add(specification.getString("name").getValue());
-            specifications.add(specification);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonArray specifications = new BsonArray();
+            List<String> names = new ArrayList<>();
+            for (IndexModel index : indexes) {
+                BsonDocument specification = Indexes.specification(index, documentClass, registry);
+                names.add(specification.getString("name").getValue());
+                specifications.add(specification);
+            }
+            BsonDocument command = new BsonDocument("createIndexes", new BsonString(name()))
+                    .append("indexes", specifications);
+            Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
+            if (options.getCommitQuorum() != null) {
+                command.put("commitQuorum", options.getCommitQuorum().toBsonValue());
+            }
+            Bsons.writeConcern(command, writeConcern);
+            primary(s, db(), command);
+            return names;
         }
-        BsonDocument command = new BsonDocument("createIndexes", new BsonString(name()))
-                .append("indexes", specifications);
-        Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
-        if (options.getCommitQuorum() != null) {
-            command.put("commitQuorum", options.getCommitQuorum().toBsonValue());
-        }
-        Bsons.writeConcern(command, writeConcern);
-        primary(s, db(), command);
-        return names;
     }
 
     @Override
@@ -1288,8 +1331,10 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
 
     @Override
     public <R> ListIndexesIterable<R> listIndexes(ClientSession session, Class<R> type) {
-        LogicalSession s = session(session);
-        return new Iterables.ListIndexes<>(topology, s, registry.get(type), db(), name());
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.ListIndexes<>(topology, s, registry.get(type), db(), name()), timeoutMillis);
+        }
     }
 
     @Override
@@ -1353,11 +1398,13 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
     }
 
     private void dropIndexBy(ClientSession session, BsonValue index, DropIndexOptions options) {
-        LogicalSession s = session(session);
-        BsonDocument command = new BsonDocument("dropIndexes", new BsonString(name()))
-                .append("index", index);
-        Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
-        Bsons.writeConcern(command, writeConcern);
-        primary(s, db(), command);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            BsonDocument command = new BsonDocument("dropIndexes", new BsonString(name()))
+                    .append("index", index);
+            Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
+            Bsons.writeConcern(command, writeConcern);
+            primary(s, db(), command);
+        }
     }
 }

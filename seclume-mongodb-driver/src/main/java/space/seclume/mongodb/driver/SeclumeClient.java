@@ -32,6 +32,7 @@ import com.mongodb.connection.ServerType;
 
 import com.mongodb.TransactionOptions;
 
+import space.seclume.mongodb.driver.internal.Deadline;
 import space.seclume.mongodb.driver.internal.LogicalSession;
 import space.seclume.mongodb.driver.internal.Topology;
 
@@ -47,6 +48,8 @@ final class SeclumeClient implements MongoClient {
     private final ReadPreference readPreference;
     private final WriteConcern writeConcern;
     private final ReadConcern readConcern;
+    /** {@code timeoutMS} for each operation; null for none set. */
+    Long timeoutMillis;
 
     SeclumeClient(Topology topology, CodecRegistry registry, ReadPreference readPreference,
             WriteConcern writeConcern, ReadConcern readConcern) {
@@ -83,39 +86,52 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public Long getTimeout(TimeUnit unit) {
-        return null;
+        return timeoutMillis == null ? null : unit.convert(timeoutMillis, TimeUnit.MILLISECONDS);
+    }
+
+    private SeclumeClient inherit(SeclumeClient other) {
+        other.timeoutMillis = timeoutMillis;
+        return other;
+    }
+
+    private SeclumeDatabase inherit(SeclumeDatabase other) {
+        other.timeoutMillis = timeoutMillis;
+        return other;
     }
 
     @Override
     public MongoCluster withCodecRegistry(CodecRegistry codecRegistry) {
-        return new SeclumeClient(topology, codecRegistry, readPreference, writeConcern,
-                readConcern);
+        return inherit(new SeclumeClient(topology, codecRegistry, readPreference, writeConcern,
+                readConcern));
     }
 
     @Override
     public MongoCluster withReadPreference(ReadPreference preference) {
-        return new SeclumeClient(topology, registry, preference, writeConcern, readConcern);
+        return inherit(new SeclumeClient(topology, registry, preference, writeConcern, readConcern));
     }
 
     @Override
     public MongoCluster withWriteConcern(WriteConcern concern) {
-        return new SeclumeClient(topology, registry, readPreference, concern, readConcern);
+        return inherit(new SeclumeClient(topology, registry, readPreference, concern, readConcern));
     }
 
     @Override
     public MongoCluster withReadConcern(ReadConcern concern) {
-        return new SeclumeClient(topology, registry, readPreference, writeConcern, concern);
+        return inherit(new SeclumeClient(topology, registry, readPreference, writeConcern, concern));
     }
 
     @Override
     public MongoCluster withTimeout(long timeout, TimeUnit unit) {
-        throw Iterables.noTimeoutMode();
+        SeclumeClient copy = inherit(new SeclumeClient(topology, registry, readPreference,
+                writeConcern, readConcern));
+        copy.timeoutMillis = Iterables.millis(timeout, unit);
+        return copy;
     }
 
     @Override
     public MongoDatabase getDatabase(String name) {
-        return new SeclumeDatabase(topology, name, registry, readPreference, writeConcern,
-                readConcern);
+        return inherit(new SeclumeDatabase(topology, name, registry, readPreference, writeConcern,
+                readConcern));
     }
 
     @Override
@@ -125,9 +141,11 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public ClientSession startSession(ClientSessionOptions options) {
+        Long defaultTimeout = options.getDefaultTimeout(TimeUnit.MILLISECONDS);
         return new SeclumeClientSession(topology, options, this, TransactionOptions.builder()
                 .readConcern(readConcern).writeConcern(writeConcern)
-                .readPreference(readPreference).build());
+                .readPreference(readPreference).build(),
+                defaultTimeout != null ? defaultTimeout : timeoutMillis);
     }
 
     @Override
@@ -137,10 +155,12 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public MongoIterable<String> listDatabaseNames(ClientSession session) {
-        LogicalSession s = session(session);
-        return new Iterables.ListDatabases<>(topology, s, registry.get(Document.class), registry,
-                true)
-                .map(database -> database.getString("name"));
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.ListDatabases<>(topology, s,
+                    registry.get(Document.class), registry, true), timeoutMillis)
+                    .map(database -> database.getString("name"));
+        }
     }
 
     @Override
@@ -160,8 +180,11 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public <R> ListDatabasesIterable<R> listDatabases(ClientSession session, Class<R> type) {
-        LogicalSession s = session(session);
-        return new Iterables.ListDatabases<>(topology, s, registry.get(type), registry, false);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.ListDatabases<>(topology, s, registry.get(type),
+                    registry, false), timeoutMillis);
+        }
     }
 
     @Override

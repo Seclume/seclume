@@ -591,7 +591,8 @@ public final class Topology implements AutoCloseable {
 
     /** A server for a command, waiting up to {@code serverSelectionTimeoutMS} for one. */
     ServerPool select(ReadPreference preference) {
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(selectionMillis);
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(
+                Deadline.bounded(selectionMillis));
         lock.lock();
         try {
             while (true) {
@@ -607,8 +608,12 @@ public final class Topology implements AutoCloseable {
                 checkNow.signalAll();
                 long left = deadline - System.nanoTime();
                 if (left <= 0) {
-                    throw new MongoTimeoutException("no server for " + preference + " within "
-                            + selectionMillis + " ms: " + summary());
+                    MongoTimeoutException none = new MongoTimeoutException("no server for "
+                            + preference + " within " + selectionMillis + " ms: " + summary());
+                    if (Deadline.active() && Deadline.remainingMillis() == 0) {
+                        throw Deadline.expired("selecting a server", none);
+                    }
+                    throw none;
                 }
                 if (changed.awaitNanos(left) <= 0) {
                     continue;                          // the deadline: the loop says so
@@ -760,14 +765,26 @@ public final class Topology implements AutoCloseable {
                 .getReadPreference() != null ? session.transactionOptions().getReadPreference()
                 : preference;
         boolean retry = retryReads && !inTransaction;
-        try {
-            return once(session, chosen, db, command, null, null, true);
-        } catch (MongoException first) {
-            if (!retry || !retryableRead(first)) {
-                throw first;
+        int attempt = 0;
+        while (true) {
+            try {
+                return once(session, chosen, db, command, null, null, true);
+            } catch (MongoException failed) {
+                // Once without timeoutMS; with it, as often as the time allows
+                // (client-side operations timeout specification, "Retryability").
+                if (!retry || !retryableRead(failed) || !again(++attempt)) {
+                    throw failed;
+                }
             }
-            return once(session, chosen, db, command, null, null, true);
         }
+    }
+
+    /** Whether a retryable operation may go once more after {@code attempts} failed ones. */
+    private static boolean again(int attempts) {
+        if (!Deadline.active()) {
+            return attempts == 1;
+        }
+        return Deadline.remainingMillis() > 0;
     }
 
     /**
@@ -795,12 +812,19 @@ public final class Topology implements AutoCloseable {
                 if (!retryableWrite(first)) {
                     throw first;
                 }
-                try {
-                    return once(s, ReadPreference.primary(), db, numbered, sequenceId, sequence,
-                            false);
-                } catch (MongoException second) {
-                    // NoWritesPerformed: the retry did nothing, the first error says more.
-                    throw second.hasErrorLabel("NoWritesPerformed") ? first : second;
+                MongoException last = first;
+                int attempt = 1;
+                while (true) {
+                    try {
+                        return once(s, ReadPreference.primary(), db, numbered, sequenceId,
+                                sequence, false);
+                    } catch (MongoException again) {
+                        // NoWritesPerformed: the retry did nothing, the earlier error says more.
+                        last = again.hasErrorLabel("NoWritesPerformed") ? last : again;
+                        if (!retryableWrite(again) || !again(++attempt)) {
+                            throw last;
+                        }
+                    }
                 }
             }
             if (concernRetryable(reply.document())) {
@@ -900,7 +924,35 @@ public final class Topology implements AutoCloseable {
             sent = command.clone();
             sent.put("$readPreference", readPreference);
         }
+        if (Deadline.active()) {
+            // What is left of the operation, less one round trip, for the
+            // server to stop at; an operation with less than that left is
+            // given up before it is sent.
+            long left = Deadline.remainingMillis() - roundTripMillis(server);
+            if (left <= 0) {
+                throw Deadline.expired("about to send " + command.getFirstKey(), null);
+            }
+            // getMore and killCursors go through on() and get none: a cursor's
+            // lifetime bounds the socket, not the server's work per batch.
+            if (Deadline.serverLimit()) {
+                if (sent == command) {
+                    sent = command.clone();
+                }
+                sent.put("maxTimeMS", new BsonInt64(left));
+            }
+        }
         return new Reply(server, run(server, session, db, sent, sequenceId, sequence, read));
+    }
+
+    private long roundTripMillis(ServerPool server) {
+        lock.lock();
+        try {
+            Server known = servers.get(server.address());
+            return known == null || known.averageRttNanos < 0 ? 0
+                    : TimeUnit.NANOSECONDS.toMillis(known.averageRttNanos);
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -965,6 +1017,10 @@ public final class Topology implements AutoCloseable {
             if (session != null && session.inTransaction()) {
                 session.transactionSent();
             }
+            if (e.getErrorCode() == MAX_TIME_EXPIRED && Deadline.active()) {
+                // The server stopped at the maxTimeMS the deadline gave it.
+                throw Deadline.expired("the server ran " + command.getFirstKey(), e);
+            }
             throw e;
         } catch (MongoSocketException e) {
             failed(server, e);
@@ -973,6 +1029,10 @@ public final class Topology implements AutoCloseable {
                 if (session.inTransaction()) {
                     e.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
                 }
+            }
+            if (e instanceof com.mongodb.MongoSocketReadTimeoutException && Deadline.active()
+                    && Deadline.remainingMillis() == 0) {
+                throw Deadline.expired("waiting for " + command.getFirstKey(), e);
             }
             throw e;
         }

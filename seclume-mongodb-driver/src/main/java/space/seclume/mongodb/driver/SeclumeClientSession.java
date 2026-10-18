@@ -34,8 +34,12 @@ final class SeclumeClientSession implements ClientSession {
     private final TransactionOptions clientDefaults;
     private volatile boolean closed;
 
+    /** {@code timeoutMS} of the client or the session; null for none. */
+    private final Long timeoutMillis;
+
     SeclumeClientSession(Topology topology, ClientSessionOptions options, Object originator,
-            TransactionOptions clientDefaults) {
+            TransactionOptions clientDefaults, Long timeoutMillis) {
+        this.timeoutMillis = timeoutMillis;
         boolean snapshot = Boolean.TRUE.equals(options.isSnapshot());
         if (snapshot && Boolean.TRUE.equals(options.isCausallyConsistent())) {
             throw new IllegalArgumentException("a session is either causally consistent or a "
@@ -167,9 +171,11 @@ final class SeclumeClientSession implements ClientSession {
         }
     }
 
-    private static boolean within(long start) {
-        return System.nanoTime() - start < TimeUnit.MILLISECONDS.toNanos(
-                WITH_TRANSACTION_LIMIT_MILLIS);
+    /** Two minutes - or timeoutMS, which replaces them (client-side operations timeout). */
+    private boolean within(long start) {
+        long limit = timeoutMillis != null && timeoutMillis > 0 ? timeoutMillis
+                : WITH_TRANSACTION_LIMIT_MILLIS;
+        return System.nanoTime() - start < TimeUnit.MILLISECONDS.toNanos(limit);
     }
 
     private static boolean maxTimeExpired(MongoException e) {

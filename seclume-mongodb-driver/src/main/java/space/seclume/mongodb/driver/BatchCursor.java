@@ -15,6 +15,7 @@ import com.mongodb.ServerAddress;
 import com.mongodb.ServerCursor;
 import com.mongodb.client.MongoCursor;
 
+import space.seclume.mongodb.driver.internal.Deadline;
 import space.seclume.mongodb.driver.internal.LogicalSession;
 import space.seclume.mongodb.driver.internal.ServerPool;
 import space.seclume.mongodb.driver.internal.Topology;
@@ -42,6 +43,9 @@ final class BatchCursor<T> implements MongoCursor<T> {
     private final BsonValue comment;
     private long id;
     private BsonArray batch;
+    /** CURSOR_LIFETIME: the end of the cursor's time; ITERATION: the time per batch. */
+    private Long lifetimeEnd;
+    private Long iterationMillis;
     private int at;
 
     /**
@@ -68,6 +72,12 @@ final class BatchCursor<T> implements MongoCursor<T> {
         if (id != 0 && session != null && session.explicit()) {
             session.opened(this);
         }
+    }
+
+    /** {@code timeoutMS} as the iterable applies it; both null for none. */
+    void timed(Long lifetimeEnd, Long iterationMillis) {
+        this.lifetimeEnd = lifetimeEnd;
+        this.iterationMillis = iterationMillis;
     }
 
     @Override
@@ -104,6 +114,14 @@ final class BatchCursor<T> implements MongoCursor<T> {
     }
 
     private void getMore() {
+        try (Deadline.Scope _ = lifetimeEnd != null ? Deadline.at(lifetimeEnd)
+                : Deadline.enter(iterationMillis)) {
+            Deadline.check("reading the next batch");
+            getMoreNow();
+        }
+    }
+
+    private void getMoreNow() {
         BsonDocument command = new BsonDocument("getMore", new BsonInt64(id))
                 .append("collection", new BsonString(collection));
         if (batchSize > 0) {

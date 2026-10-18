@@ -35,6 +35,7 @@ import com.mongodb.client.model.Collation;
 
 import com.mongodb.ReadPreference;
 
+import space.seclume.mongodb.driver.internal.Deadline;
 import space.seclume.mongodb.driver.internal.LogicalSession;
 import space.seclume.mongodb.driver.internal.Topology;
 
@@ -45,6 +46,24 @@ import space.seclume.mongodb.driver.internal.Topology;
 final class Iterables {
 
     private Iterables() {
+    }
+
+    /** An iterable with the {@code timeoutMS} of what made it. */
+    static <I extends Base<?>> I timed(I iterable, Long timeoutMillis) {
+        iterable.timeoutMillis = timeoutMillis;
+        return iterable;
+    }
+
+    static ListCollectionNames timed(ListCollectionNames names, Long timeoutMillis) {
+        names.collections.timeoutMillis = timeoutMillis;
+        return names;
+    }
+
+    static long millis(long timeout, TimeUnit unit) {
+        if (timeout < 0) {
+            throw new IllegalArgumentException("a timeout cannot be negative: " + timeout);
+        }
+        return TimeUnit.MILLISECONDS.convert(timeout, unit);
     }
 
     static UnsupportedOperationException noTimeoutMode() {
@@ -59,6 +78,9 @@ final class Iterables {
         final ReadPreference preference;
         final Decoder<T> decoder;
         int batchSize;
+        /** {@code timeoutMS}, and how it applies to the cursor: its lifetime or each batch. */
+        Long timeoutMillis;
+        TimeoutMode timeoutMode;
 
         Base(Topology topology, LogicalSession session, ReadPreference preference,
                 Decoder<T> decoder) {
@@ -71,6 +93,38 @@ final class Iterables {
         @Override
         public MongoCursor<T> cursor() {
             return iterator();
+        }
+
+        /** What the iterable runs to give its cursor; {@link #iterator} bounds it in time. */
+        abstract MongoCursor<T> open();
+
+        /** The default timeout mode: a tailable cursor's batches each, others' whole lifetime. */
+        TimeoutMode defaultTimeoutMode() {
+            return TimeoutMode.CURSOR_LIFETIME;
+        }
+
+        /** The timeout mode in force; refused without timeoutMS, as the specification says. */
+        TimeoutMode mode() {
+            if (timeoutMode != null && timeoutMillis == null) {
+                throw new IllegalArgumentException("timeoutMode needs timeoutMS: set it on the "
+                        + "client, the database or the collection");
+            }
+            return timeoutMode != null ? timeoutMode : defaultTimeoutMode();
+        }
+
+        @Override
+        public final MongoCursor<T> iterator() {
+            TimeoutMode mode = mode();
+            try (Deadline.Scope _ = mode == TimeoutMode.ITERATION
+                    ? Deadline.perBatch(timeoutMillis) : Deadline.enter(timeoutMillis)) {
+                MongoCursor<T> cursor = open();
+                if (cursor instanceof BatchCursor<T> batches && timeoutMillis != null
+                        && timeoutMillis > 0) {
+                    batches.timed(mode == TimeoutMode.CURSOR_LIFETIME ? Deadline.end() : null,
+                            mode == TimeoutMode.ITERATION ? timeoutMillis : null);
+                }
+                return cursor;
+            }
         }
 
         @Override
@@ -126,7 +180,7 @@ final class Iterables {
         }
 
         @Override
-        public MongoCursor<T> iterator() {
+        MongoCursor<T> open() {
             Topology.Reply reply = topology.read(session, preference, database, command());
             return new BatchCursor<>(topology, reply, session, decoder, batchSize,
                     maxAwaitMillis(), comment);
@@ -366,6 +420,13 @@ final class Iterables {
         @Override
         MongoCursor<T> firstOnly() {
             // One document in one batch, and no cursor left open on the server.
+            mode();
+            try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+                return firstBatchOnly();
+            }
+        }
+
+        private MongoCursor<T> firstBatchOnly() {
             Topology.Reply reply = topology.read(session, preference, database,
                     command(1, true));
             return new BatchCursor<>(topology, reply, session, decoder, 0, 0, comment);
@@ -374,6 +435,12 @@ final class Iterables {
         @Override
         long maxAwaitMillis() {
             return maxAwaitMillis;
+        }
+
+        @Override
+        TimeoutMode defaultTimeoutMode() {
+            return cursorType == CursorType.NonTailable ? TimeoutMode.CURSOR_LIFETIME
+                    : TimeoutMode.ITERATION;
         }
 
         @Override
@@ -510,7 +577,8 @@ final class Iterables {
 
         @Override
         public FindIterable<T> timeoutMode(TimeoutMode timeoutMode) {
-            throw noTimeoutMode();
+            this.timeoutMode = timeoutMode;
+            return this;
         }
 
         @Override
@@ -530,8 +598,10 @@ final class Iterables {
 
         @Override
         public <E> E explain(Class<E> type, ExplainVerbosity verbosity) {
-            return Explain.run(topology, session, preference, database, command(), verbosity,
-                    registry.get(type));
+            try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+                return Explain.run(topology, session, preference, database, command(),
+                        verbosity, registry.get(type));
+            }
         }
     }
 
@@ -639,10 +709,10 @@ final class Iterables {
          * as the official driver does.
          */
         @Override
-        public MongoCursor<T> iterator() {
+        MongoCursor<T> open() {
             BsonArray stages = stages();
             if (!writes(stages)) {
-                return super.iterator();
+                return super.open();
             }
             topology.write(session, database, command(stages, new BsonDocument()), null, null,
                     false);
@@ -670,6 +740,12 @@ final class Iterables {
 
         @Override
         public void toCollection() {
+            try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+                writeToCollection();
+            }
+        }
+
+        private void writeToCollection() {
             BsonArray stages = stages();
             if (!writes(stages)) {
                 throw new IllegalStateException("toCollection needs $out or $merge as the "
@@ -698,7 +774,8 @@ final class Iterables {
 
         @Override
         public AggregateIterable<T> timeoutMode(TimeoutMode timeoutMode) {
-            throw noTimeoutMode();
+            this.timeoutMode = timeoutMode;
+            return this;
         }
 
         @Override
@@ -774,8 +851,10 @@ final class Iterables {
         public <E> E explain(Class<E> type, ExplainVerbosity verbosity) {
             BsonDocument command = command();
             command.remove("writeConcern");
-            return Explain.run(topology, session, preference, database, command, verbosity,
-                    registry.get(type));
+            try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+                return Explain.run(topology, session, preference, database, command, verbosity,
+                        registry.get(type));
+            }
         }
     }
 
@@ -810,7 +889,7 @@ final class Iterables {
         }
 
         @Override
-        public MongoCursor<T> iterator() {
+        MongoCursor<T> open() {
             BsonDocument command = new BsonDocument("distinct", new BsonString(collection))
                     .append("key", new BsonString(field));
             Bsons.put(command, "query", filter, documentClass, registry);
@@ -881,7 +960,8 @@ final class Iterables {
 
         @Override
         public DistinctIterable<T> timeoutMode(TimeoutMode timeoutMode) {
-            throw noTimeoutMode();
+            this.timeoutMode = timeoutMode;
+            return this;
         }
     }
 
@@ -969,12 +1049,13 @@ final class Iterables {
 
         @Override
         public ListCollectionsIterable<T> timeoutMode(TimeoutMode timeoutMode) {
-            throw noTimeoutMode();
+            this.timeoutMode = timeoutMode;
+            return this;
         }
     }
 
     static final class ListCollectionNames implements ListCollectionNamesIterable {
-        private final ListCollections<BsonDocument> collections;
+        final ListCollections<BsonDocument> collections;
 
         ListCollectionNames(Topology topology, LogicalSession session, String database,
                 CodecRegistry registry) {
@@ -1092,7 +1173,8 @@ final class Iterables {
 
         @Override
         public ListIndexesIterable<T> timeoutMode(TimeoutMode timeoutMode) {
-            throw noTimeoutMode();
+            this.timeoutMode = timeoutMode;
+            return this;
         }
     }
 
@@ -1113,7 +1195,7 @@ final class Iterables {
         }
 
         @Override
-        public MongoCursor<T> iterator() {
+        MongoCursor<T> open() {
             BsonDocument command = new BsonDocument("listDatabases", new BsonInt32(1));
             Bsons.maxTime(command, maxTimeMillis);
             Bsons.put(command, "filter", filter, BsonDocument.class, registry);
@@ -1170,7 +1252,8 @@ final class Iterables {
 
         @Override
         public ListDatabasesIterable<T> timeoutMode(TimeoutMode timeoutMode) {
-            throw noTimeoutMode();
+            this.timeoutMode = timeoutMode;
+            return this;
         }
     }
 }
