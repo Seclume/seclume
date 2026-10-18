@@ -119,7 +119,10 @@ public final class MongoSession implements AutoCloseable {
             // the connection elsewhere may not.
             tls = TrustChoice.using(url.trust(), () -> {
                 try {
-                    return TlsLayers.start(TlsStack.SECLUME, transport, host, port, true);
+                    // A client certificate, when the URL names one: its key stays where
+                    // ClientIdentities keeps it - native memory, a token, the OS store.
+                    return TlsLayers.start(TlsStack.SECLUME, transport, host, port, true,
+                            url.identity());
                 } catch (IOException e) {
                     throw new SQLException(e.getMessage(), "08001", e);
                 }
@@ -133,7 +136,15 @@ public final class MongoSession implements AutoCloseable {
         try {
             session.hello = session.hello(url);
             try {
-                MongoHandshake.authenticate(tls, url, host, port);
+                if (url.mechanism().equals(MongoUrl.X509)) {
+                    session.x509(url);
+                } else if (url.mechanism().equals(MongoUrl.SCRAM_SHA_256)) {
+                    MongoHandshake.authenticate(tls, url, host, port);
+                } else {
+                    throw new MongoSecurityException(null, "authMechanism=" + url.mechanism()
+                            + " is not supported by seclume's MongoDB driver: SCRAM-SHA-256 "
+                            + "and MONGODB-X509 are");
+                }
             } catch (javax.net.ssl.SSLException | IllegalArgumentException e) {
                 throw new MongoSecurityException(null, e.getMessage(), e);
             } catch (IOException e) {
@@ -160,8 +171,11 @@ public final class MongoSession implements AutoCloseable {
                 .append("platform", new BsonString("Java " + Runtime.version().feature()));
         BsonDocument command = new BsonDocument("hello", new BsonInt32(1))
                 .append("helloOk", org.bson.BsonBoolean.TRUE)
-                .append("client", client)
-                .append("saslSupportedMechs", new BsonString(url.authSource() + "." + url.user()));
+                .append("client", client);
+        if (url.mechanism().equals(MongoUrl.SCRAM_SHA_256)) {
+            command.put("saslSupportedMechs", new BsonString(url.authSource() + "."
+                    + url.user()));
+        }
         Compression wanted = Compression.of(url.driverConnectionString());
         if (wanted.zlib()) {
             command.put("compression", new org.bson.BsonArray(List.of(new BsonString("zlib"))));
@@ -189,6 +203,26 @@ public final class MongoSession implements AutoCloseable {
             zlibLevel = wanted.level();
         }
         return reply;
+    }
+
+    /**
+     * MONGODB-X509: the TLS handshake has shown the certificate and proven the
+     * key; the server takes the user from the certificate's subject. Nothing
+     * secret goes in the command - the proof was the handshake.
+     */
+    private void x509(MongoUrl url) {
+        BsonDocument command = new BsonDocument("authenticate", new BsonInt32(1))
+                .append("mechanism", new BsonString(MongoUrl.X509));
+        if (url.user() != null && !url.user().isEmpty()) {
+            command.put("user", new BsonString(url.user()));
+        }
+        try {
+            command("$external", command);
+        } catch (MongoCommandException refused) {
+            throw new MongoSecurityException(null, "the server at " + address + " refused the "
+                    + "client certificate for MONGODB-X509: " + refused.getErrorMessage()
+                    + " - is its subject a user in $external?", refused);
+        }
     }
 
     private static String osType() {

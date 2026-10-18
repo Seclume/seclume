@@ -17,7 +17,9 @@ import space.seclume.secret.SecretProviders;
  * A MongoDB connection URL as seclume takes it: host and port, {@code user},
  * {@code authSource}, {@code tlsRootCert} or {@code tlsPin},
  * {@code connectTimeout} and {@code timeout} in milliseconds, {@code transport}
- * (what carries the connection, as for the JDBC drivers) - and the rest
+ * (what carries the connection, as for the JDBC drivers), a client certificate
+ * ({@code clientCert} and {@code clientKey-provider}, as for the JDBC drivers)
+ * - and the rest
  * the secret provider's settings.
  *
  * <p>A password in the URL is strictly refused, keeping the secret off the
@@ -25,7 +27,12 @@ import space.seclume.secret.SecretProviders;
  */
 public record MongoUrl(String host, int port, String user, String authSource,
                 TrustChoice.Choice trust, int connectTimeout, int timeout,
-                SecretProvider secret, String driverConnectionString, String transport) {
+                SecretProvider secret, String driverConnectionString, String transport,
+                space.seclume.tls.ClientIdentity identity, String mechanism) {
+
+    /** The login seclume's own driver does by default; X.509 when authMechanism says so. */
+    public static final String SCRAM_SHA_256 = "SCRAM-SHA-256";
+    public static final String X509 = "MONGODB-X509";
 
     private static final int DEFAULT_PORT = 27017;
     private static final int DEFAULT_CONNECT_TIMEOUT = 10_000;
@@ -142,18 +149,21 @@ public record MongoUrl(String host, int port, String user, String authSource,
                     "tls=false / ssl=false is refused; seclume-mongodb requires TLS");
         }
 
+        String mechanism = allOptions.getOrDefault("authMechanism", SCRAM_SHA_256)
+                .toUpperCase(java.util.Locale.ROOT);
         String user = allOptions.get("user");
         if (user == null || user.isEmpty()) {
             user = userFromUri;
         }
-        if (user == null || user.isEmpty()) {
+        if ((user == null || user.isEmpty()) && !mechanism.equals(X509)) {
             throw new IllegalArgumentException(
                     "a MongoDB URL requires a user name: mongodb://user@host/?... or ?user=...");
         }
 
         String authSource = allOptions.get("authSource");
         if (authSource == null || authSource.isEmpty()) {
-            authSource = DEFAULT_AUTH_SOURCE;
+            // X.509 users live in $external; the others in admin unless said otherwise.
+            authSource = mechanism.equals(X509) ? "$external" : DEFAULT_AUTH_SOURCE;
         }
 
         String rootCert = allOptions.get(TrustChoice.ROOT_CERT);
@@ -201,6 +211,8 @@ public record MongoUrl(String host, int port, String user, String authSource,
             String lower = key.toLowerCase(java.util.Locale.ROOT);
 
             boolean isSeclume = SECLUME_KEYS.contains(lower)
+                    || lower.startsWith("clientcert") || lower.startsWith("clientkey-")
+                    || lower.equals("authmechanism")
                     || lower.startsWith("key-")
                     || lower.startsWith("cipher-")
                     || lower.startsWith("token-")
@@ -215,7 +227,14 @@ public record MongoUrl(String host, int port, String user, String authSource,
             }
         }
 
-        SecretProvider secret = SecretProviders.of(seclumeSettings);
+        space.seclume.tls.ClientIdentity identity = space.seclume.tls.ClientIdentities.of(
+                identitySettings(seclumeSettings));
+        if (mechanism.equals(X509) && identity == null) {
+            throw new IllegalArgumentException("authMechanism=MONGODB-X509 needs a client "
+                    + "certificate: clientCert and clientKey-provider (or a certificate store)");
+        }
+        SecretProvider secret = mechanism.equals(X509) ? null
+                : SecretProviders.of(withoutIdentity(seclumeSettings));
 
         // Build clean connection string for driver
         StringBuilder sb = new StringBuilder(scheme).append("://").append(hostsPart).append(dbPath);
@@ -234,7 +253,26 @@ public record MongoUrl(String host, int port, String user, String authSource,
 
         String transport = allOptions.get("transport");
         return new MongoUrl(firstHost, firstPort, user, authSource, trust, connectTimeout,
-                timeout, secret, driverConnectionString, transport);
+                timeout, secret, driverConnectionString, transport, identity, mechanism);
+    }
+
+    /** The settings that describe a client certificate, for ClientIdentities. */
+    private static Map<String, String> identitySettings(Map<String, String> settings) {
+        Map<String, String> identity = new LinkedHashMap<>();
+        settings.forEach((key, value) -> {
+            if (key.startsWith("clientCert") || key.startsWith("clientKey-")) {
+                identity.put(key, value);
+            }
+        });
+        return identity;
+    }
+
+    /** The rest, for the password's provider. */
+    private static Map<String, String> withoutIdentity(Map<String, String> settings) {
+        Map<String, String> rest = new LinkedHashMap<>(settings);
+        rest.keySet().removeIf(key -> key.startsWith("clientCert") || key.startsWith("clientKey-")
+                || key.equalsIgnoreCase("authMechanism"));
+        return rest;
     }
 
     private static String decode(String text) {

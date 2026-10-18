@@ -36,6 +36,11 @@ public final class SeclumeMongo {
      */
     public static SSLContext sslContext(String url) {
         MongoUrl parsed = MongoUrl.parse(url);
+        if (!parsed.mechanism().equals(MongoUrl.SCRAM_SHA_256)) {
+            throw new IllegalArgumentException("seclume-mongodb logs the official driver in "
+                    + "with SCRAM-SHA-256 only; for authMechanism=" + parsed.mechanism()
+                    + " use seclume-mongodb-driver");
+        }
         return new SeclumeMongoSslContext(parsed);
     }
 
@@ -46,6 +51,11 @@ public final class SeclumeMongo {
     public static MongoClientSettings.Builder configure(MongoClientSettings.Builder builder,
                                                         String url) {
         MongoUrl parsed = MongoUrl.parse(url);
+        if (!parsed.mechanism().equals(MongoUrl.SCRAM_SHA_256)) {
+            throw new IllegalArgumentException("seclume-mongodb logs the official driver in "
+                    + "with SCRAM-SHA-256 only; for authMechanism=" + parsed.mechanism()
+                    + " use seclume-mongodb-driver");
+        }
         SSLContext context = new SeclumeMongoSslContext(parsed);
         builder.applyConnectionString(new ConnectionString(parsed.driverConnectionString()))
                 .applyToSslSettings(b -> b.enabled(true).context(context));
