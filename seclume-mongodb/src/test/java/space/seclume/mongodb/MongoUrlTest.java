@@ -121,4 +121,27 @@ class MongoUrlTest {
                 () -> MongoUrl.parse("http://localhost:27017/"));
         assertTrue(ex.getMessage().contains("begins with mongodb://"), ex.getMessage());
     }
+
+    /** A refused URL is not repeated in the message: it may carry a password. */
+    @org.junit.jupiter.api.Test
+    void aRefusedSchemeDoesNotRepeatTheUrl() {
+        IllegalArgumentException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class,
+                () -> MongoUrl.parse("http://orders:hunter2secret@db.example.invalid/"));
+        org.junit.jupiter.api.Assertions.assertFalse(
+                refused.getMessage().contains("hunter2secret"), refused.getMessage());
+    }
+
+    /** A builder that brings its own credential is refused, not cleared behind its back. */
+    @org.junit.jupiter.api.Test
+    void aBuilderWithACredentialOfItsOwnIsRefused() {
+        com.mongodb.MongoClientSettings.Builder builder = com.mongodb.MongoClientSettings.builder()
+                .credential(com.mongodb.MongoCredential.createScramSha256Credential(
+                        "orders", "admin", "on-the-heap".toCharArray()));
+        IllegalArgumentException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> SeclumeMongo.configure(builder,
+                        "mongodb://orders@db.example.invalid/?provider=none"));
+        org.junit.jupiter.api.Assertions.assertTrue(
+                refused.getMessage().contains("credential of its own"), refused.getMessage());
+    }
 }

@@ -1,6 +1,5 @@
 package space.seclume.mongodb;
 
-import java.lang.reflect.Field;
 
 import javax.net.ssl.SSLContext;
 
@@ -50,7 +49,7 @@ public final class SeclumeMongo {
         SSLContext context = new SeclumeMongoSslContext(parsed);
         builder.applyConnectionString(new ConnectionString(parsed.driverConnectionString()))
                 .applyToSslSettings(b -> b.enabled(true).context(context));
-        clearCredential(builder);
+        requireNoCredential(builder);
         return builder;
     }
 
@@ -69,13 +68,18 @@ public final class SeclumeMongo {
         return MongoClients.create(settings(url));
     }
 
-    private static void clearCredential(MongoClientSettings.Builder builder) {
-        try {
-            Field field = MongoClientSettings.Builder.class.getDeclaredField("credential");
-            field.setAccessible(true);
-            field.set(builder, null);
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to clear MongoCredential on builder", e);
+    /**
+     * The connection string handed to the driver names no user, so nothing
+     * here gives it a credential. A builder that came with one of its own is
+     * refused rather than cleared: that password is on the heap already, and
+     * clearing a private field would take reflection - which this project
+     * does not use, and a native image would not allow.
+     */
+    private static void requireNoCredential(MongoClientSettings.Builder builder) {
+        if (builder.build().getCredential() != null) {
+            throw new IllegalArgumentException("the MongoClientSettings.Builder carries a "
+                    + "credential of its own; that password is on the heap already - leave the "
+                    + "login to the seclume URL and set no credential on the builder");
         }
     }
 }

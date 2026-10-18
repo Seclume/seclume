@@ -54,8 +54,11 @@ public record MongoUrl(String host, int port, String user, String authSource,
             scheme = "mongodb+srv";
             afterScheme = url.substring("mongodb+srv://".length());
         } else {
+            // Not the URL itself: one that was refused may carry a password
+            // where the user should be, and an exception message ends up in
+            // a log.
             throw new IllegalArgumentException(
-                    "a MongoDB URL begins with mongodb:// or mongodb+srv://: " + url);
+                    "a MongoDB URL begins with mongodb:// or mongodb+srv://");
         }
 
         int question = afterScheme.indexOf('?');
