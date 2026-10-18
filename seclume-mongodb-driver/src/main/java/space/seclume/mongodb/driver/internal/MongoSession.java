@@ -31,7 +31,7 @@ import com.mongodb.MongoSocketWriteException;
 import com.mongodb.ServerAddress;
 
 import space.seclume.Version;
-import space.seclume.internal.SocketTransport;
+import space.seclume.internal.Transports;
 import space.seclume.internal.Transport;
 import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
@@ -93,9 +93,11 @@ public final class MongoSession implements AutoCloseable {
         ServerAddress address = new ServerAddress(host, port);
         int connectTimeout = url.connectTimeout() > 0 ? url.connectTimeout()
                 : DEFAULT_LOGIN_TIMEOUT_MILLIS;
-        SocketTransport transport;
+        Transport transport;
         try {
-            transport = SocketTransport.connect(host, port, connectTimeout);
+            // The transport the URL names - socket, ffm, or one that carries
+            // the connection elsewhere - as the JDBC drivers take it.
+            transport = Transports.open(url.transport(), host, port, connectTimeout);
         } catch (IOException e) {
             throw new MongoSocketOpenException("cannot reach " + address + ": " + e.getMessage(),
                     address, e);
@@ -125,6 +127,7 @@ public final class MongoSession implements AutoCloseable {
             } catch (IOException e) {
                 throw session.broke(e, "logging in");
             }
+            Transports.loggedIn(transport);
             session.networkTimeout(url.timeout());
             return session;
         } catch (RuntimeException e) {

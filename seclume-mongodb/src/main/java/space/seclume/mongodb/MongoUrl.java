@@ -16,7 +16,8 @@ import space.seclume.secret.SecretProviders;
 /**
  * A MongoDB connection URL as seclume takes it: host and port, {@code user},
  * {@code authSource}, {@code tlsRootCert} or {@code tlsPin},
- * {@code connectTimeout} and {@code timeout} in milliseconds - and the rest
+ * {@code connectTimeout} and {@code timeout} in milliseconds, {@code transport}
+ * (what carries the connection, as for the JDBC drivers) - and the rest
  * the secret provider's settings.
  *
  * <p>A password in the URL is strictly refused, keeping the secret off the
@@ -24,7 +25,7 @@ import space.seclume.secret.SecretProviders;
  */
 public record MongoUrl(String host, int port, String user, String authSource,
                 TrustChoice.Choice trust, int connectTimeout, int timeout,
-                SecretProvider secret, String driverConnectionString) {
+                SecretProvider secret, String driverConnectionString, String transport) {
 
     private static final int DEFAULT_PORT = 27017;
     private static final int DEFAULT_CONNECT_TIMEOUT = 10_000;
@@ -38,7 +39,7 @@ public record MongoUrl(String host, int port, String user, String authSource,
             "region", "secret-id", "field", "vault-uri", "name",
             "version", "project", "resource", "client-id", "scopes",
             "access-key-id", "db-user",
-            "connecttimeout", "timeout", "sockettimeout"
+            "connecttimeout", "timeout", "sockettimeout", "transport"
     );
 
     /**
@@ -231,8 +232,9 @@ public record MongoUrl(String host, int port, String user, String authSource,
         }
         String driverConnectionString = sb.toString();
 
+        String transport = allOptions.get("transport");
         return new MongoUrl(firstHost, firstPort, user, authSource, trust, connectTimeout,
-                timeout, secret, driverConnectionString);
+                timeout, secret, driverConnectionString, transport);
     }
 
     private static String decode(String text) {
