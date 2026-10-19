@@ -536,7 +536,7 @@ answers TCP and then says nothing does not hold the connection. Only SCRAM-SHA-2
 a user the server offers SCRAM-SHA-1 alone is refused, never logged in with the weaker one.
 The reactive driver (Netty, `SSLEngine`) is not covered yet.
 
-### seclume's own MongoDB driver (`seclume-mongodb-driver`, in progress)
+### seclume's own MongoDB driver (`seclume-mongodb-driver`)
 
 A driver of its own, from the socket to the API: `SeclumeMongoClients.create(url)` returns a
 `com.mongodb.client.MongoClient` (the official sync API, `mongodb-driver-sync` 5.13), with
@@ -1183,6 +1183,28 @@ SshClient client = SeclumeSsh.withIdentity(SshClient.setUpDefaultClient(),
     `DefaultSftpSessionFactory` on that client.
 - **Tests:** they use SSHD's own SFTP server. Keys come from `ssh-keygen`, and each public key
   seclume derives must be the one `ssh-keygen` exports.
+
+## NATS
+
+`seclume-nats` connects the official client (`io.nats:jnats`) with every kind of NATS
+credential off the heap:
+
+```java
+try (Connection nc = SeclumeNats.connect(
+        "tls://nats.example.com:4222?auth=creds&provider=file&path=/run/secrets/user.creds")) {
+    nc.publish("orders.created", payload);
+}
+```
+
+- **NKey and `.creds`** (`auth=nkey`, `auth=creds`): the seed is read into native memory,
+  Base32-decoded and CRC-checked there, and the server's nonce is signed with Ed25519 in native
+  memory. Only the public key, the user JWT and the signature reach the heap.
+  `SeclumeNats.authHandler(...)` gives the same as an `AuthHandler` for your own `Options`.
+- **Password and token** (`user=`, `auth=token`): the client is given a placeholder, and the
+  secret is written into the `CONNECT` line from native memory on its way into seclume's TLS 1.3.
+- The official client keeps the seed as `byte[]`/`char[]` and the password in its `Options` for
+  the life of the connection. A heap-dump test shows neither here. Tested against a stand-in NATS
+  server; not yet against a live one in CI.
 
 ## Elasticsearch and OpenSearch
 
