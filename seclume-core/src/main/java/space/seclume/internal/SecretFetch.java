@@ -241,7 +241,7 @@ public final class SecretFetch {
 
     /** Where a response is read from - a TLS channel or, for metadata, the bare socket. */
     @FunctionalInterface
-    private interface Source {
+    interface Source {
         int read(ByteBuffer into) throws IOException;
     }
 
@@ -313,8 +313,10 @@ public final class SecretFetch {
      * "body" is exactly where a secret starts and a parser that materialised
      * the whole response first would have defeated the point before reaching
      * this comment.
+     *
+     * <p>Package-private for {@code SecretFetchFuzzTest}: the parser alone, fed any bytes.
      */
-    private static Response readResponse(Source tls, MemorySegment body) throws IOException {
+    static Response readResponse(Source tls, MemorySegment body) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocateDirect(MAX_RESPONSE);
         try {
             while (buffer.hasRemaining() && !complete(buffer)) {

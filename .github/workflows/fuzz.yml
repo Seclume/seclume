@@ -97,6 +97,8 @@ jobs:
           - { module: seclume-core, test: TlsRecordFuzzTest, method: aFrozenConnection }
           - { module: seclume-core, test: JsonOffFuzzTest, method: arbitraryDocumentsStayWithinBounds }
           - { module: seclume-core, test: JsonOffFuzzTest, method: generatedValuesRoundTrip }
+          - { module: seclume-core, test: SecretFetchFuzzTest, method: anyAnswerIsParsedOrRefused }
+          - { module: seclume-core, test: KeyFilesFuzzTest, method: anyKeyFileIsReadOrRefused }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0

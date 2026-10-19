@@ -104,6 +104,10 @@ class LocalVaultDynamicCredentialsTest {
                 "the lease did not move: " + firstLease + " -> "
                         + source.credentialsValidUntil());
 
+        // Vault's token went into every request from native memory: it is in no
+        // object of this JVM, however many requests it signed.
+        space.seclume.tck.NoSecretInHeap.assertAbsent(token);
+
         vault.close();                                 // the lease is given back
         assertThrows(SQLException.class, () -> user(first),
                 "the revoked user's session was not ended");

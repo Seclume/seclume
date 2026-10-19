@@ -36,14 +36,14 @@
     <opentelemetry.version>1.67.0</opentelemetry.version>
     <jackson-annotations.version>2.22</jackson-annotations.version>
     <jackson.version>2.22.4</jackson.version>
-    <jackson3.version>3.1.4</jackson3.version>
+    <jackson3.version>3.1.8</jackson3.version>
     <amqp-client.version>5.37.0</amqp-client.version>
     <netty.version>4.2.19.Final</netty.version>
   </properties>
 
   <!-- The optional clients bring what has known holes: Jackson 2.22.2
        (CVE-2026-89407 and others, fixed in 2.22.3), Jackson 3.1.0 (CVE-2026-68494,
-       CVE-2026-54512, fixed in 3.1.4), amqp-client 5.31.0 (CVE-2026-63337, fixed in
+       CVE-2026-54512, CVE-2026-89407, CVE-2026-68497, fixed in 3.1.7), amqp-client 5.31.0 (CVE-2026-63337, fixed in
        5.33.0, the version seclume-rabbitmq uses) and Netty 4.2.14 (CVE-2026-59901,
        fixed in 4.2.16). -->
   <dependencyManagement>

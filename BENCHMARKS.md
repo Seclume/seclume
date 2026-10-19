@@ -517,6 +517,90 @@ Not a summary of them. An average with an error bar hides a bimodal result, and 
 
 That they hold on another machine, another JDK, or another distance to the server. They say what this run measured, which is the only thing a benchmark can say.
 
+## MongoDB (19.10.2026)
+
+seclume's own driver (`SeclumeMongoClients`) against the official `mongodb-driver-sync` 5.13
+with its own SCRAM-SHA-256 login, and the official driver on seclume's pre-authenticated socket
+(`SeclumeMongo.client`). MongoDB 8.0.34 in a container on the same host, TLS on every
+connection, each client with its own pool; a thousand documents read through the cursor in its
+default batches.
+
+| | seclume | official driver | official on seclume's socket |
+|---|---|---|---|
+| `ping` | **55.6 µs** ± 0.6 | 62.8 µs ± 0.6 (**−11 %**) | 63.5 µs ± 1.8 |
+| one document by `_id` | **96.6 µs** ± 1.5 | 114.4 µs ± 2.3 (**−16 %**) | 117.8 µs ± 3.3 |
+| `insertOne` | **100.1 µs** ± 0.8 | 112.7 µs ± 4.5 (**−11 %**) | 116.4 µs ± 2.8 |
+| `insertMany`, 500 | **1.90 ms** ± 0.02 | 2.03 ms ± 0.08 (**−6 %**) | 2.10 ms ± 0.09 |
+| 1000 documents | 1.28 ms ± 0.02 | **1.03 ms** ± 0.02 (+24 %) | 1.07 ms ± 0.04 |
+
+The last row stays in: seclume is slower at reading many documents - the reply is decoded
+into a `BsonDocument` and then into the application's class, the official driver decodes once.
+The socket column is the official driver with seclume doing only the TLS and the login, so it
+measures what the pre-authenticated socket costs: a few per cent.
+
+### The run
+
+| | |
+|---|---|
+| **measured** | 2026-10-19T16:13:05.041678373Z |
+| **commit** | not a git checkout |
+| **os** | Linux 5.14.0-687.44.1.el9_8.x86_64 (amd64) |
+| **cpus** | 4 |
+| **heap** | 3864 MB max |
+| **jdk** | OpenJDK 64-Bit Server VM 25.0.4.1 (Eclipse Adoptium) |
+| **jvm arguments** | none worth recording |
+| **server** | not recorded - pass -Dbench.url to have it asked |
+
+### Reproducing it
+
+```
+taskset -c 2,3 java -Dbench.mongo.host=127.0.0.1 -Dbench.mongo.port=27017 -Dbench.mongo.password.file=<file> -Dbench.mongo.ca=<file> -jar seclume-bench.jar MongoBenchmark -rf json -rff result-mongodb.json -wi 3 -i 5 -f 2 -w 3s -r 3s
+```
+
+### What was measured
+
+| benchmark | mode | score | error | unit | forks | warmup | iterations |
+|---|---|---|---|---|---|---|---|
+| `MongoBenchmark.findMany [documents=1000, driver=seclume]` | avgt | 1279.050 | ± 15.550 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.findMany [documents=1000, driver=official]` | avgt | 1028.534 | ± 22.783 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.findMany [documents=1000, driver=socket]` | avgt | 1067.843 | ± 42.433 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.findOne [documents=1000, driver=seclume]` | avgt | 96.589 | ± 1.492 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.findOne [documents=1000, driver=official]` | avgt | 114.409 | ± 2.302 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.findOne [documents=1000, driver=socket]` | avgt | 117.780 | ± 3.313 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.insertMany [documents=1000, driver=seclume]` | avgt | 1900.836 | ± 20.532 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.insertMany [documents=1000, driver=official]` | avgt | 2026.506 | ± 75.018 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.insertMany [documents=1000, driver=socket]` | avgt | 2097.746 | ± 85.947 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.insertOne [documents=1000, driver=seclume]` | avgt | 100.072 | ± 0.826 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.insertOne [documents=1000, driver=official]` | avgt | 112.654 | ± 4.523 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.insertOne [documents=1000, driver=socket]` | avgt | 116.350 | ± 2.759 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.ping [documents=1000, driver=seclume]` | avgt | 55.642 | ± 0.574 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.ping [documents=1000, driver=official]` | avgt | 62.774 | ± 0.609 | us/op | 2 | 3 | 5 |
+| `MongoBenchmark.ping [documents=1000, driver=socket]` | avgt | 63.531 | ± 1.833 | us/op | 2 | 3 | 5 |
+
+### The iterations themselves
+
+Not a summary of them. An average with an error bar hides a bimodal result, and a bimodal result is usually the interesting one.
+
+- `MongoBenchmark.findMany [documents=1000, driver=seclume]` — 1288.294, 1289.374, 1277.594, 1285.488, 1296.994, 1274.973, 1269.678, 1270.502, 1270.664, 1266.943 us/op
+- `MongoBenchmark.findMany [documents=1000, driver=official]` — 1061.523, 1034.109, 1025.951, 1023.146, 1028.451, 1044.933, 1023.596, 1016.749, 1012.749, 1014.134 us/op
+- `MongoBenchmark.findMany [documents=1000, driver=socket]` — 1106.099, 1096.668, 1099.476, 1075.072, 1055.153, 1083.570, 1045.422, 1053.048, 1036.280, 1027.642 us/op
+- `MongoBenchmark.findOne [documents=1000, driver=seclume]` — 97.978, 97.591, 97.256, 97.098, 96.990, 96.826, 95.926, 94.995, 95.498, 95.731 us/op
+- `MongoBenchmark.findOne [documents=1000, driver=official]` — 115.599, 115.556, 113.044, 113.089, 113.865, 117.021, 115.720, 112.806, 114.720, 112.668 us/op
+- `MongoBenchmark.findOne [documents=1000, driver=socket]` — 119.105, 118.021, 116.588, 115.653, 115.868, 121.168, 117.251, 117.238, 121.522, 115.381 us/op
+- `MongoBenchmark.insertMany [documents=1000, driver=seclume]` — 1915.721, 1896.048, 1895.552, 1894.857, 1894.035, 1917.766, 1924.114, 1883.420, 1887.777, 1899.072 us/op
+- `MongoBenchmark.insertMany [documents=1000, driver=official]` — 2048.318, 2081.707, 1989.357, 2023.623, 1961.692, 2102.093, 2071.712, 1998.445, 2028.666, 1959.442 us/op
+- `MongoBenchmark.insertMany [documents=1000, driver=socket]` — 2121.885, 2138.967, 2163.672, 2033.864, 1980.754, 2132.122, 2124.138, 2136.985, 2071.934, 2073.135 us/op
+- `MongoBenchmark.insertOne [documents=1000, driver=seclume]` — 99.517, 99.416, 100.178, 99.602, 99.704, 100.573, 101.103, 99.886, 100.211, 100.532 us/op
+- `MongoBenchmark.insertOne [documents=1000, driver=official]` — 111.856, 114.012, 110.939, 110.764, 109.883, 120.280, 113.385, 112.011, 112.925, 110.482 us/op
+- `MongoBenchmark.insertOne [documents=1000, driver=socket]` — 116.142, 117.072, 114.969, 118.063, 114.078, 116.735, 117.066, 114.932, 114.463, 119.980 us/op
+- `MongoBenchmark.ping [documents=1000, driver=seclume]` — 56.166, 55.852, 55.789, 55.592, 56.196, 55.745, 55.082, 55.177, 55.437, 55.384 us/op
+- `MongoBenchmark.ping [documents=1000, driver=official]` — 63.261, 63.199, 62.464, 62.849, 62.525, 62.872, 63.364, 62.301, 62.666, 62.237 us/op
+- `MongoBenchmark.ping [documents=1000, driver=socket]` — 64.443, 63.710, 65.030, 62.701, 62.025, 65.525, 63.400, 62.481, 63.865, 62.133 us/op
+
+### What these numbers do not say
+
+That they hold on another machine, another JDK, or another distance to the server. They say what this run measured, which is the only thing a benchmark can say.
+
 ## R2DBC on PostgreSQL (15.10.2026)
 
 `seclume-r2dbc` against r2dbc-postgresql 1.1.3 (Netty), and over the pools: `SeclumePool`
