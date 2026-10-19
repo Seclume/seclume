@@ -106,10 +106,12 @@ public class MongoBenchmark {
                             "mongodb://" + host + ":" + port + "/?tls=true"))
                     .applyToSslSettings(ssl -> ssl.context(trusting(ca)))
                     .credential(MongoCredential.createScramSha256Credential(user, authSource,
+                            // seclume-allow: the official driver takes the password itself - that is the very thing being compared here, and this is the measuring harness, not the library
                             Files.readString(password, StandardCharsets.UTF_8).strip()
                                     .toCharArray()))
                     .build());
-            default -> throw new IllegalArgumentException("driver=" + driver);
+            default -> throw new IllegalArgumentException("unknown driver '" + driver
+                    + "' - seclume, official or socket");
         };
         read = client.getDatabase("seclume_test").getCollection("bench_read_" + driver);
         write = client.getDatabase("seclume_test").getCollection("bench_write_" + driver);
