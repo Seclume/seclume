@@ -145,8 +145,9 @@ final class ImapLogin {
         String tag = tag();
         wire.writeLine(tag + " CAPABILITY");
         Set<String> capabilities = new TreeSet<>();
-        while (true) {
+        for (int lines = 1; ; lines++) {
             String line = wire.readLine();
+            wire.countLine(lines);
             String upper = line.toUpperCase(Locale.ROOT);
             if (upper.startsWith("* CAPABILITY ")) {
                 capabilities.addAll(words(upper.substring(13)));
@@ -180,8 +181,9 @@ final class ImapLogin {
 
     /** Reads up to the tagged line, or a continuation; untagged lines are passed over. */
     private String untilTagged(String tag) throws IOException {
-        while (true) {
+        for (int lines = 1; ; lines++) {
             String line = wire.readLine();
+            wire.countLine(lines);
             if (line.startsWith("+") || line.startsWith(tag + " ")) {
                 return line;
             }

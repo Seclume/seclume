@@ -158,27 +158,13 @@ final class LdapSocket extends Socket {
                         + " closed the connection during StartTLS");
             }
             readTotal += n;
-            long[] outer = header(buf, 0, readTotal);
-            if (outer != null) {
-                expected = (int) (outer[0] + outer[1]);
-            }
+            expected = messageLength(buf, readTotal, 65536);
         }
         if (readTotal > expected) {
             throw new IOException("the LDAP server at " + found.authority()
                     + " sent bytes after the StartTLS response before the TLS handshake");
         }
-        if ((buf[0] & 0xff) != SEQUENCE) {
-            throw new IOException("unexpected StartTLS response from " + found.authority());
-        }
-        long[] outer = header(buf, 0, expected);
-        int id = (int) outer[0];
-        long[] idHeader = header(buf, id, expected);
-        int op = (int) (id + idHeader[0] + idHeader[1]);
-        if (op >= expected || (buf[op] & 0xff) != EXTENDED_RESPONSE) {
-            throw new IOException("expected StartTLS ExtendedResponse from "
-                    + found.authority() + ", got tag 0x" + Integer.toHexString(buf[op] & 0xff));
-        }
-        ParsedResult res = parseLdapResult(buf, op, expected);
+        ParsedResult res = response(buf, expected, EXTENDED_RESPONSE);
         if (res.resultCode != 0) {
             throw new IOException("StartTLS on " + found.authority()
                     + " was refused by the server (LDAP result " + res.resultCode
@@ -523,54 +509,85 @@ final class LdapSocket extends Socket {
                         + " closed the connection during the Kerberos SASL bind");
             }
             readTotal += n;
-            long[] outer = header(buf, 0, readTotal);
-            if (outer != null) {
-                expected = (int) (outer[0] + outer[1]);
-            }
+            expected = messageLength(buf, readTotal, 1048576);
         }
-        if ((buf[0] & 0xff) != SEQUENCE) {
-            throw new IOException("unexpected LDAP response from " + registered.authority());
+        return response(buf, expected, BIND_RESPONSE);
+    }
+
+    /**
+     * How long the message starting at {@code buf[0]} is, header included;
+     * -1 while its header is not all here. A length beyond {@code cap} is
+     * refused before it is believed - a four-byte BER length is up to 4 GiB.
+     */
+    static int messageLength(byte[] buf, int readTotal, int cap) throws IOException {
+        long[] outer = header(buf, 0, readTotal);
+        if (outer == null) {
+            return -1;
         }
-        long[] outer = header(buf, 0, expected);
-        int id = (int) outer[0];
-        long[] idHeader = header(buf, id, expected);
-        int op = (int) (id + idHeader[0] + idHeader[1]);
-        if (op >= expected || (buf[op] & 0xff) != BIND_RESPONSE) {
-            throw new IOException("expected LDAP BindResponse from " + registered.authority()
-                    + ", got tag 0x" + Integer.toHexString(buf[op] & 0xff));
+        long total = outer[0] + outer[1];
+        if (total > cap) {
+            throw new IOException("an LDAP response of " + total + " bytes; at most " + cap
+                    + " are read");
         }
-        return parseLdapResult(buf, op, expected);
+        return (int) total;
+    }
+
+    /**
+     * A whole LDAP message of {@code length} bytes as the result of the
+     * operation {@code tag} - a BindResponse or the StartTLS ExtendedResponse.
+     * Every length is checked against what contains it: whatever a server
+     * sends, this answers or throws an {@link IOException}, never reads past
+     * the message. Package-private for {@code LdapResponseFuzzTest}.
+     */
+    static ParsedResult response(byte[] buf, int length, int tag) throws IOException {
+        if (length < 2 || length > buf.length || (buf[0] & 0xff) != SEQUENCE) {
+            throw new IOException("an LDAP response that is not a message");
+        }
+        int[] message = element(buf, 0, length);
+        int[] id = element(buf, message[0], message[1]);
+        int op = id[1];
+        if (op >= message[1] || (buf[op] & 0xff) != tag) {
+            throw new IOException("expected an LDAP response of tag 0x"
+                    + Integer.toHexString(tag) + ", got "
+                    + (op < message[1] ? "0x" + Integer.toHexString(buf[op] & 0xff) : "nothing"));
+        }
+        return parseLdapResult(buf, op, message[1]);
+    }
+
+    /**
+     * The element at {@code at}, which has to end within {@code limit}:
+     * {@code {content start, content end}}.
+     */
+    private static int[] element(byte[] buf, int at, int limit) throws IOException {
+        long[] header = header(buf, at, limit);
+        if (header == null || at + header[0] + header[1] > limit) {
+            throw new IOException("a malformed LDAP response: an element runs past its end");
+        }
+        return new int[] {(int) (at + header[0]), (int) (at + header[0] + header[1])};
     }
 
     private static ParsedResult parseLdapResult(byte[] buf, int op, int limit) throws IOException {
-        long[] opHeader = header(buf, op, limit);
-        int opEnd = (int) (op + opHeader[0] + opHeader[1]);
-        int rc = (int) (op + opHeader[0]);
-        long[] rcHeader = header(buf, rc, opEnd);
-        int resultCode = readInt(buf, (int) (rc + rcHeader[0]), (int) rcHeader[1]);
-        int mdn = (int) (rc + rcHeader[0] + rcHeader[1]);
-        long[] mdnHeader = header(buf, mdn, opEnd);
-        byte[] matchedDn = Arrays.copyOfRange(buf, (int) (mdn + mdnHeader[0]),
-                (int) (mdn + mdnHeader[0] + mdnHeader[1]));
-        int diag = (int) (mdn + mdnHeader[0] + mdnHeader[1]);
-        long[] diagHeader = header(buf, diag, opEnd);
-        byte[] diagBytes = Arrays.copyOfRange(buf, (int) (diag + diagHeader[0]),
-                (int) (diag + diagHeader[0] + diagHeader[1]));
+        int[] operation = element(buf, op, limit);
+        int opEnd = operation[1];
+        int[] rc = element(buf, operation[0], opEnd);
+        if (rc[1] - rc[0] < 1 || rc[1] - rc[0] > 4) {
+            throw new IOException("a malformed LDAP response: a result code of "
+                    + (rc[1] - rc[0]) + " bytes");
+        }
+        int resultCode = readInt(buf, rc[0], rc[1] - rc[0]);
+        int[] mdn = element(buf, rc[1], opEnd);
+        byte[] matchedDn = Arrays.copyOfRange(buf, mdn[0], mdn[1]);
+        int[] diag = element(buf, mdn[1], opEnd);
+        byte[] diagBytes = Arrays.copyOfRange(buf, diag[0], diag[1]);
         String diagnostic = new String(diagBytes, StandardCharsets.UTF_8); // seclume-allow: LDAP diagnostic text, not a secret
-        int pos = (int) (diag + diagHeader[0] + diagHeader[1]);
+        int pos = diag[1];
         byte[] serverSaslCreds = null;
         while (pos < opEnd) {
-            long[] elem = header(buf, pos, opEnd);
-            if (elem == null) {
-                break;
+            int[] value = element(buf, pos, opEnd);
+            if ((buf[pos] & 0xff) == SERVER_SASL_CREDS) {
+                serverSaslCreds = Arrays.copyOfRange(buf, value[0], value[1]);
             }
-            int tag = buf[pos] & 0xff;
-            int valStart = (int) (pos + elem[0]);
-            int valEnd = (int) (valStart + elem[1]);
-            if (tag == SERVER_SASL_CREDS) {
-                serverSaslCreds = Arrays.copyOfRange(buf, valStart, valEnd);
-            }
-            pos = valEnd;
+            pos = value[1];
         }
         return new ParsedResult(resultCode, matchedDn, diagBytes, diagnostic, serverSaslCreds);
     }
@@ -626,7 +643,7 @@ final class LdapSocket extends Socket {
         return at + size;
     }
 
-    private record ParsedResult(int resultCode, byte[] matchedDn, byte[] diagBytes,
+    record ParsedResult(int resultCode, byte[] matchedDn, byte[] diagBytes,
                                 String diagnostic, byte[] serverSaslCreds) {
     }
 
