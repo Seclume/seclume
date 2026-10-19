@@ -42,6 +42,14 @@ jobs:
           -pl seclume-core,seclume-tck,seclume-postgresql,seclume-mysql,seclume-sqlserver,seclume-oracle
           -am test -Dtest='*Fuzz*,BoundaryContractTest'
           -Dsurefire.failIfNoSpecifiedTests=false
+      # MongoDB: the reply parser, the logins and DNS seedlists - more rounds
+      # than the CI runs, and a seed of the night's own, printed on failure.
+      - name: MongoDB
+        run: >
+          ./mvnw -B -pl seclume-mongodb,seclume-mongodb-driver -am test
+          -Dtest='OpMsgFuzzTest,MongoLoginFuzzTest,SrvFuzzTest'
+          -Dseclume.mongo.fuzz.rounds=200000 -Dseclume.mongo.fuzz.seed=${{ github.run_id }}
+          -Dsurefire.failIfNoSpecifiedTests=false
       # The pool as a state machine: random sequences of borrows, returns,
       # broken connections, late and refused resets, suspend and resume,
       # checked after every step. The CI runs 150 sequences; this runs 20 000.

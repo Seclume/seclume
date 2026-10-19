@@ -94,13 +94,14 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
             // for - see OraStatement#withReturningInto. Once, not once per
             // execution: a second run would send one bind too many and the
             // server answers ORA-01006.
+            int[] types = keyTypes();
             while (parameters.count() < parameterCount + keyColumns.length) {
-                parameters.addOutput();
+                parameters.addOutput(types[parameters.count() - parameterCount]);
             }
             connection.session().expectReturning(keyColumns.length);
             boolean hasResult = run(OraStatement.withReturningInto(currentSql(), keyColumns,
                     parameterCount + 1), parameters);
-            keepAsGeneratedKeys(java.util.List.of(keyColumns), lastReturned());
+            keepAsGeneratedKeys(java.util.List.of(keyColumns), types, lastReturned());
             return hasResult;
         }
         return run(currentSql(), parameters);
@@ -131,6 +132,17 @@ final class OraPreparedStatement extends OraStatement implements ParameterSetter
 
     void wantGeneratedKeys(String[] columns) {
         this.keyColumns = columns.clone();
+        this.keyTypes = null;
+    }
+
+    /** The Oracle types of the key columns, as the server described them; once per statement. */
+    private int[] keyTypes;
+
+    private int[] keyTypes() {
+        if (keyTypes == null) {
+            keyTypes = connection.keyTypes(sql, keyColumns);
+        }
+        return keyTypes;
     }
 
     // ---- parameters ------------------------------------------------------

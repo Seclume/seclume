@@ -62,7 +62,7 @@ class MongoAwsTest {
             ZoneOffset.UTC);
 
     /** A TLS layer that is a server: each request answered by {@code answer}. */
-    private static final class Played implements TlsLayer {
+    static final class Played implements TlsLayer {
         private final Function<BsonDocument, BsonDocument> answer;
         private final ArrayDeque<ByteBuffer> replies = new ArrayDeque<>();
         final java.util.List<BsonDocument> requests = new java.util.ArrayList<>();
@@ -123,13 +123,13 @@ class MongoAwsTest {
         }
     }
 
-    private static BsonDocument decode(byte[] bytes) {
+    static BsonDocument decode(byte[] bytes) {
         try (BsonBinaryReader reader = new BsonBinaryReader(ByteBuffer.wrap(bytes))) {
             return new BsonDocumentCodec().decode(reader, DecoderContext.builder().build());
         }
     }
 
-    private static byte[] encode(BsonDocument document) {
+    static byte[] encode(BsonDocument document) {
         BasicOutputBuffer out = new BasicOutputBuffer();
         try (BsonBinaryWriter writer = new BsonBinaryWriter(out)) {
             new BsonDocumentCodec().encode(writer, document, EncoderContext.builder().build());
@@ -145,7 +145,7 @@ class MongoAwsTest {
         return message.flip();
     }
 
-    private static BsonDocument payload(BsonDocument command) {
+    static BsonDocument payload(BsonDocument command) {
         return decode(command.getBinary("payload").getData());
     }
 

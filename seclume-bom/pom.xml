@@ -70,6 +70,16 @@
       </dependency>
       <dependency>
         <groupId>space.seclume</groupId>
+        <artifactId>seclume-mongodb-reactive</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-elasticsearch</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
         <artifactId>seclume-crac</artifactId>
         <version>${project.version}</version>
       </dependency>

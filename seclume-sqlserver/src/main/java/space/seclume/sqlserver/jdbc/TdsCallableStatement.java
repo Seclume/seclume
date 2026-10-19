@@ -207,10 +207,21 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
      * the rows come back as results of the batch. The batch this class builds
      * appends one select of its own to read the output parameters, so the
      * <b>last</b> result belongs to the driver - it is taken away here, and
-     * everything before it is the procedure's and is handed on unchanged.
+     * everything before it is the procedure's and is handed on unchanged -
+     * its update counts and its rows in the order it sent them, as
+     * mssql-jdbc hands them out.
      */
     @Override
     public boolean execute() throws SQLException {
+        return execute(true);
+    }
+
+    /**
+     * @param inOrder counts and rows in the server's order; executeQuery and
+     *                executeUpdate read as mssql-jdbc does - the first rows,
+     *                the count - and take the rows first
+     */
+    private boolean execute(boolean inOrder) throws SQLException {
         checkOpen();
         closeRun();
         List<Object> bound = new ArrayList<>(call.parameters());
@@ -222,7 +233,11 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
             for (int i = 0; i < bound.size(); i++) {
                 prepared.setObject(i + 1, bound.get(i));
             }
-            prepared.execute();
+            if (inOrder) {
+                prepared.execute();
+            } else {
+                ((TdsPreparedStatement) prepared).executeRowsFirst();
+            }
             readOutputs(statement);
             statement.positionAtFirstResult();
             run = statement;
@@ -237,13 +252,13 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
 
     @Override
     public int executeUpdate() throws SQLException {
-        execute();
+        execute(false);
         return run == null ? 0 : Math.max(run.getUpdateCount(), 0);
     }
 
     @Override
     public ResultSet executeQuery() throws SQLException {
-        if (!execute()) {
+        if (!execute(false)) {
             throw new SQLException("the procedure " + call.name() + " returned no rows - "
                     + "run it with execute() and read its output parameters with the getters");
         }

@@ -45,6 +45,34 @@
       <version>${boot.mongodb.version}</version>
     </dependency>
     <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb-reactive</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mongodb</groupId>
+      <artifactId>mongodb-driver-reactivestreams</artifactId>
+      <version>${boot.mongodb.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-mongodb-reactive</artifactId>
+      <version>${spring.boot.version}</version>
+    </dependency>
+    <!-- What Spring Boot 4.1.1 manages (reactor-bom 2025.0.7); without it the
+         reactive driver's own reactor-core 3.5 would be the one taken. -->
+    <dependency>
+      <groupId>io.projectreactor</groupId>
+      <artifactId>reactor-core</artifactId>
+      <version>3.8.7</version>
+    </dependency>
+    <dependency>
+      <groupId>io.projectreactor</groupId>
+      <artifactId>reactor-test</artifactId>
+      <version>3.8.7</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-mongodb</artifactId>
       <version>${spring.boot.version}</version>

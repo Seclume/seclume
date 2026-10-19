@@ -419,6 +419,28 @@ This is proven by a running Spring Boot application against all four servers, wi
 single test runs. Hibernate, Flyway, Liquibase, jOOQ, MyBatis and Spring Data JDBC are listed
 in [FRAMEWORKS.md](FRAMEWORKS.md).
 
+## Spring Boot: data services from `application.properties`
+
+With `seclume-spring-boot-starter` and the module of the service on the class path, one property
+gives Spring Boot seclume's client, and Spring Boot's own configuration steps aside and builds
+the rest on it - templates, repositories, listener containers, caches:
+
+| Property | What you get | Built on it by Spring Boot |
+|---|---|---|
+| `seclume.mongodb.url` | `MongoClient` - seclume's own driver, or the official one on seclume's socket - and the reactive `MongoClient` | Spring Data MongoDB, sync and reactive |
+| `seclume.elasticsearch.url` | `Rest5Client` | `ElasticsearchClient`, Spring Data Elasticsearch |
+| `seclume.opensearch.url` | `OpenSearchClient` | - |
+| `seclume.rabbitmq.url` | Spring AMQP's `CachingConnectionFactory` | `RabbitTemplate`, listener containers, `RabbitAdmin` |
+| `seclume.nats.url` | a NATS `Connection` | - |
+| `seclume.redis.url` | Spring Data Redis's `LettuceConnectionFactory` (standalone, Sentinel) | `RedisTemplate`, repositories, the cache |
+
+A password in Spring Boot's own settings for the same service - `spring.mongodb.password`,
+`spring.elasticsearch.password`, `spring.rabbitmq.password`, `spring.data.redis.password`, or a
+URI with a password in it - stops the application at start: it would be a `String` in the
+`Environment` for as long as the application runs, and it would not be used. Jedis is not offered
+for Spring Data Redis, which gives Jedis no socket factory; use Lettuce, or `SeclumeRedisSocketFactory`
+with Jedis directly.
+
 ## R2DBC
 
 `seclume-r2dbc` is an R2DBC driver over the four JDBC drivers, not beside them. Everything
@@ -550,16 +572,78 @@ The URL is the same as above.
   pooled server session goes on under the same `lsid`; a reused server session starts without
   the last transaction; `maxIdleTimeMS` and `maxLifeTimeMS` retire connections
   (`LocalNothingCarriesOverTest`).
+- **Change streams:** `watch` on a collection, a database or the whole deployment, with
+  `resumeAfter`, `startAfter`, `startAtOperationTime`, `fullDocument` and pre-images; a stream
+  resumes by itself after a network error or an error the server labels resumable, from the
+  last resume token it handed out (`postBatchResumeToken` included).
+- **The client-level `bulkWrite`** (MongoDB 8): writes to several collections in one
+  command, ordered or not, with per-write results when asked for and what got through when
+  something fails.
+- **Snapshot sessions:** every read in the session sees the data as of the first read's
+  `atClusterTime`.
+- **Unacknowledged writes (`w: 0`):** sent with `moreToCome` - the server does not answer -
+  and refused in a session or a transaction, where they would make no sense.
+- **Client-side operation timeouts (`timeoutMS`):** one deadline per operation, on the
+  client, the database, the collection or the session; the server is told what is left
+  (`maxTimeMS`, less the round trip), and retries, server selection and a pooled connection
+  all count against it. Cursors in both of the specification's modes, `CURSOR_LIFETIME` and
+  `ITERATION`. Expiry is a `MongoOperationTimeoutException`.
+- **`mongodb+srv://`:** the hosts from the SRV record (only under the name's own domain),
+  the options from the TXT record (only `replicaSet`, `authSource` and `loadBalanced`, as the
+  specification allows); TLS is on regardless.
+- **Compression:** `compressors=zlib,snappy,zstd` (the first the server agrees to is used),
+  `zlibCompressionLevel`; snappy and zstd through aircompressor, Java without a native library,
+  an optional dependency as in the official driver. The replies are
+  decompressed with their announced size checked first.
+- **Logins besides SCRAM-SHA-256:** `MONGODB-X509` with a client certificate from seclume's
+  client identities (the key never on the heap); `MONGODB-AWS` with the workload's role
+  (`credentials=instance|container|web-identity`) or an access key from a secret provider,
+  signed with SigV4 off the heap; `MONGODB-OIDC` with a token from any secret provider
+  (`token-provider=...`), the Kubernetes service account (`ENVIRONMENT:k8s`), an Azure
+  managed identity (`ENVIRONMENT:azure`, the user as its client id) or a Google service
+  account's identity token (`ENVIRONMENT:gcp`), both for the cluster's `TOKEN_RESOURCE` and read
+  from the metadata service into native memory; logged in again when the server says the token
+  expired.
+- **A session carried on by another client** (`SeclumeSessions`): `handOff(session)` lets
+  go of a session without ending it and returns its state - the `lsid`, the transaction's
+  number, state and options, the causal-consistency times; no credential and no key.
+  `takeUp(client, state)` in another process, logged in as the same user, carries the open
+  transaction on and commits it.
 - **Spring Data MongoDB:** a Spring Boot application gets seclume's client as its
   `MongoClient` bean; repositories, `MongoTemplate` and `@Transactional` run on it, with the
   MongoDB driver version Spring Boot manages (FRAMEWORKS.md).
-- **Not yet, and refused rather than imitated:** change streams, the client-level `bulkWrite`,
-  snapshot sessions, unacknowledged writes (`w: 0`), client-side operation timeouts
-  (`timeoutMS`), `mongodb+srv://`, load balancers, compression, Atlas Search indexes.
-  `mapReduce` is not offered (deprecated by MongoDB).
+- **Behind a load balancer** (`loadBalanced=true`, also from a TXT record): mongos routers
+  behind one address, as Atlas serverless and private endpoints put them. Nothing is
+  monitored; each command borrows a connection, and a cursor or a transaction keeps the one
+  it began on until it ends - the router behind it is the only one that knows it. A router
+  that does not answer `hello` with a `serviceId` is refused, and a network error distrusts
+  only the connections to the same router. Tested against two mongos behind HAProxy, with a
+  control that shows the cursors and transactions failing without the pinning.
+- **Atlas Search indexes:** `createSearchIndex(es)`, `updateSearchIndex`, `dropSearchIndex`,
+  `listSearchIndexes` - the index management specification's commands, for Atlas or a server
+  with mongot beside it; checked against the official driver for the same server answers.
+- **GridFS:** the official driver's `GridFSBuckets.create(database)` runs on seclume's
+  database - upload, download, streams, find, rename, delete - checked against the official
+  client's buckets byte for byte.
+- `mapReduce` is not offered (deprecated by MongoDB).
+- **An APM agent in the process** (`ApmAgentHeapDumpTest`): the OpenTelemetry Java agent with
+  its MongoDB instrumentation records the commands of both drivers, and the heap dump of that
+  JVM does not hold the password. The control - the official driver given the password itself,
+  under the same agent - is found by the same search.
 - **The reply parser is strict and fuzzed** (`OpMsgFuzzTest`): it checks every length in a
   reply's documents before the bson library reads them, whose reader allocated whatever a
   length announced.
+
+### The reactive API (`seclume-mongodb-reactive`)
+
+`SeclumeMongoReactiveClients.create(url)` returns a
+`com.mongodb.reactivestreams.client.MongoClient` (the official Reactive Streams API,
+`mongodb-driver-reactivestreams` 5.x) over seclume's own driver: each publisher runs the
+blocking operation on a virtual thread once it is subscribed to and asked for something,
+and hands documents on only as they are asked for. A cancel ends the operation and closes
+its cursor. The publishers pass the Reactive Streams TCK (`PublishersTckTest`); Spring Data
+MongoDB reactive - `ReactiveMongoRepository`, `ReactiveMongoTemplate`, transactions through
+`ReactiveMongoTransactionManager`, change streams - runs on it (FRAMEWORKS.md).
 
 ## Reports: JasperReports, embedded
 
@@ -728,10 +812,20 @@ and the same check finds it.
 ### Lettuce
 
 ```java
+// Standalone:
 RedisClient redis = SeclumeLettuce.client(
         "rediss://cache:6380?user=orders&provider=file&path=/run/secrets/redis");
 try (StatefulRedisConnection<String, String> connection = redis.connect()) { ... }
 redis.shutdown();                      // shuts down its client resources as well
+
+// Sentinel (and optional sentinelUser= / sentinel-provider= when Sentinel itself takes a login):
+RedisClient sentinel = SeclumeLettuce.client(
+        "rediss-sentinel://s1:26379,s2:26379?sentinelMasterId=mymaster"
+        + "&user=orders&provider=file&path=/run/secrets/redis");
+
+// Cluster:
+RedisClusterClient cluster = SeclumeLettuce.clusterClient(
+        "rediss://node-1:6379,node-2:6379?user=orders&provider=file&path=/run/secrets/redis");
 ```
 
 Lettuce given a password keeps it as a `char[]` in its credentials and encodes it into a Netty
@@ -740,23 +834,30 @@ OpenSSL's then copies it once more. `SeclumeLettuce` gives Lettuce a random plac
 The password is read from its provider into native memory for each of those commands and
 written in the placeholder's place, together with its RESP length, just before it leaves:
 
-- over `rediss://`, by a Netty `SslHandler` on seclume's own TLS 1.3 engine, the first handler
-  before the socket. Lettuce itself sees a plain connection. The engine checks the certificate
-  and host name (`tlsRootCert=`, `tlsPin=`) and puts the password into the cipher from native
-  memory.
-- over `redis://`, by the first handler before the socket, which hands the socket a direct
-  buffer over the native memory and wipes it once the socket has taken it.
+- over `rediss://` and `rediss-sentinel://`, by a Netty `SslHandler` on seclume's own TLS 1.3
+  engine, put in front of the socket as the channel connects to its target node. Lettuce itself
+  sees a plain connection. Each node's engine checks that node's own certificate and host name or
+  IP address (`tlsRootCert=`, `tlsPin=`) — whether it is a seed node, a cluster shard discovered
+  on topology refresh or redirect, a Sentinel, or the master Sentinel resolves — and puts the
+  password into the cipher from native memory.
+- over `redis://` and `redis-sentinel://`, by the first handler before the socket, which hands the
+  socket a direct buffer over the native memory and wipes it once the socket has taken it.
 
-A standalone server only: the certificate is checked against the URL's host, which a Cluster
-or Sentinel topology does not have.
+When Sentinel nodes take a login of their own, `sentinelUser=` and `sentinel-provider=` (with
+`sentinel-path=`, and so on) supply Sentinel's credentials through a second placeholder, also off
+the heap.
 
-Shown against Redis 8 (`LocalLettuceTest`):
+Shown against Redis 8 (`LocalLettuceTest`) and multi-node TLS 1.3 Cluster and Sentinel topologies
+(`SeclumeLettuceTopologyTest`):
 
 - plain TCP and TLS 1.3 both log in over RESP3's `HELLO`;
+- Cluster shards and Sentinel-resolved masters whose certificates carry their own host name or IP
+  are verified per node, while a discovered shard or master presenting another node's certificate
+  is refused before any password is sent;
 - when the server kills the connection, Lettuce reconnects and logs in again through the same
   path;
 - a wrong password is refused, and so is a server the JVM does not trust;
-- the heap dump holds no copy of the password.
+- the heap dump holds no copy of the Redis or Sentinel password.
 
 With `-Dseclume.redis.control=true`, Lettuce is given the password itself, and the same search
 finds it.
@@ -1081,6 +1182,48 @@ SshClient client = SeclumeSsh.withIdentity(SshClient.setUpDefaultClient(),
 - **Tests:** they use SSHD's own SFTP server. Keys come from `ssh-keygen`, and each public key
   seclume derives must be the one `ssh-keygen` exports.
 
+## Elasticsearch and OpenSearch
+
+`seclume-elasticsearch` gives the official clients an API key, token or password they never
+hold:
+
+```java
+ElasticsearchClient es = SeclumeElasticsearch.client(
+        "https://es.example.com:9200/?auth=apikey&provider=file&path=/run/secrets/es-key");
+OpenSearchClient os = SeclumeOpenSearch.client(
+        "https://app@os.example.com:9200/?auth=basic&provider=file&path=/run/secrets/os");
+```
+
+- **Clients:** the typed `ElasticsearchClient` and the low-level `Rest5Client` of
+  elasticsearch-java 9 (Apache HttpClient 5), the `RestClient` of elasticsearch-rest-client
+  (HttpAsyncClient 4, under Elasticsearch 8's clients), and opensearch-java 3 on
+  `ApacheHttpClient5Transport`. The application brings the client versions it uses.
+- **How:** the client is given a placeholder in its `Authorization` header. Its connections are
+  seclume's TLS 1.3 engine (`SeclumeSslContext`, in seclume-http), which writes the secret in from
+  native memory as each request head goes into the cipher - the API key, the token, or
+  `base64(user:password)` for Basic. A head the client writes in pieces is held until it is
+  whole, so a placeholder split across two writes never goes out unreplaced.
+- **Bodies are not touched:** a document that contains a placeholder is stored with the
+  placeholder. Only request heads are rewritten - which is why the engine follows the HTTP/1.1
+  framing (`Content-Length`, chunks) and offers no ALPN, so the clients stay on HTTP/1.1.
+- **The URL:** `auth=apikey` (the encoded key, `base64(id:key)`, as Elasticsearch hands it
+  out), `auth=bearer`, or `auth=basic` with the user before the `@`; any secret provider;
+  `tlsRootCert`/`tlsPin`; several hosts separated by commas. `http://` and a password in the
+  URL are refused. OpenSearch's security plugin has no API keys: Basic or a bearer JWT.
+- **Tests:** against a local TLS server that accepts only the real credential, every client
+  and Basic, with pieces of a byte at a time (`HttpCredentialRewriterTest`); against
+  Elasticsearch 9.5 and OpenSearch 3.9 with TLS (`LocalSearchTest`: indexed, read back,
+  searched, a wrong key refused by the server); and the key searched for in a heap dump after
+  all four clients were used, the server in a JVM of its own (`NoKeyOnTheHeapTest`).
+- **Amazon OpenSearch Service and Serverless, signed with SigV4:**
+  `SeclumeOpenSearch.awsClient("https://<domain endpoint>/?auth=aws&region=...&access-key-id=...&provider=...")`,
+  or `credentials=instance|container|web-identity` for a workload's temporary credentials;
+  `service=aoss` for Serverless. opensearch-java's own `AwsSdk2Transport` signs with the SDK's
+  signer and offers no way to replace it, so it is given a placeholder key, and its HTTP client -
+  `SeclumeAws.resigning`, over seclume's TLS - drops that signature and signs each request again
+  from native memory (`AmazonOpenSearchTest`: the signature that arrives is the one the SDK's
+  signer makes with the real key; `ResigningTest`: the placeholder's own signature is refused).
+
 ## AWS
 
 `seclume-aws` signs AWS SDK requests without the secret access key on the heap. The SDK's
@@ -1155,7 +1298,10 @@ URL download = presigner.presignGet("reports", "2026/q3.pdf", Duration.ofMinutes
   identity token. They run in JVMs of their own.
 
 **Limits:**
-- SigV4a is not supported yet.
+- SigV4a (S3 multi-region access points) signs with ECDSA P-256 from a key derived from the
+  secret key in native memory, as AWS derives it; OpenSSL 3 on 64-bit Linux only, as seclume's
+  other signing with a private key. Checked against AWS's own SigV4a test suite (the derived
+  public key, and signatures that verify with it).
 - An async client's body is collected in memory before it is signed. This is meant for the
   small bodies of SQS, SNS and DynamoDB. S3 over HTTPS sends its body unsigned, so nothing is
   collected there.
@@ -1264,14 +1410,25 @@ stub.withCallCredentials(token).call(request);
 ## LDAP and Active Directory
 
 `seclume-ldap` gives JNDI, and with it Spring LDAP and Spring Security's LDAP support, a
-socket factory. JNDI holds a placeholder instead of the service account's password. The
-socket encrypts with seclume's TLS 1.3. In the simple bind that carries the placeholder, it
-writes the real password and the BER lengths that follow from it, both from native memory.
+socket factory. JNDI holds a placeholder instead of the service account's password. For
+`ldaps://` (default port 636) the socket connects directly with seclume's TLS 1.3; for
+`ldap://` (default port 389) it first sends the RFC 4511 StartTLS `ExtendedRequest`
+(`1.3.6.1.4.1.1466.20037`), verifies the `ExtendedResponse` (and refuses any trailing
+plaintext bytes injected before the handshake), and upgrades the connection to seclume's TLS.
+In the bind that carries the placeholder, it either writes the real password and the BER
+lengths that follow from it from native memory, or (when `authentication=kerberos` /
+`authentication=gssapi` is set) drives the 3-step RFC 4752 SASL `GSSAPI` bind using the
+operating system's Kerberos ticket cache (`libgssapi_krb5.so.2` on Linux, `secur32.dll` SSPI
+on Windows) with mutual authentication and `NO_PROTECTION` (`0x01`) over the TLS channel.
 
 ```java
 SeclumeLdap ldap = SeclumeLdap.of("ldaps://ad.example.com/dc=example,dc=com"
         + "?user=svc-app@example.com&provider=file&path=/run/secrets/ldap");
 DirContext context = new InitialDirContext(ldap.environment());
+
+// StartTLS on port 389 with Active Directory / Kerberos (SASL GSSAPI)
+SeclumeLdap kerberos = SeclumeLdap.of("ldap://ad.example.com/dc=example,dc=com"
+        + "?authentication=kerberos");
 
 LdapContextSource source = new LdapContextSource();          // Spring LDAP
 source.setUrl(ldap.url()); source.setBase(ldap.base());
@@ -1279,14 +1436,20 @@ source.setUserDn(ldap.user()); source.setPassword(ldap.password());
 source.setBaseEnvironmentProperties(ldap.socketFactory());
 ```
 
+- **StartTLS (`ldap://`):** negotiated inside `LdapSocket.connect` before any bind or directory
+  operation leaves JNDI, and verified with the same `tlsRootCert` / `tlsPin` options as
+  `ldaps://`.
+- **Kerberos / GSSAPI (`authentication=kerberos`):** optional `serviceName=` (default `ldap`),
+  `serverSpn=` (explicit SPN such as `ldap/dc1.example.com`), and `user=` / `authorizationId=`
+  (RFC 4752 SASL authorization identity). No JAAS config and no keytab in the JVM heap.
 - **What passes through unchanged:** binds with any other password. An end user logging in
   through Spring Security binds with what they typed.
-- **Limits:** `ldaps://` only, no StartTLS, no SASL binds.
-- **Spring Boot:** `seclume.ldap.url=ldaps://...?user=...&provider=...` makes the
+- **Spring Boot:** `seclume.ldap.url=ldaps://...` or `ldap://...` makes the
   `LdapContextSource` bean. Boot's `LdapTemplate` and Spring Security's LDAP authentication
   use it.
-- **Tests:** they run against UnboundID's directory server in a process of its own, so the
-  password is never in the test JVM.
+- **Tests:** they run against UnboundID's directory server (both `--useSSL` and
+  `--useStartTLS`) in a process of its own so the password is never in the test JVM, plus
+  in-memory SASL `GSSAPI` servers testing mutual authentication and security-layer negotiation.
 
 ## GraalVM native image
 

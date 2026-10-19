@@ -23,15 +23,30 @@ public final class BsonReader {
 
     private record Element(byte type, long valueOffset, int valueLength) {}
 
+    /**
+     * A document that is not well-formed BSON. Its own type, so that a login
+     * reading a server's reply can tell it from a refusal of its own
+     * settings and report it as the failed login it is (found by
+     * {@code MongoLoginFuzzTest}).
+     */
+    public static final class Malformed extends IllegalArgumentException {
+
+        private static final long serialVersionUID = 1L;
+
+        Malformed(String message) {
+            super(message);
+        }
+    }
+
     public BsonReader(MemorySegment segment, long baseOffset) {
         this.segment = segment;
         this.baseOffset = baseOffset;
         if (baseOffset + 4 > segment.byteSize()) {
-            throw new IllegalArgumentException("truncated BSON document length header");
+            throw new Malformed("truncated BSON document length header");
         }
         this.documentLength = segment.get(ValueLayout.JAVA_INT_UNALIGNED, baseOffset);
         if (documentLength < 5 || baseOffset + documentLength > segment.byteSize()) {
-            throw new IllegalArgumentException("invalid or truncated BSON document of length "
+            throw new Malformed("invalid or truncated BSON document of length "
                     + documentLength);
         }
         parseElements();
@@ -50,7 +65,7 @@ public final class BsonReader {
                 pos++;
             }
             if (pos >= end) {
-                throw new IllegalArgumentException("unterminated BSON field name");
+                throw new Malformed("unterminated BSON field name");
             }
             int nameLen = (int) (pos - nameStart);
             byte[] nameBytes = new byte[nameLen];
@@ -66,17 +81,17 @@ public final class BsonReader {
                     pos += 8;
                 }
                 case 0x02 -> { // String
-                    int strLen = segment.get(ValueLayout.JAVA_INT_UNALIGNED, pos);
+                    int strLen = length(pos, end, 1);
                     valueLength = strLen;
                     pos += 4 + strLen;
                 }
                 case 0x03, 0x04 -> { // Embedded document or Array
-                    int docLen = segment.get(ValueLayout.JAVA_INT_UNALIGNED, pos);
+                    int docLen = length(pos, end, 5);
                     valueLength = docLen;
                     pos += docLen;
                 }
                 case 0x05 -> { // Binary
-                    int binLen = segment.get(ValueLayout.JAVA_INT_UNALIGNED, pos);
+                    int binLen = length(pos, end, 0);
                     valueLength = binLen;
                     pos += 4 + 1 + binLen; // int32 length + subtype byte + bytes
                 }
@@ -108,17 +123,17 @@ public final class BsonReader {
                     valueLength = (int) (pos - startRegex);
                 }
                 case 0x0C -> { // DBPointer (string + 12 bytes ObjectId)
-                    int strLen = segment.get(ValueLayout.JAVA_INT_UNALIGNED, pos);
+                    int strLen = length(pos, end, 1);
                     valueLength = 4 + strLen + 12;
                     pos += 4 + strLen + 12;
                 }
                 case 0x0D, 0x0E -> { // JS code, Symbol
-                    int strLen = segment.get(ValueLayout.JAVA_INT_UNALIGNED, pos);
+                    int strLen = length(pos, end, 1);
                     valueLength = strLen;
                     pos += 4 + strLen;
                 }
                 case 0x0F -> { // JS code with scope
-                    int codeWLen = segment.get(ValueLayout.JAVA_INT_UNALIGNED, pos);
+                    int codeWLen = length(pos, end, 14);
                     valueLength = codeWLen;
                     pos += codeWLen;
                 }
@@ -133,11 +148,35 @@ public final class BsonReader {
                 case -1, 0x7F -> { // Min key, Max key
                     valueLength = 0;
                 }
-                default -> throw new IllegalArgumentException("unsupported BSON element type "
+                default -> throw new Malformed("unsupported BSON element type "
                         + type + " for field " + name);
+            }
+            if (pos > end) {
+                // The last value ends at the latest where the document's
+                // trailing zero begins; past it, a getter would read beyond
+                // the document - or, with a length near 2^31, before it.
+                throw new Malformed("the value of " + name + " runs past the end of the "
+                        + "document");
             }
             elements.put(name, new Element(type, valueOffset, valueLength));
         }
+    }
+
+    /**
+     * A value's int32 length at {@code pos}: there to be read, at least
+     * {@code least}, and within the document. A negative one would move the
+     * parser backwards, and round again (found by {@code MongoLoginFuzzTest}).
+     */
+    private int length(long pos, long end, int least) {
+        if (pos + 4 > end) {
+            throw new Malformed("a length that runs past the end of the document");
+        }
+        int length = segment.get(ValueLayout.JAVA_INT_UNALIGNED, pos);
+        if (length < least || length > end - pos) {
+            throw new Malformed("a length of " + length + " in a document of "
+                    + documentLength + " bytes");
+        }
+        return length;
     }
 
     public boolean has(String name) {

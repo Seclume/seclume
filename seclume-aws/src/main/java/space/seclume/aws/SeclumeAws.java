@@ -8,6 +8,7 @@ import java.util.concurrent.CompletableFuture;
 
 import software.amazon.awssdk.awscore.client.builder.AwsClientBuilder;
 import software.amazon.awssdk.http.auth.aws.scheme.AwsV4AuthScheme;
+import software.amazon.awssdk.http.auth.aws.scheme.AwsV4aAuthScheme;
 import software.amazon.awssdk.http.auth.spi.scheme.AuthScheme;
 import software.amazon.awssdk.http.auth.spi.signer.HttpSigner;
 import software.amazon.awssdk.identity.spi.AwsCredentialsIdentity;
@@ -54,7 +55,8 @@ import space.seclume.secret.SecretProviders;
  * stay in native memory: the token is signed from there, and written into the
  * request by seclume's TLS, which becomes the client's HTTP transport (the
  * SDK's Apache 5 client over {@link SessionTokenSocket}) - so a synchronous
- * client. SigV4a is not supported yet.
+ * client. SigV4a (S3 multi-region access points) is signed the same way,
+ * where OpenSSL 3 is there to sign it - see {@link SeclumeSigV4Signer}.
  */
 public final class SeclumeAws {
 
@@ -85,13 +87,18 @@ public final class SeclumeAws {
                     .tlsSocketStrategy(new SeclumeTlsStrategy(settings.trust)).build());
             IdentityProvider<AwsCredentialsIdentity> identity = session(settings.temporary);
             builder.credentialsProvider(identity);
-            builder.putAuthScheme(new Scheme(new SeclumeSigV4Signer(null, null), identity));
+            SeclumeSigV4Signer signer = new SeclumeSigV4Signer(null, null);
+            builder.putAuthScheme(new Scheme(signer, identity, AwsV4AuthScheme.SCHEME_ID));
+            builder.putAuthScheme(new Scheme(signer.asymmetric(), identity,
+                    AwsV4aAuthScheme.SCHEME_ID));
         } else {
             SeclumeSigV4Signer signer = new SeclumeSigV4Signer(settings.accessKeyId,
                     settings.secret);
             IdentityProvider<AwsCredentialsIdentity> identity = identity(settings.accessKeyId);
             builder.credentialsProvider(identity);
-            builder.putAuthScheme(new Scheme(signer, identity));
+            builder.putAuthScheme(new Scheme(signer, identity, AwsV4AuthScheme.SCHEME_ID));
+            builder.putAuthScheme(new Scheme(signer.asymmetric(), identity,
+                    AwsV4aAuthScheme.SCHEME_ID));
         }
         if (settings.region != null) {
             builder.region(Region.of(settings.region));
@@ -157,15 +164,61 @@ public final class SeclumeAws {
         };
     }
 
-    /** SigV4, with seclume's signer. */
-    private record Scheme(SeclumeSigV4Signer signer,
-                          IdentityProvider<AwsCredentialsIdentity> identity)
-            implements AuthScheme<AwsCredentialsIdentity> {
+    /**
+     * What a client needs that signs with the SDK's own signer and lets
+     * nobody replace it - OpenSearch's {@code AwsSdk2Transport}: credentials
+     * whose secret is a placeholder, for that client's own signature, and an
+     * HTTP client that drops that signature and signs every request again with
+     * seclume's signer before it goes, over seclume's TLS.
+     *
+     * @param httpClient  the client's HTTP client; closing it closes the transport under it
+     * @param credentials for the client's own signer - nothing secret in them
+     * @param region      the region the requests are signed for
+     */
+    public record Resigning(software.amazon.awssdk.http.SdkHttpClient httpClient,
+                            software.amazon.awssdk.auth.credentials.AwsCredentialsProvider
+                                    credentials,
+                            Region region) {
+    }
 
-        @Override
-        public String schemeId() {
-            return AwsV4AuthScheme.SCHEME_ID;
+    /**
+     * {@link Resigning} for {@code service} - {@code es} for an Amazon
+     * OpenSearch Service domain, {@code aoss} for OpenSearch Serverless - with
+     * the credentials {@code spec} names, as for {@link #configure}; the
+     * region is required here.
+     */
+    public static Resigning resigning(String spec, String service) {
+        return resigning(spec, service, java.time.Clock.systemUTC());
+    }
+
+    static Resigning resigning(String spec, String service, java.time.Clock clock) {
+        Settings settings = Settings.of(spec);
+        if (settings.region == null) {
+            throw new IllegalArgumentException("region= is missing: a request is signed for "
+                    + "one region");
         }
+        software.amazon.awssdk.http.SdkHttpClient transport = software.amazon.awssdk.http
+                .apache5.Apache5HttpClient.builder()
+                .tlsSocketStrategy(new SeclumeTlsStrategy(settings.trust)).build();
+        SeclumeSigV4Signer signer = settings.temporary != null
+                ? new SeclumeSigV4Signer(null, null)
+                : new SeclumeSigV4Signer(settings.accessKeyId, settings.secret);
+        IdentityProvider<AwsCredentialsIdentity> identity = settings.temporary != null
+                ? session(settings.temporary) : identity(settings.accessKeyId);
+        // The client's own signer signs with these, and that signature is dropped.
+        software.amazon.awssdk.auth.credentials.AwsCredentialsProvider placeholder =
+                software.amazon.awssdk.auth.credentials.StaticCredentialsProvider.create(
+                        software.amazon.awssdk.auth.credentials.AwsBasicCredentials.create(
+                                settings.accessKeyId != null ? settings.accessKeyId
+                                        : "seclume-temporary", PLACEHOLDER));
+        return new Resigning(new ResigningHttpClient(transport, signer, identity, service,
+                settings.region, clock), placeholder, Region.of(settings.region));
+    }
+
+    /** SigV4 or SigV4a, with seclume's signer. */
+    private record Scheme(SeclumeSigV4Signer signer,
+                          IdentityProvider<AwsCredentialsIdentity> identity, String schemeId)
+            implements AuthScheme<AwsCredentialsIdentity> {
 
         @Override
         public IdentityProvider<AwsCredentialsIdentity> identityProvider(

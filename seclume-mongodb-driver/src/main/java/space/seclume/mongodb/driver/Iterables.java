@@ -1129,6 +1129,116 @@ final class Iterables {
         }
     }
 
+    /**
+     * {@code $listSearchIndexes}: an aggregation of one stage, as the
+     * index management specification has it - on Atlas, or a server with
+     * {@code mongot} beside it.
+     */
+    static final class ListSearchIndexes<T> extends Command<T>
+            implements com.mongodb.client.ListSearchIndexesIterable<T> {
+        private final String collection;
+        private final CodecRegistry registry;
+        private String name;
+        private Boolean allowDiskUse;
+        private Collation collation;
+
+        ListSearchIndexes(Topology topology, LogicalSession session, Decoder<T> decoder,
+                String database, String collection, CodecRegistry registry) {
+            super(topology, session, ReadPreference.primary(), decoder, database);
+            this.collection = collection;
+            this.registry = registry;
+        }
+
+        @Override
+        BsonDocument command() {
+            BsonDocument stage = new BsonDocument();
+            if (name != null) {
+                stage.put("name", new BsonString(name));
+            }
+            BsonDocument command = new BsonDocument("aggregate", new BsonString(collection))
+                    .append("pipeline", new BsonArray(List.of(
+                            new BsonDocument("$listSearchIndexes", stage))))
+                    .append("cursor", cursorOptions());
+            Bsons.put(command, "allowDiskUse", allowDiskUse);
+            Bsons.maxTime(command, maxTimeMillis);
+            Bsons.put(command, "collation", collation);
+            Bsons.put(command, "comment", comment);
+            return command;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> name(String indexName) {
+            this.name = indexName;
+            return this;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> allowDiskUse(Boolean allow) {
+            this.allowDiskUse = allow;
+            return this;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> batchSize(int size) {
+            this.batchSize = size;
+            return this;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> maxTime(long maxTime,
+                TimeUnit unit) {
+            this.maxTimeMillis = Bsons.millis(maxTime, unit);
+            return this;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> collation(Collation value) {
+            this.collation = value;
+            return this;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> comment(String value) {
+            this.comment = value == null ? null : new BsonString(value);
+            return this;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> comment(BsonValue value) {
+            this.comment = value;
+            return this;
+        }
+
+        @Override
+        public com.mongodb.client.ListSearchIndexesIterable<T> timeoutMode(TimeoutMode mode) {
+            this.timeoutMode = mode;
+            return this;
+        }
+
+        @Override
+        public Document explain() {
+            return explain(Document.class, null);
+        }
+
+        @Override
+        public Document explain(ExplainVerbosity verbosity) {
+            return explain(Document.class, verbosity);
+        }
+
+        @Override
+        public <E> E explain(Class<E> type) {
+            return explain(type, null);
+        }
+
+        @Override
+        public <E> E explain(Class<E> type, ExplainVerbosity verbosity) {
+            try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+                return Explain.run(topology, session, preference, database, command(),
+                        verbosity, registry.get(type));
+            }
+        }
+    }
+
     static final class ListIndexes<T> extends Command<T> implements ListIndexesIterable<T> {
         private final String collection;
 
@@ -1136,6 +1246,23 @@ final class Iterables {
                 String database, String collection) {
             super(topology, session, ReadPreference.primary(), decoder, database);
             this.collection = collection;
+        }
+
+        /**
+         * A collection that is not there has no indexes - an empty cursor,
+         * as the official driver answers, not the server's NamespaceNotFound.
+         * GridFS asks before its first upload, and failed on it.
+         */
+        @Override
+        MongoCursor<T> open() {
+            try {
+                return super.open();
+            } catch (com.mongodb.MongoCommandException e) {
+                if (e.getErrorCode() != 26) {
+                    throw e;
+                }
+                return new ArrayCursor<>(new BsonArray(), value -> null, e.getServerAddress());
+            }
         }
 
         @Override

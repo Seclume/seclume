@@ -9,7 +9,7 @@ import java.nio.ByteBuffer;
 import java.time.Clock;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.Base64;
+import java.util.Base64; // seclume-allow: the server's nonce, public
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -75,6 +75,15 @@ public final class MongoAws {
     }
 
     static void authenticate(TlsLayer tls, Credentials credentials, String host, int port,
+            Clock clock) throws IOException {
+        try {
+            login(tls, credentials, host, port, clock);
+        } catch (BsonReader.Malformed e) {
+            throw MongoHandshake.malformed(host, port, e);
+        }
+    }
+
+    private static void login(TlsLayer tls, Credentials credentials, String host, int port,
             Clock clock) throws IOException {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment clientNonce = arena.allocate(NONCE);
@@ -146,8 +155,9 @@ public final class MongoAws {
                 : SecretScope.fromProvider(sessionToken);
              CanonicalRequest canonical = new CanonicalRequest(arena, 4096 + MAX_TOKEN)) {
             boolean withToken = token != null && token.length() > 0;
-            if (withToken && token.length() > MAX_TOKEN) {
-                throw new SSLException("the AWS session token is " + token.length()
+            long length = withToken ? token.length() : 0;
+            if (length > MAX_TOKEN) {
+                throw new SSLException("the AWS session token is " + length
                         + " bytes; at most " + MAX_TOKEN + " are taken");
             }
             String signedHeaders = "content-length;content-type;host;x-amz-date;"

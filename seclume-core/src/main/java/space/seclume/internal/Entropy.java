@@ -21,9 +21,10 @@ import java.security.SecureRandom;
  * {@code byte[]}. For plain random bytes that would be harmless - randomness is
  * not a secret - but here those bytes become padding <em>next to</em> the
  * password in the same buffer, and a second copying step is one more place to
- * get it wrong. Hence {@code BCryptGenRandom} on Windows,
- * {@code /dev/urandom} otherwise, and only if both are missing the detour via
- * an array that is zeroed immediately.
+ * get it wrong. Hence {@code BCryptGenRandom} on Windows, {@code getrandom(2)}
+ * on Linux and {@code getentropy(3)} on macOS - system calls, no file opened
+ * per call - then {@code /dev/urandom}, and only if all are missing the detour
+ * via an array that is zeroed immediately.
  */
 public final class Entropy {
 
@@ -33,6 +34,16 @@ public final class Entropy {
     private static final MethodHandle BCRYPT_GEN_RANDOM = lookupBCryptGenRandom();
     /** BCRYPT_USE_SYSTEM_PREFERRED_RNG - then hAlgorithm may be null. */
     private static final int USE_SYSTEM_PREFERRED_RNG = 0x00000002;
+
+    /** {@code ssize_t getrandom(void*, size_t, unsigned)} - Linux 3.17+, glibc 2.25+. */
+    private static final MethodHandle GETRANDOM = lookupLibc("getrandom", Platform.isLinux(),
+            FunctionDescriptor.of(ValueLayout.JAVA_LONG,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
+    /** {@code int getentropy(void*, size_t)} - macOS 10.12+, at most 256 bytes a call. */
+    private static final MethodHandle GETENTROPY = lookupLibc("getentropy", Platform.isMac(),
+            FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                    ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
+    private static final int GETENTROPY_MAX = 256;
 
     private Entropy() {
     }
@@ -48,7 +59,8 @@ public final class Entropy {
             return;
         }
         MemorySegment slice = target.asSlice(offset, length);
-        if (fillFromBCrypt(slice) || fillFromUrandom(slice)) {
+        if (fillFromBCrypt(slice) || fillFromGetrandom(slice) || fillFromGetentropy(slice)
+                || fillFromUrandom(slice)) {
             return;
         }
         fillFromSecureRandom(slice);
@@ -67,7 +79,7 @@ public final class Entropy {
         }
     }
 
-    private static boolean fillFromBCrypt(MemorySegment target) {
+    static boolean fillFromBCrypt(MemorySegment target) {
         if (BCRYPT_GEN_RANDOM == null) {
             return false;
         }
@@ -80,7 +92,48 @@ public final class Entropy {
         }
     }
 
-    private static boolean fillFromUrandom(MemorySegment target) {
+    /** Package-private for the test that each source works on its own. */
+    static boolean fillFromGetrandom(MemorySegment target) {
+        if (GETRANDOM == null) {
+            return false;
+        }
+        try {
+            long done = 0;
+            while (done < target.byteSize()) {
+                // A large request may come back short, or be cut by a signal
+                // (-1, EINTR): ask for the rest; give up only after a failure
+                // that brought nothing, and let the next source try.
+                long got = (long) GETRANDOM.invokeExact(target.asSlice(done),
+                        target.byteSize() - done, 0);
+                if (got <= 0) {
+                    return false;
+                }
+                done += got;
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    static boolean fillFromGetentropy(MemorySegment target) {
+        if (GETENTROPY == null) {
+            return false;
+        }
+        try {
+            for (long done = 0; done < target.byteSize(); done += GETENTROPY_MAX) {
+                long chunk = Math.min(GETENTROPY_MAX, target.byteSize() - done);
+                if ((int) GETENTROPY.invokeExact(target.asSlice(done, chunk), chunk) != 0) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    static boolean fillFromUrandom(MemorySegment target) {
         if (Platform.isWindows()) {
             return false;
         }
@@ -104,6 +157,20 @@ public final class Entropy {
             MemorySegment.copy(MemorySegment.ofArray(scratch), 0, target, 0, scratch.length);
         } finally {
             java.util.Arrays.fill(scratch, (byte) 0);
+        }
+    }
+
+    private static MethodHandle lookupLibc(String name, boolean here,
+                                           FunctionDescriptor descriptor) {
+        if (!here) {
+            return null;
+        }
+        try {
+            return Linker.nativeLinker().defaultLookup().find(name)
+                    .map(symbol -> Linker.nativeLinker().downcallHandle(symbol, descriptor))
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 

@@ -68,7 +68,10 @@ public final class SeclumeSslEngine extends SSLEngine {
          * What to do with the next bytes: send {@code unchanged} of them as
          * they are, or replace the first {@code replaced} with
          * {@code replacement}, which the engine encrypts and then closes.
-         * Neither may be more than {@link #MAX_PLAINTEXT} bytes.
+         * Neither may be more than {@link #MAX_PLAINTEXT} bytes. An empty
+         * replacement takes the bytes and sends nothing yet - for a caller
+         * that holds them until it knows what goes in their place, as an
+         * HTTP request head split over several writes.
          */
         record Step(int unchanged, int replaced, SecretScope replacement) {
 
@@ -112,6 +115,17 @@ public final class SeclumeSslEngine extends SSLEngine {
         }
         this.trust = trust;
         this.outgoing = outgoing;
+    }
+
+    /**
+     * Whether {@code session} is one of these engines' - whose server
+     * certificate and name the engine checked itself during the handshake.
+     * For a client's hostname verifier, which would otherwise check again
+     * with what it knows about JSSE's sessions.
+     */
+    public static boolean checked(javax.net.ssl.SSLSession session) {
+        return session != null && session.getClass().getEnclosingClass() == SeclumeSslEngine.class
+                && session.isValid();
     }
 
     // ---- the handshake ------------------------------------------------------
@@ -249,7 +263,9 @@ public final class SeclumeSslEngine extends SSLEngine {
                         throw new IllegalStateException("a replacement of " + step.replaced()
                                 + " bytes by " + bytes.length() + " does not fit one record");
                     }
-                    layer.write(bytes.segment().asSlice(0, bytes.length()).asByteBuffer());
+                    if (bytes.length() > 0) {
+                        layer.write(bytes.segment().asSlice(0, bytes.length()).asByteBuffer());
+                    }
                 }
                 consumed = step.replaced();
             } else {

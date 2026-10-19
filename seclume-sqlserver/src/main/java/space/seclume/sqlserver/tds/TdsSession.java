@@ -644,9 +644,10 @@ public final class TdsSession implements AutoCloseable {
                         + "checked, and trustServerCertificate=true checks nothing. Leave it off, "
                         + "or name the server's key with tlsPin; nothing was sent", "28000");
             }
+            // The URL's user, or a dynamic secret's own (Vault's database engine).
             Login7.Settings login = new Login7.Settings(settings.host(), settings.database(),
-                    settings.user(), settings.secret(), settings.applicationName(), "seclume",
-                    recoveryData);
+                    space.seclume.secret.DynamicUser.loginUser(settings.user(), settings.secret()),
+                    settings.secret(), settings.applicationName(), "seclume", recoveryData);
             LoginResponse response;
             if (Kerberos.is(settings.secret())) {
                 response = integrated(channel, login, preLogin,

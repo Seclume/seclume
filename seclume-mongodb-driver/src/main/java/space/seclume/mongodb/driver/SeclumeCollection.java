@@ -501,44 +501,83 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
         throw mapReduce();
     }
 
-    private static UnsupportedOperationException searchIndexes() {
-        return new UnsupportedOperationException("Atlas Search indexes are not supported by "
-                + "seclume's MongoDB driver yet");
-    }
+    // ---- Atlas Search indexes -------------------------------------------------
+    // The index management specification's commands; Atlas, or a server with
+    // mongot beside it, runs them - another one refuses them with its own error.
 
     @Override
     public String createSearchIndex(String indexName, Bson definition) {
-        throw searchIndexes();
+        return createSearchIndexes(List.of(new SearchIndexModel(indexName, definition))).get(0);
     }
 
     @Override
     public String createSearchIndex(Bson definition) {
-        throw searchIndexes();
+        // No name: the server calls it "default", and says so in its answer.
+        return createSearchIndexes(List.of(new SearchIndexModel(definition))).get(0);
     }
 
     @Override
     public List<String> createSearchIndexes(List<SearchIndexModel> models) {
-        throw searchIndexes();
+        if (models == null || models.isEmpty()) {
+            throw new IllegalArgumentException("no search index to create");
+        }
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            BsonArray indexes = new BsonArray();
+            for (SearchIndexModel model : models) {
+                BsonDocument index = new BsonDocument("definition", doc(model.getDefinition()));
+                if (model.getName() != null) {
+                    index.put("name", new BsonString(model.getName()));
+                }
+                if (model.getType() != null) {
+                    index.put("type", model.getType().toBsonValue());
+                }
+                indexes.add(index);
+            }
+            BsonDocument reply = topology.command(null, ReadPreference.primary(), db(),
+                    new BsonDocument("createSearchIndexes", new BsonString(name()))
+                            .append("indexes", indexes)).document();
+            List<String> names = new ArrayList<>();
+            for (BsonValue created : reply.getArray("indexesCreated", new BsonArray())) {
+                names.add(created.asDocument().getString("name").getValue());
+            }
+            return names;
+        }
     }
 
     @Override
     public void updateSearchIndex(String indexName, Bson definition) {
-        throw searchIndexes();
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            primary(null, db(), new BsonDocument("updateSearchIndex", new BsonString(name()))
+                    .append("name", new BsonString(indexName))
+                    .append("definition", doc(definition)));
+        }
     }
 
     @Override
     public void dropSearchIndex(String indexName) {
-        throw searchIndexes();
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            primary(null, db(), new BsonDocument("dropSearchIndex", new BsonString(name()))
+                    .append("name", new BsonString(indexName)));
+        } catch (com.mongodb.MongoCommandException e) {
+            // The specification: a collection or an index that is not there
+            // is no error for a drop.
+            if (e.getErrorCode() != 26) {
+                throw e;
+            }
+        }
     }
 
     @Override
     public ListSearchIndexesIterable<Document> listSearchIndexes() {
-        throw searchIndexes();
+        return listSearchIndexes(Document.class);
     }
 
     @Override
     public <R> ListSearchIndexesIterable<R> listSearchIndexes(Class<R> type) {
-        throw searchIndexes();
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            return Iterables.timed(new Iterables.ListSearchIndexes<>(topology, null,
+                    registry.get(type), db(), name(), registry), timeoutMillis);
+        }
     }
 
     // ---- inserting ----------------------------------------------------------

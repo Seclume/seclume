@@ -138,10 +138,41 @@ class LocalMongoSessionTest {
         }
     }
 
+    /**
+     * snappy and zstd the same way, through aircompressor: the server's
+     * counters show what it took in compressed and what it sent back so, and
+     * the replies read as they should. The URL's first one the server agrees
+     * to is the one used.
+     */
+    @Test
+    void snappyAndZstdAreAgreedAndUsedBothWays() {
+        for (OpMsg.Compressor compressor : java.util.List.of(OpMsg.Compressor.SNAPPY,
+                OpMsg.Compressor.ZSTD)) {
+            String name = compressor.wireName();
+            try (MongoSession session = open("&compressors=" + name + ",zlib")) {
+                assertEquals(compressor, session.compressor(), "the server did not agree to "
+                        + name);
+                long in = bytes(session, name, "decompressor");
+                long out = bytes(session, name, "compressor");
+                BsonDocument big = new BsonDocument("ping", new BsonInt32(1))
+                        .append("comment", new BsonString("z".repeat(20_000)));
+                assertEquals(1.0, session.command("admin", big).getNumber("ok").doubleValue());
+                assertTrue(bytes(session, name, "decompressor") > in,
+                        "nothing reached the server compressed with " + name);
+                assertTrue(bytes(session, name, "compressor") > out,
+                        "the server sent nothing back compressed with " + name);
+            }
+        }
+    }
+
     private static long zlibBytesIn(MongoSession session) {
+        return bytes(session, "zlib", "decompressor");
+    }
+
+    private static long bytes(MongoSession session, String compressor, String direction) {
         return session.command("admin", new BsonDocument("serverStatus", new BsonInt32(1)))
-                .getDocument("network").getDocument("compression").getDocument("zlib")
-                .getDocument("decompressor").getNumber("bytesIn").longValue();
+                .getDocument("network").getDocument("compression").getDocument(compressor)
+                .getDocument(direction).getNumber("bytesIn").longValue();
     }
 
     /** A refused command is the API's exception with the server's code; the session goes on. */

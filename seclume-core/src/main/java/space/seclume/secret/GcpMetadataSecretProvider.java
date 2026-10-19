@@ -24,6 +24,12 @@ import java.util.Map;
  * <p>It works as the {@code token-provider} of {@code gcp-secret-manager} as
  * well, which then reads with the workload's identity and nothing else.
  *
+ * <p>With {@code audience=...} it is the account's <b>identity token</b>
+ * instead - a JWT naming that audience, for a service that checks who the
+ * caller is rather than what it may do: MongoDB's {@code MONGODB-OIDC} login
+ * ({@code ENVIRONMENT:gcp}). The metadata server answers it as plain text,
+ * which goes from the socket to the target as it is.
+ *
  * <p><b>The token never becomes a {@code String}</b>, where
  * {@code GoogleCredentials.getAccessToken().getTokenValue()} is one. The
  * answer lands in native memory and only {@code access_token} is copied out.
@@ -43,6 +49,7 @@ public final class GcpMetadataSecretProvider implements SecretProvider {
     private final int timeoutMillis;
     private final String account;
     private final String scopes;
+    private final String audience;
     private final int maxLength;
 
     /**
@@ -51,12 +58,29 @@ public final class GcpMetadataSecretProvider implements SecretProvider {
      *                account's own
      */
     public GcpMetadataSecretProvider(String account, String scopes, int maxLength) {
-        this(METADATA_HOST, 80, 5_000, account, scopes, maxLength);
+        this(METADATA_HOST, 80, 5_000, account, scopes, null, maxLength);
+    }
+
+    /** @param audience for an identity token instead of an access token, or {@code null} */
+    public GcpMetadataSecretProvider(String account, String scopes, String audience,
+            int maxLength) {
+        this(METADATA_HOST, 80, 5_000, account, scopes, audience, maxLength);
     }
 
     /** The same against another address - for tests, which run a stand-in on loopback. */
     public GcpMetadataSecretProvider(String host, int port, int timeoutMillis, String account,
             String scopes, int maxLength) {
+        this(host, port, timeoutMillis, account, scopes, null, maxLength);
+    }
+
+    /** The same against another address, for an identity token - for tests. */
+    public GcpMetadataSecretProvider(String host, int port, int timeoutMillis, String account,
+            String scopes, String audience, int maxLength) {
+        if (audience != null && scopes != null && !scopes.isBlank()) {
+            throw new IllegalArgumentException("gcp-metadata takes scopes for an access token "
+                    + "or audience for an identity token, not both");
+        }
+        this.audience = audience == null || audience.isBlank() ? null : audience;
         this.host = host;
         this.port = port;
         this.timeoutMillis = timeoutMillis;
@@ -72,6 +96,13 @@ public final class GcpMetadataSecretProvider implements SecretProvider {
 
     @Override
     public int writeSecret(MemorySegment target) {
+        if (audience != null) {
+            String identity = "/computeMetadata/v1/instance/service-accounts/"
+                    + URLEncoder.encode(account, StandardCharsets.UTF_8) + "/identity?audience="
+                    + URLEncoder.encode(audience, StandardCharsets.UTF_8);
+            return MetadataToken.fetchRaw("the GCP metadata server", host, port, timeoutMillis,
+                    identity, Map.of("Metadata-Flavor", "Google"), target);
+        }
         String path = "/computeMetadata/v1/instance/service-accounts/"
                 + URLEncoder.encode(account, StandardCharsets.UTF_8) + "/token"
                 + (scopes == null || scopes.isBlank() ? ""

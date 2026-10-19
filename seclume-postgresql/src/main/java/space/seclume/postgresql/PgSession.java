@@ -526,6 +526,9 @@ public final class PgSession implements AutoCloseable {
         return id;
     }
 
+    /** The user this login went out as: the URL's, or a dynamic secret's own (Vault). */
+    private String loginUser;
+
     private void startup(Settings settings) throws SQLException {
         // The server does not send the database back among its parameters, so
         // it is kept here - getCatalog() has to answer with something, and
@@ -535,7 +538,9 @@ public final class PgSession implements AutoCloseable {
         try {
             WireBuffer out = channel.beginUntagged();
             out.putInt(PgProtocol.VERSION_3);
-            out.putCString("user").putCString(settings.user());
+            loginUser = space.seclume.secret.DynamicUser.loginUser(settings.user(),
+                    settings.secret());
+            out.putCString("user").putCString(loginUser);
             out.putCString("database").putCString(settings.database());
             out.putCString("application_name").putCString(settings.applicationName());
             out.putCString("client_encoding").putCString("UTF8");
@@ -664,7 +669,7 @@ public final class PgSession implements AutoCloseable {
                     case PgProtocol.AUTH_MD5 -> {
                         authenticationMethod = "md5";
                         MemorySegment salt = in.slice(in.position(), 4);
-                        sendMd5(settings.user(), secret.secret(), salt);
+                        sendMd5(loginUser, secret.secret(), salt);
                         channel.endMessage();
                     }
                     case PgProtocol.AUTH_SASL -> {

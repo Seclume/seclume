@@ -164,7 +164,18 @@ public final class TtcBinds {
      * everything else - see {@code TtcResult#returned}.
      */
     public void addOutput() {
-        owned().add(new Output(OracleColumn.TYPE_NUMBER, false));
+        addOutput(OracleColumn.TYPE_NUMBER);
+    }
+
+    /**
+     * The same with the type the server should write: a key that is a
+     * VARCHAR2 or a RAW, written into a NUMBER, is ORA-01722 - or a RAW read
+     * as digits.
+     *
+     * @param type one of {@link OracleColumn}'s type numbers
+     */
+    public void addOutput(int type) {
+        owned().add(new Output(type, false));
     }
 
     /**
@@ -386,6 +397,9 @@ public final class TtcBinds {
         }
         if (type == OracleColumn.TYPE_VARCHAR) {
             return 4000L * BYTES_PER_CHARACTER;
+        }
+        if (type == OracleColumn.TYPE_RAW) {
+            return 2000;                               // the longest RAW column
         }
         if (type == OracleColumn.TYPE_DATE) {
             return DATE_SIZE;

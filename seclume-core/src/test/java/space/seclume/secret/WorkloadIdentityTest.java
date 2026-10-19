@@ -113,6 +113,34 @@ class WorkloadIdentityTest {
         }
     }
 
+    /**
+     * App Service, Functions, Container Apps: the endpoint and header the
+     * platform sets, its own API version - and the same token into native
+     * memory. An endpoint that is not plain http is refused before anything
+     * is sent.
+     */
+    @Test
+    void azureAppServiceAsksItsOwnEndpoint() throws Exception {
+        String answer = "{\"access_token\":\"" + TOKEN + "\",\"expires_on\":\"1790000000\","
+                + "\"resource\":\"x\",\"token_type\":\"Bearer\",\"client_id\":\"c\"}";
+        try (Metadata endpoint = new Metadata(200, answer)) {
+            SecretProvider provider = new AzureManagedIdentitySecretProvider(
+                    "http://127.0.0.1:" + endpoint.port() + "/msi/token", "guard-7d2e",
+                    AzureManagedIdentitySecretProvider.OSSRDBMS_RESOURCE, null, 8192);
+            assertEquals(TOKEN, read(provider));
+            String request = endpoint.request;
+            assertTrue(request.startsWith("GET /msi/token?api-version=2019-08-01&resource="),
+                    request);
+            assertTrue(request.contains("\r\nX-IDENTITY-HEADER: guard-7d2e\r\n"), request);
+            assertFalse(request.contains("Metadata: true"), request);
+        }
+        for (String endpoint : new String[] {"https://127.0.0.1:41000/msi/token", "not a url"}) {
+            assertThrows(IllegalArgumentException.class, () -> new AzureManagedIdentitySecretProvider(
+                    endpoint, "guard", AzureManagedIdentitySecretProvider.OSSRDBMS_RESOURCE, null,
+                    8192), endpoint);
+        }
+    }
+
     @Test
     void googleAsksTheMetadataServerTheWayItInsistsOn() throws Exception {
         String answer = "{\"access_token\":\"" + TOKEN + "\",\"expires_in\":3599,"
@@ -128,6 +156,30 @@ class WorkloadIdentityTest {
             assertTrue(request.contains("\r\nMetadata-Flavor: Google\r\n"),
                     "the metadata server refuses a request without this header: " + request);
         }
+    }
+
+    /** With an audience, the identity token - a JWT as plain text, as MongoDB's OIDC login wants it. */
+    @Test
+    void googleGivesAnIdentityTokenForAnAudience() throws Exception {
+        try (Metadata server = new Metadata(200, TOKEN + "\n")) {
+            SecretProvider provider = new GcpMetadataSecretProvider("127.0.0.1", server.port(),
+                    5_000, null, null, "api://mongodb-cluster", 8192);
+            assertEquals(TOKEN, read(provider));
+            String request = server.request;
+            assertTrue(request.startsWith("GET /computeMetadata/v1/instance/service-accounts/"
+                    + "default/identity?audience=api%3A%2F%2Fmongodb-cluster "), request);
+            assertTrue(request.contains("\r\nMetadata-Flavor: Google\r\n"), request);
+        }
+        // An answer that is not a JWT is neither taken nor quoted.
+        try (Metadata server = new Metadata(200, "<html>" + TOKEN + "</html>")) {
+            SecretProvider provider = new GcpMetadataSecretProvider("127.0.0.1", server.port(),
+                    5_000, null, null, "api://mongodb-cluster", 8192);
+            SecretUnavailableException refused = assertThrows(SecretUnavailableException.class,
+                    () -> read(provider));
+            assertFalse(refused.getMessage().contains(TOKEN), refused.getMessage());
+        }
+        assertThrows(IllegalArgumentException.class, () -> new GcpMetadataSecretProvider(
+                "127.0.0.1", 1, 5_000, null, "scope-a", "api://x", 8192));
     }
 
     /**

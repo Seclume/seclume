@@ -43,6 +43,13 @@ public final class Srv {
         List<String> txt(String name);
     }
 
+    private static final java.util.regex.Pattern HOST_NAME = java.util.regex.Pattern.compile(
+            "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*");
+    private static final java.util.regex.Pattern TXT_VALUE = java.util.regex.Pattern.compile(
+            "[A-Za-z0-9_.$-]{1,255}");
+    private static final java.util.regex.Pattern PORT = java.util.regex.Pattern.compile(
+            "[1-9][0-9]{0,4}");
+
     private static final Set<String> TXT_OPTIONS = Set.of("authsource", "replicaset",
             "loadbalanced");
 
@@ -125,16 +132,26 @@ public final class Srv {
         String domain = labels.length >= 3 ? host.substring(host.indexOf('.')) : "." + host;
         List<String> seeds = new ArrayList<>();
         for (String target : found) {
-            String name = target.substring(0, target.lastIndexOf(':')).toLowerCase(Locale.ROOT);
+            int colon = target.lastIndexOf(':');
+            String port = colon < 0 ? "" : target.substring(colon + 1);
+            String name = target.substring(0, Math.max(colon, 0)).toLowerCase(Locale.ROOT);
             if (name.endsWith(".")) {
                 name = name.substring(0, name.length() - 1);
+            }
+            // Only a host name and a port go into the URL: a target that
+            // carried '/', '?', '@' or ',' would end in the domain and still
+            // name another host, or options, once it is part of the URL.
+            if (!HOST_NAME.matcher(name).matches() || !PORT.matcher(port).matches()
+                    || Integer.parseInt(port) > 65_535) {
+                throw new MongoConfigurationException("the SRV record of " + host + " names "
+                        + "'" + target + "', which is not a host name and port");
             }
             if (!name.endsWith(domain) || name.equals(domain.substring(1))) {
                 throw new MongoConfigurationException("the SRV record of " + host + " names "
                         + name + ", which is not within " + domain.substring(1)
                         + " - refused, so that DNS cannot send the login elsewhere");
             }
-            seeds.add(name + target.substring(target.lastIndexOf(':')));
+            seeds.add(name + ":" + port);
         }
         return seeds;
     }
@@ -159,7 +176,14 @@ public final class Srv {
                         + " sets '" + key + "'; only authSource, replicaSet and loadBalanced "
                         + "may come from DNS");
             }
-            options.put(key, equals < 0 ? "" : pair.substring(equals + 1));
+            String value = equals < 0 ? "" : pair.substring(equals + 1);
+            // Into the URL as it is: nothing that could end the value and start
+            // something else there.
+            if (!TXT_VALUE.matcher(value).matches()) {
+                throw new MongoConfigurationException("the TXT record of " + host
+                        + " sets " + key + " to '" + value + "', which is not a plain name");
+            }
+            options.put(key, value);
         }
         return options;
     }

@@ -135,7 +135,12 @@ public final class FrameworkMatrix {
             new Framework("Spring transactions on MongoDB (seclume-mongodb-driver)",
                     "SpringDataMongoTransactionsOn",
                     "@Transactional through MongoTransactionManager on a replica set: both "
-                    + "writes, or neither"));
+                    + "writes, or neither"),
+            new Framework("Spring Data MongoDB reactive (seclume-mongodb-reactive)",
+                    "SpringDataMongoReactiveOn",
+                    "ReactiveMongoRepository and ReactiveMongoTemplate, backpressure, a "
+                    + "transaction through ReactiveMongoTransactionManager, a change stream "
+                    + "- on the reactive driver version Spring Boot manages"));
 
     private static final Pattern SET = Pattern.compile("Test set: (\\S+)");
     private static final Pattern COUNTS = Pattern.compile(

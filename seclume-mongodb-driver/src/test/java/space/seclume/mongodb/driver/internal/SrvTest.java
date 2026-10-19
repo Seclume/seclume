@@ -69,6 +69,36 @@ class SrvTest {
                 () -> Srv.expand("mongodb+srv://cluster0.example.com/", lookalike));
     }
 
+    /**
+     * A target that ends in the domain and still names another host once it
+     * stands in the URL - or options, or a port that is none.
+     */
+    @Test
+    void aTargetThatIsNotAHostNameIsRefused() {
+        for (String target : List.of("evil.com:27017/?x=.example.com:27017",
+                "evil.com@a.example.com:27017", "evil.com:1,a.example.com:27017",
+                "a.example.com", "a.example.com:0", "a.example.com:99999",
+                "a.example.com:27017?tls=false")) {
+            Srv.Resolver spoilt = dns(Map.of("_mongodb._tcp.cluster0.example.com",
+                    List.of(target)), Map.of());
+            assertThrows(MongoConfigurationException.class,
+                    () -> Srv.expand("mongodb+srv://cluster0.example.com/", spoilt), target);
+        }
+    }
+
+    /** A TXT value goes into the URL as it is: nothing in it may end it and start another. */
+    @Test
+    void aTxtValueThatIsNotAPlainNameIsRefused() {
+        for (String txt : List.of("replicaSet=rs0#x", "authSource=admin/x",
+                "replicaSet=a%26tls%3Dfalse", "authSource=")) {
+            Srv.Resolver spoilt = dns(Map.of("_mongodb._tcp.cluster0.example.com",
+                    List.of("a.example.com:27017")), Map.of("cluster0.example.com",
+                    List.of(txt)));
+            assertThrows(MongoConfigurationException.class,
+                    () -> Srv.expand("mongodb+srv://cluster0.example.com/", spoilt), txt);
+        }
+    }
+
     /** A host of two labels is its own domain: a target has to be below it, not it. */
     @Test
     void aShortHostNeedsTargetsBelowIt() {

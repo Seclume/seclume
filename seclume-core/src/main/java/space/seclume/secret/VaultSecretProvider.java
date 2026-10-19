@@ -56,12 +56,24 @@ import space.seclume.internal.SecretFetch;
  * start failing instead of after. Dynamic credentials without that are a
  * scheduled outage; with it they are just credentials.
  *
+ * <h2>The user, the renewal, the revocation</h2>
+ *
+ * <p>A credential from {@code database/creds} is a user and its password, and
+ * the user is a new one each time: {@link #currentUser()} hands it to the
+ * driver, which logs in with it ({@link DynamicUser}). Halfway through the
+ * lease the lease is <b>renewed</b> ({@code sys/leases/renew}) - the same
+ * user, longer - for as long as Vault extends it; only when the role's
+ * {@code max_ttl} caps the renewal is a new user fetched. When the provider
+ * is closed the lease is <b>revoked</b>, and Vault drops the user then rather
+ * than at the end of its lease.
+ *
  * <p>The Vault token itself is a secret and comes from another provider - a
  * file, an agent socket, the Kubernetes service-account path. It is written
  * into the request from native memory and never concatenated into a header
  * string.
  */
-public final class VaultSecretProvider implements SecretProvider, ExpiringCredentials {
+public final class VaultSecretProvider implements SecretProvider, ExpiringCredentials,
+        DynamicUser {
 
     /** Fetch again once the remaining lease is under this fraction of its length. */
     private static final double REFRESH_AT = 0.5;
@@ -87,6 +99,13 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     private Instant fetchedAt;
     private Instant validUntil;
     private boolean closed;
+    /** The lease of the credential in hand - an id, not a secret - and its length as granted. */
+    private String leaseId;
+    private long leaseSeconds;
+    /** The database user of the credential in hand, from {@code data.username}; or null. */
+    private String username;
+    /** Set when the user was handed out: the password read next is that user's, unchanged. */
+    private boolean userHandedOut;
 
     /**
      * @param address   the Vault address, e.g. {@code https://vault:8200}
@@ -152,9 +171,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
         if (closed) {
             throw new SecretUnavailableException("this Vault provider is closed");
         }
-        if (cached == null || dueForRefresh()) {
-            refresh();
+        if (cached == null || (dueForRefresh() && !userHandedOut)) {
+            renewOrRefresh();
         }
+        userHandedOut = false;
         int length = cached.length();
         if (length > target.byteSize()) {
             throw new SecretUnavailableException("the secret from " + path + " is " + length
@@ -167,6 +187,68 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     @Override
     public synchronized Instant credentialsValidUntil() {
         return validUntil;
+    }
+
+    /**
+     * The database user of the credential the next {@link #writeSecret} will
+     * write - renewed or replaced here, if it is due, so that the two belong
+     * together.
+     */
+    @Override
+    public synchronized String currentUser() {
+        if (closed) {
+            throw new SecretUnavailableException("this Vault provider is closed");
+        }
+        if (cached == null || dueForRefresh()) {
+            renewOrRefresh();
+        }
+        userHandedOut = true;
+        return username;
+    }
+
+    /**
+     * Extends the lease when there is one Vault will extend; fetches a new
+     * credential when it will not, or no longer far enough - a lease capped
+     * by its role's {@code max_ttl} ends whatever is asked for.
+     */
+    private void renewOrRefresh() {
+        if (cached != null && leaseId != null && renew()) {
+            return;
+        }
+        refresh();
+    }
+
+    private boolean renew() {
+        try (Arena arena = Arena.ofConfined();
+             SecretScope answer = SecretScope.in(arena, 64 * 1024)) {
+            SecretFetch.Response response = send("PUT", "/v1/sys/leases/renew",
+                    "{\"lease_id\":\"" + jsonText(leaseId) + "\",\"increment\":"
+                            + leaseSeconds + "}", answer.segment());
+            if (!response.ok()) {
+                return false;                  // not renewable, or gone: a new credential
+            }
+            answer.length(response.bodyLength());
+            long granted = Math.min(JsonOff.number(answer.segment(), answer.length(),
+                    "lease_duration"), MAX_LEASE_SECONDS);
+            Instant now = clock.instant();
+            Instant until = now.plusSeconds(granted);
+            // Worth keeping only if it grants at least half a lease more: near
+            // max_ttl Vault grants what is left, and a renewal that was due
+            // again at once would only put the new user off.
+            if (granted * 2 < leaseSeconds) {
+                return false;
+            }
+            fetchedAt = now;
+            validUntil = until;
+            return true;
+        } catch (IOException | JsonOff.NotFound | SecretUnavailableException e) {
+            return false;                      // a renewal that failed is a fetch, not an outage
+        }
+    }
+
+    /** A lease id in a JSON string: it is Vault's own path-like id, quotes and backslashes escaped. */
+    private static String jsonText(String text) {
+        return text.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     /**
@@ -184,7 +266,12 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
         Instant now = clock.instant();
         Duration whole = Duration.between(fetchedAt, validUntil);
         Instant half = fetchedAt.plus(Duration.ofMillis((long) (whole.toMillis() * REFRESH_AT)));
-        Instant latest = validUntil.minus(LATEST_REFRESH);
+        // Thirty seconds, or half a lease shorter than a minute: thirty
+        // seconds before the end of a twenty second lease lie before it began,
+        // and every connection fetched a new user.
+        Duration margin = whole.dividedBy(2).compareTo(LATEST_REFRESH) < 0 ? whole.dividedBy(2)
+                : LATEST_REFRESH;
+        Instant latest = validUntil.minus(margin);
         return now.isAfter(half) || now.isAfter(latest);
     }
 
@@ -224,6 +311,11 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 cached = fresh;
                 fetchedAt = now;
                 validUntil = lease > 0 ? now.plusSeconds(lease) : null;
+                leaseSeconds = lease;
+                leaseId = lease > 0 ? text(answer, "lease_id") : null;
+                // The database engine's user, beside the password; a KV secret
+                // nests its fields one level deeper and names no user here.
+                username = text(answer, "data", "username");
                 if (previous != null) {
                     previous.close();           // the old credential is wiped, not dropped
                 }
@@ -240,6 +332,23 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
         }
     }
 
+    /** A field that is no secret - a lease id, a user name - as text; null when absent or empty. */
+    private static String text(SecretScope answer, String... field) {
+        if (!JsonOff.has(answer.segment(), answer.length(), field)) {
+            return null;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(1024);
+            int length = JsonOff.string(answer.segment(), answer.length(), out, field);
+            // seclume-allow: a lease id or a database user name - neither is a secret
+            String value = new String(out.asSlice(0, length).toArray(
+                    java.lang.foreign.ValueLayout.JAVA_BYTE), java.nio.charset.StandardCharsets.UTF_8);
+            return value.isEmpty() ? null : value;
+        } catch (RuntimeException notText) {      // JsonOff.NotFound among them
+            return null;
+        }
+    }
+
     /** KV v2 nests the data one level deeper than everything else does. */
     private int extract(SecretScope answer, MemorySegment out) {
         if (JsonOff.has(answer.segment(), answer.length(), "data", "data", field)) {
@@ -250,15 +359,41 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
 
     /** The request, with the token written in from native memory. */
     private SecretFetch.Response fetch(MemorySegment into) throws IOException {
+        return send("GET", "/v1/" + path, null, into);
+    }
+
+    /** Any request to Vault: the token from native memory, a body that is no secret. */
+    private SecretFetch.Response send(String method, String requestPath, String body,
+            MemorySegment into) throws IOException {
         try (SecretScope vaultToken = SecretScope.fromProvider(token)) {
             Map<String, String> headers = namespace == null || namespace.isEmpty()
                     ? Map.of()
                     : Map.of("X-Vault-Namespace", namespace);
-            return SecretFetch.send(host, port, verify, timeoutMillis, "GET", "/v1/" + path,
+            return SecretFetch.send(host, port, verify, timeoutMillis, method, requestPath,
                     headers,
                     List.of(new SecretFetch.SecretHeader("X-Vault-Token",
                             vaultToken.segment(), vaultToken.length())),
-                    null, into);
+                    body, into);
+        }
+    }
+
+    /**
+     * Gives the lease back: Vault drops the database user now, not at the
+     * end of its lease. Best effort - a Vault that cannot be reached lets the
+     * lease run out by itself.
+     */
+    private void revoke() {
+        if (leaseId == null) {
+            return;
+        }
+        try (Arena arena = Arena.ofConfined();
+             SecretScope answer = SecretScope.in(arena, 16 * 1024)) {
+            send("PUT", "/v1/sys/leases/revoke", "{\"lease_id\":\"" + jsonText(leaseId)
+                    + "\"}", answer.segment());
+        } catch (IOException | RuntimeException unreachable) {
+            // the lease ends on its own
+        } finally {
+            leaseId = null;
         }
     }
 
@@ -269,6 +404,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
         }
         closed = true;
         try {
+            revoke();
             if (cached != null) {
                 cached.close();
                 cached = null;

@@ -19,13 +19,13 @@ java -XX:StartFlightRecording=filename=app.jfr,settings=profile ...
 |---|---|
 | `space.seclume.ConnectionOpen` | how long a physical connect, TLS and login really take |
 | `space.seclume.TlsHandshake` | whether the slow part is the handshake and which stack ran it |
-| `space.seclume.Authentication` | the login on its own, and by what method the server asked for it — databases and mail (SMTP, IMAP, POP3) |
+| `space.seclume.Authentication` | the login on its own, and by what method the server asked for it — databases (MongoDB with its mechanism), mail (SMTP, IMAP, POP3), Redis through Jedis, Kafka's SCRAM |
 | `space.seclume.Query` | which statements are slow — over 10 ms by default, lower it in the recording settings |
 | `space.seclume.PoolWait` | the one an operator wants when the app is slow and the database is idle |
 | `space.seclume.Failover` | which server was passed over, why, and **how long it took to not answer** |
 | `space.seclume.CredentialRotation` | that a secret was fetched, how long it took, and when it expires |
 | `space.seclume.StatementCache` | whether server-side plans are actually being reused |
-| `space.seclume.SecretUse` | which credential seclume wrote into which request: HTTP (bearer, basic, API key, OAuth2, JWT), any client on `SeclumeSslSocketFactory` - Kubernetes, JGit, gRPC over HTTP/2 - AWS (SigV4, presign, session token), Azure Storage (Shared Key), LDAP bind, RabbitMQ login |
+| `space.seclume.SecretUse` | which credential seclume wrote into which request: HTTP (bearer, basic, API key, OAuth2, JWT), any client on `SeclumeSslSocketFactory` - Kubernetes, JGit, gRPC over HTTP/2 - AWS (SigV4, presign, session token), Azure Storage (Shared Key), LDAP bind, RabbitMQ login, Redis `AUTH` through Lettuce, Kafka's SASL PLAIN and OAUTHBEARER, the Elasticsearch and OpenSearch clients |
 | `space.seclume.Signature` | a signature made or checked with a key held off the heap: TLS server keys, SSH, Google service accounts, JWTs, webhook HMACs — and whether a check matched |
 | `space.seclume.SecretRotation` | a secret that changed at its source and was taken up without a restart, or refused |
 
@@ -61,6 +61,23 @@ The fingerprint replaces literals of every quoting form each dialect has, number
 placeholder spelling. `in (?, ?, ?)` collapses to `in (?)`, so one query stays one entry. Where
 a dialect makes it ambiguous whether something is an identifier or a string (`"x"` in MySQL),
 the fingerprint gives up the identifier rather than risk the value.
+
+**MongoDB** records each command the same way, by its shape - seclume's own driver directly,
+the official driver through a command listener `SeclumeMongo` installs:
+
+```
+find shop.orders filter {status: ?, total: {$gt: ?}}
+aggregate shop.orders pipeline ({$match: {tags: {$in: ?}}}, {$group: {_id: ?, n: {$sum: ?}}})
+```
+
+The command, the namespace, and the field names and operators of its filter, sort, projection,
+update or pipeline; every value is a `?`, and a field name that is not a name - a map keyed by
+data - is masked too. The monitor's `hello`, which waits on the server on purpose, and the login
+commands are not recorded as queries. A new primary, and a read or write retried on another
+connection, are `Failover` events; the login is an `Authentication` event with the mechanism
+(`SCRAM-SHA-256`, `MONGODB-X509`, `MONGODB-AWS`, `MONGODB-OIDC`, and an OIDC login again when the
+server says the token expired). `LocalMongoEventsTest` plants a value in a document and a filter
+and searches every field of every event for it.
 
 ## The same events as metrics
 

@@ -121,19 +121,74 @@ public final class OpMsg {
         }
     }
 
-    /** The compressor id of zlib in OP_COMPRESSED (the compression specification). */
-    static final int ZLIB = 2;
+    /** The compressors of OP_COMPRESSED and their ids (the compression specification). */
+    public enum Compressor {
+        NOOP(0), SNAPPY(1), ZLIB(2), ZSTD(3);
+
+        final int id;
+
+        Compressor(int id) {
+            this.id = id;
+        }
+
+        /** The name in a URL's {@code compressors} and in {@code hello}. */
+        public String wireName() {
+            return name().toLowerCase(java.util.Locale.ROOT);
+        }
+
+        static Compressor byId(int id) {
+            for (Compressor compressor : values()) {
+                if (compressor.id == id) {
+                    return compressor;
+                }
+            }
+            return null;
+        }
+
+        /** {@code null} for a name that is none of them. */
+        public static Compressor byName(String name) {
+            for (Compressor compressor : values()) {
+                if (compressor != NOOP && compressor.wireName().equalsIgnoreCase(name.trim())) {
+                    return compressor;
+                }
+            }
+            return null;
+        }
+    }
+
+    /** An OP_MSG as OP_COMPRESSED with zlib; see {@link #compress(ByteBuffer, Compressor, int)}. */
+    public static ByteBuffer compress(ByteBuffer message, int level) {
+        return compress(message, Compressor.ZLIB, level);
+    }
 
     /**
-     * An OP_MSG as OP_COMPRESSED with zlib: the header stays, the rest is
-     * deflated behind the original opcode, its size and the compressor id.
+     * An OP_MSG as OP_COMPRESSED: the header stays, the rest is compressed
+     * behind the original opcode, its size and the compressor id.
+     *
+     * @param level zlib's level; the others have none
      */
-    public static ByteBuffer compress(ByteBuffer message, int level) {
+    public static ByteBuffer compress(ByteBuffer message, Compressor compressor, int level) {
         ByteBuffer in = message.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         int start = in.position();
         int length = in.remaining();
         byte[] body = new byte[length - HEADER];
         in.duplicate().position(start + HEADER).get(body);
+        byte[] packed = compressor == Compressor.ZLIB ? deflate(body, level)
+                : Airlift.compress(compressor, body);
+        ByteBuffer out = ByteBuffer.allocate(HEADER + 9 + packed.length) // seclume-allow: a command, compressed; the login is never compressed
+                .order(ByteOrder.LITTLE_ENDIAN);
+        out.putInt(HEADER + 9 + packed.length)
+                .putInt(in.getInt(start + 4))
+                .putInt(in.getInt(start + 8))
+                .putInt(OP_COMPRESSED)
+                .putInt(in.getInt(start + 12))
+                .putInt(body.length)
+                .put((byte) compressor.id)
+                .put(packed);
+        return out.flip();
+    }
+
+    private static byte[] deflate(byte[] body, int level) {
         java.util.zip.Deflater deflater = new java.util.zip.Deflater(level);
         try {
             deflater.setInput(body);
@@ -145,18 +200,7 @@ public final class OpMsg {
                 int n = deflater.deflate(chunk);
                 deflated.write(chunk, 0, n);
             }
-            byte[] packed = deflated.toByteArray();
-            ByteBuffer out = ByteBuffer.allocate(HEADER + 9 + packed.length) // seclume-allow: a command, compressed; the login is never compressed
-                    .order(ByteOrder.LITTLE_ENDIAN);
-            out.putInt(HEADER + 9 + packed.length)
-                    .putInt(in.getInt(start + 4))
-                    .putInt(in.getInt(start + 8))
-                    .putInt(OP_COMPRESSED)
-                    .putInt(in.getInt(start + 12))
-                    .putInt(body.length)
-                    .put((byte) ZLIB)
-                    .put(packed);
-            return out.flip();
+            return deflated.toByteArray();
         } finally {
             deflater.end();
         }
@@ -170,6 +214,15 @@ public final class OpMsg {
      * limit is reached, not after it has filled the memory.
      */
     public static ByteBuffer decompress(ByteBuffer message, int maxMessageSize) {
+        return decompress(message, maxMessageSize, java.util.Set.of(Compressor.ZLIB));
+    }
+
+    /**
+     * The same for the compressors agreed in {@code hello}: a reply may come
+     * with any of them, or uncompressed ({@code noop}), but with no other.
+     */
+    public static ByteBuffer decompress(ByteBuffer message, int maxMessageSize,
+            java.util.Set<Compressor> agreed) {
         ByteBuffer in = message.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         int start = in.position();
         int length = in.remaining();
@@ -182,9 +235,10 @@ public final class OpMsg {
         if (original != OP_MSG) {
             throw refused("a compressed reply of opcode " + original + ", not OP_MSG");
         }
-        if (compressor != ZLIB) {
+        Compressor used = Compressor.byId(compressor);
+        if (used == null || (used != Compressor.NOOP && !agreed.contains(used))) {
             throw refused("a reply compressed with compressor " + compressor
-                    + ", though zlib was agreed");
+                    + ", though " + agreed + " were agreed");
         }
         if (size < SMALLEST - HEADER || size > maxMessageSize - HEADER) {
             throw refused("a compressed reply announcing " + size + " bytes; at most "
@@ -193,6 +247,28 @@ public final class OpMsg {
         byte[] packed = new byte[length - HEADER - 9];
         in.duplicate().position(start + HEADER + 9).get(packed);
         byte[] body = new byte[size];
+        if (used == Compressor.NOOP) {
+            if (packed.length != size) {
+                throw refused("an uncompressed reply of " + packed.length + " bytes where "
+                        + size + " were announced");
+            }
+            System.arraycopy(packed, 0, body, 0, size);
+        } else if (used != Compressor.ZLIB) {
+            if (Airlift.decompress(used, packed, body) != size) {
+                throw refused("a " + used.wireName() + " reply that is malformed or does not "
+                        + "decompress to the " + size + " bytes it announced");
+            }
+        } else {
+            inflate(packed, body);
+        }
+        ByteBuffer out = ByteBuffer.allocate(HEADER + size).order(ByteOrder.LITTLE_ENDIAN); // seclume-allow: a command reply, as readMessage holds it
+        out.putInt(HEADER + size).putInt(in.getInt(start + 4)).putInt(in.getInt(start + 8))
+                .putInt(OP_MSG).put(body);
+        return out.flip();
+    }
+
+    private static void inflate(byte[] packed, byte[] body) {
+        int size = body.length;
         java.util.zip.Inflater inflater = new java.util.zip.Inflater();
         try {
             inflater.setInput(packed);
@@ -221,10 +297,6 @@ public final class OpMsg {
         } finally {
             inflater.end();
         }
-        ByteBuffer out = ByteBuffer.allocate(HEADER + size).order(ByteOrder.LITTLE_ENDIAN); // seclume-allow: a command reply, as readMessage holds it
-        out.putInt(HEADER + size).putInt(in.getInt(start + 4)).putInt(in.getInt(start + 8))
-                .putInt(OP_MSG).put(body);
-        return out.flip();
     }
 
     /** The message's length from its header - checked by {@link #parse}, not here. */

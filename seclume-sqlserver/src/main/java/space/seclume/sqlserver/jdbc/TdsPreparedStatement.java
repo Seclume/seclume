@@ -107,8 +107,24 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
 
     // ---- executing -------------------------------------------------------
 
+    /**
+     * Counts and rows in the order the server sent them, as
+     * {@code Statement.execute(String)} - not with generated keys, whose
+     * {@code scope_identity()} select is the driver's and not a result.
+     */
     @Override
     public boolean execute() throws SQLException {
+        inOrderNext(!wantsGeneratedKeys);
+        try {
+            run();
+        } finally {
+            inOrderNext(false);
+        }
+        return currentResultSet() != null;
+    }
+
+    /** {@link #execute()} as it read before: the rows first, the counts behind them. */
+    boolean executeRowsFirst() throws SQLException {
         run();
         return currentResultSet() != null;
     }

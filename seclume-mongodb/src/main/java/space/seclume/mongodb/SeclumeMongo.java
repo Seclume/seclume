@@ -58,7 +58,8 @@ public final class SeclumeMongo {
         }
         SSLContext context = new SeclumeMongoSslContext(parsed);
         builder.applyConnectionString(new ConnectionString(parsed.driverConnectionString()))
-                .applyToSslSettings(b -> b.enabled(true).context(context));
+                .applyToSslSettings(b -> b.enabled(true).context(context))
+                .addCommandListener(new CommandEvents());
         requireNoCredential(builder);
         return builder;
     }

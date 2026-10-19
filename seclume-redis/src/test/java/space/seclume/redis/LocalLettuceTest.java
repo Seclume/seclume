@@ -59,6 +59,30 @@ class LocalLettuceTest {
         return null;
     }
 
+    /** What a recording of {@code work} holds of the named events. */
+    private static java.util.List<jdk.jfr.consumer.RecordedEvent> recorded(
+            java.util.function.Consumer<jdk.jfr.Recording> work, String... names) throws Exception {
+        Path file = Files.createTempFile("seclume-events", ".jfr");
+        try (jdk.jfr.Recording recording = new jdk.jfr.Recording()) {
+            for (String name : names) {
+                recording.enable(name).withThreshold(java.time.Duration.ZERO);
+            }
+            recording.start();
+            work.accept(recording);
+            recording.stop();
+            recording.dump(file);
+            return jdk.jfr.consumer.RecordingFile.readAllEvents(file);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    private static jdk.jfr.consumer.RecordedEvent first(
+            java.util.List<jdk.jfr.consumer.RecordedEvent> events, String name) {
+        return events.stream().filter(e -> e.getEventType().getName().equals(name)).findFirst()
+                .orElseThrow(() -> new AssertionError("no " + name + " in " + events));
+    }
+
     private static String url(String scheme, int port, Path secret, String more) {
         return scheme + "://" + host + ":" + port + "?user=orders&provider=file&path="
                 + secret.toString().replace('\\', '/') + more;
@@ -108,6 +132,24 @@ class LocalLettuceTest {
             overTls.shutdown();
         }
         NoSecretInHeap.assertAbsent(password);
+    }
+
+    /** The password written into Lettuce's AUTH on a real connection: one SecretUse event. */
+    @Test
+    void thePasswordWrittenInIsRecorded() throws Exception {
+        assumeTrue(!Boolean.getBoolean("seclume.redis.control"), "the control runs instead");
+        java.util.List<jdk.jfr.consumer.RecordedEvent> events = recorded(recording -> {
+            RedisClient client = SeclumeLettuce.client(tlsUrl(password));
+            try (StatefulRedisConnection<String, String> connection = client.connect()) {
+                assertEquals("orders", connection.sync().aclWhoami());
+            } finally {
+                client.shutdown();
+            }
+        }, "space.seclume.SecretUse");
+        jdk.jfr.consumer.RecordedEvent use = first(events, "space.seclume.SecretUse");
+        assertEquals("redis", use.getString("kind"));
+        assertEquals("AUTH", use.getString("mechanism"));
+        assertTrue(use.getString("target").contains(host), use.getString("target"));
     }
 
     @Test

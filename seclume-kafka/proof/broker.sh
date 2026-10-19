@@ -11,6 +11,8 @@ set -e
 NAME=seclume-kafka-test
 DIR=/tmp/seclume-kafka
 IMG=docker.io/apache/kafka:4.1.0
+# podman here, docker on a CI runner: CONTAINER_ENGINE=docker
+ENGINE=${CONTAINER_ENGINE:-podman}
 case "$1" in
 up)
   ADDRESS=$2; PORT=${3:-19092}; SECURE=${4:-19093}
@@ -37,7 +39,7 @@ up)
     "$(cat password)" > plain.env
   chmod 600 plain.env
   SCRAM="org.apache.kafka.common.security.scram.ScramLoginModule required;"
-  podman run -d --name $NAME -p $PORT:19092 -p $SECURE:19093 -v $DIR:/conf:ro,z \
+  $ENGINE run -d --name $NAME -p $PORT:19092 -p $SECURE:19093 -v $DIR:/conf:ro,z \
     --env-file plain.env \
     -e KAFKA_NODE_ID=1 -e KAFKA_PROCESS_ROLES=broker,controller \
     -e KAFKA_LISTENERS=CLIENT://:19092,SECURE://:19093,INTERNAL://:9092,CONTROLLER://:9093 \
@@ -61,18 +63,18 @@ up)
     $IMG >/dev/null
   shred -u plain.env
   for i in $(seq 60); do
-    podman exec $NAME /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 && break
+    $ENGINE exec $NAME /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 && break
     sleep 2
   done
   # The password goes in through a file inside the container, not the command line.
-  podman cp $DIR/password $NAME:/tmp/pw
+  $ENGINE cp $DIR/password $NAME:/tmp/pw
   # kafka-configs echoes its arguments on an error - nothing of it is shown.
-  podman exec $NAME sh -c 'P=$(cat /tmp/pw); rm /tmp/pw; C="/opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --entity-type users --entity-name orders"; $C --add-config "SCRAM-SHA-256=[iterations=8192,password=$P]" && $C --add-config "SCRAM-SHA-512=[password=$P]"' >/dev/null 2>&1 \
+  $ENGINE exec $NAME sh -c 'P=$(cat /tmp/pw); rm /tmp/pw; C="/opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --entity-type users --entity-name orders"; $C --add-config "SCRAM-SHA-256=[iterations=8192,password=$P]" && $C --add-config "SCRAM-SHA-512=[password=$P]"' >/dev/null 2>&1 \
     || { echo "creating the user failed (output suppressed: it would show the password)"; exit 1; }
   echo "broker up on $ADDRESS: SASL_PLAINTEXT $PORT, SASL_SSL $SECURE, user orders"
   ;;
 down)
-  podman rm -f $NAME >/dev/null 2>&1 || true
+  $ENGINE rm -f $NAME >/dev/null 2>&1 || true
   shred -u $DIR/password $DIR/token $DIR/*.key $DIR/server.pem 2>/dev/null || true
   rm -rf $DIR
   echo "broker removed"

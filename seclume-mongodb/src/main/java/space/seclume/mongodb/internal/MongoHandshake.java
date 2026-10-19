@@ -49,7 +49,17 @@ public final class MongoHandshake {
      */
     public static void authenticate(TlsLayer tls, MongoUrl url, String host, int port)
             throws IOException {
-        scram(tls, url, host, port);
+        try {
+            scram(tls, url, host, port);
+        } catch (BsonReader.Malformed e) {
+            throw malformed(host, port, e);
+        }
+    }
+
+    /** A reply that is not BSON: the login failed, as any other refusal by the server. */
+    static SSLException malformed(String host, int port, BsonReader.Malformed e) {
+        return new SSLException("MongoDB login on " + host + ":" + port + " failed: a reply "
+                + "that is not well-formed BSON: " + e.getMessage(), e);
     }
 
     private static void scram(TlsLayer tls, MongoUrl url, String host, int port)
@@ -92,7 +102,7 @@ public final class MongoHandshake {
 
             try {
                 scram.serverFirst(serverFirst, 0, (int) serverFirst.byteSize());
-            } catch (IllegalStateException e) {
+            } catch (IllegalStateException | IllegalArgumentException e) {
                 throw new SSLException("MongoDB server-first validation failed for user '" + user
                         + "' on " + host + ":" + port + ": " + e.getMessage(), e);
             }

@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import com.mongodb.MongoInternalException;
 
-/** OP_COMPRESSED with zlib: the round trip, and every way a reply is refused. */
+/** OP_COMPRESSED with zlib, snappy and zstd: the round trip, and every way a reply is refused. */
 class CompressionTest {
 
     private static final int MAX = 48_000_000;
@@ -33,6 +33,67 @@ class CompressionTest {
         assertTrue(compressed.remaining() < 1000, "5000 of the same letter did not compress");
         BsonDocument back = OpMsg.parse(OpMsg.decompress(compressed, MAX), 7);
         assertEquals(body, back);
+    }
+
+    private static final java.util.Set<OpMsg.Compressor> ALL = java.util.EnumSet.of(
+            OpMsg.Compressor.ZLIB, OpMsg.Compressor.SNAPPY, OpMsg.Compressor.ZSTD);
+
+    @Test
+    void snappyAndZstdComeBackAsTheyWent() {
+        BsonDocument body = new BsonDocument("ok", new BsonInt32(1))
+                .append("text", new BsonString("x".repeat(5000)));
+        for (OpMsg.Compressor compressor : java.util.List.of(OpMsg.Compressor.SNAPPY,
+                OpMsg.Compressor.ZSTD)) {
+            ByteBuffer compressed = OpMsg.compress(reply(body), compressor, -1);
+            assertEquals(compressor.id, compressed.get(OpMsg.HEADER + 8), compressor.name());
+            assertTrue(compressed.remaining() < 1000, compressor + " did not compress");
+            assertEquals(body, OpMsg.parse(OpMsg.decompress(compressed, MAX, ALL), 7));
+        }
+    }
+
+    /** A size that is not the one in the stream: refused, by both. */
+    @Test
+    void snappyAndZstdRefuseASizeThatIsNotTheirs() {
+        for (OpMsg.Compressor compressor : java.util.List.of(OpMsg.Compressor.SNAPPY,
+                OpMsg.Compressor.ZSTD)) {
+            for (int delta : new int[] {-1, 10}) {
+                ByteBuffer compressed = OpMsg.compress(reply(new BsonDocument("a",
+                        new BsonString("y".repeat(3000)))), compressor, -1);
+                int size = compressed.order(ByteOrder.LITTLE_ENDIAN).getInt(OpMsg.HEADER + 4);
+                compressed.putInt(OpMsg.HEADER + 4, size + delta);
+                MongoInternalException refused = assertThrows(MongoInternalException.class,
+                        () -> OpMsg.decompress(compressed, MAX, ALL), compressor + " " + delta);
+                assertTrue(refused.getMessage().contains("does not decompress"),
+                        refused.getMessage());
+            }
+        }
+    }
+
+    /** Agreed is agreed: a snappy reply on a zlib connection is refused. */
+    @Test
+    void aCompressorNotAgreedIsRefused() {
+        ByteBuffer compressed = OpMsg.compress(reply(new BsonDocument()),
+                OpMsg.Compressor.SNAPPY, -1);
+        MongoInternalException refused = assertThrows(MongoInternalException.class,
+                () -> OpMsg.decompress(compressed, MAX, java.util.Set.of(OpMsg.Compressor.ZLIB)));
+        assertTrue(refused.getMessage().contains("compressor 1"), refused.getMessage());
+    }
+
+    /** noop: compressed in form only - the bytes as they are, their count checked. */
+    @Test
+    void noopIsTheBodyAsItIs() {
+        BsonDocument body = new BsonDocument("ok", new BsonInt32(1));
+        ByteBuffer plain = reply(body);
+        int bodyLength = plain.remaining() - OpMsg.HEADER;
+        ByteBuffer noop = ByteBuffer.allocate(OpMsg.HEADER + 9 + bodyLength)
+                .order(ByteOrder.LITTLE_ENDIAN);
+        noop.putInt(OpMsg.HEADER + 9 + bodyLength).putInt(plain.getInt(4)).putInt(plain.getInt(8))
+                .putInt(OpMsg.OP_COMPRESSED).putInt(OpMsg.OP_MSG).putInt(bodyLength)
+                .put((byte) 0).put(plain.duplicate().position(OpMsg.HEADER));
+        noop.flip();
+        assertEquals(body, OpMsg.parse(OpMsg.decompress(noop.duplicate(), MAX, ALL), 7));
+        noop.putInt(OpMsg.HEADER + 4, bodyLength + 1);
+        assertThrows(MongoInternalException.class, () -> OpMsg.decompress(noop, MAX, ALL));
     }
 
     @Test
@@ -91,6 +152,10 @@ class CompressionTest {
                 "mongodb://h/?compressors=snappy,zlib&zlibCompressionLevel=6");
         assertTrue(zlib.zlib());
         assertEquals(6, zlib.level());
+        assertEquals(java.util.List.of(OpMsg.Compressor.SNAPPY, OpMsg.Compressor.ZLIB),
+                zlib.compressors(), "the URL's order, which is the preference");
+        assertEquals(java.util.List.of(OpMsg.Compressor.ZSTD), MongoSession.Compression.of(
+                "mongodb://h/?compressors=zstd,lz4").compressors(), "an unknown one is left out");
     }
 
     private static void assertRefused(String why, ByteBuffer message) {

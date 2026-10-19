@@ -25,14 +25,19 @@ final class LdapServer implements AutoCloseable {
     final Path certificate;
     final Path password;
     final int port;
+    final int startTlsPort;
     private final Process process;
+    private final Process startTlsProcess;
 
-    private LdapServer(Path directory, int port, Process process) {
+    private LdapServer(Path directory, int port, int startTlsPort, Process process,
+                       Process startTlsProcess) {
         this.directory = directory;
         this.certificate = directory.resolve("cert.pem");
         this.password = directory.resolve("service-password");
         this.port = port;
+        this.startTlsPort = startTlsPort;
         this.process = process;
+        this.startTlsProcess = startTlsProcess;
     }
 
     static LdapServer start(Path directory) throws Exception {
@@ -62,29 +67,47 @@ final class LdapServer implements AutoCloseable {
             throw new IllegalStateException("the LDAP server could not be prepared: " + output);
         }
         int port;
-        try (ServerSocket free = new ServerSocket(0)) {
-            port = free.getLocalPort();
+        int startTlsPort;
+        try (ServerSocket free1 = new ServerSocket(0);
+             ServerSocket free2 = new ServerSocket(0)) {
+            port = free1.getLocalPort();
+            startTlsPort = free2.getLocalPort();
         }
+        Process process = startInstance(directory, port, "--useSSL", "server.log");
+        Process startTlsProcess = startInstance(directory, startTlsPort, "--useStartTLS",
+                "server-starttls.log");
+        LdapServer server = new LdapServer(directory, port, startTlsPort, process, startTlsProcess);
+        waitUntilListening(server, process, port, directory.resolve("server.log"));
+        waitUntilListening(server, startTlsProcess, startTlsPort,
+                directory.resolve("server-starttls.log"));
+        return server;
+    }
+
+    private static Process startInstance(Path directory, int port, String tlsMode, String logName)
+            throws IOException {
         List<String> command = new ArrayList<>(List.of(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "-cp", System.getProperty("java.class.path"),
                 "com.unboundid.ldap.listener.InMemoryDirectoryServerTool",
-                "--baseDN", BASE, "--port", String.valueOf(port), "--useSSL",
+                "--baseDN", BASE, "--port", String.valueOf(port), tlsMode,
                 "--keyStorePath", directory.resolve("store.p12").toString(),
                 "--keyStorePassword", "keystore", "--keyStoreType", "PKCS12",
                 "--ldifFile", directory.resolve("data.ldif").toString()));
-        Process process = new ProcessBuilder(command).redirectErrorStream(true)
-                .redirectOutput(directory.resolve("server.log").toFile()).start();
-        LdapServer server = new LdapServer(directory, port, process);
+        return new ProcessBuilder(command).redirectErrorStream(true)
+                .redirectOutput(directory.resolve(logName).toFile()).start();
+    }
+
+    private static void waitUntilListening(LdapServer server, Process proc, int port, Path log)
+            throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
         while (System.nanoTime() < deadline) {
-            if (!process.isAlive()) {
-                throw new IllegalStateException("the LDAP server ended, see "
-                        + directory.resolve("server.log"));
+            if (!proc.isAlive()) {
+                server.close();
+                throw new IllegalStateException("the LDAP server ended, see " + log);
             }
             try {
                 new Socket("localhost", port).close();
-                return server;
+                return;
             } catch (IOException notYet) {
                 Thread.sleep(100);
             }
@@ -103,15 +126,33 @@ final class LdapServer implements AutoCloseable {
         return url(password);
     }
 
+    String startTlsUrl(Path passwordFile) {
+        return "ldap://localhost:" + startTlsPort + "/" + BASE + "?user=" + SERVICE
+                + "&tlsRootCert=" + certificate.toString().replace('\\', '/')
+                + "&provider=file&path=" + passwordFile.toString().replace('\\', '/');
+    }
+
+    String startTlsUrl() {
+        return startTlsUrl(password);
+    }
+
     @Override
     public void close() {
-        process.destroy();
+        stopProcess(process);
+        stopProcess(startTlsProcess);
+    }
+
+    private static void stopProcess(Process proc) {
+        if (proc == null) {
+            return;
+        }
+        proc.destroy();
         try {
-            if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
+            if (!proc.waitFor(10, TimeUnit.SECONDS)) {
+                proc.destroyForcibly();
             }
         } catch (InterruptedException e) {
-            process.destroyForcibly();
+            proc.destroyForcibly();
             Thread.currentThread().interrupt();
         }
     }

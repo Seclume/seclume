@@ -33,7 +33,8 @@ import com.mongodb.MongoInternalException;
  * where it was, and never a long loop or a large allocation.
  *
  * <p>Seeded, so a failure is reproducible: the message names the seed and
- * the mutation. {@code -Dseclume.mongo.fuzz.rounds=N} runs more.
+ * the mutation. {@code -Dseclume.mongo.fuzz.rounds=N} runs more,
+ * {@code -Dseclume.mongo.fuzz.seed=S} others.
  */
 @Timeout(120)
 class OpMsgFuzzTest {
@@ -48,8 +49,13 @@ class OpMsgFuzzTest {
                         new BsonInt32(1))), OpMsgTest.sequence("batch", rich(), rich()))),
                 OpMsgTest.withChecksum(OpMsgTest.reply(5, OpMsg.CHECKSUM_PRESENT,
                         OpMsgTest.body(rich())), false),
-                OpMsg.compress(OpMsgTest.reply(5, 0, OpMsgTest.body(rich())), -1));
-        Random random = new Random(0x5EC1_0DB);
+                OpMsg.compress(OpMsgTest.reply(5, 0, OpMsgTest.body(rich())), -1),
+                OpMsg.compress(OpMsgTest.reply(5, 0, OpMsgTest.body(rich())),
+                        OpMsg.Compressor.SNAPPY, -1),
+                OpMsg.compress(OpMsgTest.reply(5, 0, OpMsgTest.body(rich())),
+                        OpMsg.Compressor.ZSTD, -1));
+        long fuzzSeed = Long.getLong("seclume.mongo.fuzz.seed", 0x5EC1_0DB);
+        Random random = new Random(fuzzSeed);
         for (int round = 0; round < ROUNDS; round++) {
             ByteBuffer seed = seeds.get(round % seeds.size());
             byte[] bytes = new byte[seed.remaining()];
@@ -63,13 +69,16 @@ class OpMsgFuzzTest {
             try {
                 // A compressed one is inflated first, as the session does.
                 if (message.order(ByteOrder.LITTLE_ENDIAN).getInt(12) == OpMsg.OP_COMPRESSED) {
-                    message = OpMsg.decompress(message, 1 << 20);
+                    message = OpMsg.decompress(message, 1 << 20, java.util.EnumSet.of(
+                            OpMsg.Compressor.ZLIB, OpMsg.Compressor.SNAPPY,
+                            OpMsg.Compressor.ZSTD));
                 }
                 OpMsg.parse(message, 5);
             } catch (MongoInternalException refused) {
                 // what it should do with garbage
             } catch (RuntimeException | StackOverflowError | OutOfMemoryError other) {
-                fail("round " + round + " (" + mutation + "): " + other, other);
+                fail("seed " + fuzzSeed + " round " + round + " (" + mutation + "): "
+                        + other, other);
             }
         }
     }

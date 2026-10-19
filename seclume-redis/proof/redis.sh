@@ -8,6 +8,8 @@ set -e
 NAME=seclume-redis-test
 DIR=/tmp/seclume-redis
 IMG=docker.io/library/redis:8
+# podman here, docker on a CI runner: CONTAINER_ENGINE=docker
+ENGINE=${CONTAINER_ENGINE:-podman}
 case "$1" in
 up)
   ADDRESS=$2; PLAIN=${3:-16379}; TLS=${4:-16380}
@@ -24,18 +26,18 @@ up)
   openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
     -extfile ext -out server.pem 2>/dev/null
   chmod 644 users.acl server.pem server.key ca.pem   # password stays 600
-  podman run -d --name $NAME -p $PLAIN:6379 -p $TLS:6380 -v $DIR:/conf:ro,z $IMG \
+  $ENGINE run -d --name $NAME -p $PLAIN:6379 -p $TLS:6380 -v $DIR:/conf:ro,z $IMG \
     redis-server --aclfile /conf/users.acl --port 6379 --tls-port 6380 \
       --tls-cert-file /conf/server.pem --tls-key-file /conf/server.key \
       --tls-ca-cert-file /conf/ca.pem --tls-auth-clients no --tls-protocols TLSv1.3 >/dev/null
   for i in $(seq 30); do
-    podman exec $NAME redis-cli -p 6379 PING 2>/dev/null | grep -q NOAUTH && break
+    $ENGINE exec $NAME redis-cli -p 6379 PING 2>/dev/null | grep -q NOAUTH && break
     sleep 1
   done
   echo "redis up on $ADDRESS: plain $PLAIN, TLS 1.3 $TLS, user orders"
   ;;
 down)
-  podman rm -f $NAME >/dev/null 2>&1 || true
+  $ENGINE rm -f $NAME >/dev/null 2>&1 || true
   shred -u $DIR/password $DIR/users.acl $DIR/*.key 2>/dev/null || true
   rm -rf $DIR
   echo "redis removed"

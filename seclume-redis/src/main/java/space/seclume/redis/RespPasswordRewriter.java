@@ -30,12 +30,34 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
 
     private static final int MAX_DIGITS = 10;
 
-    private final byte[] placeholder;
-    private final SecretProvider secret;
+    private record Binding(byte[] placeholder, SecretProvider secret) {
+    }
+
+    private final Binding[] bindings;
+    /** The server, for the event that says the password was written in. */
+    private final String where;
 
     RespPasswordRewriter(String placeholder, SecretProvider secret) {
-        this.placeholder = placeholder.getBytes(StandardCharsets.US_ASCII); // seclume-allow: the placeholder, not the password
-        this.secret = secret;
+        this(placeholder, secret, null, null, "");
+    }
+
+    RespPasswordRewriter(String placeholder, SecretProvider secret, String where) {
+        this(placeholder, secret, null, null, where);
+    }
+
+    RespPasswordRewriter(String placeholder, SecretProvider secret, String sentinelPlaceholder,
+                         SecretProvider sentinelSecret, String where) {
+        // seclume-allow: the placeholder, not the password
+        Binding main = new Binding(placeholder.getBytes(StandardCharsets.US_ASCII), secret);
+        if (sentinelPlaceholder != null && sentinelSecret != null) {
+            // seclume-allow: the placeholder, not the password
+            Binding sentinel = new Binding(sentinelPlaceholder.getBytes(StandardCharsets.US_ASCII),
+                    sentinelSecret);
+            this.bindings = new Binding[] {main, sentinel};
+        } else {
+            this.bindings = new Binding[] {main};
+        }
+        this.where = where;
     }
 
     /** A new random placeholder. */
@@ -45,32 +67,50 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
         return "seclume-redis-" + HexFormat.of().formatHex(random); // seclume-allow: a random placeholder - public
     }
 
-    /** Whether {@code plain} holds the placeholder anywhere from its position. */
+    /** Whether {@code plain} holds any of our placeholders anywhere from its position. */
     boolean contains(ByteBuffer plain) {
-        return indexOf(plain, plain.position(), plain.limit()) >= 0;
+        int from = plain.position();
+        int to = plain.limit();
+        for (Binding binding : bindings) {
+            if (indexOf(plain, from, to, binding.placeholder) >= 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
     public Step next(ByteBuffer plain) throws IOException {
         int from = plain.position();
-        int at = indexOf(plain, from, plain.limit());
+        int to = plain.limit();
+        int at = -1;
+        Binding matched = null;
+        for (Binding binding : bindings) {
+            int found = indexOf(plain, from, to, binding.placeholder);
+            if (found >= 0 && (at < 0 || found < at)) {
+                at = found;
+                matched = binding;
+            }
+        }
         if (at < 0) {
             return Step.unchanged(Math.min(plain.remaining(), SeclumeSslEngine.MAX_PLAINTEXT));
         }
-        int header = bulkHeader(plain, from, at);
+        int placeholderLength = matched.placeholder.length;
+        int header = bulkHeader(plain, from, at, placeholderLength);
         if (header < 0) {
             // Not a bulk string of its own: nothing to replace, and nothing to hide.
-            return Step.unchanged(Math.min(at + placeholder.length - from,
+            return Step.unchanged(Math.min(at + placeholderLength - from,
                     SeclumeSslEngine.MAX_PLAINTEXT));
         }
         if (header > from) {
             return Step.unchanged(Math.min(header - from, SeclumeSslEngine.MAX_PLAINTEXT));
         }
-        return Step.replace(at + placeholder.length - header, bulk());
+        space.seclume.jfr.Observed.secretUse("redis", where, "AUTH");
+        return Step.replace(at + placeholderLength - header, bulk(matched.secret));
     }
 
     /** {@code $<length>\r\n<password>} in native memory, from the password read now. */
-    private SecretScope bulk() {
+    private static SecretScope bulk(SecretProvider secret) {
         try (SecretScope password = SecretScope.fromProvider(secret)) {
             int length = password.length();
             int digits = 1;
@@ -95,7 +135,7 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
      * Where {@code $<length>\r\n} begins right before {@code at}, with the
      * placeholder's length in it; -1 when that is not what is there.
      */
-    private int bulkHeader(ByteBuffer plain, int from, int at) {
+    private static int bulkHeader(ByteBuffer plain, int from, int at, int placeholderLength) {
         if (at - 2 < from || plain.get(at - 1) != '\n' || plain.get(at - 2) != '\r') {
             return -1;
         }
@@ -111,10 +151,10 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
         for (int i = start; i < end; i++) {
             declared = declared * 10 + (plain.get(i) - '0');
         }
-        return declared == placeholder.length ? start - 1 : -1;
+        return declared == placeholderLength ? start - 1 : -1;
     }
 
-    private int indexOf(ByteBuffer in, int from, int to) {
+    private static int indexOf(ByteBuffer in, int from, int to, byte[] placeholder) {
         outer:
         for (int i = from; i <= to - placeholder.length; i++) {
             for (int j = 0; j < placeholder.length; j++) {

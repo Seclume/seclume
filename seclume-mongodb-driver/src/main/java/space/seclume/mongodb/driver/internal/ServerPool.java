@@ -7,6 +7,7 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.bson.BsonDocument;
+import org.bson.BsonValue;
 
 import com.mongodb.MongoInterruptedException;
 import com.mongodb.MongoTimeoutException;
@@ -26,6 +27,13 @@ import space.seclume.mongodb.MongoUrl;
  * <p>A borrower leaves nothing on a connection that the next one could see:
  * a logical session travels with each command as its {@code lsid}, not with
  * the connection, and so does a transaction.
+ *
+ * <p>Behind a load balancer ({@code loadBalanced=true}) one address is many
+ * servers: each connection reaches the one the balancer chose, named by the
+ * {@code serviceId} of its {@code hello}. A cursor or a transaction lives on
+ * that server only, so it keeps its connection - {@link #pin} - and an error
+ * distrusts only the connections to the same service, not the others (the
+ * load balancer specification).
  */
 public final class ServerPool implements AutoCloseable {
 
@@ -35,6 +43,15 @@ public final class ServerPool implements AutoCloseable {
     private final long maxWaitMillis;
     private final long maxIdleNanos;
     private final long maxLifeNanos;
+    private final boolean loadBalanced;
+    /** Behind a load balancer: each service's generation, cleared one by one. */
+    private final java.util.Map<BsonValue, Integer> serviceGenerations = new java.util.HashMap<>();
+    /** The newest {@code hello} a connection answered - the limits, the session support. */
+    private volatile BsonDocument lastHello;
+    /** Not null for a pinned view: the one connection it runs on, and who lent it. */
+    private final Pooled only;
+    private final ServerPool lender;
+    private int holders;
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition returned = lock.newCondition();
     private final ArrayDeque<Pooled> idle = new ArrayDeque<>();
@@ -43,11 +60,16 @@ public final class ServerPool implements AutoCloseable {
     private boolean closed;
 
     /** A connection, the generation it belongs to, when it was opened and last given back. */
-    private record Pooled(MongoSession session, int generation, long bornNanos,
-                          long returnedNanos) {
+    private record Pooled(MongoSession session, int generation, int serviceGeneration,
+                          long bornNanos, long returnedNanos) {
 
         Pooled returned() {
-            return new Pooled(session, generation, bornNanos, System.nanoTime());
+            return new Pooled(session, generation, serviceGeneration, bornNanos,
+                    System.nanoTime());
+        }
+
+        BsonValue serviceId() {
+            return session.helloReply().get("serviceId");
         }
     }
 
@@ -58,30 +80,146 @@ public final class ServerPool implements AutoCloseable {
      */
     ServerPool(MongoUrl url, ServerAddress address, int maxSize, long maxWaitMillis,
             long maxIdleMillis, long maxLifeMillis) {
+        this(url, address, maxSize, maxWaitMillis, maxIdleMillis, maxLifeMillis, false);
+    }
+
+    /** @param loadBalanced the address is a load balancer: see the class comment */
+    ServerPool(MongoUrl url, ServerAddress address, int maxSize, long maxWaitMillis,
+            long maxIdleMillis, long maxLifeMillis, boolean loadBalanced) {
         this.url = url;
         this.address = address;
         this.maxSize = maxSize;
         this.maxWaitMillis = maxWaitMillis;
         this.maxIdleNanos = TimeUnit.MILLISECONDS.toNanos(maxIdleMillis);
         this.maxLifeNanos = TimeUnit.MILLISECONDS.toNanos(maxLifeMillis);
+        this.loadBalanced = loadBalanced;
+        this.only = null;
+        this.lender = null;
+    }
+
+    private ServerPool(ServerPool lender, Pooled only) {
+        this.url = lender.url;
+        this.address = lender.address;
+        this.maxSize = 1;
+        this.maxWaitMillis = lender.maxWaitMillis;
+        this.maxIdleNanos = 0;
+        this.maxLifeNanos = 0;
+        this.loadBalanced = true;
+        this.only = only;
+        this.lender = lender;
+        this.holders = 1;
     }
 
     private boolean usable(Pooled pooled) {
         long now = System.nanoTime();
         return !pooled.session().isClosed() && pooled.generation() == generation
+                && pooled.serviceGeneration() == serviceGeneration(pooled.serviceId())
                 && (maxIdleNanos == 0 || now - pooled.returnedNanos() < maxIdleNanos)
                 && (maxLifeNanos == 0 || now - pooled.bornNanos() < maxLifeNanos);
+    }
+
+    /** Under the lock; 0 for a service never cleared, and for every connection not behind a balancer. */
+    private int serviceGeneration(BsonValue serviceId) {
+        return serviceId == null ? 0 : serviceGenerations.getOrDefault(serviceId, 0);
     }
 
     public ServerAddress address() {
         return address;
     }
 
+    /**
+     * Behind a load balancer: one connection of this pool, kept for whatever
+     * must stay on the server behind it - a cursor, a transaction. The view
+     * runs every command on that connection and gives it back when the last
+     * holder {@link #release releases} it. Elsewhere this pool itself, as
+     * every connection to the address reaches the same server.
+     */
+    ServerPool pin() {
+        if (!loadBalanced || only != null) {
+            return this;
+        }
+        return new ServerPool(this, borrow());
+    }
+
+    /** Whether this is one connection held for a cursor or a transaction; see {@link #pin}. */
+    boolean pinned() {
+        return only != null;
+    }
+
+    /** One more holder of a pinned connection; nothing for a pool. */
+    void retain() {
+        if (only == null) {
+            return;
+        }
+        lock.lock();
+        try {
+            if (holders == 0) {
+                throw new IllegalStateException("the pinned connection was given back already");
+            }
+            holders++;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** A holder is done; the last one gives the connection back. Nothing for a pool. */
+    public void release() {
+        if (only == null) {
+            return;
+        }
+        boolean last;
+        lock.lock();
+        try {
+            if (holders == 0) {
+                return;
+            }
+            last = --holders == 0;
+        } finally {
+            lock.unlock();
+        }
+        if (last) {
+            lender.giveBack(only);
+        }
+    }
+
+    /** The {@code hello} of the newest connection; one is opened if there is none yet. */
+    BsonDocument hello() {
+        if (only != null) {
+            return only.session().helloReply();
+        }
+        if (lastHello == null) {
+            giveBack(borrow());
+        }
+        return lastHello;
+    }
+
     /** Runs one command on a pooled connection; no retry, no selection - see {@link Topology}. */
     BsonDocument run(String db, BsonDocument command, String sequenceId,
             List<? extends BsonDocument> sequence) {
+        if (only != null) {
+            // A cursor and the transaction it was opened in may share the
+            // connection; one command at a time goes over it.
+            lock.lock();
+            try {
+                if (holders == 0) {
+                    throw new IllegalStateException("the pinned connection was given back "
+                            + "already");
+                }
+                return runOn(only.session(), db, command, sequenceId, sequence);
+            } finally {
+                lock.unlock();
+            }
+        }
         Pooled pooled = borrow();
-        MongoSession session = pooled.session();
+        try {
+            return runOn(pooled.session(), db, command, sequenceId, sequence);
+        } finally {
+            giveBack(pooled);
+        }
+    }
+
+    private static BsonDocument runOn(MongoSession session, String db, BsonDocument command,
+            String sequenceId, List<? extends BsonDocument> sequence) {
         int before = session.networkTimeout();
         boolean bounded = Deadline.active();
         try {
@@ -97,13 +235,21 @@ public final class ServerPool implements AutoCloseable {
             if (bounded && !session.isClosed()) {
                 session.networkTimeout(before);
             }
-            giveBack(pooled);
         }
     }
 
     /** A write with no reply asked for; see {@link MongoSession#send}. */
     void send(String db, BsonDocument command, String sequenceId,
             List<? extends BsonDocument> sequence) {
+        if (only != null) {
+            lock.lock();
+            try {
+                only.session().send(db, command, sequenceId, sequence);
+                return;
+            } finally {
+                lock.unlock();
+            }
+        }
         Pooled pooled = borrow();
         try {
             pooled.session().send(db, command, sequenceId, sequence);
@@ -114,7 +260,10 @@ public final class ServerPool implements AutoCloseable {
 
     /** A new connection, for the monitor: it is not the pool's. */
     MongoSession openOwn() {
-        return MongoSession.open(url, address.getHost(), address.getPort());
+        MongoSession session = MongoSession.open(url, address.getHost(), address.getPort(),
+                loadBalanced);
+        lastHello = session.helloReply();
+        return session;
     }
 
     private Pooled borrow() {
@@ -166,7 +315,15 @@ public final class ServerPool implements AutoCloseable {
         }
         try {
             long now = System.nanoTime();
-            return new Pooled(openOwn(), born, now, now);
+            MongoSession opened = openOwn();
+            int serviceBorn;
+            lock.lock();
+            try {
+                serviceBorn = serviceGeneration(opened.helloReply().get("serviceId"));
+            } finally {
+                lock.unlock();
+            }
+            return new Pooled(opened, born, serviceBorn, now, now);
         } catch (RuntimeException e) {
             lock.lock();
             try {
@@ -182,7 +339,8 @@ public final class ServerPool implements AutoCloseable {
     private void giveBack(Pooled pooled) {
         lock.lock();
         try {
-            if (closed || pooled.session().isClosed() || pooled.generation() != generation) {
+            if (closed || pooled.session().isClosed() || pooled.generation() != generation
+                    || pooled.serviceGeneration() != serviceGeneration(pooled.serviceId())) {
                 open--;
                 pooled.session().close();
             } else {
@@ -230,7 +388,8 @@ public final class ServerPool implements AutoCloseable {
             }
             open++;
             long now = System.nanoTime();
-            idle.addFirst(new Pooled(session, generation, now, now));
+            idle.addFirst(new Pooled(session, generation,
+                    serviceGeneration(session.helloReply().get("serviceId")), now, now));
             returned.signal();
             return true;
         } finally {
@@ -238,8 +397,20 @@ public final class ServerPool implements AutoCloseable {
         }
     }
 
-    /** Distrusts every connection there is now: see the class comment. */
+    /**
+     * Distrusts every connection there is now: see the class comment. A
+     * pinned view clears the connections to its own service only.
+     */
     void clear() {
+        if (only != null) {
+            lender.clear(only.serviceId());
+            return;
+        }
+        if (loadBalanced) {
+            // Behind a balancer an error without a service says nothing about
+            // the others; only the connection that failed is not used again.
+            return;
+        }
         lock.lock();
         try {
             generation++;
@@ -254,8 +425,34 @@ public final class ServerPool implements AutoCloseable {
         }
     }
 
+    /** Behind a load balancer: the connections to one service, as the class comment says. */
+    private void clear(BsonValue serviceId) {
+        if (serviceId == null) {
+            return;
+        }
+        lock.lock();
+        try {
+            serviceGenerations.merge(serviceId, 1, Integer::sum);
+            for (java.util.Iterator<Pooled> it = idle.iterator(); it.hasNext(); ) {
+                Pooled pooled = it.next();
+                if (serviceId.equals(pooled.serviceId())) {
+                    it.remove();
+                    pooled.session().close();
+                    open--;
+                }
+            }
+            returned.signalAll();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     @Override
     public void close() {
+        if (only != null) {
+            release();
+            return;
+        }
         lock.lock();
         try {
             closed = true;

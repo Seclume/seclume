@@ -35,10 +35,12 @@ Produced by `space.seclume.verify.FrameworkMatrix` on 2026-10-18 by reading the 
 | **Spring Data MongoDB repositories (seclume-mongodb-driver)** | verified (8) |
 | **MongoTemplate (seclume-mongodb-driver)** | verified (6) |
 | **Spring transactions on MongoDB (seclume-mongodb-driver)** | verified (1) |
+| **Spring Data MongoDB reactive (seclume-mongodb-reactive)** | verified (7) |
 
 - **Spring Data MongoDB repositories (seclume-mongodb-driver)** - derived queries, paging and sorting, @Query, @Aggregation, a unique index and DuplicateKeyException, @Version - on Spring Boot with the MongoDB driver version Spring Boot manages
 - **MongoTemplate (seclume-mongodb-driver)** - queries, distinct, updates and upserts, findAndModify, bulk operations, aggregation, the indexes Spring Data creates
 - **Spring transactions on MongoDB (seclume-mongodb-driver)** - @Transactional through MongoTransactionManager on a replica set: both writes, or neither
+- **Spring Data MongoDB reactive (seclume-mongodb-reactive)** - ReactiveMongoRepository and ReactiveMongoTemplate, backpressure, a transaction through ReactiveMongoTransactionManager, a change stream - on the reactive driver version Spring Boot manages
 
 ## What this table does not say
 

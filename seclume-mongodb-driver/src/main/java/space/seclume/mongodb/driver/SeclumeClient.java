@@ -148,6 +148,13 @@ final class SeclumeClient implements MongoClient {
                 defaultTimeout != null ? defaultTimeout : timeoutMillis);
     }
 
+    /** See {@link SeclumeSessions#takeUp}. */
+    ClientSession takeUp(LogicalSession.State state) {
+        return new SeclumeClientSession(topology, state, this, TransactionOptions.builder()
+                .readConcern(readConcern).writeConcern(writeConcern)
+                .readPreference(readPreference).build(), timeoutMillis);
+    }
+
     @Override
     public MongoIterable<String> listDatabaseNames() {
         return listDatabaseNames(null);

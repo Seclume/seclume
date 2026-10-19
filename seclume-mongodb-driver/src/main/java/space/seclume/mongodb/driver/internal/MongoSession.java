@@ -38,6 +38,7 @@ import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
 import space.seclume.internal.jdbc.TlsStack;
 import space.seclume.mongodb.MongoUrl;
+import space.seclume.mongodb.internal.CommandShape;
 import space.seclume.mongodb.internal.MongoHandshake;
 
 /**
@@ -78,8 +79,11 @@ public final class MongoSession implements AutoCloseable {
     private int timeoutMillis;
     private BsonDocument hello;
     private int maxMessageSize = DEFAULT_MAX_MESSAGE_SIZE;
-    /** zlib's level when the server agreed to zlib in hello, else null: no compression. */
-    private Integer zlibLevel;
+    /** The compressor commands go with - the first of the URL's the server agreed to - or null. */
+    private OpMsg.Compressor compressor;
+    /** All the server agreed to: a reply may come with any of them. */
+    private java.util.Set<OpMsg.Compressor> agreed = java.util.Set.of();
+    private int zlibLevel = -1;
 
     /**
      * Never compressed, whatever was agreed (compression specification): the
@@ -95,12 +99,42 @@ public final class MongoSession implements AutoCloseable {
         this.tls = tls;
     }
 
+    /** The URL it logged in with - for a login again; null for a session taken up. */
+    private MongoUrl url;
+
+    /** The server's code for "log in again": an OIDC token expired under the connection. */
+    private static final int REAUTHENTICATION_REQUIRED = 391;
+
     /**
      * Connects, logs in and returns the session; the URL's {@code connectTimeout}
      * bounds TCP, TLS, {@code hello} and the login together.
      */
     public static MongoSession open(MongoUrl url, String host, int port) {
+        return open(url, host, port, false);
+    }
+
+    /**
+     * The same through a load balancer: {@code hello} says so, and the server
+     * behind it has to answer with the {@code serviceId} it is known by - the
+     * pool tells the services apart by it.
+     */
+    public static MongoSession open(MongoUrl url, String host, int port, boolean loadBalanced) {
         ServerAddress address = new ServerAddress(host, port);
+        space.seclume.jfr.SeclumeEvents.ConnectionOpen connecting =
+                space.seclume.jfr.Observed.beginConnect();
+        boolean connected = false;
+        try {
+            MongoSession session = connect(url, host, port, address, loadBalanced);
+            connected = true;
+            return session;
+        } finally {
+            space.seclume.jfr.Observed.endConnect(connecting, "mongodb", address.toString(),
+                    url.authSource(), connected ? "TLSv1.3" : null, connected);
+        }
+    }
+
+    private static MongoSession connect(MongoUrl url, String host, int port,
+            ServerAddress address, boolean loadBalanced) {
         int connectTimeout = url.connectTimeout() > 0 ? url.connectTimeout()
                 : DEFAULT_LOGIN_TIMEOUT_MILLIS;
         Transport transport;
@@ -133,11 +167,18 @@ public final class MongoSession implements AutoCloseable {
                     + e.getMessage(), address, e);
         }
         MongoSession session = new MongoSession(address, transport, tls);
+        session.url = url;
         try {
-            session.hello = session.hello(url);
+            session.hello = session.hello(url, loadBalanced);
+            space.seclume.jfr.SeclumeEvents.Authentication login =
+                    space.seclume.jfr.Observed.beginLogin();
+            boolean loggedIn = false;
             try {
                 if (url.mechanism().equals(MongoUrl.X509)) {
                     session.x509(url);
+                } else if (url.mechanism().equals(MongoUrl.OIDC)) {
+                    space.seclume.mongodb.internal.MongoOidc.authenticate(tls, url.secret(),
+                            host, port);
                 } else if (url.mechanism().equals(MongoUrl.AWS)) {
                     space.seclume.mongodb.internal.MongoAws.authenticate(tls, url.aws(), host,
                             port);
@@ -146,12 +187,16 @@ public final class MongoSession implements AutoCloseable {
                 } else {
                     throw new MongoSecurityException(null, "authMechanism=" + url.mechanism()
                             + " is not supported by seclume's MongoDB driver: SCRAM-SHA-256, "
-                            + "MONGODB-X509 and MONGODB-AWS are");
+                            + "MONGODB-X509, MONGODB-AWS and MONGODB-OIDC are");
                 }
+                loggedIn = true;
             } catch (javax.net.ssl.SSLException | IllegalArgumentException e) {
                 throw new MongoSecurityException(null, e.getMessage(), e);
             } catch (IOException e) {
                 throw session.broke(e, "logging in");
+            } finally {
+                space.seclume.jfr.Observed.endLogin(login, "mongodb", address.toString(),
+                        url.mechanism(), loggedIn);
             }
             Transports.loggedIn(transport);
             session.networkTimeout(url.timeout());
@@ -162,7 +207,7 @@ public final class MongoSession implements AutoCloseable {
         }
     }
 
-    private BsonDocument hello(MongoUrl url) {
+    private BsonDocument hello(MongoUrl url, boolean loadBalanced) {
         BsonDocument client = new BsonDocument()
                 .append("driver", new BsonDocument()
                         .append("name", new BsonString("seclume"))
@@ -180,10 +225,21 @@ public final class MongoSession implements AutoCloseable {
                     + url.user()));
         }
         Compression wanted = Compression.of(url.driverConnectionString());
-        if (wanted.zlib()) {
-            command.put("compression", new org.bson.BsonArray(List.of(new BsonString("zlib"))));
+        if (!wanted.compressors().isEmpty()) {
+            command.put("compression", new org.bson.BsonArray(wanted.compressors().stream()
+                    .map(c -> (BsonValue) new BsonString(c.wireName())).toList()));
+        }
+        if (loadBalanced) {
+            command.put("loadBalanced", org.bson.BsonBoolean.TRUE);
         }
         BsonDocument reply = command("admin", command);
+        if (loadBalanced && !reply.containsKey("serviceId")) {
+            // Without it every error would distrust all servers behind the
+            // balancer, or none; the load balancer specification refuses it.
+            throw new MongoClientException("the server at " + address + " does not support "
+                    + "loadBalanced=true: its hello has no serviceId - is it a mongos behind a "
+                    + "load balancer, configured for one?");
+        }
         int wire = intOf(reply.get("maxWireVersion"), 0);
         if (wire < MIN_WIRE_VERSION) {
             throw new MongoClientException("the server at " + address + " speaks wire version "
@@ -201,8 +257,18 @@ public final class MongoSession implements AutoCloseable {
                     + "; seclume logs in with SCRAM-SHA-256 only");
         }
         maxMessageSize = intOf(reply.get("maxMessageSizeBytes"), DEFAULT_MAX_MESSAGE_SIZE);
-        if (wanted.zlib() && reply.get("compression") instanceof org.bson.BsonArray agreed
-                && agreed.contains(new BsonString("zlib"))) {
+        if (reply.get("compression") instanceof org.bson.BsonArray offered) {
+            java.util.EnumSet<OpMsg.Compressor> both = java.util.EnumSet.noneOf(
+                    OpMsg.Compressor.class);
+            for (OpMsg.Compressor mine : wanted.compressors()) {
+                if (offered.contains(new BsonString(mine.wireName()))) {
+                    both.add(mine);
+                    if (compressor == null) {
+                        compressor = mine;                // the URL's order is the preference
+                    }
+                }
+            }
+            agreed = both;
             zlibLevel = wanted.level();
         }
         return reply;
@@ -284,6 +350,11 @@ public final class MongoSession implements AutoCloseable {
      */
     public BsonDocument command(String db, BsonDocument command, String sequenceId,
             List<? extends BsonDocument> sequence) {
+        return command(db, command, sequenceId, sequence, false);
+    }
+
+    private BsonDocument command(String db, BsonDocument command, String sequenceId,
+            List<? extends BsonDocument> sequence, boolean loggedInAgain) {
         lock.lock();
         try {
             if (closed || aborted) {
@@ -292,34 +363,77 @@ public final class MongoSession implements AutoCloseable {
                 throw new MongoSocketClosedException(wasAborted ? "the session was aborted"
                         : "the session is closed", address);
             }
-            int requestId = REQUEST_IDS.incrementAndGet();
-            ByteBuffer request = OpMsg.encode(requestId, command, db, sequenceId, sequence,
-                    maxMessageSize);
-            if (zlibLevel != null && !command.isEmpty() && !NEVER_COMPRESSED.contains(
-                    command.getFirstKey().toLowerCase(Locale.ROOT))) {
-                request = OpMsg.compress(request, zlibLevel);
-            }
+            space.seclume.jfr.Observed.Statement observed = CommandShape.recorded(command)
+                    ? space.seclume.jfr.Observed.beginQuery("mongodb") : null;
+            boolean failed = true;
+            BsonDocument answered = null;
             try {
-                tls.write(request);
-            } catch (IOException e) {
-                throw broke(e, "sending a command");
+                answered = exchange(db, command, sequenceId, sequence, loggedInAgain);
+                failed = false;
+                return answered;
+            } finally {
+                if (observed != null) {
+                    space.seclume.jfr.Observed.endQuery(observed, "mongodb",
+                            CommandShape.shape(db, command),
+                            space.seclume.QueryFingerprint.Dialect.GENERIC,
+                            answered == null ? 0 : CommandShape.rows(answered), failed);
+                }
             }
-            BsonDocument reply;
-            try {
-                reply = OpMsg.parse(readMessage(), requestId);
-            } catch (IOException e) {
-                throw broke(e, "reading a reply");
-            } catch (MongoException e) {
-                close();
-                throw e;
-            }
-            if (!isOk(reply)) {
-                throw refused(reply, address);
-            }
-            return reply;
         } finally {
             lock.unlock();
         }
+    }
+
+    /** One command and its reply, under the lock; the server's refusal thrown. */
+    private BsonDocument exchange(String db, BsonDocument command, String sequenceId,
+            List<? extends BsonDocument> sequence, boolean loggedInAgain) {
+        int requestId = REQUEST_IDS.incrementAndGet();
+        ByteBuffer request = OpMsg.encode(requestId, command, db, sequenceId, sequence,
+                maxMessageSize);
+        if (compressor != null && !command.isEmpty() && !NEVER_COMPRESSED.contains(
+                command.getFirstKey().toLowerCase(Locale.ROOT))) {
+            request = OpMsg.compress(request, compressor, zlibLevel);
+        }
+        try {
+            tls.write(request);
+        } catch (IOException e) {
+            throw broke(e, "sending a command");
+        }
+        BsonDocument reply;
+        try {
+            reply = OpMsg.parse(readMessage(), requestId);
+        } catch (IOException e) {
+            throw broke(e, "reading a reply");
+        } catch (MongoException e) {
+            close();
+            throw e;
+        }
+        if (!isOk(reply) && intOf(reply.get("code"), 0) == REAUTHENTICATION_REQUIRED
+                && !loggedInAgain && url != null && url.mechanism().equals(MongoUrl.OIDC)) {
+            // The token the connection logged in with expired: a fresh one
+            // from its source, the login again, and the command once more.
+            space.seclume.jfr.SeclumeEvents.Authentication login =
+                    space.seclume.jfr.Observed.beginLogin();
+            boolean loggedIn = false;
+            try {
+                space.seclume.mongodb.internal.MongoOidc.authenticate(tls, url.secret(),
+                        address.getHost(), address.getPort());
+                loggedIn = true;
+            } catch (javax.net.ssl.SSLException e) {
+                close();
+                throw new MongoSecurityException(null, e.getMessage(), e);
+            } catch (IOException e) {
+                throw broke(e, "logging in again");
+            } finally {
+                space.seclume.jfr.Observed.endLogin(login, "mongodb", address.toString(),
+                        MongoUrl.OIDC, loggedIn);
+            }
+            return exchange(db, command, sequenceId, sequence, true);
+        }
+        if (!isOk(reply)) {
+            throw refused(reply, address);
+        }
+        return reply;
     }
 
     /**
@@ -355,11 +469,11 @@ public final class MongoSession implements AutoCloseable {
         message.flip();
         int opCode = message.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt(12);
         if (opCode == OpMsg.OP_COMPRESSED) {
-            if (zlibLevel == null) {
+            if (compressor == null) {
                 throw new com.mongodb.MongoInternalException("the server sent a compressed "
                         + "reply, though no compression was agreed");
             }
-            return OpMsg.decompress(message, maxMessageSize);
+            return OpMsg.decompress(message, maxMessageSize, agreed);
         }
         return message;
     }
@@ -441,18 +555,27 @@ public final class MongoSession implements AutoCloseable {
 
     /** Whether commands on this connection go compressed. */
     public boolean compressed() {
-        return zlibLevel != null;
+        return compressor != null;
     }
 
-    /** {@code compressors} and {@code zlibCompressionLevel} from a URL. */
-    record Compression(boolean zlib, int level) {
+    /** The compressor commands go with on this connection, or null. */
+    public OpMsg.Compressor compressor() {
+        return compressor;
+    }
+
+    /** {@code compressors} (in their order) and {@code zlibCompressionLevel} from a URL. */
+    record Compression(List<OpMsg.Compressor> compressors, int level) {
+
+        boolean zlib() {
+            return compressors.contains(OpMsg.Compressor.ZLIB);
+        }
 
         static Compression of(String url) {
             int question = url.indexOf('?');
-            boolean zlib = false;
+            List<OpMsg.Compressor> compressors = new java.util.ArrayList<>();
             int level = -1;
             if (question < 0) {
-                return new Compression(false, level);
+                return new Compression(List.of(), level);
             }
             for (String pair : url.substring(question + 1).split("&")) {
                 int equals = pair.indexOf('=');
@@ -464,15 +587,16 @@ public final class MongoSession implements AutoCloseable {
                         java.nio.charset.StandardCharsets.UTF_8);
                 if (key.equals("compressors")) {
                     for (String name : value.split(",")) {
-                        if (name.trim().equalsIgnoreCase("zlib")) {
-                            zlib = true;
+                        OpMsg.Compressor named = OpMsg.Compressor.byName(name);
+                        if (named != null && !compressors.contains(named)) {
+                            compressors.add(named);
                         }
                     }
                 } else if (key.equals("zlibcompressionlevel")) {
                     level = Integer.parseInt(value.trim());
                 }
             }
-            return new Compression(zlib, level);
+            return new Compression(List.copyOf(compressors), level);
         }
     }
 
@@ -573,6 +697,13 @@ public final class MongoSession implements AutoCloseable {
             throw new IllegalStateException("this session's TLS state cannot leave its layer");
         }
         return new Detached(transport, tls, hello, address);
+    }
+
+    /** The same as {@link #resume(Detached)}, with the URL its login came from - for logging in again. */
+    static MongoSession resume(Detached detached, MongoUrl url) {
+        MongoSession session = resume(detached);
+        session.url = url;
+        return session;
     }
 
     /**

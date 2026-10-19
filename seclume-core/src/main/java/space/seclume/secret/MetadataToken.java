@@ -77,4 +77,60 @@ final class MetadataToken {
                     + "the token document it should be: " + malformed.getMessage(), malformed);
         }
     }
+
+    /**
+     * Fetches a token that is the whole answer - GCP's identity token, a JWT
+     * as plain text - and writes it into {@code target}, trailing whitespace
+     * left out. Every byte of it has to be one a JWT is made of: base64url
+     * and dots. Anything else is not the token asked for, and is neither
+     * written nor quoted.
+     */
+    static int fetchRaw(String who, String host, int port, int timeoutMillis, String path,
+            Map<String, String> headers, MemorySegment target) {
+        try (Arena arena = Arena.ofConfined();
+             SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE)) {
+            SecretFetch.Response response;
+            try {
+                response = SecretFetch.sendLinkLocal(host, port, timeoutMillis, "GET", path,
+                        headers, answer.segment());
+            } catch (IOException unreachable) {
+                throw new SecretUnavailableException(who + " could not be reached at " + host
+                        + ":" + port + " - " + unreachable.getMessage() + ". This provider "
+                        + "only works on a machine of that cloud with an identity assigned",
+                        unreachable);
+            }
+            answer.length(response.bodyLength());
+            if (!response.ok()) {
+                throw new SecretUnavailableException(who + " answered " + response.status()
+                        + ". 400 usually means no identity is assigned to this machine or the "
+                        + "audience asked for is wrong; 404 that the identity named does not "
+                        + "exist");
+            }
+            MemorySegment body = answer.segment();
+            int length = response.bodyLength();
+            while (length > 0 && Character.isWhitespace(
+                    (char) body.get(java.lang.foreign.ValueLayout.JAVA_BYTE, length - 1))) {
+                length--;
+            }
+            if (length == 0) {
+                throw new SecretUnavailableException(who + " answered with an empty token");
+            }
+            for (int i = 0; i < length; i++) {
+                byte b = body.get(java.lang.foreign.ValueLayout.JAVA_BYTE, i);
+                boolean jwt = (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+                        || (b >= '0' && b <= '9') || b == '-' || b == '_' || b == '.';
+                if (!jwt) {
+                    throw new SecretUnavailableException(who + " answered with something that "
+                            + "is not a JWT (a byte outside base64url and dots at " + i + ")");
+                }
+            }
+            if (length > target.byteSize()) {
+                throw new SecretUnavailableException("the token from " + who + " is longer "
+                        + "than the " + target.byteSize() + " bytes allowed for it - raise "
+                        + "max-length");
+            }
+            MemorySegment.copy(body, 0, target, 0, length);
+            return length;
+        }
+    }
 }

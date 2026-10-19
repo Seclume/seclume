@@ -28,7 +28,9 @@ import space.seclume.mongodb.driver.internal.Topology;
  *
  * <p>A cursor is not tied to the connection that opened it, so each
  * {@code getMore} borrows whichever connection to its server is free - a
- * cursor lives on the server that opened it.
+ * cursor lives on the server that opened it. Behind a load balancer that
+ * server is reached through the one connection only: the cursor holds it,
+ * and gives it back when it ends (see {@code ServerPool#pin}).
  */
 final class BatchCursor<T> implements MongoCursor<T> {
 
@@ -42,6 +44,8 @@ final class BatchCursor<T> implements MongoCursor<T> {
     private final long maxAwaitMillis;
     private final BsonValue comment;
     private long id;
+    /** Whether the cursor still holds the server - a pinned connection - for itself. */
+    private boolean holding;
     private BsonArray batch;
     /** A change stream's position after the last batch, when the server says it. */
     private BsonDocument postBatchResumeToken;
@@ -72,6 +76,7 @@ final class BatchCursor<T> implements MongoCursor<T> {
         this.collection = namespace.substring(dot + 1);
         this.batch = cursor.getArray("firstBatch");
         this.postBatchResumeToken = cursor.getDocument("postBatchResumeToken", null);
+        this.holding = id != 0;
         if (id != 0 && session != null && session.explicit()) {
             session.opened(this);
         }
@@ -150,6 +155,7 @@ final class BatchCursor<T> implements MongoCursor<T> {
             reply = topology.on(server, session, database, command);
         } catch (MongoException e) {
             id = 0;                        // a cursor the server refused is gone there
+            letGo();
             throw e;
         }
         BsonDocument cursor = reply.getDocument("cursor");
@@ -157,8 +163,19 @@ final class BatchCursor<T> implements MongoCursor<T> {
         batch = cursor.getArray("nextBatch");
         postBatchResumeToken = cursor.getDocument("postBatchResumeToken", null);
         at = 0;
-        if (id == 0 && session != null) {
-            session.ended(this);
+        if (id == 0) {
+            if (session != null) {
+                session.ended(this);
+            }
+            letGo();
+        }
+    }
+
+    /** Once: the cursor's hold on its server, a pinned connection behind a balancer. */
+    private void letGo() {
+        if (holding) {
+            holding = false;
+            server.release();
         }
     }
 
@@ -179,6 +196,8 @@ final class BatchCursor<T> implements MongoCursor<T> {
                     .append("cursors", new BsonArray(java.util.List.of(new BsonInt64(open)))));
         } catch (MongoException | IllegalStateException ignored) {
             // the server ends the cursor after its idle timeout; nothing else to do
+        } finally {
+            letGo();
         }
     }
 

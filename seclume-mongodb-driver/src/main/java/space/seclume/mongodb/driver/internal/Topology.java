@@ -62,6 +62,13 @@ import space.seclume.mongodb.MongoUrl;
  * fields, and retry once where the retryable reads and writes specifications
  * allow it - a write keeps its {@code txnNumber}, so the server applies it at
  * most once.
+ *
+ * <p>With {@code loadBalanced=true} the one address is a load balancer in
+ * front of mongos routers (the load balancer specification): nothing is
+ * monitored, the balancer is always the server chosen, and every command
+ * borrows its own connection - pinned for as long as a cursor it opened or
+ * the transaction it belongs to lives, since those exist on the router behind
+ * that connection only (see {@link ServerPool#pin}).
  */
 public final class Topology implements AutoCloseable {
 
@@ -87,7 +94,7 @@ public final class Topology implements AutoCloseable {
     static final String RETRYABLE_WRITE_ERROR = "RetryableWriteError";
     private static final int MAX_TIME_EXPIRED = 50;
 
-    private enum Kind { UNKNOWN, SINGLE, REPLICA_SET, SHARDED }
+    private enum Kind { UNKNOWN, SINGLE, REPLICA_SET, SHARDED, LOAD_BALANCED }
 
     private final MongoUrl url;
     private final ConnectionString options;
@@ -98,6 +105,8 @@ public final class Topology implements AutoCloseable {
     private final long selectionMillis;
     private final long heartbeatMillis;
     private final long localThresholdMillis;
+    /** The primary last seen, for the event when another one is elected. */
+    private ServerAddress lastPrimary;
     private final boolean retryWrites;
     private final boolean retryReads;
     private final ReentrantLock lock = new ReentrantLock();
@@ -159,10 +168,17 @@ public final class Topology implements AutoCloseable {
         boolean direct = Boolean.TRUE.equals(options.isDirectConnection())
                 || (options.getHosts().size() == 1 && setName == null
                         && options.isDirectConnection() == null);
-        this.kind = direct ? Kind.SINGLE : setName != null ? Kind.REPLICA_SET : Kind.UNKNOWN;
+        this.kind = Boolean.TRUE.equals(options.isLoadBalanced()) ? Kind.LOAD_BALANCED
+                : direct ? Kind.SINGLE : setName != null ? Kind.REPLICA_SET : Kind.UNKNOWN;
         for (String host : options.getHosts()) {
             ServerAddress address = new ServerAddress(host);
-            servers.put(address, new Server(pool(address)));
+            Server server = new Server(pool(address));
+            if (kind == Kind.LOAD_BALANCED) {
+                server.description = ServerDescription.builder().address(address)
+                        .state(ServerConnectionState.CONNECTED).ok(true)
+                        .type(ServerType.LOAD_BALANCER).build();
+            }
+            servers.put(address, server);
         }
         this.monitor = Thread.ofPlatform().daemon().name("seclume-mongodb-monitor")
                 .unstarted(this::monitor);
@@ -170,7 +186,7 @@ public final class Topology implements AutoCloseable {
 
     private ServerPool pool(ServerAddress address) {
         return new ServerPool(url, address, maxPool, maxWaitMillis, maxIdleMillis,
-                maxLifeMillis);
+                maxLifeMillis, kind == Kind.LOAD_BALANCED);
     }
 
     /** The connections to a server the topology knows, or {@code null}. */
@@ -194,17 +210,26 @@ public final class Topology implements AutoCloseable {
         String given = url.driverConnectionString();
         ConnectionString options = new ConnectionString(Srv.expand(given, resolver));
         for (com.mongodb.MongoCompressor compressor : options.getCompressorList()) {
-            if (!compressor.getName().equalsIgnoreCase("zlib")) {
+            OpMsg.Compressor named = OpMsg.Compressor.byName(compressor.getName());
+            if (named == null) {
                 throw new MongoClientException("compressor '" + compressor.getName()
-                        + "' is not supported by seclume's MongoDB driver - only zlib, which "
-                        + "needs no native library");
+                        + "' is not supported by seclume's MongoDB driver - zlib, snappy and "
+                        + "zstd are");
+            }
+            if (named != OpMsg.Compressor.ZLIB && !Airlift.available()) {
+                // Java, no native library - but a jar of its own, as the
+                // official driver needs one for these two as well.
+                throw new MongoClientException("compressor '" + compressor.getName()
+                        + "' needs io.airlift:aircompressor-v3 on the class path");
             }
         }
-        if (Boolean.TRUE.equals(options.isLoadBalanced())) {
-            throw new MongoClientException("loadBalanced is not supported by seclume's "
-                    + "MongoDB driver yet");
-        }
         Topology topology = new Topology(url, options);
+        if (topology.kind == Kind.LOAD_BALANCED) {
+            // Nothing to monitor: the balancer is not one server, and what is
+            // behind it answers one connection at a time. Nor are SRV records
+            // polled - a balanced URL has one host.
+            return topology;
+        }
         if (given.startsWith("mongodb+srv://")) {
             topology.srv = given;
             topology.resolver = resolver;
@@ -392,6 +417,13 @@ public final class Topology implements AutoCloseable {
                 server.hello = null;
                 return;
             }
+            ServerAddress elected = server.pool.address();
+            if (lastPrimary != null && !lastPrimary.equals(elected)) {
+                // Recorded as a failover: the writes go somewhere else from now on.
+                space.seclume.jfr.Observed.failover(space.seclume.jfr.Observed.beginAttempt(),
+                        lastPrimary.toString(), elected.toString(), "a new primary", 0);
+            }
+            lastPrimary = elected;
             for (Server other : servers.values()) {
                 if (other != server
                         && other.description.getType() == ServerType.REPLICA_SET_PRIMARY) {
@@ -580,9 +612,11 @@ public final class Topology implements AutoCloseable {
                     ? ClusterType.UNKNOWN : all.get(0).getClusterType();
             case REPLICA_SET -> ClusterType.REPLICA_SET;
             case SHARDED -> ClusterType.SHARDED;
+            case LOAD_BALANCED -> ClusterType.LOAD_BALANCED;
             case UNKNOWN -> ClusterType.UNKNOWN;
         };
         return new ClusterDescription(kind == Kind.SINGLE ? ClusterConnectionMode.SINGLE
+                : kind == Kind.LOAD_BALANCED ? ClusterConnectionMode.LOAD_BALANCED
                 : ClusterConnectionMode.MULTIPLE, type, all,
                 ClusterSettings.builder().applyConnectionString(options).build(),
                 ServerSettings.builder().heartbeatFrequency(heartbeatMillis,
@@ -641,6 +675,7 @@ public final class Topology implements AutoCloseable {
                     .filter(description -> description.getType() == ServerType.SHARD_ROUTER)
                     .forEach(eligible::add);
             case REPLICA_SET -> eligible.addAll(preference.choose(describeLocked()));
+            case LOAD_BALANCED -> eligible.add(servers.values().iterator().next().description);
             case UNKNOWN -> {
                 // nothing known yet
             }
@@ -679,6 +714,17 @@ public final class Topology implements AutoCloseable {
     /** The {@code hello} of the server writes go to: its limits. */
     public BsonDocument writableHello() {
         ServerPool pool = select(ReadPreference.primary());
+        if (kind == Kind.LOAD_BALANCED) {
+            // No monitor asked: what the newest connection's router answered.
+            BsonDocument hello = pool.hello();
+            lock.lock();
+            try {
+                servers.get(pool.address()).hello = hello;
+            } finally {
+                lock.unlock();
+            }
+            return hello;
+        }
         lock.lock();
         try {
             Server server = servers.get(pool.address());
@@ -766,10 +812,16 @@ public final class Topology implements AutoCloseable {
                 : preference;
         boolean retry = retryReads && !inTransaction;
         int attempt = 0;
+        MongoException earlier = null;
+        space.seclume.jfr.SeclumeEvents.Failover retried = null;
         while (true) {
             try {
-                return once(session, chosen, db, command, null, null, true);
+                Reply reply = once(session, chosen, db, command, null, null, true);
+                retriedAfter(retried, earlier, reply, attempt);
+                return reply;
             } catch (MongoException failed) {
+                earlier = failed;
+                retried = space.seclume.jfr.Observed.beginAttempt();
                 // Once without timeoutMS; with it, as often as the time allows
                 // (client-side operations timeout specification, "Retryability").
                 if (!retry || !retryableRead(failed) || !again(++attempt)) {
@@ -777,6 +829,24 @@ public final class Topology implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /**
+     * A retry that worked, as a failover event: from the server that failed
+     * to the one that answered - which, after an election, is another one.
+     */
+    private static void retriedAfter(space.seclume.jfr.SeclumeEvents.Failover event,
+            MongoException failed, Reply reply, int attempt) {
+        if (event == null || failed == null) {
+            return;
+        }
+        ServerAddress from = failed instanceof com.mongodb.MongoSocketException socket
+                ? socket.getServerAddress()
+                : failed instanceof com.mongodb.MongoServerException server
+                        ? server.getServerAddress() : null;
+        space.seclume.jfr.Observed.failover(event, from == null ? "" : from.toString(),
+                reply.server().address().toString(), "retried after " + failed.getClass()
+                        .getSimpleName() + " " + failed.getCode(), attempt);
     }
 
     /** Whether a retryable operation may go once more after {@code attempts} failed ones. */
@@ -814,10 +884,14 @@ public final class Topology implements AutoCloseable {
                 }
                 MongoException last = first;
                 int attempt = 1;
+                space.seclume.jfr.SeclumeEvents.Failover retried =
+                        space.seclume.jfr.Observed.beginAttempt();
                 while (true) {
                     try {
-                        return once(s, ReadPreference.primary(), db, numbered, sequenceId,
-                                sequence, false);
+                        Reply again = once(s, ReadPreference.primary(), db, numbered,
+                                sequenceId, sequence, false);
+                        retriedAfter(retried, first, again, attempt);
+                        return again;
                     } catch (MongoException again) {
                         // NoWritesPerformed: the retry did nothing, the earlier error says more.
                         last = again.hasErrorLabel("NoWritesPerformed") ? last : again;
@@ -915,7 +989,24 @@ public final class Topology implements AutoCloseable {
             }
             throw e;
         }
-        if (session != null && session.inTransaction() && kind == Kind.SHARDED) {
+        // Behind a balancer a command has a connection of its own, kept on
+        // for a transaction or a cursor it opens; see the class comment.
+        ServerPool lease = kind == Kind.LOAD_BALANCED && !server.pinned() ? server.pin() : null;
+        try {
+            return once(session, preference, db, command, sequenceId, sequence, read,
+                    lease != null ? lease : server);
+        } finally {
+            if (lease != null) {
+                lease.release();
+            }
+        }
+    }
+
+    private Reply once(LogicalSession session, ReadPreference preference, String db,
+            BsonDocument command, String sequenceId, List<? extends BsonDocument> sequence,
+            boolean read, ServerPool server) {
+        if (session != null && session.inTransaction()
+                && (kind == Kind.SHARDED || kind == Kind.LOAD_BALANCED)) {
             session.pin(server);
         }
         BsonDocument sent = command;
@@ -941,7 +1032,12 @@ public final class Topology implements AutoCloseable {
                 sent.put("maxTimeMS", new BsonInt64(left));
             }
         }
-        return new Reply(server, run(server, session, db, sent, sequenceId, sequence, read));
+        BsonDocument reply = run(server, session, db, sent, sequenceId, sequence, read);
+        if (server.pinned() && reply.get("cursor") instanceof BsonDocument cursor
+                && cursor.getNumber("id", new BsonInt64(0)).longValue() != 0) {
+            server.retain();                   // the cursor's; it releases it at its end
+        }
+        return new Reply(server, reply);
     }
 
     private long roundTripMillis(ServerPool server) {
@@ -1016,6 +1112,7 @@ public final class Topology implements AutoCloseable {
             failed(server, e);
             if (session != null && session.inTransaction()) {
                 session.transactionSent();
+                unpinIfTransient(session, e);
             }
             if (e.getErrorCode() == MAX_TIME_EXPIRED && Deadline.active()) {
                 // The server stopped at the maxTimeMS the deadline gave it.
@@ -1028,6 +1125,7 @@ public final class Topology implements AutoCloseable {
                 session.markDirty();
                 if (session.inTransaction()) {
                     e.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+                    unpinIfTransient(session, e);
                 }
             }
             if (e instanceof com.mongodb.MongoSocketReadTimeoutException && Deadline.active()
@@ -1044,6 +1142,17 @@ public final class Topology implements AutoCloseable {
             }
         }
         return reply;
+    }
+
+    /**
+     * Behind a balancer a transaction that failed transiently is let go of
+     * its connection: it is retried from the start, maybe on another router.
+     */
+    private void unpinIfTransient(LogicalSession session, MongoException e) {
+        if (kind == Kind.LOAD_BALANCED
+                && e.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL)) {
+            session.unpin();
+        }
     }
 
     /** The cluster time and the operation time a reply tells. */
@@ -1106,6 +1215,14 @@ public final class Topology implements AutoCloseable {
     private void failed(ServerPool server, MongoException e) {
         boolean network = e instanceof MongoSocketException;
         int code = e instanceof MongoCommandException command ? command.getErrorCode() : -1;
+        if (kind == Kind.LOAD_BALANCED) {
+            // The balancer stays what it is; a network error distrusts the
+            // connections to the router behind this one, and no others.
+            if (network) {
+                server.clear();
+            }
+            return;
+        }
         if (!network && !NOT_PRIMARY.contains(code) && !RECOVERING.contains(code)) {
             return;
         }
@@ -1295,6 +1412,9 @@ public final class Topology implements AutoCloseable {
         } catch (MongoSocketException e) {
             failed(server, e);
             session.markDirty();
+            if (kind == Kind.LOAD_BALANCED) {
+                session.unpin();               // a retried commit takes another connection
+            }
             throw e;
         }
     }

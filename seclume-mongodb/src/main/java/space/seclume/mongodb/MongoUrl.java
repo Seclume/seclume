@@ -35,6 +35,7 @@ public record MongoUrl(String host, int port, String user, String authSource,
     public static final String SCRAM_SHA_256 = "SCRAM-SHA-256";
     public static final String X509 = "MONGODB-X509";
     public static final String AWS = "MONGODB-AWS";
+    public static final String OIDC = "MONGODB-OIDC";
 
     private static final int DEFAULT_PORT = 27017;
     private static final int DEFAULT_CONNECT_TIMEOUT = 10_000;
@@ -158,7 +159,7 @@ public record MongoUrl(String host, int port, String user, String authSource,
             user = userFromUri;
         }
         if ((user == null || user.isEmpty()) && !mechanism.equals(X509)
-                && !mechanism.equals(AWS)) {
+                && !mechanism.equals(AWS) && !mechanism.equals(OIDC)) {
             throw new IllegalArgumentException(
                     "a MongoDB URL requires a user name: mongodb://user@host/?... or ?user=...");
         }
@@ -166,8 +167,8 @@ public record MongoUrl(String host, int port, String user, String authSource,
         String authSource = allOptions.get("authSource");
         if (authSource == null || authSource.isEmpty()) {
             // X.509 users live in $external; the others in admin unless said otherwise.
-            authSource = mechanism.equals(X509) || mechanism.equals(AWS) ? "$external"
-                    : DEFAULT_AUTH_SOURCE;
+            authSource = mechanism.equals(X509) || mechanism.equals(AWS)
+                    || mechanism.equals(OIDC) ? "$external" : DEFAULT_AUTH_SOURCE;
         }
 
         String rootCert = allOptions.get(TrustChoice.ROOT_CERT);
@@ -240,6 +241,8 @@ public record MongoUrl(String host, int port, String user, String authSource,
         space.seclume.mongodb.internal.MongoAws.Credentials aws = mechanism.equals(AWS)
                 ? awsCredentials(seclumeSettings) : null;
         SecretProvider secret = mechanism.equals(X509) || mechanism.equals(AWS) ? null
+                : mechanism.equals(OIDC) ? oidcToken(seclumeSettings,
+                        allOptions.get("authMechanismProperties"), user)
                 : SecretProviders.of(withoutIdentity(seclumeSettings));
 
         // Build clean connection string for driver
@@ -286,6 +289,89 @@ public record MongoUrl(String host, int port, String user, String authSource,
         Map<String, String> token = prefixed(settings, "session-token-");
         return new space.seclume.mongodb.internal.MongoAws.Credentials(null, accessKeyId,
                 SecretProviders.of(key), token.isEmpty() ? null : SecretProviders.of(token));
+    }
+
+    /**
+     * Where a MONGODB-OIDC token comes from: any provider under {@code token-}
+     * (a file, a socket, a vault), or the workload's own identity as the
+     * driver specification names it - {@code ENVIRONMENT:k8s} for the service
+     * account's token file, {@code ENVIRONMENT:azure} for the managed
+     * identity's token from IMDS (the user, if any, is its client id),
+     * {@code ENVIRONMENT:gcp} for the service account's identity token from the
+     * metadata server; both of the last need {@code TOKEN_RESOURCE}. The
+     * metadata answers are read from the socket into native memory
+     * ({@code azure-managed-identity}, {@code gcp-metadata}), never a String.
+     */
+    private static SecretProvider oidcToken(Map<String, String> settings, String properties,
+                                            String user) {
+        Map<String, String> token = prefixed(settings, "token-");
+        String environment = null;
+        String resource = null;
+        if (properties != null) {
+            for (String pair : properties.split(",")) {
+                // The first colon only: a TOKEN_RESOURCE is often api://... itself.
+                int colon = pair.indexOf(':');
+                if (colon <= 0) {
+                    continue;
+                }
+                String key = pair.substring(0, colon).trim();
+                String value = pair.substring(colon + 1).trim();
+                if (key.equalsIgnoreCase("ENVIRONMENT")) {
+                    environment = value.toLowerCase(java.util.Locale.ROOT);
+                } else if (key.equalsIgnoreCase("TOKEN_RESOURCE")) {
+                    resource = value;           // decoded with the URL's other options
+                }
+            }
+        }
+        // A JWT is often a kilobyte or more; the providers' default of 256 bytes is for
+        // passwords.
+        token.putIfAbsent("max-length", "16384");
+        if (token.size() > 1) {
+            return SecretProviders.of(token);
+        }
+        if ("k8s".equals(environment)) {
+            String file = System.getenv("AZURE_FEDERATED_TOKEN_FILE"); // seclume-allow: a file path - the token is in the file
+            if (file == null) {
+                file = System.getenv("AWS_WEB_IDENTITY_TOKEN_FILE"); // seclume-allow: a file path - the token is in the file
+            }
+            if (file == null) {
+                file = space.seclume.mongodb.internal.MongoOidc.KUBERNETES_TOKEN;
+            }
+            return SecretProviders.of(Map.of("provider", "file", "path", file,
+                    "max-length", "16384"));
+        }
+        if ("azure".equals(environment) || "gcp".equals(environment)) {
+            if (resource == null || resource.isEmpty()) {
+                throw new IllegalArgumentException("ENVIRONMENT:" + environment + " needs "
+                        + "TOKEN_RESOURCE in authMechanismProperties - the audience the token "
+                        + "is issued for, as the cluster's OIDC configuration names it");
+            }
+            Map<String, String> metadata = new LinkedHashMap<>();
+            if (environment.equals("azure")) {
+                metadata.put("provider", "azure-managed-identity");
+                metadata.put("resource", resource);
+                if (user != null && !user.isEmpty()) {
+                    metadata.put("client-id", user);
+                }
+            } else {
+                if (user != null && !user.isEmpty()) {
+                    throw new IllegalArgumentException("ENVIRONMENT:gcp takes no user: the "
+                            + "metadata server's default service account is the identity");
+                }
+                metadata.put("provider", "gcp-metadata");
+                metadata.put("audience", resource);
+            }
+            metadata.put("max-length", "16384");
+            return SecretProviders.of(metadata);
+        }
+        if (environment != null) {
+            throw new IllegalArgumentException("ENVIRONMENT:" + environment + " is not one "
+                    + "seclume knows for MONGODB-OIDC: k8s, azure or gcp - or name the token's "
+                    + "source with token-provider");
+        }
+        throw new IllegalArgumentException("authMechanism=MONGODB-OIDC needs a token: "
+                + "token-provider (e.g. token-provider=file&token-path=...) or "
+                + "authMechanismProperties=ENVIRONMENT:k8s, azure or gcp");
     }
 
     private static Map<String, String> prefixed(Map<String, String> settings, String prefix) {

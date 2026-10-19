@@ -25,6 +25,13 @@ public class MongoApplication {
         return SeclumeMongoClients.create(environment.getRequiredProperty("seclume.mongo.url"));
     }
 
+    /** The reactive one too: with the reactive starter present, Boot would make its own. */
+    @Bean
+    com.mongodb.reactivestreams.client.MongoClient reactiveMongoClient(Environment environment) {
+        return space.seclume.mongodb.reactive.SeclumeMongoReactiveClients.create(
+                environment.getRequiredProperty("seclume.mongo.url"));
+    }
+
     @Bean
     MongoTransactionManager transactionManager(MongoDatabaseFactory factory) {
         return new MongoTransactionManager(factory);

@@ -30,6 +30,8 @@ nested provider rather than a value.
 | `unix-socket` | a local agent | no | — | a round trip |
 | `dpapi` | Windows DPAPI, bound to the account | no | — | one decrypt |
 | `credential-manager` | the Windows Credential Manager | no | — | one lookup |
+| `libsecret` | the Linux desktop keyring (Secret Service: GNOME Keyring, KWallet, KeePassXC) | no | — | one D-Bus lookup |
+| `keychain` | the macOS Keychain, a generic password | no | — | one lookup |
 | `encrypted` | an AES-GCM ciphertext | no | **two**: `cipher-`, `key-` | one decrypt |
 | `rds-iam` | built, not stored — a signed RDS token | 15 min (AWS fixes it) | `key-` | four HMACs |
 | `vault` | HashiCorp Vault over HTTPS | **yes**, with its lease | `token-` | one HTTPS request |
@@ -95,7 +97,20 @@ provider=unix-socket      path=/run/agent.sock           request=db-password   #
 provider=dpapi            path=/run/secrets/db.dpapi     entropy=optional-extra
 
 provider=credential-manager   target=AppDb
+
+provider=libsecret        attribute.service=orders-db    attribute.account=app
+                          # as stored by: secret-tool store --label=... service orders-db account app
+
+provider=keychain         service=orders-db              account=app   # account optional
+                          # as stored by: security add-generic-password -s orders-db -a app -w
 ```
+
+`libsecret` reads the item as libsecret's own `SecretValue`, which lives in libsecret's
+non-pageable memory and is wiped when released; the bytes go from there into the target. It
+matches the attributes only, so an item stored under any schema is found. Tested against
+gnome-keyring in a container. `keychain` reads through `SecItemCopyMatching` from
+Security.framework; it is written against Apple's documented API and **not yet tested on a
+Mac**.
 
 `max-length` works on all of them and defaults to 256 bytes, which is longer than any database
 password.
@@ -151,7 +166,13 @@ timeout-millis=10000                  # default
 ```
 
 Both engines. Under `database/creds/...` Vault creates a database user with a lease, and the
-lease is what feeds the pool machinery above.
+lease is what feeds the pool machinery above. The user comes with the password: the drivers
+(PostgreSQL, MySQL, SQL Server, Oracle) log in as the user Vault created, whatever the URL's
+`user` says. One credential serves every connection of the data source. Halfway through the
+lease it is **renewed** (`sys/leases/renew`) - the same user, no new one in the database - for
+as long as Vault extends it; when the role's `max_ttl` caps the renewal, a new credential is
+fetched. **Closing the provider revokes the lease**, and Vault drops the user at once.
+Tested against a real Vault and PostgreSQL (`.github/scripts/vault_fixtures.sh`).
 
 ### The three cloud vaults
 
@@ -200,6 +221,8 @@ client-id=...                                         # a user-assigned identity
 
 provider=gcp-metadata                                 # Cloud SQL IAM authentication
 account=default                                       # or another attached service account
+audience=api://...                                    # optional: the identity token (a JWT) for
+                                                      # this audience, not an access token
 ```
 
 The database accepts the machine's own identity. Azure's Instance Metadata Service and
@@ -236,7 +259,12 @@ likewise refuses `trustServerCertificate=true` unless a `tlsPin` names the key. 
 no password go out. The wire format is checked against a SQL Server 2022, which reads it and
 answers with an ordinary "Login failed"; a live Azure SQL login has not been run yet.
 
-**Not covered yet:** App Service and Functions (a different endpoint and header), Azure Arc.
+**App Service, Functions and Container Apps** have no IMDS. They give the process its own
+endpoint on loopback (`IDENTITY_ENDPOINT`) and a header value to send with it
+(`IDENTITY_HEADER`). When both are set, `azure-managed-identity` asks that endpoint instead, as
+the Azure SDK does; nothing else changes in the configuration.
+
+**Not covered yet:** Azure Arc (its endpoint first answers with a challenge file to read).
 
 ### No password: the certificate is the login
 
