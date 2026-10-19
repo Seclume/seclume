@@ -56,6 +56,30 @@ class LocalRedisTest {
         assumeTrue(password != null && ca != null, "no password file or CA for Redis");
     }
 
+    /** What a recording of {@code work} holds of the named events. */
+    private static java.util.List<jdk.jfr.consumer.RecordedEvent> recorded(
+            java.util.function.Consumer<jdk.jfr.Recording> work, String... names) throws Exception {
+        Path file = Files.createTempFile("seclume-events", ".jfr");
+        try (jdk.jfr.Recording recording = new jdk.jfr.Recording()) {
+            for (String name : names) {
+                recording.enable(name).withThreshold(java.time.Duration.ZERO);
+            }
+            recording.start();
+            work.accept(recording);
+            recording.stop();
+            recording.dump(file);
+            return jdk.jfr.consumer.RecordingFile.readAllEvents(file);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    private static jdk.jfr.consumer.RecordedEvent first(
+            java.util.List<jdk.jfr.consumer.RecordedEvent> events, String name) {
+        return events.stream().filter(e -> e.getEventType().getName().equals(name)).findFirst()
+                .orElseThrow(() -> new AssertionError("no " + name + " in " + events));
+    }
+
     private static Path find(String name) {
         for (Path candidate : new Path[] {Path.of(name), Path.of("..", name)}) {
             if (Files.isReadable(candidate)) {
@@ -94,6 +118,29 @@ class LocalRedisTest {
             pooled.del(key, key + ":count");
         }
         NoSecretInHeap.assertAbsent(password);
+    }
+
+    /**
+     * The connection and the login against the real server, as Flight
+     * Recorder events: the kind, the server, the mechanism - and that they
+     * worked. Nothing of the password is in an event.
+     */
+    @Test
+    void theConnectionAndTheLoginAreRecorded() throws Exception {
+        java.util.List<jdk.jfr.consumer.RecordedEvent> events = recorded(recording -> {
+            try (Jedis jedis = new Jedis(SeclumeRedisSocketFactory.of(url("rediss", tls, password,
+                    "&tlsRootCert=" + ca.toString().replace('\\', '/'))))) {
+                assertEquals("orders", jedis.aclWhoAmI());
+            }
+        }, "space.seclume.ConnectionOpen", "space.seclume.Authentication");
+        jdk.jfr.consumer.RecordedEvent open = first(events, "space.seclume.ConnectionOpen");
+        assertEquals("redis", open.getString("kind"));
+        assertEquals(host + ":" + tls, open.getString("server"));
+        assertTrue(open.getBoolean("succeeded"));
+        jdk.jfr.consumer.RecordedEvent login = first(events, "space.seclume.Authentication");
+        assertEquals("redis", login.getString("kind"));
+        assertEquals("AUTH", login.getString("method"));
+        assertTrue(login.getBoolean("succeeded"));
     }
 
     @Test

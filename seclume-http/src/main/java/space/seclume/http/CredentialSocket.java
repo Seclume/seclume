@@ -1,12 +1,8 @@
 package space.seclume.http;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.SocketException;
@@ -23,13 +19,11 @@ import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSessionContext;
 import javax.net.ssl.SSLSocket;
 
-import space.seclume.internal.Base64Off;
 import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
 import space.seclume.internal.Transport;
 import space.seclume.internal.TrustChoice;
 import space.seclume.internal.jdbc.TlsStack;
-import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
 
 /**
@@ -54,11 +48,6 @@ import space.seclume.secret.SecretScope;
  */
 final class CredentialSocket extends SSLSocket {
 
-    private static final byte[] PREFIX =
-            CredentialPlaceholders.PREFIX.getBytes(StandardCharsets.US_ASCII); // seclume-allow: the placeholder's prefix - no secret
-
-    private enum State { HEAD, BODY, CHUNK_SIZE, CHUNK_DATA, CHUNK_END, TRAILER }
-
     private final Socket plain;
     private final String host;
     private final int port;
@@ -66,10 +55,7 @@ final class CredentialSocket extends SSLSocket {
     private final Object writing = new Object();
     private volatile boolean closed;
 
-    private State state = State.HEAD;
-    private final ByteArrayOutputStream head = new ByteArrayOutputStream();
-    private final ByteArrayOutputStream line = new ByteArrayOutputStream();
-    private long remaining;
+    private final HttpFraming framing = new HttpFraming();
     /** For HTTP/2 - negotiated by ALPN - the frames are followed instead. */
     private final Http2Requests http2;
 
@@ -133,258 +119,38 @@ final class CredentialSocket extends SSLSocket {
         int at = offset;
         int end = offset + length;
         while (at < end) {
-            switch (state) {
-                case HEAD -> {
-                    head.write(source[at++]);
-                    if (endsWithBlankLine(head)) {
-                        sendHead();
-                    }
+            if (framing.inHead()) {
+                byte[] complete = framing.headByte(source[at++]);
+                if (complete != null) {
+                    sendHead(complete);
                 }
-                case BODY, CHUNK_DATA -> {
-                    int n = (int) Math.min(remaining, end - at);
-                    tls.write(ByteBuffer.wrap(source, at, n));
-                    at += n;
-                    remaining -= n;
-                    if (remaining == 0) {
-                        state = state == State.BODY ? State.HEAD : State.CHUNK_END;
-                        remaining = 2;
-                    }
-                }
-                case CHUNK_END -> {
-                    tls.write(ByteBuffer.wrap(source, at++, 1));
-                    if (--remaining == 0) {
-                        state = State.CHUNK_SIZE;
-                    }
-                }
-                case CHUNK_SIZE, TRAILER -> {
-                    byte b = source[at];
-                    tls.write(ByteBuffer.wrap(source, at++, 1));
-                    line.write(b);
-                    if (b == '\n') {
-                        String text = line.toString(StandardCharsets.US_ASCII).trim();
-                        line.reset();
-                        if (state == State.TRAILER) {
-                            if (text.isEmpty()) {
-                                state = State.HEAD;
-                            }
-                        } else {
-                            int semicolon = text.indexOf(';');
-                            long size = number(semicolon < 0 ? text
-                                    : text.substring(0, semicolon).trim(), 16);
-                            if (size == 0) {
-                                state = State.TRAILER;
-                            } else {
-                                state = State.CHUNK_DATA;
-                                remaining = size;
-                            }
-                        }
-                    }
-                }
-                default -> throw new IllegalStateException(state.name());
+            } else {
+                int n = framing.passThrough(ByteBuffer.wrap(source, at, end - at),
+                        Integer.MAX_VALUE);
+                tls.write(ByteBuffer.wrap(source, at, n));
+                at += n;
             }
         }
-    }
-
-    private static boolean endsWithBlankLine(ByteArrayOutputStream head) {
-        int size = head.size();
-        if (size < 4) {
-            return false;
-        }
-        byte[] bytes = head.toByteArray();
-        return bytes[size - 4] == '\r' && bytes[size - 3] == '\n' && bytes[size - 2] == '\r'
-                && bytes[size - 1] == '\n';
     }
 
     /** The request head, with the secrets written where their placeholders are. */
-    private void sendHead() throws IOException {
-        byte[] bytes = head.toByteArray();
-        head.reset();
-        String text = new String(bytes, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT); // seclume-allow: a request head with placeholders - no secret
-        long length = header(text, "content-length");
-        if (text.contains("\r\ntransfer-encoding: chunked")) {
-            state = State.CHUNK_SIZE;
-        } else if (length > 0) {
-            state = State.BODY;
-            remaining = length;
-        } else {
-            state = State.HEAD;
-        }
-        if (indexOf(bytes, PREFIX, 0) < 0 && !text.contains(": basic ")) {
+    private void sendHead(byte[] bytes) throws IOException {
+        if (!HttpFraming.carriesPlaceholder(bytes)) {
             write(ByteBuffer.wrap(bytes));
             return;
         }
+        String text = new String(bytes, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT); // seclume-allow: a request head with placeholders - no secret
         space.seclume.jfr.Observed.secretUse("http", host + ":" + port,
                 text.contains(": basic ") ? "basic" : "header");
-        try (SecretScope out = SecretScope.allocate(bytes.length * 2 + 64 * 1024)) {
-            MemorySegment w = out.segment();
-            int at = 0;
-            int line = 0;
-            while (line < bytes.length) {
-                int end = line;
-                while (end < bytes.length && bytes[end] != '\n') {
-                    end++;
-                }
-                end = Math.min(end + 1, bytes.length);
-                at = rewriteLine(bytes, line, end, w, at);
-                line = end;
-            }
-            ByteBuffer buffer = w.asSlice(0, at).asByteBuffer();
-            write(buffer);
+        try (SecretScope out = HttpFraming.rewrite(bytes)) {
+            write(out.segment().asSlice(0, out.length()).asByteBuffer());
         }
-    }
-
-    /** One header line, secrets written in. @return where the next line goes */
-    private static int rewriteLine(byte[] bytes, int from, int to, MemorySegment w, int at)
-            throws IOException {
-        int basic = basicValue(bytes, from, to);
-        if (basic >= 0) {
-            int valueEnd = to;
-            while (valueEnd > basic && (bytes[valueEnd - 1] == '\n' || bytes[valueEnd - 1] == '\r'
-                    || bytes[valueEnd - 1] == ' ')) {
-                valueEnd--;
-            }
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment encoded = arena.allocate(Math.max(1, valueEnd - basic));
-                MemorySegment.copy(bytes, basic, encoded, ValueLayout.JAVA_BYTE, 0,
-                        valueEnd - basic);
-                MemorySegment decoded = arena.allocate(
-                        Base64Off.decodedUpperBound(valueEnd - basic) + 1);
-                int size = Base64Off.decode(encoded, 0, valueEnd - basic, decoded, 0);
-                byte[] plain = decoded.asSlice(0, size).toArray(ValueLayout.JAVA_BYTE); // seclume-allow: user:placeholder - no secret
-                int found = indexOf(plain, PREFIX, 0);
-                if (found >= 0) {
-                    int placeholderEnd = placeholderEnd(plain, found);
-                    SecretProvider provider = provider(plain, found, placeholderEnd);
-                    try (SecretScope secret = SecretScope.fromProvider(provider);
-                         SecretScope credentials = SecretScope.allocate(
-                                 found + secret.length() + plain.length - placeholderEnd);
-                         SecretScope base64 = SecretScope.allocate(Base64Off.encodedLength(
-                                 found + secret.length() + plain.length - placeholderEnd))) {
-                        MemorySegment c = credentials.segment();
-                        MemorySegment.copy(plain, 0, c, ValueLayout.JAVA_BYTE, 0, found);
-                        MemorySegment.copy(secret.segment(), 0, c, found, secret.length());
-                        MemorySegment.copy(plain, placeholderEnd, c, ValueLayout.JAVA_BYTE,
-                                found + secret.length(), plain.length - placeholderEnd);
-                        int total = found + secret.length() + plain.length - placeholderEnd;
-                        int written = Base64Off.encode(c, 0, total, base64.segment(), 0);
-                        MemorySegment.copy(bytes, from, w, ValueLayout.JAVA_BYTE, at,
-                                basic - from);
-                        at += basic - from;
-                        MemorySegment.copy(base64.segment(), 0, w, at, written);
-                        at += written;
-                        MemorySegment.copy(bytes, valueEnd, w, ValueLayout.JAVA_BYTE, at,
-                                to - valueEnd);
-                        return at + to - valueEnd;
-                    }
-                }
-            }
-        }
-        int cursor = from;
-        while (true) {
-            int found = indexOf(bytes, PREFIX, cursor);
-            if (found < 0 || found >= to) {
-                MemorySegment.copy(bytes, cursor, w, ValueLayout.JAVA_BYTE, at, to - cursor);
-                return at + to - cursor;
-            }
-            MemorySegment.copy(bytes, cursor, w, ValueLayout.JAVA_BYTE, at, found - cursor);
-            at += found - cursor;
-            int placeholderEnd = placeholderEnd(bytes, found);
-            try (SecretScope secret = SecretScope.fromProvider(provider(bytes, found,
-                    placeholderEnd))) {
-                MemorySegment.copy(secret.segment(), 0, w, at, secret.length());
-                at += secret.length();
-            }
-            cursor = placeholderEnd;
-        }
-    }
-
-    /** Where the base64 of a {@code Basic} credential starts in this line, or -1. */
-    private static int basicValue(byte[] bytes, int from, int to) {
-        int colon = -1;
-        for (int i = from; i < to; i++) {
-            if (bytes[i] == ':') {
-                colon = i;
-                break;
-            }
-        }
-        if (colon < 0) {
-            return -1;
-        }
-        String name = new String(bytes, from, colon - from, StandardCharsets.ISO_8859_1) // seclume-allow: a header's name
-                .trim().toLowerCase(Locale.ROOT);
-        if (!name.equals("authorization") && !name.equals("proxy-authorization")) {
-            return -1;
-        }
-        int at = colon + 1;
-        while (at < to && bytes[at] == ' ') {
-            at++;
-        }
-        byte[] basic = {'b', 'a', 's', 'i', 'c', ' '};
-        if (to - at < basic.length) {
-            return -1;
-        }
-        for (int i = 0; i < basic.length; i++) {
-            if (Character.toLowerCase((char) bytes[at + i]) != basic[i]) {
-                return -1;
-            }
-        }
-        return at + basic.length;
-    }
-
-    private static int placeholderEnd(byte[] bytes, int found) {
-        int end = found + PREFIX.length;
-        while (end < bytes.length && CredentialPlaceholders.placeholderChar(bytes[end])) {
-            end++;
-        }
-        return end;
-    }
-
-    private static SecretProvider provider(byte[] bytes, int from, int to) throws IOException {
-        // seclume-allow: the placeholder - no secret
-        String placeholder = new String(bytes, from, to - from, StandardCharsets.US_ASCII);
-        SecretProvider provider = CredentialPlaceholders.provider(placeholder);
-        if (provider == null) {
-            throw new IOException("a credential placeholder this process did not hand out");
-        }
-        return provider;
     }
 
     private void write(ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
             tls.write(buffer);
         }
-    }
-
-    private static long header(String head, String name) throws IOException {
-        int at = head.indexOf("\r\n" + name + ":");
-        if (at < 0) {
-            return -1;
-        }
-        int end = head.indexOf("\r\n", at + 2);
-        return number(head.substring(at + name.length() + 3, end).trim(), 10);
-    }
-
-    /** A length the client wrote - not one, and the framing cannot be followed. */
-    private static long number(String text, int radix) throws IOException {
-        try {
-            return Long.parseLong(text, radix);
-        } catch (NumberFormatException e) {
-            throw new IOException("the HTTP client wrote a length that is not a number: '"
-                    + text + "'", e);
-        }
-    }
-
-    private static int indexOf(byte[] data, byte[] pattern, int from) {
-        outer:
-        for (int i = from; i <= data.length - pattern.length; i++) {
-            for (int j = 0; j < pattern.length; j++) {
-                if (data[i + j] != pattern[j]) {
-                    continue outer;
-                }
-            }
-            return i;
-        }
-        return -1;
     }
 
     // ---- what is read ---------------------------------------------------------------

@@ -5,6 +5,112 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Signing with a private key on Windows** (`CngSigningKey`): seclume-keys, seclume-jwt and SigV4a
+  sign through CNG where there is no OpenSSL - RSA (PKCS#1 v1.5, PSS) and ECDSA on P-256, P-384,
+  P-521, the key imported from native memory into an ephemeral CNG key. Ed25519 stays with
+  OpenSSL.
+- **Dependencies:** Jackson 2.22.4 and 3.1.8, amqp-client 5.37.0 and Netty 4.2.19 where the new
+  search clients and the starter's optional clients brought versions with known holes.
+- **Vault dynamic database credentials, complete**: the drivers log in as the user Vault created
+  (`DynamicUser`), the lease is renewed halfway instead of a new user being made, until
+  `max_ttl` caps it; closing the provider revokes the lease. Fixed: a lease shorter than a
+  minute was due at once, and every connection got a new database user. Live against Vault
+  and PostgreSQL in CI.
+- **SigV4a** (seclume-aws): S3 multi-region access points and anything else the SDK signs with
+  `aws.auth#sigv4a` - an ECDSA P-256 key derived from the secret key in native memory, signed
+  by OpenSSL; checked against AWS's SigV4a test suite.
+- **Azure App Service, Functions and Container Apps identities**: `azure-managed-identity` asks
+  `IDENTITY_ENDPOINT` with `IDENTITY_HEADER` where the platform sets them; on **Azure Arc** it
+  answers the agent's challenge with the file it names, read only from the agent's token
+  directory.
+- **Desktop keyrings as providers**: `libsecret` (the Linux Secret Service, read as libsecret's
+  wiped `SecretValue`) and `keychain` (macOS, not yet tested on a Mac).
+- **MongoDB**: snappy and zstd compression (aircompressor, optional), Atlas Search index
+  commands, GridFS through the official driver's buckets; `listIndexes` on a collection that
+  is not there is an empty cursor, as in the official driver - GridFS's first upload failed on
+  it.
+- **Oracle generated keys of any column type**: the key columns are described once per
+  connection and bound with their type - a VARCHAR2 key, a RAW (a UUID from `sys_guid()`) or the
+  ROWID come back as text or bytes; a NUMBER key stays a number.
+- **SQL Server**: a prepared statement's and a procedure call's `execute()` hand out update
+  counts and rows in the order the server sent them, as `Statement.execute(String)` already
+  did and mssql-jdbc does; `executeQuery` and `executeUpdate` read as before.
+- **An APM agent in the process, for MongoDB**: the OpenTelemetry Java agent records both
+  drivers' commands, and the heap dump holds no password - with the control that finds it
+  when the official driver is given the password itself.
+- **MongoDB behind a load balancer** (`loadBalanced=true`) in seclume's own driver: cursors and
+  transactions keep the connection - and so the mongos - they began on; errors distrust the
+  connections to one router only. The `mongodb` CI job runs it against two mongos behind
+  HAProxy (`.github/scripts/mongo_lb_fixtures.sh`).
+- **Redis and Kafka in CI** (job `brokers`): Jedis, Lettuce and the Kafka logins against real
+  servers with TLS 1.3, their Flight Recorder events included, and the controls that show the
+  vendors' own clients leaving the secret on the heap.
+- **Randomness by system call:** `getrandom(2)` on Linux and `getentropy(3)` on macOS, written
+  straight into native memory, instead of opening `/dev/urandom` for every fill (still the
+  fallback).
+- **MONGODB-OIDC with Azure and Google identities** (`ENVIRONMENT:azure`, `ENVIRONMENT:gcp`,
+  with `TOKEN_RESOURCE`): the token read from IMDS or the metadata server into native memory.
+- **`gcp-metadata` with `audience=`**: the service account's identity token, a JWT for that
+  audience, instead of an access token.
+- **Amazon OpenSearch Service with SigV4** (`SeclumeOpenSearch.awsClient`, and
+  `seclume.opensearch.url=...?auth=aws` in the starter): opensearch-java's `AwsSdk2Transport`,
+  signed from native memory with a long-term key or a workload's temporary credentials.
+- **`SeclumeAws.resigning(spec, service)`** (seclume-aws): for a client that signs with the SDK's
+  own signer and lets nobody replace it - placeholder credentials for it, and an HTTP client that
+  signs every request again with seclume's signer.
+- **Changed:** a Kerberos login (GSSAPI on Linux, SSPI on Windows) now asks for integrity
+  protection along with mutual authentication - for the LDAP SASL bind, and so also for the
+  database drivers' Kerberos logins. Servers that take Kerberos take it; a context that is
+  refused for it is refused with the GSSAPI or SSPI status, as before.
+- **Spring Boot starter: MongoDB, Elasticsearch, OpenSearch, RabbitMQ, NATS and Redis** from one
+  property each (`seclume.mongodb.url`, `seclume.elasticsearch.url`, `seclume.opensearch.url`,
+  `seclume.rabbitmq.url`, `seclume.nats.url`, `seclume.redis.url`); Spring Boot's own settings
+  with a password for the same service are refused at start.
+- **`SeclumeLettuce.prepare(url)`**: the `RedisURI` and the client resources for a Lettuce
+  client built elsewhere, such as Spring Data Redis's.
+- **LDAP StartTLS and Kerberos/GSSAPI binds** (`seclume-ldap`): `ldap://` URLs (default port
+  389) negotiate RFC 4511 StartTLS (`1.3.6.1.4.1.1466.20037`), refuse plaintext injection
+  after the `ExtendedResponse`, and upgrade the connection to seclume's TLS before handing
+  the socket to JNDI. `authentication=kerberos` (or `gssapi`, with optional `serviceName=`,
+  `serverSpn=` and `user=`/`authorizationId=`) runs the 3-step RFC 4752 SASL `GSSAPI` bind
+  over `ldaps://` or `ldap://` (StartTLS) using the OS ticket cache (`libgssapi_krb5.so.2`
+  on Linux, `secur32.dll` SSPI on Windows) with mutual authentication and `NO_PROTECTION`
+  over TLS.
+- **Redis Cluster and Sentinel in `SeclumeLettuce`** (`seclume-redis`): `SeclumeLettuce.clusterClient(url)`
+  for Redis Cluster and `sentinelMasterId=` / `redis-sentinel://` / `rediss-sentinel://` (with
+  optional `sentinelUser=` and `sentinel-*` secret provider settings) for Redis Sentinel. The
+  TLS 1.3 `SeclumeSslEngine` is attached as each Netty channel connects to its target address,
+  so seed nodes, cluster shards discovered on topology refresh, Sentinels and Sentinel-resolved
+  masters each have their certificate checked against their own host name or IP address, with
+  every password kept off the heap.
+- **Elasticsearch and OpenSearch** (`seclume-elasticsearch`, new): the official clients -
+  elasticsearch-java 9 (`ElasticsearchClient`, `Rest5Client`), the `RestClient` of
+  elasticsearch-rest-client and opensearch-java 3 - with the API key, token or password written
+  into each request head by seclume's TLS 1.3 engine from native memory; bodies untouched.
+- **`SeclumeSslContext`** (seclume-http): an `SSLContext` whose engines are seclume's TLS 1.3 and
+  write the secrets of `SeclumeSslSocketFactory.placeholder` into HTTP/1.1 request heads - for
+  clients that take an `SSLContext` rather than a socket factory.
+- **seclume's own MongoDB driver**, what it refused until now: change streams that resume by
+  themselves, the client-level `bulkWrite`, snapshot sessions, `w: 0`, client-side
+  operation timeouts (`timeoutMS`, both cursor modes), `mongodb+srv://`, zlib compression,
+  and the logins `MONGODB-X509`, `MONGODB-AWS` and `MONGODB-OIDC` (FEATURES.md has the
+  details). Still refused: Atlas Search indexes.
+- **Flight Recorder events where there were none**: the official MongoDB driver on seclume's
+  socket (connection, login, each command by its shape), Redis (the login through Jedis, the
+  password written in for Lettuce), Kafka (the secret written into SASL PLAIN and OAUTHBEARER, the
+  SCRAM login).
+- **Flight Recorder events from seclume's own MongoDB driver**: the connection, the login by
+  mechanism, each command by its shape (`find shop.orders filter {status: ?}` - never a value),
+  a new primary and a retry as `Failover` (OBSERVABILITY.md).
+- **`SeclumeSessions`**: a session handed off by one client and taken up by another - in
+  another process - with its transaction still open.
+- **The reactive API** (`seclume-mongodb-reactive`, new): the official Reactive Streams
+  `MongoClient` over seclume's own driver, the publishers on virtual threads with
+  backpressure and cancel; the Reactive Streams TCK passes, and Spring Data MongoDB reactive
+  runs on it.
+- **Fixed**: an EC client certificate key (`ClientIdentity`) shared between connections
+  could only sign on the thread that loaded it; on any other the handshake failed.
+
 - **Pool metrics**: `seclume.pool.acquire`, `.usage` and `.creation` as timers with
   histograms - how long a borrower waited, how long a connection was held, how long opening
   one took - through the new `PoolListener`, which costs nothing when nobody listens.

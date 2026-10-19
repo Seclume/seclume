@@ -34,18 +34,36 @@ final class SeclumeClientSession implements ClientSession {
     private final TransactionOptions clientDefaults;
     private volatile boolean closed;
 
+    /** {@code timeoutMS} of the client or the session; null for none. */
+    private final Long timeoutMillis;
+
+    /** A session that carries on what another client handed off; see {@link SeclumeSessions}. */
+    SeclumeClientSession(Topology topology, LogicalSession.State state, Object originator,
+            TransactionOptions clientDefaults, Long timeoutMillis) {
+        this.timeoutMillis = timeoutMillis;
+        this.topology = topology;
+        this.options = ClientSessionOptions.builder()
+                .causallyConsistent(state.causallyConsistent()).build();
+        this.originator = originator;
+        this.clientDefaults = clientDefaults;
+        this.session = LogicalSession.of(state);
+    }
+
     SeclumeClientSession(Topology topology, ClientSessionOptions options, Object originator,
-            TransactionOptions clientDefaults) {
-        if (Boolean.TRUE.equals(options.isSnapshot())) {
-            throw new UnsupportedOperationException("snapshot sessions are not supported by "
-                    + "seclume's MongoDB driver yet");
+            TransactionOptions clientDefaults, Long timeoutMillis) {
+        this.timeoutMillis = timeoutMillis;
+        boolean snapshot = Boolean.TRUE.equals(options.isSnapshot());
+        if (snapshot && Boolean.TRUE.equals(options.isCausallyConsistent())) {
+            throw new IllegalArgumentException("a session is either causally consistent or a "
+                    + "snapshot session, not both");
         }
         this.topology = topology;
         this.options = options;
         this.originator = originator;
         this.clientDefaults = clientDefaults;
-        this.session = topology.acquire(true, options.isCausallyConsistent() == null
-                || options.isCausallyConsistent());
+        this.session = topology.acquire(true, !snapshot
+                && (options.isCausallyConsistent() == null || options.isCausallyConsistent()));
+        this.session.snapshot(snapshot);
     }
 
     /** The session behind an API argument; {@code null} for none. */
@@ -165,9 +183,11 @@ final class SeclumeClientSession implements ClientSession {
         }
     }
 
-    private static boolean within(long start) {
-        return System.nanoTime() - start < TimeUnit.MILLISECONDS.toNanos(
-                WITH_TRANSACTION_LIMIT_MILLIS);
+    /** Two minutes - or timeoutMS, which replaces them (client-side operations timeout). */
+    private boolean within(long start) {
+        long limit = timeoutMillis != null && timeoutMillis > 0 ? timeoutMillis
+                : WITH_TRANSACTION_LIMIT_MILLIS;
+        return System.nanoTime() - start < TimeUnit.MILLISECONDS.toNanos(limit);
     }
 
     private static boolean maxTimeExpired(MongoException e) {
@@ -271,18 +291,36 @@ final class SeclumeClientSession implements ClientSession {
 
     @Override
     public void setSnapshotTimestamp(BsonTimestamp snapshotTimestamp) {
-        throw new UnsupportedOperationException("snapshot sessions are not supported by "
-                + "seclume's MongoDB driver yet");
+        session.snapshotTime(snapshotTimestamp);
     }
 
     @Override
     public BsonTimestamp getSnapshotTimestamp() {
-        return null;
+        return session.snapshotTime();
     }
 
     @Override
     public BsonDocument getClusterTime() {
         return session.clusterTime();
+    }
+
+    /**
+     * Lets go of the session without ending it: an open transaction stays
+     * open on the server, and the server session does not go back to this
+     * client's pool - whoever takes the state up uses its {@code lsid}.
+     * Open cursors are closed; they are not carried.
+     */
+    LogicalSession.State handOff() {
+        if (closed) {
+            throw new IllegalStateException("the session is closed");
+        }
+        String why = session.notCarriable();
+        if (why != null) {
+            throw new IllegalStateException(why + " cannot be handed off");
+        }
+        closed = true;
+        session.closeCursors();
+        return session.state();
     }
 
     /** Aborts a transaction left open and gives the server session back to the pool. */

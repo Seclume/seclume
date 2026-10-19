@@ -37,6 +37,7 @@ import software.amazon.awssdk.identity.spi.AwsSessionCredentialsIdentity;
 import space.seclume.crypto.Digest;
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.internal.AwsSigV4;
+import space.seclume.internal.AwsSigV4a;
 import space.seclume.secret.SecretProvider;
 
 /**
@@ -57,8 +58,11 @@ import space.seclume.secret.SecretProvider;
  * signatures request by request.
  *
  * <p>Presigned URLs ({@code S3Presigner} on a client set up here) are signed
- * in the query string the same way. Not here: SigV4a (multi-region access
- * points) and the
+ * in the query string the same way. SigV4a - S3 multi-region access points,
+ * where the SDK asks for {@code aws.auth#sigv4a} - is the same canonical
+ * request with the region set in {@code X-Amz-Region-Set} and an ECDSA
+ * signature from a key derived in native memory ({@link AwsSigV4a}; OpenSSL 3
+ * on Linux). Not here: the
  * chunked ({@code aws-chunked}) upload encoding - a body is signed in one
  * piece, or, where the SDK allows it over HTTPS, sent as
  * {@code UNSIGNED-PAYLOAD}; an S3 checksum goes into its header. An async
@@ -77,10 +81,22 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
 
     private final String accessKeyId;
     private final SecretProvider secretKey;
+    /** SigV4a: ECDSA over the region set, instead of an HMAC for one region. */
+    private final boolean asymmetric;
 
     SeclumeSigV4Signer(String accessKeyId, SecretProvider secretKey) {
+        this(accessKeyId, secretKey, false);
+    }
+
+    SeclumeSigV4Signer(String accessKeyId, SecretProvider secretKey, boolean asymmetric) {
         this.accessKeyId = accessKeyId;
         this.secretKey = secretKey;
+        this.asymmetric = asymmetric;
+    }
+
+    /** The same signer for SigV4a. */
+    SeclumeSigV4Signer asymmetric() {
+        return new SeclumeSigV4Signer(accessKeyId, secretKey, true);
     }
 
     @Override
@@ -179,7 +195,9 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
                     + "and handed out; presign with a long-term key");
         }
         String service = request.requireProperty(AwsV4FamilyHttpSigner.SERVICE_SIGNING_NAME);
-        String region = request.requireProperty(AwsV4HttpSigner.REGION_NAME);
+        String region = asymmetric ? regionSet(request)
+                : request.requireProperty(AwsV4HttpSigner.REGION_NAME);
+        String algorithm = asymmetric ? AwsSigV4a.ALGORITHM : AwsSigV4.ALGORITHM;
         boolean doubleEncode = request.requireProperty(AwsV4FamilyHttpSigner.DOUBLE_URL_ENCODE,
                 true);
         boolean normalize = request.requireProperty(AwsV4FamilyHttpSigner.NORMALIZE_PATH, true);
@@ -190,7 +208,8 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
 
         SdkHttpRequest.Builder builder = request.request().toBuilder();
         builder.putHeader("Host", host(request.request()));
-        String scope = AwsSigV4.scope(day, region, service);
+        String scope = asymmetric ? AwsSigV4a.scope(day, service)
+                : AwsSigV4.scope(day, region, service);
         String payloadHash;
         if (presign) {
             java.time.Duration expires = request.requireProperty(
@@ -198,7 +217,10 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
             payloadHash = signsPayload(request) && payload != null ? sha256Hex(payload)
                     : UNSIGNED_PAYLOAD;
             TreeMap<String, String> signedNames = canonicalHeaders(builder.build().headers());
-            builder.putRawQueryParameter("X-Amz-Algorithm", AwsSigV4.ALGORITHM)
+            if (asymmetric) {
+                builder.putRawQueryParameter("X-Amz-Region-Set", region);
+            }
+            builder.putRawQueryParameter("X-Amz-Algorithm", algorithm)
                     .putRawQueryParameter("X-Amz-Credential", keyId + "/" + scope)
                     .putRawQueryParameter("X-Amz-Date", stamp)
                     .putRawQueryParameter("X-Amz-Expires", String.valueOf(expires.getSeconds()))
@@ -206,6 +228,9 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
                             String.join(";", signedNames.keySet()));
         } else {
             builder.putHeader("X-Amz-Date", stamp);
+            if (asymmetric) {
+                builder.putHeader("X-Amz-Region-Set", region);
+            }
             if (generation != null) {
                 builder.putHeader("X-Amz-Security-Token", generation.placeholder);
             }
@@ -230,19 +255,27 @@ final class SeclumeSigV4Signer implements HttpSigner<AwsCredentialsIdentity> {
         try (Arena arena = Arena.ofConfined()) {
             String canonicalHash = canonicalHash(arena, unsigned, headers, signedHeaders,
                     payloadHash, doubleEncode, normalize, generation);
-            String toSign = AwsSigV4.ALGORITHM + "\n" + stamp + "\n" + scope + "\n"
+            String toSign = algorithm + "\n" + stamp + "\n" + scope + "\n"
                     + canonicalHash;
-            signature = AwsSigV4.hex(AwsSigV4.sign(arena, key::writeSecret, toSign, day,
-                    region, service));
+            signature = asymmetric ? AwsSigV4a.sign(key::writeSecret, keyId, toSign)
+                    : AwsSigV4.hex(AwsSigV4.sign(arena, key::writeSecret, toSign, day,
+                            region, service));
         }
         space.seclume.jfr.Observed.secretUse("aws", unsigned.host() + ":" + unsigned.port(),
-                presign ? "sigv4-presign" : "sigv4");
+                (asymmetric ? "sigv4a" : "sigv4") + (presign ? "-presign" : ""));
         if (presign) {
             return builder.putRawQueryParameter("X-Amz-Signature", signature).build();
         }
-        return builder.putHeader("Authorization", AwsSigV4.ALGORITHM + " Credential="
+        return builder.putHeader("Authorization", algorithm + " Credential="
                 + keyId + "/" + scope + ", SignedHeaders=" + signedHeaders
                 + ", Signature=" + signature).build();
+    }
+
+    /** The regions a SigV4a signature is good for, as the SDK resolved them: {@code *} if none. */
+    private static String regionSet(BaseSignRequest<?, ?> request) {
+        software.amazon.awssdk.http.auth.aws.signer.RegionSet set = request.property(
+                software.amazon.awssdk.http.auth.aws.signer.AwsV4aHttpSigner.REGION_SET);
+        return set == null ? "*" : set.asString();
     }
 
     /**

@@ -5,15 +5,24 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import javax.naming.Context;
 
+import space.seclume.internal.Gssapi;
+
 /**
- * LDAP and Active Directory with the bind password off the heap.
+ * LDAP and Active Directory with the bind password off the heap, or with
+ * Kerberos ({@code GSSAPI}) tickets from the operating system, over either
+ * {@code ldaps://} or {@code ldap://} upgraded with StartTLS.
  *
  * <pre>
  * SeclumeLdap ldap = SeclumeLdap.of("ldaps://ad.example.com/dc=example,dc=com"
  *         + "?user=svc-app@example.com&amp;provider=file&amp;path=/run/secrets/ldap");
+ *
+ * // StartTLS on port 389 with Kerberos (Active Directory GSSAPI)
+ * SeclumeLdap kerberos = SeclumeLdap.of("ldap://ad.example.com/dc=example,dc=com"
+ *         + "?authentication=kerberos");
  *
  * // JNDI
  * DirContext context = new InitialDirContext(ldap.environment());
@@ -28,17 +37,19 @@ import javax.naming.Context;
  * </pre>
  *
  * <p>JNDI is given a placeholder as the password and seclume's socket
- * factory. The socket encrypts with seclume's own TLS 1.3, and in the simple
- * bind whose password is the placeholder it writes the real one - read from
- * the secret provider into native memory - and the BER lengths that follow
- * from it. Everything else JNDI sends and receives goes through unchanged,
- * including binds with other passwords: an end user logging in through
- * Spring Security binds with the password they typed, which is theirs to
- * have on the heap.
- *
- * <p>{@code ldaps://} only; StartTLS and SASL binds are not supported. The
- * service account's password is the one protected - which is the one that
- * lives as long as the application does.
+ * factory. For {@code ldap://} URLs, the socket first sends the RFC 4511
+ * StartTLS {@code ExtendedRequest} ({@code 1.3.6.1.4.1.1466.20037}), checks the
+ * {@code ExtendedResponse}, and upgrades the transport to seclume's own TLS
+ * before returning the socket to JNDI. In the simple bind whose password is the
+ * placeholder, the socket either writes the real password - read from the
+ * secret provider into native memory - and the BER lengths that follow from it,
+ * or (when {@code authentication=kerberos} is configured) runs the RFC 4752
+ * {@code GSSAPI} SASL bind using the operating system's Kerberos ticket cache
+ * ({@code libgssapi_krb5.so.2} on Linux, {@code secur32.dll} SSPI on Windows)
+ * with mutual authentication and {@code NO_PROTECTION} over the TLS channel.
+ * Everything else JNDI sends and receives goes through unchanged, including
+ * binds with other passwords: an end user logging in through Spring Security
+ * binds with the password they typed, which is theirs to have on the heap.
  */
 public final class SeclumeLdap {
 
@@ -59,21 +70,34 @@ public final class SeclumeLdap {
 
     /** Reads the URL and registers it with the socket factory. */
     public static SeclumeLdap of(String url) {
-        LdapSettings settings = LdapSettings.of(url);
+        return register(LdapSettings.of(url));
+    }
+
+    static SeclumeLdap of(String url, Supplier<Gssapi.Context> gssSupplier) {
+        return register(LdapSettings.of(url).withGssSupplier(gssSupplier));
+    }
+
+    private static SeclumeLdap register(LdapSettings settings) {
         LdapSettings earlier = BY_AUTHORITY.putIfAbsent(settings.authority(), settings);
-        if (earlier != null && !Objects.equals(String.valueOf(earlier.trust),
-                String.valueOf(settings.trust))) {
-            throw new IllegalArgumentException(settings.authority() + " is already set up with "
-                    + "another tlsRootCert/tlsPin; one server has one certificate");
+        if (earlier != null) {
+            if (!Objects.equals(String.valueOf(earlier.trust), String.valueOf(settings.trust))) {
+                throw new IllegalArgumentException(settings.authority() + " is already set up with "
+                        + "another tlsRootCert/tlsPin; one server has one certificate");
+            }
+            if (earlier.startTls != settings.startTls) {
+                throw new IllegalArgumentException(settings.authority() + " is already set up as "
+                        + (earlier.startTls ? "ldap:// (StartTLS)" : "ldaps://"));
+            }
+            BY_AUTHORITY.put(settings.authority(), settings);
         }
         String placeholder = PLACEHOLDER_PREFIX + IDS.incrementAndGet();
         BY_PLACEHOLDER.put(placeholder, settings);
         return new SeclumeLdap(settings, placeholder);
     }
 
-    /** {@code ldaps://host:port} - for a context source's URL. */
+    /** {@code ldaps://host:port} or {@code ldap://host:port} (StartTLS) - for a context source's URL. */
     public String url() {
-        return "ldaps://" + settings.authority();
+        return (settings.startTls ? "ldap://" : "ldaps://") + settings.authority();
     }
 
     /** The base DN from the URL's path, or empty. */
@@ -81,7 +105,7 @@ public final class SeclumeLdap {
         return settings.base;
     }
 
-    /** The bind DN. */
+    /** The bind DN, or the SASL authorization identity (empty by default for Kerberos). */
     public String user() {
         return settings.user;
     }
@@ -98,7 +122,7 @@ public final class SeclumeLdap {
                 "com.sun.jndi.ldap.read.timeout", String.valueOf(settings.timeout));
     }
 
-    /** A complete JNDI environment: URL with base, simple bind as the user, the socket factory. */
+    /** A complete JNDI environment: URL with base, bind credentials, and the socket factory. */
     public Hashtable<String, Object> environment() {
         Hashtable<String, Object> environment = new Hashtable<>(socketFactory());
         environment.put(Context.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.ldap.LdapCtxFactory");
@@ -112,6 +136,9 @@ public final class SeclumeLdap {
 
     @Override
     public String toString() {
+        if (settings.kerberos) {
+            return url() + (settings.user.isEmpty() ? " with Kerberos" : " as " + settings.user + " (Kerberos)");
+        }
         return url() + " as " + settings.user;
     }
 }

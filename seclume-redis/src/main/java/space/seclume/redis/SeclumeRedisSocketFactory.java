@@ -73,6 +73,11 @@ public final class SeclumeRedisSocketFactory implements JedisSocketFactory {
     /** From a {@code redis://} or {@code rediss://} URL - see the class comment. */
     public static SeclumeRedisSocketFactory of(String url) {
         RedisUrl parsed = RedisUrl.parse(url);
+        if (parsed.sentinelMasterId() != null || parsed.nodes().size() > 1) {
+            throw new IllegalArgumentException("SeclumeRedisSocketFactory opens a single "
+                    + "standalone socket; use SeclumeLettuce.client(url) for Sentinel or "
+                    + "SeclumeLettuce.clusterClient(url) for a Redis Cluster");
+        }
         return new SeclumeRedisSocketFactory(parsed.host(), parsed.port(), parsed.user(),
                 parsed.tls(), parsed.trust(), parsed.connectTimeout(), parsed.timeout(),
                 parsed.secret());
@@ -80,6 +85,20 @@ public final class SeclumeRedisSocketFactory implements JedisSocketFactory {
 
     @Override
     public Socket createSocket() throws JedisConnectionException {
+        space.seclume.jfr.SeclumeEvents.ConnectionOpen connecting =
+                space.seclume.jfr.Observed.beginConnect();
+        boolean connected = false;
+        try {
+            Socket socket = connect();
+            connected = true;
+            return socket;
+        } finally {
+            space.seclume.jfr.Observed.endConnect(connecting, "redis", host + ":" + port, "",
+                    connected && tls ? "TLSv1.3" : null, connected);
+        }
+    }
+
+    private Socket connect() throws JedisConnectionException {
         SocketTransport transport = null;
         TlsLayer layer = null;
         try {
@@ -122,6 +141,19 @@ public final class SeclumeRedisSocketFactory implements JedisSocketFactory {
      * native memory, then the one-line answer.
      */
     private void authenticate(TransportSocket socket) throws IOException {
+        space.seclume.jfr.SeclumeEvents.Authentication login =
+                space.seclume.jfr.Observed.beginLogin();
+        boolean loggedIn = false;
+        try {
+            send(socket);
+            loggedIn = true;
+        } finally {
+            space.seclume.jfr.Observed.endLogin(login, "redis", host + ":" + port, "AUTH",
+                    loggedIn);
+        }
+    }
+
+    private void send(TransportSocket socket) throws IOException {
         try (SecretScope password = SecretScope.fromProvider(secret)) {
             int length = password.length();
             byte[] head = header(length);                         // no secret in it

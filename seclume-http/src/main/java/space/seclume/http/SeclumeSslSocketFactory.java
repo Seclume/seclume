@@ -77,22 +77,26 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
             throw new IllegalArgumentException("connectTimeout is not a number of milliseconds: '"
                     + parsed.get("connectTimeout") + "'", e);
         }
-        TrustChoice.Choice trust = null;
-        if (rootCert != null || pin != null) {
-            Properties named = new Properties();
-            if (rootCert != null) {
-                named.setProperty(TrustChoice.ROOT_CERT, rootCert);
-            }
-            if (pin != null) {
-                named.setProperty(TrustChoice.PIN, pin);
-            }
-            try {
-                trust = TrustChoice.of(null, named);
-            } catch (SQLException e) {
-                throw new IllegalArgumentException(e.getMessage(), e);
-            }
+        return new SeclumeSslSocketFactory(trust(rootCert, pin), connectTimeout, false);
+    }
+
+    /** Whom to trust: the JVM's store (null), or {@code tlsRootCert} / {@code tlsPin}. */
+    static TrustChoice.Choice trust(String rootCert, String pin) {
+        if (rootCert == null && pin == null) {
+            return null;
         }
-        return new SeclumeSslSocketFactory(trust, connectTimeout, false);
+        Properties named = new Properties();
+        if (rootCert != null) {
+            named.setProperty(TrustChoice.ROOT_CERT, rootCert);
+        }
+        if (pin != null) {
+            named.setProperty(TrustChoice.PIN, pin);
+        }
+        try {
+            return TrustChoice.of(null, named);
+        } catch (SQLException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
     }
 
     /**
@@ -114,7 +118,8 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
 
     /** For clients that ask: accepts the hostnames seclume's TLS already checked. */
     public HostnameVerifier hostnameVerifier() {
-        return (host, session) -> CredentialSocket.ours(session);
+        return (host, session) -> CredentialSocket.ours(session)
+                || space.seclume.internal.SeclumeSslEngine.checked(session);
     }
 
     /**
@@ -186,7 +191,7 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
         return getDefaultCipherSuites();
     }
 
-    private static Map<String, String> parse(String options) {
+    static Map<String, String> parse(String options) {
         Map<String, String> parsed = new LinkedHashMap<>();
         if (options == null || options.isBlank()) {
             return parsed;

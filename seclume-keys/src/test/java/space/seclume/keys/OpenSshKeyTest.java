@@ -36,7 +36,7 @@ class OpenSshKeyTest {
 
     @BeforeAll
     static void keys() throws Exception {
-        assumeTrue(OpenSslSigningKey.available(), "OpenSSL 3 on 64-bit Linux");
+        assumeTrue(space.seclume.crypto.PrivateSigningKey.available(), "OpenSSL 3 on 64-bit Linux or CNG on Windows");
         Process probe = space.seclume.tck.Shell.builder("-c", "command -v ssh-keygen").start();
         assumeTrue(probe.waitFor() == 0, "ssh-keygen is not installed");
         Path script = directory.resolve("keys.sh");
@@ -73,6 +73,8 @@ class OpenSshKeyTest {
     @CsvSource({"ed25519, Ed25519", "ecdsa256, SHA256withECDSA", "ecdsa384, SHA384withECDSA",
             "ecdsa521, SHA512withECDSA", "rsa, SHA256withRSA", "rsa, SHA512withRSA"})
     void readsWhatSshKeygenWrites(String name, String algorithm) throws Exception {
+        assumeTrue(!name.equals("ed25519") || space.seclume.crypto.OpenSslSigningKey.available(),
+                "Ed25519 signs in OpenSSL only - CNG has no Ed25519");
         KeyPair pair = SeclumeKeys.keyPair(spec(name));
         assertArrayEquals(Files.readAllBytes(directory.resolve(name + ".public.der")),
                 pair.getPublic().getEncoded(), "the public key from the private key file");
@@ -89,6 +91,8 @@ class OpenSshKeyTest {
 
     @Test
     void anEd25519KeyIsWhatTheJdkCallsEdDsa() {
+        assumeTrue(space.seclume.crypto.OpenSslSigningKey.available(),
+                "Ed25519 signs in OpenSSL only - CNG has no Ed25519");
         PrivateKey key = SeclumeKeys.privateKey(spec("ed25519"));
         assertEquals("EdDSA", key.getAlgorithm());
         assertEquals(null, key.getEncoded());

@@ -115,6 +115,18 @@ final class SeclumeMongoSocket extends SSLSocket {
             throw new IllegalArgumentException("unsupported endpoint: " + endpoint);
         }
         this.remoteAddress = inet;
+        space.seclume.jfr.SeclumeEvents.ConnectionOpen connecting =
+                space.seclume.jfr.Observed.beginConnect();
+        try {
+            open(inet, connectTimeout);
+        } finally {
+            space.seclume.jfr.Observed.endConnect(connecting, "mongodb", inet.getHostString()
+                    + ":" + inet.getPort(), url.authSource(), connected ? "TLSv1.3" : null,
+                    connected);
+        }
+    }
+
+    private void open(InetSocketAddress inet, int connectTimeout) throws IOException {
         String host = inet.getHostString();
         int port = inet.getPort();
         int effectiveTimeout = connectTimeout > 0 ? connectTimeout : url.connectTimeout();
@@ -135,7 +147,16 @@ final class SeclumeMongoSocket extends SSLSocket {
                 }
             });
 
-            MongoHandshake.authenticate(tls, url, host, port);
+            space.seclume.jfr.SeclumeEvents.Authentication login =
+                    space.seclume.jfr.Observed.beginLogin();
+            boolean loggedIn = false;
+            try {
+                MongoHandshake.authenticate(tls, url, host, port);
+                loggedIn = true;
+            } finally {
+                space.seclume.jfr.Observed.endLogin(login, "mongodb", host + ":" + port,
+                        MongoUrl.SCRAM_SHA_256, loggedIn);
+            }
             transport.networkTimeout(timeoutMillis);        // the driver's, 0 for none
             connected = true;
         } catch (SQLException e) {

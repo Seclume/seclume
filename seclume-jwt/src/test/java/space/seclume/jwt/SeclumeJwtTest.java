@@ -146,7 +146,7 @@ class SeclumeJwtTest {
 
     @Test
     void rsaPssAndEcTokensAreCheckedByTheJdk(@TempDir Path dir) throws Exception {
-        Assumptions.assumeTrue(OpenSslSigningKey.available(), "no OpenSSL 3 here");
+        Assumptions.assumeTrue(space.seclume.crypto.PrivateSigningKey.available(), "no OpenSSL 3 or CNG here");
         KeyPairGenerator rsaGenerator = KeyPairGenerator.getInstance("RSA");
         rsaGenerator.initialize(2048);
         KeyPair rsa = rsaGenerator.generateKeyPair();

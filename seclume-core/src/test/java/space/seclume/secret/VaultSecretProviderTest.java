@@ -276,6 +276,88 @@ class VaultSecretProviderTest {
     }
 
     /**
+     * The database engine's user comes with its password, and halfway
+     * through the lease the lease is renewed - the same user, no new one in
+     * the database - until Vault caps it at the role's max_ttl: then a new
+     * credential, a new user. Closing gives the lease back.
+     */
+    @Test
+    void theLeaseIsRenewedUntilItIsCappedAndRevokedAtTheEnd() throws Exception {
+        Instant start = Instant.parse("2026-09-20T12:00:00Z");
+        MovingClock clock = new MovingClock(start);
+        try (FakeVault vault = new FakeVault(200,
+                "{\"lease_id\":\"database/creds/app/one\",\"renewable\":true,"
+                        + "\"lease_duration\":600,"
+                        + "\"data\":{\"username\":\"v-app-one\",\"password\":\"first\"}}",
+                "{\"lease_id\":\"database/creds/app/one\",\"renewable\":true,"
+                        + "\"lease_duration\":600}",                 // renewed in full
+                "{\"lease_id\":\"database/creds/app/one\",\"renewable\":true,"
+                        + "\"lease_duration\":20}",                  // capped by max_ttl
+                "{\"lease_id\":\"database/creds/app/two\",\"renewable\":true,"
+                        + "\"lease_duration\":600,"
+                        + "\"data\":{\"username\":\"v-app-two\",\"password\":\"second\"}}",
+                "{}")) {                                             // the revocation
+            VaultSecretProvider provider = provider(vault, "database/creds/app", clock);
+            assertEquals("v-app-one", DynamicUser.loginUser("configured", provider));
+            assertEquals("first", read(provider));
+
+            clock.advance(Duration.ofMinutes(6));                    // past half of ten
+            assertEquals("v-app-one", provider.currentUser(), "renewed: the same user");
+            assertEquals("first", read(provider));
+            assertEquals(2, vault.served());
+            assertTrue(vault.requests.get(1).startsWith("PUT /v1/sys/leases/renew "),
+                    vault.requests.get(1));
+            assertEquals(start.plus(Duration.ofMinutes(6)).plusSeconds(600),
+                    provider.credentialsValidUntil());
+
+            clock.advance(Duration.ofMinutes(6));
+            assertEquals("v-app-two", provider.currentUser(), "capped: a new user");
+            assertEquals("second", read(provider), "the password of the user handed out");
+            assertEquals(4, vault.served());
+            assertTrue(vault.requests.get(3).startsWith("GET /v1/database/creds/app "));
+
+            provider.close();
+            assertEquals(5, vault.served(), "the lease was not given back");
+            assertTrue(vault.requests.get(4).startsWith("PUT /v1/sys/leases/revoke "),
+                    vault.requests.get(4));
+        }
+    }
+
+    /**
+     * A lease shorter than a minute: thirty seconds before its end lay before
+     * it began, every read was due, and each connection got a new user.
+     */
+    @Test
+    void aShortLeaseIsNotFetchedAgainAtOnce() throws Exception {
+        MovingClock clock = new MovingClock(Instant.parse("2026-09-20T12:00:00Z"));
+        try (FakeVault vault = new FakeVault(200,
+                "{\"lease_duration\":20,\"data\":{\"username\":\"v-1\",\"password\":\"a\"}}",
+                "{\"lease_duration\":20,\"data\":{\"username\":\"v-2\",\"password\":\"b\"}}");
+             VaultSecretProvider provider = provider(vault, "database/creds/app", clock)) {
+            assertEquals("v-1", provider.currentUser());
+            assertEquals("a", read(provider));
+            clock.advance(Duration.ofSeconds(5));
+            assertEquals("v-1", provider.currentUser());
+            assertEquals(1, vault.served(), "fetched again five seconds into twenty");
+            clock.advance(Duration.ofSeconds(6));               // past half
+            assertEquals("v-2", provider.currentUser());
+        }
+    }
+
+    /** A KV secret is a password alone: the configured user stays. */
+    @Test
+    void aStaticSecretLeavesTheConfiguredUser() throws Exception {
+        try (FakeVault vault = new FakeVault(200,
+                "{\"lease_duration\":0,\"data\":{\"data\":{\"username\":\"kv-user\","
+                        + "\"password\":\"static\"}}}");
+             VaultSecretProvider provider = provider(vault, "secret/data/app",
+                     Clock.fixed(Instant.parse("2026-09-20T12:00:00Z"), ZoneOffset.UTC))) {
+            assertEquals("configured", DynamicUser.loginUser("configured", provider));
+            assertEquals("static", read(provider));
+        }
+    }
+
+    /**
      * A long lease is refreshed no later than thirty seconds before it ends.
      *
      * <p>Half of twenty-four hours is twelve, and twelve hours of confidence

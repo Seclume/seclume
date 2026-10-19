@@ -32,6 +32,16 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
 
     /** Bytes of the current request not yet passed on; 0 at the start of the next. */
     private long remaining;
+    /** The broker, for the event that says a secret was written in. */
+    private final String where;
+
+    SaslAuthenticateRewriter() {
+        this("");
+    }
+
+    SaslAuthenticateRewriter(String where) {
+        this.where = where;
+    }
 
     @Override
     public Step next(ByteBuffer plain) throws IOException {
@@ -48,6 +58,7 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
             if (plain.getShort(at + 4) == SASL_AUTHENTICATE && total <= plain.remaining()) {
                 Step replaced = replace(plain, at, (int) total);
                 if (replaced != null) {
+                    space.seclume.jfr.Observed.secretUse("kafka", where, "sasl");
                     return replaced;
                 }
             }

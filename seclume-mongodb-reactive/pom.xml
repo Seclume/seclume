@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.13.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-mongodb-reactive</artifactId>
+  <name>seclume MongoDB driver, reactive</name>
+  <description>
+    seclume's own MongoDB driver behind the reactive API of the official
+    driver (com.mongodb.reactivestreams.client): Reactive Streams publishers
+    over the sync driver, each subscription on a virtual thread.
+  </description>
+
+  <properties>
+    <mongodb.version>5.13.0</mongodb.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb-driver</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The interfaces implemented here, and Reactive Streams with them. -->
+    <dependency>
+      <groupId>org.mongodb</groupId>
+      <artifactId>mongodb-driver-reactivestreams</artifactId>
+      <version>${mongodb.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- The Reactive Streams TCK, which is TestNG: run on the JUnit Platform. -->
+    <dependency>
+      <groupId>org.reactivestreams</groupId>
+      <artifactId>reactive-streams-tck</artifactId>
+      <version>1.0.4</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testng</groupId>
+      <artifactId>testng</artifactId>
+      <version>7.10.2</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.support</groupId>
+      <artifactId>testng-engine</artifactId>
+      <version>1.0.5</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

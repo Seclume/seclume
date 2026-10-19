@@ -24,6 +24,26 @@ openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 
   -extfile ext -out server.crt 2>/dev/null
 cat server.crt server.key > server.pem
 rm -f ca.key server.key server.csr ext ca.srl
+# MONGODB-X509: a client CA the servers trust besides their own, certuser from
+# it, and two that must be refused - another CA's and a self-signed one with the
+# same name. Their keys stay the runner's; only the CA goes into ca.pem.
+mkdir -p certauth
+client() { # name subject issuer-key issuer-cert
+  openssl ecparam -name prime256v1 -genkey -noout -out certauth/$1.key
+  openssl req -new -key certauth/$1.key -subj "/CN=$2" -out certauth/$1.csr 2>/dev/null
+  echo 'extendedKeyUsage=clientAuth' > certauth/ext
+  openssl x509 -req -in certauth/$1.csr -CA $4 -CAkey $3 -CAcreateserial -days 2     -extfile certauth/ext -out certauth/$1.crt 2>/dev/null
+}
+openssl ecparam -name prime256v1 -genkey -noout -out certauth/ca.key
+openssl req -x509 -new -key certauth/ca.key -days 2 -subj "/CN=seclume CI client CA"   -out certauth/ca.crt 2>/dev/null
+openssl ecparam -name prime256v1 -genkey -noout -out certauth/other-ca.key
+openssl req -x509 -new -key certauth/other-ca.key -days 2 -subj "/CN=a stranger's CA"   -out certauth/other-ca.crt 2>/dev/null
+client certuser certuser certauth/ca.key certauth/ca.crt
+client stranger certuser certauth/other-ca.key certauth/other-ca.crt
+openssl ecparam -name prime256v1 -genkey -noout -out certauth/forged.key
+openssl req -x509 -new -key certauth/forged.key -days 2 -subj "/CN=certuser"   -addext "extendedKeyUsage=clientAuth" -out certauth/forged.crt 2>/dev/null
+rm -f certauth/*.csr certauth/ext certauth/*.srl certauth/ca.key certauth/other-ca.key
+cat certauth/ca.crt >> ca.pem
 head -c 24 /dev/urandom | base64 | tr -d '/+=' > pw
 openssl rand -base64 756 > keyfile
 chmod 400 keyfile server.pem pw
@@ -64,6 +84,9 @@ if (!db.hello().isWritablePrimary) { throw new Error('no primary'); }
 const pwd = require('fs').readFileSync('/certs/pw', 'utf8').trim();
 db.getSiblingDB('admin').createUser({user: 'seclume_test', pwd: pwd, roles: ['root'],
     mechanisms: ['SCRAM-SHA-1', 'SCRAM-SHA-256']});
+db.getSiblingDB('admin').auth('seclume_test', pwd);
+db.getSiblingDB('$external').createUser({user: 'CN=certuser',
+    roles: [{role: 'readWrite', db: 'seclume_test'}]});
 JS
 sudo chown 999:999 "$work/init.js"
 docker exec mongo-rs1 mongosh --quiet --tls --tlsCAFile /certs/ca.pem --host localhost \
@@ -82,4 +105,5 @@ ready 27017
 sudo cat "$work/pw" > .local-mongo-password
 cp "$work/ca.pem" .local-mongo-ca.pem
 cp "$work/ca.pem" .local-mongo-rs-ca.pem
+rm -rf .local-certauth && cp -r "$work/certauth" .local-certauth
 echo "MongoDB standalone on 27017, replica set slm-rs on 27021-27023"

@@ -179,18 +179,40 @@ class LocalDriverTest {
         }
     }
 
-    /** What is not there yet says so, instead of doing something else. */
+    /**
+     * w: 0 - sent with moreToCome, nothing read: the results say they know
+     * nothing, and the writes arrive. In a session it is refused.
+     */
     @Test
-    void whatIsNotSupportedYetSaysSo() {
-        assertThrows(MongoClientException.class, () -> SeclumeMongoClients.create(
-                url.replace("mongodb://", "mongodb+srv://").replaceAll(":[0-9]+/", "/")));
+    void unacknowledgedWritesGoAndSayNothing() throws Exception {
         try (MongoClient client = SeclumeMongoClients.create(url)) {
-            UnsupportedOperationException unacknowledged = assertThrows(
-                    UnsupportedOperationException.class, () -> client.getDatabase("seclume_test")
-                            .getCollection(fresh())
-                            .withWriteConcern(com.mongodb.WriteConcern.UNACKNOWLEDGED)
-                            .insertOne(new Document()));
-            assertTrue(unacknowledged.getMessage().contains("w: 0"));
+            MongoCollection<Document> things = client.getDatabase("seclume_test")
+                    .getCollection(fresh());
+            try {
+                things.insertOne(new Document("_id", 0));            // the collection exists
+                MongoCollection<Document> blind = things.withWriteConcern(
+                        com.mongodb.WriteConcern.UNACKNOWLEDGED);
+                assertTrue(!blind.insertOne(new Document("_id", 1)).wasAcknowledged());
+                assertTrue(!blind.insertMany(List.of(new Document("_id", 2),
+                        new Document("_id", 3))).wasAcknowledged());
+                assertTrue(!blind.updateOne(Filters.eq("_id", 1),
+                        com.mongodb.client.model.Updates.set("v", 1)).wasAcknowledged());
+                assertTrue(!blind.deleteOne(Filters.eq("_id", 3)).wasAcknowledged());
+                long until = System.nanoTime() + 5_000_000_000L;
+                while (things.countDocuments() != 3 && System.nanoTime() < until) {
+                    Thread.sleep(50);
+                }
+                assertEquals(3, things.countDocuments(), "the unacknowledged writes did not arrive");
+                assertEquals(1, things.find(Filters.eq("_id", 1)).first().getInteger("v"));
+                try (var session = client.startSession()) {
+                    assertThrows(IllegalArgumentException.class,
+                            () -> blind.insertOne(session, new Document("_id", 9)));
+                }
+                // The connection is still in step: an acknowledged command after them answers.
+                assertEquals(3, things.countDocuments());
+            } finally {
+                things.drop();
+            }
         }
     }
 }

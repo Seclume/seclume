@@ -146,6 +146,101 @@ class LocalSameAsOfficialTest {
         });
     }
 
+    /**
+     * Atlas Search indexes: the commands reach the server as the official
+     * driver sends them. A server without mongot answers each with its own
+     * error, and both drivers have to hand over the same one - the same code
+     * for create, update, list; a drop of an index that is not there is no
+     * error for either.
+     */
+    @Test
+    void searchIndexCommandsAreTheOfficialDriversOwn() {
+        same(c -> {
+            c.insertOne(new Document("_id", 1).append("title", "a pencil"));
+            List<Object> seen = new ArrayList<>();
+            Document definition = new Document("mappings", new Document("dynamic", true));
+            seen.add(code(() -> c.createSearchIndex("titles", definition)));
+            seen.add(code(() -> c.createSearchIndexes(List.of(
+                    new com.mongodb.client.model.SearchIndexModel("vectors",
+                            new Document("fields", List.of(new Document("type", "vector")
+                                    .append("path", "v").append("numDimensions", 3)
+                                    .append("similarity", "cosine"))),
+                            com.mongodb.client.model.SearchIndexType.vectorSearch())))));
+            seen.add(code(() -> {
+                c.updateSearchIndex("titles", definition);
+                return "updated";
+            }));
+            seen.add(code(() -> c.listSearchIndexes().name("titles").into(new ArrayList<>())));
+            seen.add(code(() -> {
+                c.dropSearchIndex("titles");
+                return "dropped";
+            }));
+            return seen;
+        });
+    }
+
+    /**
+     * GridFS: the official driver's buckets on seclume's database - a file in
+     * chunks, read back whole and from a stream, found by name, renamed,
+     * deleted - the same as on the official client's.
+     */
+    @Test
+    void gridFsBucketsWorkOnSeclumesDatabase() {
+        String bucketName = "zl_fs_" + new ObjectId().toHexString();
+        byte[] content = new byte[700_000];                // several 255 KiB chunks
+        for (int i = 0; i < content.length; i++) {
+            content[i] = (byte) (i * 7 + 3);
+        }
+        List<Object> results = new ArrayList<>();
+        for (MongoClient client : List.of(official, seclume)) {
+            MongoDatabase database = client.getDatabase("seclume_test");
+            com.mongodb.client.gridfs.GridFSBucket bucket =
+                    com.mongodb.client.gridfs.GridFSBuckets.create(database,
+                            bucketName + (client == official ? "_o" : "_s"));
+            List<Object> seen = new ArrayList<>();
+            org.bson.types.ObjectId id = bucket.uploadFromStream("orders.bin",
+                    new java.io.ByteArrayInputStream(content),
+                    new com.mongodb.client.gridfs.model.GridFSUploadOptions()
+                            .chunkSizeBytes(255 * 1024)
+                            .metadata(new Document("kind", "export")));
+            java.io.ByteArrayOutputStream back = new java.io.ByteArrayOutputStream();
+            bucket.downloadToStream(id, back);
+            seen.add(java.util.Arrays.equals(content, back.toByteArray()));
+            try (com.mongodb.client.gridfs.GridFSDownloadStream stream =
+                         bucket.openDownloadStream("orders.bin")) {
+                seen.add(stream.getGridFSFile().getLength());
+                seen.add(stream.getGridFSFile().getMetadata());
+                byte[] head = new byte[10];
+                seen.add(stream.read(head));
+                seen.add(java.util.Arrays.equals(head, java.util.Arrays.copyOf(content, 10)));
+            }
+            seen.add(database.getCollection(bucket.getBucketName() + ".chunks")
+                    .countDocuments());
+            bucket.rename(id, "renamed.bin");
+            seen.add(bucket.find(com.mongodb.client.model.Filters.eq("filename", "renamed.bin"))
+                    .into(new ArrayList<>()).size());
+            bucket.delete(id);
+            seen.add(bucket.find().into(new ArrayList<>()).size());
+            seen.add(code(() -> {
+                bucket.delete(id);
+                return "deleted twice";
+            }));
+            bucket.drop();
+            results.add(seen);
+        }
+        assertEquals(results.get(0), results.get(1));
+        assertEquals(true, ((List<?>) results.get(1)).get(0), "the file came back changed");
+    }
+
+    /** What an operation answered, or the server's error code for it. */
+    private static Object code(java.util.function.Supplier<?> operation) {
+        try {
+            return operation.get();
+        } catch (com.mongodb.MongoException refused) {
+            return refused.getClass().getSimpleName() + " " + refused.getCode();
+        }
+    }
+
     @Test
     void manySmallBatchesThroughGetMore() {
         same(c -> {
@@ -301,6 +396,71 @@ class LocalSameAsOfficialTest {
             seen.add(c.countDocuments());
             return seen;
         });
+    }
+
+    /** The client-level bulkWrite of MongoDB 8: two collections in one command. */
+    @Test
+    void clientBulkWriteIsTheSame() {
+        String base = "zl_cbw_" + new ObjectId().toHexString();
+        assertEquals(clientBulk(official, base + "_o"), clientBulk(seclume, base + "_s"));
+    }
+
+    private static List<Object> clientBulk(MongoClient client, String base) {
+        com.mongodb.MongoNamespace a = new com.mongodb.MongoNamespace("seclume_test", base + "_a");
+        com.mongodb.MongoNamespace b = new com.mongodb.MongoNamespace("seclume_test", base + "_b");
+        List<Object> seen = new ArrayList<>();
+        try {
+            var result = client.bulkWrite(List.of(
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(a,
+                            new Document("_id", 1).append("v", 1)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(b,
+                            new Document("_id", 1).append("v", 1)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(a,
+                            new Document("_id", 2).append("v", 2)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.updateOne(a,
+                            Filters.eq("_id", 1), Updates.inc("v", 10)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.replaceOne(b,
+                            Filters.eq("_id", 1), new Document("w", 5)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.updateOne(b,
+                            Filters.eq("_id", 9), Updates.set("v", 9),
+                            com.mongodb.client.model.bulk.ClientUpdateOneOptions
+                                    .clientUpdateOneOptions().upsert(true)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.deleteMany(a,
+                            Filters.gte("v", 2))),
+                    com.mongodb.client.model.bulk.ClientBulkWriteOptions.clientBulkWriteOptions()
+                            .verboseResults(true));
+            seen.add(List.of(result.getInsertedCount(), result.getUpsertedCount(),
+                    result.getMatchedCount(), result.getModifiedCount(),
+                    result.getDeletedCount()));
+            var verbose = result.getVerboseResults().orElseThrow();
+            seen.add(new java.util.TreeMap<>(verbose.getInsertResults()).keySet());
+            seen.add(verbose.getInsertResults().get(2).getInsertedId().orElseThrow());
+            seen.add(verbose.getUpdateResults().get(5).getUpsertedId().orElseThrow());
+            seen.add(verbose.getUpdateResults().get(3).getModifiedCount());
+            seen.add(verbose.getDeleteResults().get(6).getDeletedCount());
+            seen.add(client.getDatabase("seclume_test").getCollection(b.getCollectionName())
+                    .find().sort(Sorts.ascending("_id")).into(new ArrayList<>()));
+            for (boolean ordered : List.of(true, false)) {
+                try {
+                    client.bulkWrite(List.of(
+                            com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(b,
+                                    new Document("_id", 1)),
+                            com.mongodb.client.model.bulk.ClientNamespacedWriteModel.insertOne(b,
+                                    new Document("_id", 20))),
+                            com.mongodb.client.model.bulk.ClientBulkWriteOptions
+                                    .clientBulkWriteOptions().ordered(ordered));
+                    seen.add("no error");
+                } catch (com.mongodb.ClientBulkWriteException e) {
+                    seen.add(List.of(ordered, new java.util.TreeMap<>(e.getWriteErrors()).keySet(),
+                            e.getWriteErrors().get(0).getCode(),
+                            e.getPartialResult().map(r -> r.getInsertedCount()).orElse(-1L)));
+                }
+            }
+        } finally {
+            client.getDatabase("seclume_test").getCollection(a.getCollectionName()).drop();
+            client.getDatabase("seclume_test").getCollection(b.getCollectionName()).drop();
+        }
+        return seen;
     }
 
     @Test

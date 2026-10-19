@@ -279,6 +279,7 @@ public final class SmtpConnection implements AutoCloseable {
         List<String> lines = new ArrayList<>();
         while (true) {
             String line = wire.readLine();
+            wire.countLine(lines.size() + 1);
             if (line.length() < 3 || !isDigit(line.charAt(0)) || !isDigit(line.charAt(1))
                     || !isDigit(line.charAt(2))
                     || (line.length() > 3 && line.charAt(3) != ' ' && line.charAt(3) != '-')) {

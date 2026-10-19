@@ -1,5 +1,6 @@
 package space.seclume.kafka;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -67,6 +68,30 @@ class LocalKafkaSaslSslTest {
                 "no password, token or CA file for the broker");
     }
 
+    /** What a recording of {@code work} holds of the named events. */
+    private static java.util.List<jdk.jfr.consumer.RecordedEvent> recorded(
+            java.util.function.Consumer<jdk.jfr.Recording> work, String... names) throws Exception {
+        Path file = Files.createTempFile("seclume-events", ".jfr");
+        try (jdk.jfr.Recording recording = new jdk.jfr.Recording()) {
+            for (String name : names) {
+                recording.enable(name).withThreshold(java.time.Duration.ZERO);
+            }
+            recording.start();
+            work.accept(recording);
+            recording.stop();
+            recording.dump(file);
+            return jdk.jfr.consumer.RecordingFile.readAllEvents(file);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    private static jdk.jfr.consumer.RecordedEvent first(
+            java.util.List<jdk.jfr.consumer.RecordedEvent> events, String name) {
+        return events.stream().filter(e -> e.getEventType().getName().equals(name)).findFirst()
+                .orElseThrow(() -> new AssertionError("no " + name + " in " + events));
+    }
+
     private static Path find(String name) {
         for (Path candidate : new Path[] {Path.of(name), Path.of("..", name)}) {
             if (Files.isReadable(candidate)) {
@@ -91,6 +116,33 @@ class LocalKafkaSaslSslTest {
         }
         NoSecretInHeap.assertAbsent(password);
         NoSecretInHeap.assertAbsent(token);
+    }
+
+    /**
+     * Against the real broker, as Flight Recorder events: the PLAIN password
+     * written into the SASL request, and the SCRAM login with its mechanism
+     * and outcome.
+     */
+    @Test
+    void theSecretWrittenInAndTheScramLoginAreRecorded() throws Exception {
+        assumeTrue(!Boolean.getBoolean("seclume.kafka.control"), "the control runs instead");
+        java.util.List<jdk.jfr.consumer.RecordedEvent> events = recorded(recording -> {
+            for (Properties client : List.of(plain(password), scram())) {
+                try (Admin admin = Admin.create(client)) {
+                    admin.listTopics().names().get();
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new AssertionError(e);
+                }
+            }
+        }, "space.seclume.SecretUse", "space.seclume.Authentication");
+        jdk.jfr.consumer.RecordedEvent use = first(events, "space.seclume.SecretUse");
+        assertEquals("kafka", use.getString("kind"));
+        assertTrue(use.getString("target").endsWith(bootstrap.substring(bootstrap.lastIndexOf(':'))),
+                use.getString("target"));
+        jdk.jfr.consumer.RecordedEvent login = first(events, "space.seclume.Authentication");
+        assertEquals("kafka", login.getString("kind"));
+        assertEquals("SCRAM-SHA-512", login.getString("method"));
+        assertTrue(login.getBoolean("succeeded"));
     }
 
     @Test

@@ -337,6 +337,7 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
             return null;
         }
         TdsResultBlock last = results.remove(results.size() - 1);
+        answered.remove(last);                 // and from the in-order answer, if it is one
         return new TdsResultSet(last, this);
     }
 
@@ -344,6 +345,22 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     void positionAtFirstResult() {
         if (resultSet != null) {
             resultSet.discard();
+        }
+        if (inOrder) {
+            // Counts and rows as the server sent them: the first of them.
+            answeredIndex = 0;
+            resultSet = null;
+            block = null;
+            updateCount = -1;
+            if (!answered.isEmpty()) {
+                if (answered.get(0) instanceof Long count) {
+                    updateCount = count;
+                } else {
+                    block = (TdsResultBlock) answered.get(0);
+                    resultSet = new TdsResultSet(block, this);
+                }
+            }
+            return;
         }
         resultIndex = 0;
         block = results.isEmpty() ? null : results.get(0);
@@ -363,18 +380,23 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
 
     /**
      * Results and update counts as the server sent them: a block, or a
-     * {@code Long}. Only {@code execute(String)} hands them out this way -
-     * {@code "insert ...; select ..."} is an update count first, then the
-     * rows, as JDBC and mssql-jdbc have it. Everything else keeps its own
-     * reading: executeQuery takes the rows, executeUpdate the count, and a
-     * procedure call through a prepared or callable statement its selects,
-     * whatever its statements counted before them.
+     * {@code Long}. {@code execute(String)} and a prepared or callable
+     * statement's {@code execute()} hand them out this way -
+     * {@code "insert ...; select ..."}, or a procedure that updates and then
+     * selects, is an update count first, then the rows, as JDBC and
+     * mssql-jdbc have it. Everything else keeps its own reading:
+     * executeQuery takes the rows, executeUpdate the count.
      */
     private final List<Object> answered = new ArrayList<>(2);
     private int answeredIndex;
     /** This answer is handed out in order - set by execute(String) for its own run. */
     private boolean inOrder;
     private boolean inOrderNext;
+
+    /** For the next execution of a prepared statement: whether its answer is handed out in order. */
+    void inOrderNext(boolean inOrder) {
+        this.inOrderNext = inOrder;
+    }
 
     @Override
     public void counted(long count) {

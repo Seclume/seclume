@@ -43,6 +43,20 @@ public final class BsonWriter {
         putByte((byte) 0);
     }
 
+    /**
+     * A string whose bytes are in native memory - a session token - copied
+     * there without becoming a Java object. The bytes have to be UTF-8 and
+     * hold no 0, as any BSON string.
+     */
+    public void putString(String name, MemorySegment value, int length) {
+        putByte((byte) 0x02);
+        putCString(name);
+        putIntLE(length + 1);
+        MemorySegment.copy(value, 0, target, pos, length);
+        pos += length;
+        putByte((byte) 0);
+    }
+
     public void putBoolean(String name, boolean value) {
         putByte((byte) 0x08);
         putCString(name);

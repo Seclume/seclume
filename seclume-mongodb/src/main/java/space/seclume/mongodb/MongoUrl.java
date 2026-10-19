@@ -17,7 +17,9 @@ import space.seclume.secret.SecretProviders;
  * A MongoDB connection URL as seclume takes it: host and port, {@code user},
  * {@code authSource}, {@code tlsRootCert} or {@code tlsPin},
  * {@code connectTimeout} and {@code timeout} in milliseconds, {@code transport}
- * (what carries the connection, as for the JDBC drivers) - and the rest
+ * (what carries the connection, as for the JDBC drivers), a client certificate
+ * ({@code clientCert} and {@code clientKey-provider}, as for the JDBC drivers)
+ * - and the rest
  * the secret provider's settings.
  *
  * <p>A password in the URL is strictly refused, keeping the secret off the
@@ -25,7 +27,15 @@ import space.seclume.secret.SecretProviders;
  */
 public record MongoUrl(String host, int port, String user, String authSource,
                 TrustChoice.Choice trust, int connectTimeout, int timeout,
-                SecretProvider secret, String driverConnectionString, String transport) {
+                SecretProvider secret, String driverConnectionString, String transport,
+                space.seclume.tls.ClientIdentity identity, String mechanism,
+                space.seclume.mongodb.internal.MongoAws.Credentials aws) {
+
+    /** The login seclume's own driver does by default; X.509 when authMechanism says so. */
+    public static final String SCRAM_SHA_256 = "SCRAM-SHA-256";
+    public static final String X509 = "MONGODB-X509";
+    public static final String AWS = "MONGODB-AWS";
+    public static final String OIDC = "MONGODB-OIDC";
 
     private static final int DEFAULT_PORT = 27017;
     private static final int DEFAULT_CONNECT_TIMEOUT = 10_000;
@@ -142,18 +152,23 @@ public record MongoUrl(String host, int port, String user, String authSource,
                     "tls=false / ssl=false is refused; seclume-mongodb requires TLS");
         }
 
+        String mechanism = allOptions.getOrDefault("authMechanism", SCRAM_SHA_256)
+                .toUpperCase(java.util.Locale.ROOT);
         String user = allOptions.get("user");
         if (user == null || user.isEmpty()) {
             user = userFromUri;
         }
-        if (user == null || user.isEmpty()) {
+        if ((user == null || user.isEmpty()) && !mechanism.equals(X509)
+                && !mechanism.equals(AWS) && !mechanism.equals(OIDC)) {
             throw new IllegalArgumentException(
                     "a MongoDB URL requires a user name: mongodb://user@host/?... or ?user=...");
         }
 
         String authSource = allOptions.get("authSource");
         if (authSource == null || authSource.isEmpty()) {
-            authSource = DEFAULT_AUTH_SOURCE;
+            // X.509 users live in $external; the others in admin unless said otherwise.
+            authSource = mechanism.equals(X509) || mechanism.equals(AWS)
+                    || mechanism.equals(OIDC) ? "$external" : DEFAULT_AUTH_SOURCE;
         }
 
         String rootCert = allOptions.get(TrustChoice.ROOT_CERT);
@@ -201,6 +216,8 @@ public record MongoUrl(String host, int port, String user, String authSource,
             String lower = key.toLowerCase(java.util.Locale.ROOT);
 
             boolean isSeclume = SECLUME_KEYS.contains(lower)
+                    || lower.startsWith("clientcert") || lower.startsWith("clientkey-")
+                    || lower.equals("authmechanism")
                     || lower.startsWith("key-")
                     || lower.startsWith("cipher-")
                     || lower.startsWith("token-")
@@ -215,7 +232,18 @@ public record MongoUrl(String host, int port, String user, String authSource,
             }
         }
 
-        SecretProvider secret = SecretProviders.of(seclumeSettings);
+        space.seclume.tls.ClientIdentity identity = space.seclume.tls.ClientIdentities.of(
+                identitySettings(seclumeSettings));
+        if (mechanism.equals(X509) && identity == null) {
+            throw new IllegalArgumentException("authMechanism=MONGODB-X509 needs a client "
+                    + "certificate: clientCert and clientKey-provider (or a certificate store)");
+        }
+        space.seclume.mongodb.internal.MongoAws.Credentials aws = mechanism.equals(AWS)
+                ? awsCredentials(seclumeSettings) : null;
+        SecretProvider secret = mechanism.equals(X509) || mechanism.equals(AWS) ? null
+                : mechanism.equals(OIDC) ? oidcToken(seclumeSettings,
+                        allOptions.get("authMechanismProperties"), user)
+                : SecretProviders.of(withoutIdentity(seclumeSettings));
 
         // Build clean connection string for driver
         StringBuilder sb = new StringBuilder(scheme).append("://").append(hostsPart).append(dbPath);
@@ -234,7 +262,145 @@ public record MongoUrl(String host, int port, String user, String authSource,
 
         String transport = allOptions.get("transport");
         return new MongoUrl(firstHost, firstPort, user, authSource, trust, connectTimeout,
-                timeout, secret, driverConnectionString, transport);
+                timeout, secret, driverConnectionString, transport, identity, mechanism, aws);
+    }
+
+    /**
+     * The AWS credentials of a MONGODB-AWS login, named as for rds-iam: the
+     * workload's role ({@code credentials=instance|container|web-identity}),
+     * or {@code access-key-id} with the secret key's provider under
+     * {@code key-} and an optional session token's under {@code session-token-}.
+     */
+    private static space.seclume.mongodb.internal.MongoAws.Credentials awsCredentials(
+            Map<String, String> settings) {
+        space.seclume.secret.AwsInstanceRole role = space.seclume.secret.AwsInstanceRole.of(
+                settings);
+        if (role != null) {
+            return new space.seclume.mongodb.internal.MongoAws.Credentials(role, null, null,
+                    null);
+        }
+        String accessKeyId = settings.get("access-key-id");
+        Map<String, String> key = prefixed(settings, "key-");
+        if (accessKeyId == null || key.isEmpty()) {
+            throw new IllegalArgumentException("authMechanism=MONGODB-AWS needs credentials: "
+                    + "credentials=instance|container|web-identity, or access-key-id and "
+                    + "key-provider (with session-token-provider for temporary ones)");
+        }
+        Map<String, String> token = prefixed(settings, "session-token-");
+        return new space.seclume.mongodb.internal.MongoAws.Credentials(null, accessKeyId,
+                SecretProviders.of(key), token.isEmpty() ? null : SecretProviders.of(token));
+    }
+
+    /**
+     * Where a MONGODB-OIDC token comes from: any provider under {@code token-}
+     * (a file, a socket, a vault), or the workload's own identity as the
+     * driver specification names it - {@code ENVIRONMENT:k8s} for the service
+     * account's token file, {@code ENVIRONMENT:azure} for the managed
+     * identity's token from IMDS (the user, if any, is its client id),
+     * {@code ENVIRONMENT:gcp} for the service account's identity token from the
+     * metadata server; both of the last need {@code TOKEN_RESOURCE}. The
+     * metadata answers are read from the socket into native memory
+     * ({@code azure-managed-identity}, {@code gcp-metadata}), never a String.
+     */
+    private static SecretProvider oidcToken(Map<String, String> settings, String properties,
+                                            String user) {
+        Map<String, String> token = prefixed(settings, "token-");
+        String environment = null;
+        String resource = null;
+        if (properties != null) {
+            for (String pair : properties.split(",")) {
+                // The first colon only: a TOKEN_RESOURCE is often api://... itself.
+                int colon = pair.indexOf(':');
+                if (colon <= 0) {
+                    continue;
+                }
+                String key = pair.substring(0, colon).trim();
+                String value = pair.substring(colon + 1).trim();
+                if (key.equalsIgnoreCase("ENVIRONMENT")) {
+                    environment = value.toLowerCase(java.util.Locale.ROOT);
+                } else if (key.equalsIgnoreCase("TOKEN_RESOURCE")) {
+                    resource = value;           // decoded with the URL's other options
+                }
+            }
+        }
+        // A JWT is often a kilobyte or more; the providers' default of 256 bytes is for
+        // passwords.
+        token.putIfAbsent("max-length", "16384");
+        if (token.size() > 1) {
+            return SecretProviders.of(token);
+        }
+        if ("k8s".equals(environment)) {
+            String file = System.getenv("AZURE_FEDERATED_TOKEN_FILE"); // seclume-allow: a file path - the token is in the file
+            if (file == null) {
+                file = System.getenv("AWS_WEB_IDENTITY_TOKEN_FILE"); // seclume-allow: a file path - the token is in the file
+            }
+            if (file == null) {
+                file = space.seclume.mongodb.internal.MongoOidc.KUBERNETES_TOKEN;
+            }
+            return SecretProviders.of(Map.of("provider", "file", "path", file,
+                    "max-length", "16384"));
+        }
+        if ("azure".equals(environment) || "gcp".equals(environment)) {
+            if (resource == null || resource.isEmpty()) {
+                throw new IllegalArgumentException("ENVIRONMENT:" + environment + " needs "
+                        + "TOKEN_RESOURCE in authMechanismProperties - the audience the token "
+                        + "is issued for, as the cluster's OIDC configuration names it");
+            }
+            Map<String, String> metadata = new LinkedHashMap<>();
+            if (environment.equals("azure")) {
+                metadata.put("provider", "azure-managed-identity");
+                metadata.put("resource", resource);
+                if (user != null && !user.isEmpty()) {
+                    metadata.put("client-id", user);
+                }
+            } else {
+                if (user != null && !user.isEmpty()) {
+                    throw new IllegalArgumentException("ENVIRONMENT:gcp takes no user: the "
+                            + "metadata server's default service account is the identity");
+                }
+                metadata.put("provider", "gcp-metadata");
+                metadata.put("audience", resource);
+            }
+            metadata.put("max-length", "16384");
+            return SecretProviders.of(metadata);
+        }
+        if (environment != null) {
+            throw new IllegalArgumentException("ENVIRONMENT:" + environment + " is not one "
+                    + "seclume knows for MONGODB-OIDC: k8s, azure or gcp - or name the token's "
+                    + "source with token-provider");
+        }
+        throw new IllegalArgumentException("authMechanism=MONGODB-OIDC needs a token: "
+                + "token-provider (e.g. token-provider=file&token-path=...) or "
+                + "authMechanismProperties=ENVIRONMENT:k8s, azure or gcp");
+    }
+
+    private static Map<String, String> prefixed(Map<String, String> settings, String prefix) {
+        Map<String, String> nested = new LinkedHashMap<>();
+        settings.forEach((name, value) -> {
+            if (name.startsWith(prefix)) {
+                nested.put(name.substring(prefix.length()), value);
+            }
+        });
+        return nested;
+    }
+
+    /** The settings that describe a client certificate, for ClientIdentities. */
+    private static Map<String, String> identitySettings(Map<String, String> settings) {
+        Map<String, String> identity = new LinkedHashMap<>();
+        settings.forEach((key, value) -> {
+            if (key.startsWith("clientCert") || key.startsWith("clientKey-")) {
+                identity.put(key, value);
+            }
+        });
+        return identity;
+    }
+
+    /** The rest, for the password's provider. */
+    private static Map<String, String> withoutIdentity(Map<String, String> settings) {
+        Map<String, String> rest = new LinkedHashMap<>(settings);
+        rest.keySet().removeIf(key -> key.startsWith("clientCert") || key.startsWith("clientKey-")
+                || key.equalsIgnoreCase("authMechanism"));
+        return rest;
     }
 
     private static String decode(String text) {

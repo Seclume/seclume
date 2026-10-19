@@ -10,7 +10,7 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import space.seclume.crypto.OpenSshPrivateKey;
-import space.seclume.crypto.OpenSslSigningKey;
+import space.seclume.crypto.PrivateSigningKey;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
 
@@ -27,11 +27,11 @@ final class NativeKey {
     /** {@code RSA}, {@code EC} or {@code Ed25519}: what the key is, in JCA's words. */
     final String type;
     final PublicKey publicKey;
-    private final OpenSslSigningKey key;
+    private final PrivateSigningKey key;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private boolean destroyed;                    // guarded by lock
 
-    private NativeKey(String type, PublicKey publicKey, OpenSslSigningKey key) {
+    private NativeKey(String type, PublicKey publicKey, PrivateSigningKey key) {
         this.type = type;
         this.publicKey = publicKey;
         this.key = key;
@@ -39,21 +39,21 @@ final class NativeKey {
 
     /** Reads the key once from {@code secret}, PEM or DER, and decodes it in OpenSSL. */
     static NativeKey read(SecretProvider secret) {
-        if (!OpenSslSigningKey.available()) {
+        if (!PrivateSigningKey.available()) {
             throw new IllegalStateException("a private key off the heap needs OpenSSL 3 on "
-                    + "64-bit Linux, which is not there");
+                    + "64-bit Linux or CNG on Windows, which are not there");
         }
-        OpenSslSigningKey decoded;
+        PrivateSigningKey decoded;
         try (SecretScope encoded = SecretScope.fromProvider(secret)) {
             if (OpenSshPrivateKey.is(encoded.segment(), encoded.length())) {
                 try (SecretScope der = SecretScope.allocate(
                         OpenSshPrivateKey.maxDerLength(encoded.length()))) {
                     der.length(OpenSshPrivateKey.toDer(encoded.segment(), encoded.length(),
                             der.segment()));
-                    decoded = OpenSslSigningKey.decode(der.segment(), der.length());
+                    decoded = PrivateSigningKey.decode(der.segment(), der.length());
                 }
             } else {
-                decoded = OpenSslSigningKey.decode(encoded.segment(), encoded.length());
+                decoded = PrivateSigningKey.decode(encoded.segment(), encoded.length());
             }
         }
         try {
@@ -95,7 +95,7 @@ final class NativeKey {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment data = arena.allocate(Math.max(1, length));
                 MemorySegment.copy(message, 0, data, ValueLayout.JAVA_BYTE, 0, length);
-                MemorySegment out = arena.allocate(OpenSslSigningKey.MAX_SIGNATURE);
+                MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
                 int written = key.sign(digest, pss, data, length, out);
                 return out.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
             }

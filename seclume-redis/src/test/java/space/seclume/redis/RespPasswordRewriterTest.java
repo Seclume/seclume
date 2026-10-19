@@ -67,8 +67,71 @@ class RespPasswordRewriterTest {
         assertEquals(command, rewrite(ours, "pw", command));
     }
 
+    @Test
+    void sentinelAndMasterPlaceholdersEachWriteTheirOwnPassword() throws Exception {
+        String masterPlaceholder = RespPasswordRewriter.newPlaceholder();
+        String sentinelPlaceholder = RespPasswordRewriter.newPlaceholder();
+        RespPasswordRewriter rewriter = new RespPasswordRewriter(
+                masterPlaceholder, file("master-secret"),
+                sentinelPlaceholder, file("sentinel-secret"),
+                "localhost:26379");
+        String sentinelAuth = "*3\r\n$4\r\nAUTH\r\n$8\r\nsentinel\r\n$"
+                + sentinelPlaceholder.length() + "\r\n" + sentinelPlaceholder + "\r\n";
+        String masterAuth = "*3\r\n$4\r\nAUTH\r\n$6\r\norders\r\n$"
+                + masterPlaceholder.length() + "\r\n" + masterPlaceholder + "\r\n";
+        assertEquals("*3\r\n$4\r\nAUTH\r\n$8\r\nsentinel\r\n$15\r\nsentinel-secret\r\n",
+                rewriteWith(rewriter, sentinelAuth));
+        assertEquals("*3\r\n$4\r\nAUTH\r\n$6\r\norders\r\n$13\r\nmaster-secret\r\n",
+                rewriteWith(rewriter, masterAuth));
+    }
+
+    @Test
+    void clusterAndSentinelUrlsAreParsedAndInlinePasswordsRefused() throws Exception {
+        Path redisPw = Files.createTempFile(dir, "redis", ".pw");
+        Path sentinelPw = Files.createTempFile(dir, "sentinel", ".pw");
+        Files.writeString(redisPw, "pw1");
+        Files.writeString(sentinelPw, "pw2");
+
+        RedisUrl cluster = RedisUrl.parse("rediss://node-1:6380,node-2,[::1]:6381?user=orders"
+                + "&provider=file&path=" + redisPw);
+        assertEquals(java.util.List.of(
+                new RedisUrl.Node("node-1", 6380),
+                new RedisUrl.Node("node-2", 6379),
+                new RedisUrl.Node("::1", 6381)), cluster.nodes());
+        assertEquals("node-1", cluster.host());
+        assertEquals(6380, cluster.port());
+        org.junit.jupiter.api.Assertions.assertNull(cluster.sentinelMasterId());
+
+        RedisUrl sentinel = RedisUrl.parse("rediss-sentinel://s1,s2:26380?sentinelMasterId=mymaster"
+                + "&user=orders&provider=file&path=" + redisPw
+                + "&sentinelUser=guard&sentinel-provider=file&sentinel-path=" + sentinelPw);
+        assertEquals(java.util.List.of(
+                new RedisUrl.Node("s1", 26379),
+                new RedisUrl.Node("s2", 26380)), sentinel.nodes());
+        assertEquals("mymaster", sentinel.sentinelMasterId());
+        assertEquals("guard", sentinel.sentinelUser());
+        org.junit.jupiter.api.Assertions.assertNotNull(sentinel.sentinelSecret());
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> RedisUrl.parse("rediss-sentinel://s1:26379?provider=file&path=" + redisPw));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> RedisUrl.parse("rediss://s1:26379?sentinelMasterId=mymaster&sentinelPassword=bad"
+                        + "&provider=file&path=" + redisPw));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> SeclumeLettuce.client("rediss://n1:6379,n2:6379?provider=file&path=" + redisPw));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> SeclumeLettuce.clusterClient(
+                        "rediss://s1:26379?sentinelMasterId=mymaster&provider=file&path=" + redisPw));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> SeclumeRedisSocketFactory.of(
+                        "rediss://n1:6379,n2:6379?provider=file&path=" + redisPw));
+    }
+
     private String rewrite(String placeholder, String password, String command) throws Exception {
-        RespPasswordRewriter rewriter = new RespPasswordRewriter(placeholder, file(password));
+        return rewriteWith(new RespPasswordRewriter(placeholder, file(password)), command);
+    }
+
+    private String rewriteWith(RespPasswordRewriter rewriter, String command) throws Exception {
         ByteBuffer plain = ByteBuffer.wrap(command.getBytes(StandardCharsets.US_ASCII));
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         while (plain.hasRemaining()) {

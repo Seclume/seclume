@@ -34,9 +34,12 @@ public final class BenchMain {
         Main.main(withBenchProperties(args));
     }
 
-    /** Benchmarks that measure seclume's own code and need no server. */
+    /**
+     * Benchmarks the JDBC check does not apply to: seclume's own code with no
+     * server at all, and MongoDB, which opens its clients itself.
+     */
     private static final java.util.Set<String> WITHOUT_DATABASE =
-            java.util.Set.of("RecordBenchmark");
+            java.util.Set.of("RecordBenchmark", "MongoBenchmark");
 
     /** Whether every benchmark named before the first option is one of those. */
     private static boolean onlyWithoutDatabase(String[] args) {

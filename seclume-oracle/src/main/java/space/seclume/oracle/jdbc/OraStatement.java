@@ -450,8 +450,9 @@ class OraStatement implements Statement, TtcResult.RowHandler {
     }
 
     /** Takes what an {@code into} bind brought back as this statement's keys. */
-    void keepAsGeneratedKeys(java.util.List<String> names, java.util.List<byte[]> values) {
-        this.generatedKeys = new OraGeneratedKeys(this, names, values);
+    void keepAsGeneratedKeys(java.util.List<String> names, int[] types,
+            java.util.List<byte[]> values) {
+        this.generatedKeys = new OraGeneratedKeys(this, names, types, values);
     }
 
     /**
@@ -558,7 +559,7 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         if (generatedKeys != null) {
             return generatedKeys;
         }
-        return new OraGeneratedKeys(this, java.util.List.of(), java.util.List.of());
+        return new OraGeneratedKeys(this, java.util.List.of(), new int[0], java.util.List.of());
     }
 
     // ---- batches ---------------------------------------------------------

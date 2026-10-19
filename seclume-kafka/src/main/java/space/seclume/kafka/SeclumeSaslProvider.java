@@ -73,7 +73,8 @@ final class SeclumeSaslProvider extends Provider {
                         if (secret != null) {
                             return new ScramClient(mechanism, mechanism.endsWith("256")
                                     ? HashAlgorithm.SHA_256 : HashAlgorithm.SHA_512,
-                                    username(callbacks, mechanism), secret.provider());
+                                    username(callbacks, mechanism), secret.provider(),
+                                    serverName);
                         }
                     }
                     case "PLAIN" -> {

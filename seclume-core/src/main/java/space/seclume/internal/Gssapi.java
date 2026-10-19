@@ -34,6 +34,7 @@ public final class Gssapi {
     private static final int COMPLETE = 0;
     private static final int CONTINUE_NEEDED = 1;
     private static final int MUTUAL_FLAG = 2;
+    private static final int INTEG_FLAG = 32;
     private static final int GSS_CODE = 1;
     private static final int MECH_CODE = 2;
     /** gss_buffer_desc: size_t length, void* value. */
@@ -98,6 +99,24 @@ public final class Gssapi {
         /** Whether the context is established - the server has proved who it is. */
         boolean complete();
 
+        /**
+         * Unwraps an integrity-protected token from the server (RFC 4752 SASL
+         * GSSAPI security-layer negotiation).
+         */
+        default byte[] unwrap(byte[] token) {
+            throw new UnsupportedOperationException(
+                    "this GSSAPI context does not unwrap message tokens");
+        }
+
+        /**
+         * Wraps an integrity-protected token for the server without encryption
+         * ({@code conf_req_flag = false}, for RFC 4752 SASL GSSAPI over TLS).
+         */
+        default byte[] wrap(byte[] plain) {
+            throw new UnsupportedOperationException(
+                    "this GSSAPI context does not wrap message tokens");
+        }
+
         @Override
         void close();
     }
@@ -138,7 +157,7 @@ public final class Gssapi {
                 MemorySegment output = call.allocate(BUFFER);
                 MemorySegment flags = call.allocate(JAVA_INT);
                 int major = (int) Native.call(Native.INIT_SEC_CONTEXT, minor, NULL, handle, name,
-                        NULL, MUTUAL_FLAG, 0, NULL, input, NULL, output, flags, NULL);
+                        NULL, MUTUAL_FLAG | INTEG_FLAG, 0, NULL, input, NULL, output, flags, NULL);
                 check(major, minor, "the Kerberos exchange failed");
                 complete = (major & 0xffff) == COMPLETE;
                 long size = output.get(JAVA_LONG, 0);
@@ -155,6 +174,61 @@ public final class Gssapi {
         @Override
         public boolean complete() {
             return complete;
+        }
+
+        @Override
+        public byte[] unwrap(byte[] token) {
+            try (Arena call = Arena.ofConfined()) {
+                MemorySegment minor = call.allocate(JAVA_INT);
+                MemorySegment input = call.allocate(BUFFER);
+                MemorySegment inBytes = call.allocate(Math.max(token.length, 1));
+                if (token.length > 0) {
+                    MemorySegment.copy(token, 0, inBytes, JAVA_BYTE, 0, token.length);
+                }
+                input.set(JAVA_LONG, 0, token.length);
+                input.set(ADDRESS, 8, inBytes);
+                MemorySegment output = call.allocate(BUFFER);
+                MemorySegment conf = call.allocate(JAVA_INT);
+                MemorySegment qop = call.allocate(JAVA_INT);
+                int major = (int) Native.call(Native.UNWRAP, minor, handle.get(ADDRESS, 0),
+                        input, output, conf, qop);
+                check(major, minor, "could not unwrap the server's GSSAPI token");
+                long size = output.get(JAVA_LONG, 0);
+                byte[] plain = new byte[(int) size]; // seclume-allow: SASL security-layer negotiation bytes, not a secret
+                if (size > 0) {
+                    MemorySegment.copy(output.get(ADDRESS, 8).reinterpret(size), JAVA_BYTE, 0,
+                            plain, 0, (int) size);
+                    Native.call(Native.RELEASE_BUFFER, minor, output);
+                }
+                return plain;
+            }
+        }
+
+        @Override
+        public byte[] wrap(byte[] plain) {
+            try (Arena call = Arena.ofConfined()) {
+                MemorySegment minor = call.allocate(JAVA_INT);
+                MemorySegment input = call.allocate(BUFFER);
+                MemorySegment inBytes = call.allocate(Math.max(plain.length, 1));
+                if (plain.length > 0) {
+                    MemorySegment.copy(plain, 0, inBytes, JAVA_BYTE, 0, plain.length);
+                }
+                input.set(JAVA_LONG, 0, plain.length);
+                input.set(ADDRESS, 8, inBytes);
+                MemorySegment conf = call.allocate(JAVA_INT);
+                MemorySegment output = call.allocate(BUFFER);
+                int major = (int) Native.call(Native.WRAP, minor, handle.get(ADDRESS, 0),
+                        0, 0, input, conf, output);
+                check(major, minor, "could not wrap the client's GSSAPI token");
+                long size = output.get(JAVA_LONG, 0);
+                byte[] wrapped = new byte[(int) size]; // seclume-allow: a GSSAPI wrap token, protocol data and not the key
+                if (size > 0) {
+                    MemorySegment.copy(output.get(ADDRESS, 8).reinterpret(size), JAVA_BYTE, 0,
+                            wrapped, 0, (int) size);
+                    Native.call(Native.RELEASE_BUFFER, minor, output);
+                }
+                return wrapped;
+            }
         }
 
         @Override
@@ -218,6 +292,8 @@ public final class Gssapi {
         static final MethodHandle DELETE_SEC_CONTEXT;
         static final MethodHandle RELEASE_NAME;
         static final MethodHandle DISPLAY_STATUS;
+        static final MethodHandle UNWRAP;
+        static final MethodHandle WRAP;
         static final MemorySegment HOSTBASED;
         static final MemorySegment USER_NAME;
 
@@ -225,7 +301,7 @@ public final class Gssapi {
         private static SymbolLookup lookup;
 
         static {
-            MethodHandle[] handles = new MethodHandle[6];
+            MethodHandle[] handles = new MethodHandle[8];
             MemorySegment hostbased = NULL;
             MemorySegment userName = NULL;
             boolean available = false;
@@ -238,6 +314,8 @@ public final class Gssapi {
                     handles[3] = bind("gss_delete_sec_context", JAVA_INT, ADDRESS, ADDRESS, ADDRESS);
                     handles[4] = bind("gss_release_name", JAVA_INT, ADDRESS, ADDRESS);
                     handles[5] = bind("gss_display_status", JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, ADDRESS, ADDRESS);
+                    handles[6] = bind("gss_unwrap", JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS);
+                    handles[7] = bind("gss_wrap", JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, ADDRESS, ADDRESS);
                     // An exported gss_OID variable: its address, read as a pointer.
                     hostbased = lookup.find("GSS_C_NT_HOSTBASED_SERVICE").orElseThrow()
                             .reinterpret(8).get(ADDRESS, 0);
@@ -255,6 +333,8 @@ public final class Gssapi {
             DELETE_SEC_CONTEXT = handles[3];
             RELEASE_NAME = handles[4];
             DISPLAY_STATUS = handles[5];
+            UNWRAP = handles[6];
+            WRAP = handles[7];
             HOSTBASED = hostbased;
             USER_NAME = userName;
         }

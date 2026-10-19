@@ -98,6 +98,7 @@ public final class SecretProviders {
             throw new IllegalArgumentException(
                     "no secret provider configured - set 'provider' to one of "
                     + "file, env-file, unix-socket, process, dpapi, credential-manager, "
+                    + "libsecret, keychain, "
                     + "rds-iam, encrypted, vault, aws-secrets-manager, azure-key-vault, "
                     + "gcp-secret-manager, azure-managed-identity, gcp-metadata, or none for a "
                     + "login by client certificate alone");
@@ -115,6 +116,12 @@ public final class SecretProviders {
                     value(settings, "entropy"), maxLength);
             case "credential-manager", "credentialmanager" -> new CredentialManagerSecretProvider(
                     required(settings, "target", "credential-manager"), maxLength);
+            // The desktop keyrings: the Secret Service on Linux, the Keychain on macOS.
+            case "libsecret", "secret-service" -> new LibsecretSecretProvider(
+                    nested(settings, "attribute."), maxLength);
+            case "keychain" -> new KeychainSecretProvider(
+                    required(settings, "service", "keychain"), value(settings, "account"),
+                    maxLength);
             // The password is built, not stored: an AWS RDS IAM token, signed
             // here so that the short-lived credential never becomes a String.
             // The AWS key itself comes from one of the sources above, named in
@@ -208,13 +215,15 @@ public final class SecretProviders {
             case "gcp-metadata", "gcpmetadata" -> new GcpMetadataSecretProvider(
                     value(settings, "account"),
                     value(settings, "scopes"),
+                    value(settings, "audience"),
                     tokenLength(settings));
             // No password: the client certificate is the login - see
             // NoSecretProvider for why this is a word and not an absence.
             case "none" -> NoSecretProvider.INSTANCE;
             default -> throw new IllegalArgumentException(
                     "unknown secret provider '" + kind + "' - known are file, env-file, "
-                    + "unix-socket, process, dpapi, credential-manager, rds-iam, encrypted, "
+                    + "unix-socket, process, dpapi, credential-manager, libsecret, keychain, "
+                    + "rds-iam, encrypted, "
                     + "vault, aws-secrets-manager, azure-key-vault, gcp-secret-manager, "
                     + "azure-managed-identity, gcp-metadata, none");
         };

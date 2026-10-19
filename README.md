@@ -3,15 +3,15 @@
 **Java heap dumps without secrets.**
 
 Every heap dump of a Java application contains the credentials it logs in with: the database
-password, the mail password or OAuth token, the API keys and signing keys, the Kafka and Redis logins. `jmap`,
+password, the mail password or OAuth token, the API keys and signing keys, the MongoDB, Kafka and Redis logins. `jmap`,
 `-XX:+HeapDumpOnOutOfMemoryError`, the Actuator's `/heapdump`, the file attached to a support
 ticket. It does not matter that the password came from Vault. The moment the client library
 turns Vault's answer into a `String` and keeps it, it is on the heap, and the heap is what
 gets dumped.
 
 seclume is a set of clients built so that this does not happen: JDBC drivers for PostgreSQL,
-MySQL/MariaDB, SQL Server and Oracle, and clients for Kafka, RabbitMQ, Redis, mail (SMTP, IMAP,
-POP3) and HTTPS APIs. Each logs
+MySQL/MariaDB, SQL Server and Oracle, a MongoDB driver, and clients for Elasticsearch and
+OpenSearch, Kafka, RabbitMQ, NATS, Redis, mail (SMTP, IMAP, POP3) and HTTPS APIs. Each logs
 in from native memory, and the credential never becomes a heap object:
 
 ```
@@ -188,8 +188,8 @@ Everything below works on all four databases unless the row says otherwise.
 
 | Area | What | More |
 |---|---|---|
-| **Secrets** | 14 providers plus `none` and `callback`: files, Windows DPAPI/Credential Manager, Vault, AWS/Azure/GCP vaults, RDS IAM, workload identity | [PROVIDERS.md](PROVIDERS.md) |
-| | Dynamic credentials: the pool rotates connections before the lease ends, without emptying | [PROVIDERS.md](PROVIDERS.md#what-expires-buys) |
+| **Secrets** | 16 providers plus `none` and `callback`: files, Windows DPAPI/Credential Manager, the Linux and macOS keyrings, Vault, AWS/Azure/GCP vaults, RDS IAM, workload identity (VMs, App Service, Arc, Kubernetes, GCP) | [PROVIDERS.md](PROVIDERS.md) |
+| | Dynamic credentials: the driver logs in as the user Vault created, the lease is renewed and revoked at the end; the pool rotates connections before it runs out, without emptying | [PROVIDERS.md](PROVIDERS.md#what-expires-buys) |
 | | Secret columns read and bound off the heap (`Sensitive`, `SensitiveParameters`) | [FEATURES.md](FEATURES.md#secrets-in-columns-not-only-in-the-login) |
 | **TLS** | `verify-full`, a per-connection CA file (`tlsRootCert`) or a key pin (`tlsPin`) | [TLS.md](TLS.md) |
 | | Own TLS 1.3 stack: traffic secrets never become Java objects; post-quantum X25519MLKEM768 with OpenSSL 3.5 or Windows CNG | [TLS.md](TLS.md#which-tls-carries-it-a-separate-question) |
@@ -208,6 +208,9 @@ Everything below works on all four databases unless the row says otherwise.
 | **Clusters** | Host lists, `targetServerType=primary`, `hostSelection=quality` | [FEATURES.md](FEATURES.md#several-servers-and-which-one-to-take) |
 | | Read replicas with `ReadWriteSplit`, read-your-writes on PostgreSQL | [FEATURES.md](FEATURES.md#several-servers-and-which-one-to-take) |
 | **Frameworks** | Spring Data JPA, Hibernate, Flyway, Liquibase, jOOQ, MyBatis, Spring Data JDBC, all tested on all four | [FRAMEWORKS.md](FRAMEWORKS.md) |
+| **MongoDB** | seclume's own driver behind the official `com.mongodb.client` API (sessions, transactions, change streams, replica sets, sharding and load balancers, `mongodb+srv`, compression, GridFS, Search indexes), a reactive API, and Spring Data MongoDB on both; SCRAM, X.509, AWS and OIDC logins off the heap: `seclume-mongodb-driver`, `seclume-mongodb-reactive` | [FEATURES.md](FEATURES.md#mongodb) |
+| | The official MongoDB driver on a pre-authenticated socket, for code that has to keep it: `seclume-mongodb` | [FEATURES.md](FEATURES.md#mongodb) |
+| **Spring Boot** | MongoDB, Elasticsearch, OpenSearch, RabbitMQ, NATS and Redis from one property each; Spring Boot's own password settings refused at start: `seclume-spring-boot-starter` | [FEATURES.md](FEATURES.md#spring-boot-data-services-from-applicationproperties) |
 | **R2DBC** | A reactive driver over the four, with each database's own placeholders; R2DBC's conformance suite passes; over the pool and its reset, Spring Boot's `ConnectionFactory` when it is on the class path: `seclume-r2dbc` | [FEATURES.md](FEATURES.md#r2dbc) |
 | | Testcontainers `@ServiceConnection` and Docker Compose: the pool comes from the container | [FEATURES.md](FEATURES.md#spring-data-and-jpa) |
 | **Observability** | JFR events, Micrometer meters, OpenTelemetry spans, all without values - for the databases and every module: logins, secrets written into requests, signatures, rotations | [OBSERVABILITY.md](OBSERVABILITY.md) |
@@ -218,14 +221,16 @@ Everything below works on all four databases unless the row says otherwise.
 | | `NoSecretInHeap`: the heap-dump proof in your own tests; `seclume-heapcheck` for any process |
 | **Your own library** | `seclume-core`'s secret classes for any client that holds a secret: mail, API keys, signing keys | [SECRETS-API.md](SECRETS-API.md) | [FEATURES.md](FEATURES.md#proving-there-is-no-secret-on-the-heap-for-any-application) |
 | **Kafka** | SASL/SCRAM, PLAIN and OAUTHBEARER with the password or token off the heap, PLAIN and OAUTHBEARER over seclume's own TLS 1.3: `seclume-kafka` | [FEATURES.md](FEATURES.md#kafka) |
-| **Redis** | Jedis and Lettuce logged in from native memory, over TLS 1.3 with keys off the heap: `seclume-redis` | [FEATURES.md](FEATURES.md#redis) |
+| **Redis** | Jedis and Lettuce logged in from native memory, over TLS 1.3 with keys off the heap, Cluster and Sentinel included: `seclume-redis` | [FEATURES.md](FEATURES.md#redis) |
+| **NATS** | The official client with the NKey seed, `.creds` file, password or token off the heap, over TLS 1.3: `seclume-nats` | [FEATURES.md](FEATURES.md#nats) |
+| **Elasticsearch / OpenSearch** | The official clients (Elasticsearch 9/8, OpenSearch 3, Amazon OpenSearch with SigV4) with the API key, token or password written into each request from native memory: `seclume-elasticsearch` | [FEATURES.md](FEATURES.md#elasticsearch-and-opensearch) |
 | **Mail** | Sending (SMTP) and reading (IMAP, POP3), logged in with PLAIN, LOGIN or XOAUTH2 from native memory over STARTTLS or implicit TLS 1.3; a Jakarta Mail session for Spring's `JavaMailSender`, Spring Integration and Camel: `seclume-mail` | [FEATURES.md](FEATURES.md#mail) |
 | **HTTPS APIs** | API keys, bearer tokens and Basic passwords written from native memory, per request and only to their own origin; standalone or as the request factory for Spring's `RestClient` and `RestTemplate`: `seclume-http` | [FEATURES.md](FEATURES.md#https-apis) |
-| **Signing keys** | JWTs signed and checked with HMAC keys, signed with RSA or EC keys held by OpenSSL; GitHub and Stripe webhook signatures checked: `seclume-jwt` | [FEATURES.md](FEATURES.md#signing-keys-jwt-and-webhooks) |
+| **Signing keys** | JWTs signed and checked with HMAC keys, signed with RSA or EC keys held by OpenSSL (Linux) or CNG (Windows); GitHub and Stripe webhook signatures checked: `seclume-jwt` | [FEATURES.md](FEATURES.md#signing-keys-jwt-and-webhooks) |
 | **RabbitMQ** | A `ConnectionFactory` for the official client and Spring AMQP; the PLAIN login written from native memory into the handshake over TLS 1.3, also on recovery: `seclume-rabbitmq` | [FEATURES.md](FEATURES.md#rabbitmq) |
-| **Private keys** | TLS server keys (Tomcat, Netty, any `SSLContext`), client certificates and Spring SSL bundles with the key held by OpenSSL: `seclume-keys` | [FEATURES.md](FEATURES.md#private-keys-tls-servers-client-certificates-ssh) |
+| **Private keys** | TLS server keys (Tomcat, Netty, any `SSLContext`), client certificates and Spring SSL bundles with the key held by OpenSSL (Linux) or CNG (Windows): `seclume-keys` | [FEATURES.md](FEATURES.md#private-keys-tls-servers-client-certificates-ssh) |
 | **SSH / SFTP** | Public-key logins for Apache MINA SSHD, Spring Integration SFTP and JSch with that key - Ed25519, ECDSA, RSA, also from OpenSSH key files: `seclume-ssh` | [FEATURES.md](FEATURES.md#private-keys-tls-servers-client-certificates-ssh) |
-| **AWS** | A SigV4 signer for the AWS SDK (S3, SQS, DynamoDB, MinIO ...) with the secret access key in native memory; temporary credentials (EC2, ECS/EKS, IRSA) with the session token off the heap too; presigned S3 URLs: `seclume-aws` | [FEATURES.md](FEATURES.md#aws) |
+| **AWS** | A SigV4 signer for the AWS SDK (S3, SQS, DynamoDB, MinIO ...) with the secret access key in native memory; temporary credentials (EC2, ECS/EKS, IRSA) with the session token off the heap too; presigned S3 URLs; SigV4a for multi-region access points: `seclume-aws` | [FEATURES.md](FEATURES.md#aws) |
 | **Azure Storage** | Shared Key signing for Blob, Queue, File and Data Lake with the account key in native memory: `seclume-azure` | [FEATURES.md](FEATURES.md#azure-storage) |
 | **Google Cloud** | Service account credentials whose private key stays in OpenSSL, for every Google Cloud library: `seclume-gcp` | [FEATURES.md](FEATURES.md#google-cloud) |
 | **Kubernetes** | The official Java client with the service account token off the heap, rotation included: `seclume-kubernetes` | [FEATURES.md](FEATURES.md#kubernetes-git-and-grpc) |
@@ -235,7 +240,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **LDAP / Active Directory** | JNDI, Spring LDAP and Spring Security binds with the password written from native memory over TLS 1.3: `seclume-ldap` | [FEATURES.md](FEATURES.md#ldap-and-active-directory) |
 | **Rotation** | Passwords, TLS server keys and certificates rotated at their source, taken up without a restart; a JFR event and a metric for each rotation | [FEATURES.md](FEATURES.md#rotation-without-a-restart) |
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
-| | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build | [FEATURES.md](FEATURES.md#quarkus) |
+| | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build: `seclume-quarkus` | [FEATURES.md](FEATURES.md#quarkus) |
 | | CRaC / Lambda SnapStart with `seclume-crac`: the checkpoint image holds no password | [FEATURES.md](FEATURES.md#the-pool) |
 
 ### Supported database versions

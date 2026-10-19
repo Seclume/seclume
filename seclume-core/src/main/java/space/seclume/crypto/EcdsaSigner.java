@@ -20,7 +20,11 @@ import space.seclume.internal.Platform;
  * checked at once. The output is DER, at most {@link Curve#maxSignature()} bytes.
  *
  * <p>Thread-confined and explicitly closed, like everything else that holds
- * key material.
+ * key material - unless made {@link #shared}: a client certificate's key is
+ * loaded once and used by every connection a pool opens, on whichever thread
+ * opens it. Neither CNG nor OpenSSL ties a key to a thread; what confinement
+ * prevents is two signatures at once, and a shared signer takes them one
+ * after the other instead.
  */
 public final class EcdsaSigner implements AutoCloseable {
 
@@ -110,14 +114,25 @@ public final class EcdsaSigner implements AutoCloseable {
         @Override void close();
     }
 
-    private final Thread owner = Thread.currentThread();
+    /** The thread it belongs to; null for a shared signer. */
+    private final Thread owner;
     private final Curve curve;
     private final Backend backend;
     private boolean closed;
 
-    private EcdsaSigner(Curve curve, Backend backend) {
+    private EcdsaSigner(Curve curve, Backend backend, Thread owner) {
         this.curve = curve;
         this.backend = backend;
+        this.owner = owner;
+    }
+
+    /**
+     * The same as {@link #of}, for use from any thread: {@link #sign} and
+     * {@link #close} take a lock, so one signature is made at a time.
+     */
+    public static EcdsaSigner shared(Curve curve, MemorySegment publicPoint,
+            MemorySegment scalar) {
+        return create(curve, publicPoint, scalar, null);
     }
 
     /**
@@ -129,6 +144,11 @@ public final class EcdsaSigner implements AutoCloseable {
      *                    in native memory - normally a {@code SecretScope}
      */
     public static EcdsaSigner of(Curve curve, MemorySegment publicPoint, MemorySegment scalar) {
+        return create(curve, publicPoint, scalar, Thread.currentThread());
+    }
+
+    private static EcdsaSigner create(Curve curve, MemorySegment publicPoint,
+            MemorySegment scalar, Thread owner) {
         if (publicPoint.byteSize() < curve.pointSize()
                 || publicPoint.get(ValueLayout.JAVA_BYTE, 0) != 4) {
             throw new IllegalArgumentException(curve + " requires an uncompressed public point of "
@@ -139,10 +159,11 @@ public final class EcdsaSigner implements AutoCloseable {
                     + curve.field() + " bytes");
         }
         if (Platform.isWindows()) {
-            return new EcdsaSigner(curve, new CngEcdsaSigner(curve, publicPoint, scalar));
+            return new EcdsaSigner(curve, new CngEcdsaSigner(curve, publicPoint, scalar), owner);
         }
         if (Platform.isLinux() && ValueLayout.ADDRESS.byteSize() == 8) {
-            return new EcdsaSigner(curve, new OpenSslEcdsaSigner(curve, publicPoint, scalar));
+            return new EcdsaSigner(curve, new OpenSslEcdsaSigner(curve, publicPoint, scalar),
+                    owner);
         }
         throw new UnsupportedOperationException("signing with an EC key off the heap requires "
                 + "Windows or 64-bit Linux with libcrypto.so.3");
@@ -167,7 +188,7 @@ public final class EcdsaSigner implements AutoCloseable {
      *               {@link Curve#maxSignature()} bytes
      * @return how many bytes of {@code der} were written
      */
-    public int sign(MemorySegment digest, MemorySegment der) {
+    public synchronized int sign(MemorySegment digest, MemorySegment der) {
         checkOpen();
         if (digest.byteSize() != curve.field()) {
             throw new IllegalArgumentException("ECDSA with " + curve + " signs a "
@@ -181,7 +202,7 @@ public final class EcdsaSigner implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         if (closed) {
             return;
         }
@@ -193,7 +214,7 @@ public final class EcdsaSigner implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("the signer is closed");
         }
-        if (Thread.currentThread() != owner) {
+        if (owner != null && Thread.currentThread() != owner) {
             throw new IllegalStateException("a signer belongs to the thread that made it");
         }
     }

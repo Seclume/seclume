@@ -32,6 +32,7 @@ import com.mongodb.connection.ServerType;
 
 import com.mongodb.TransactionOptions;
 
+import space.seclume.mongodb.driver.internal.Deadline;
 import space.seclume.mongodb.driver.internal.LogicalSession;
 import space.seclume.mongodb.driver.internal.Topology;
 
@@ -47,6 +48,8 @@ final class SeclumeClient implements MongoClient {
     private final ReadPreference readPreference;
     private final WriteConcern writeConcern;
     private final ReadConcern readConcern;
+    /** {@code timeoutMS} for each operation; null for none set. */
+    Long timeoutMillis;
 
     SeclumeClient(Topology topology, CodecRegistry registry, ReadPreference readPreference,
             WriteConcern writeConcern, ReadConcern readConcern) {
@@ -83,39 +86,52 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public Long getTimeout(TimeUnit unit) {
-        return null;
+        return timeoutMillis == null ? null : unit.convert(timeoutMillis, TimeUnit.MILLISECONDS);
+    }
+
+    private SeclumeClient inherit(SeclumeClient other) {
+        other.timeoutMillis = timeoutMillis;
+        return other;
+    }
+
+    private SeclumeDatabase inherit(SeclumeDatabase other) {
+        other.timeoutMillis = timeoutMillis;
+        return other;
     }
 
     @Override
     public MongoCluster withCodecRegistry(CodecRegistry codecRegistry) {
-        return new SeclumeClient(topology, codecRegistry, readPreference, writeConcern,
-                readConcern);
+        return inherit(new SeclumeClient(topology, codecRegistry, readPreference, writeConcern,
+                readConcern));
     }
 
     @Override
     public MongoCluster withReadPreference(ReadPreference preference) {
-        return new SeclumeClient(topology, registry, preference, writeConcern, readConcern);
+        return inherit(new SeclumeClient(topology, registry, preference, writeConcern, readConcern));
     }
 
     @Override
     public MongoCluster withWriteConcern(WriteConcern concern) {
-        return new SeclumeClient(topology, registry, readPreference, concern, readConcern);
+        return inherit(new SeclumeClient(topology, registry, readPreference, concern, readConcern));
     }
 
     @Override
     public MongoCluster withReadConcern(ReadConcern concern) {
-        return new SeclumeClient(topology, registry, readPreference, writeConcern, concern);
+        return inherit(new SeclumeClient(topology, registry, readPreference, writeConcern, concern));
     }
 
     @Override
     public MongoCluster withTimeout(long timeout, TimeUnit unit) {
-        throw Iterables.noTimeoutMode();
+        SeclumeClient copy = inherit(new SeclumeClient(topology, registry, readPreference,
+                writeConcern, readConcern));
+        copy.timeoutMillis = Iterables.millis(timeout, unit);
+        return copy;
     }
 
     @Override
     public MongoDatabase getDatabase(String name) {
-        return new SeclumeDatabase(topology, name, registry, readPreference, writeConcern,
-                readConcern);
+        return inherit(new SeclumeDatabase(topology, name, registry, readPreference, writeConcern,
+                readConcern));
     }
 
     @Override
@@ -125,9 +141,18 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public ClientSession startSession(ClientSessionOptions options) {
+        Long defaultTimeout = options.getDefaultTimeout(TimeUnit.MILLISECONDS);
         return new SeclumeClientSession(topology, options, this, TransactionOptions.builder()
                 .readConcern(readConcern).writeConcern(writeConcern)
-                .readPreference(readPreference).build());
+                .readPreference(readPreference).build(),
+                defaultTimeout != null ? defaultTimeout : timeoutMillis);
+    }
+
+    /** See {@link SeclumeSessions#takeUp}. */
+    ClientSession takeUp(LogicalSession.State state) {
+        return new SeclumeClientSession(topology, state, this, TransactionOptions.builder()
+                .readConcern(readConcern).writeConcern(writeConcern)
+                .readPreference(readPreference).build(), timeoutMillis);
     }
 
     @Override
@@ -137,10 +162,12 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public MongoIterable<String> listDatabaseNames(ClientSession session) {
-        LogicalSession s = session(session);
-        return new Iterables.ListDatabases<>(topology, s, registry.get(Document.class), registry,
-                true)
-                .map(database -> database.getString("name"));
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.ListDatabases<>(topology, s,
+                    registry.get(Document.class), registry, true), timeoutMillis)
+                    .map(database -> database.getString("name"));
+        }
     }
 
     @Override
@@ -160,80 +187,92 @@ final class SeclumeClient implements MongoClient {
 
     @Override
     public <R> ListDatabasesIterable<R> listDatabases(ClientSession session, Class<R> type) {
-        LogicalSession s = session(session);
-        return new Iterables.ListDatabases<>(topology, s, registry.get(type), registry, false);
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return Iterables.timed(new Iterables.ListDatabases<>(topology, s, registry.get(type),
+                    registry, false), timeoutMillis);
+        }
     }
 
     @Override
     public ChangeStreamIterable<Document> watch() {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, List.of(), Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, List.of(), type);
     }
 
     @Override
     public ChangeStreamIterable<Document> watch(List<? extends Bson> pipeline) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, pipeline, Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(List<? extends Bson> pipeline, Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(null, pipeline, type);
     }
 
     @Override
     public ChangeStreamIterable<Document> watch(ClientSession session) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, List.of(), Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(ClientSession session, Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, List.of(), type);
     }
 
     @Override
     public ChangeStreamIterable<Document> watch(ClientSession session,
             List<? extends Bson> pipeline) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, pipeline, Document.class);
     }
 
     @Override
     public <R> ChangeStreamIterable<R> watch(ClientSession session, List<? extends Bson> pipeline,
             Class<R> type) {
-        throw SeclumeCollection.changeStreams();
+        return watchOn(session, pipeline, type);
     }
 
-    private static UnsupportedOperationException clientBulkWrite() {
-        return new UnsupportedOperationException("the client-level bulkWrite (MongoDB 8) is "
-                + "not supported by seclume's MongoDB driver yet; MongoCollection.bulkWrite is");
+    /** A change stream on the whole cluster ({@code allChangesForCluster}). */
+    private <R> ChangeStreamIterable<R> watchOn(ClientSession session,
+            List<? extends Bson> pipeline, Class<R> type) {
+        LogicalSession s = session(session);
+        return new ChangeStreams.Stream<>(topology, s, readPreference, registry, type,
+                ChangeStreams.Target.cluster(), pipeline,
+                () -> readConcern.isServerDefault() ? null : readConcern.asDocument(),
+                timeoutMillis);
     }
 
     @Override
     public ClientBulkWriteResult bulkWrite(List<? extends ClientNamespacedWriteModel> models)
             throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        return bulkWrite(null, models, null);
     }
 
     @Override
     public ClientBulkWriteResult bulkWrite(List<? extends ClientNamespacedWriteModel> models,
             ClientBulkWriteOptions options) throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        return bulkWrite(null, models, options);
     }
 
     @Override
     public ClientBulkWriteResult bulkWrite(ClientSession session,
             List<? extends ClientNamespacedWriteModel> models) throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        return bulkWrite(session, models, null);
     }
 
+    /** Writes to any collections in one command (MongoDB 8); see {@link ClientBulkWrites}. */
     @Override
     public ClientBulkWriteResult bulkWrite(ClientSession session,
             List<? extends ClientNamespacedWriteModel> models, ClientBulkWriteOptions options)
             throws ClientBulkWriteException {
-        throw clientBulkWrite();
+        try (Deadline.Scope _ = Deadline.enter(timeoutMillis)) {
+            LogicalSession s = session(session);
+            return ClientBulkWrites.run(topology, s, registry, writeConcern, models, options);
+        }
     }
 
     @Override

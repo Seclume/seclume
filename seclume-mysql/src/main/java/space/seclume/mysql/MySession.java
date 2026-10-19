@@ -773,7 +773,9 @@ public final class MySession implements AutoCloseable {
             out.putIntLe(MyPackets.MAX_PAYLOAD);   // groesstes Paket, das wir annehmen
             out.putByte(CHARSET_UTF8MB4);
             out.putZeroes(23);                     // Fueller, so will es das Protokoll
-            out.putCString(settings.user());
+            // The URL's user, or a dynamic secret's own (Vault's database engine).
+            out.putCString(space.seclume.secret.DynamicUser.loginUser(settings.user(),
+                    settings.secret()));
 
             int lengthAt = out.position();
             out.putByte((byte) 0);                 // a placeholder for the length

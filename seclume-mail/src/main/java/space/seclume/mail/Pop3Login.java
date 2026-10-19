@@ -108,8 +108,9 @@ final class Pop3Login {
         if (!wire.readLine().startsWith("+OK")) {
             return capabilities;
         }
-        while (true) {
+        for (int lines = 1; ; lines++) {
             String line = wire.readLine();
+            wire.countLine(lines);
             if (line.equals(".")) {
                 return capabilities;
             }

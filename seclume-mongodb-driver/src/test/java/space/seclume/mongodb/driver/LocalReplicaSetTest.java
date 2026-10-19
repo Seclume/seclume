@@ -186,6 +186,35 @@ class LocalReplicaSetTest {
         }
     }
 
+    /** A snapshot session reads as of its first read; a write after that is not in it. */
+    @Test
+    void aSnapshotSessionReadsAsOfItsFirstRead() {
+        try (MongoClient client = all("")) {
+            MongoCollection<Document> things = fresh(client).withWriteConcern(WriteConcern.MAJORITY);
+            try {
+                things.insertOne(new Document("_id", 1));
+                try (ClientSession snapshot = client.startSession(ClientSessionOptions.builder()
+                        .snapshot(true).build())) {
+                    assertEquals(1, things.find(snapshot).into(new ArrayList<>()).size());
+                    assertTrue(snapshot.getSnapshotTimestamp() != null,
+                            "the first read did not fix the point in time");
+                    things.insertOne(new Document("_id", 2));
+                    assertEquals(1, things.find(snapshot).into(new ArrayList<>()).size(),
+                            "a write after the snapshot is in it");
+                    assertEquals(List.of(1), things.distinct(snapshot, "_id", Integer.class)
+                            .into(new ArrayList<>()));
+                    assertThrows(IllegalStateException.class, snapshot::startTransaction);
+                }
+                try (ClientSession later = client.startSession(ClientSessionOptions.builder()
+                        .snapshot(true).build())) {
+                    assertEquals(2, things.find(later).into(new ArrayList<>()).size());
+                }
+            } finally {
+                things.drop();
+            }
+        }
+    }
+
     /** withTransaction runs the body again after a transient error - here a write conflict. */
     @Test
     void withTransactionRetriesAWriteConflict() throws Exception {

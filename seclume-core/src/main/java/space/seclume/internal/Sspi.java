@@ -37,15 +37,23 @@ final class Sspi {
     private static final int SECPKG_CRED_OUTBOUND = 2;
     private static final int ISC_REQ_MUTUAL_AUTH = 0x2;
     private static final int ISC_REQ_ALLOCATE_MEMORY = 0x100;
+    private static final int ISC_REQ_INTEGRITY = 0x10000;
     private static final int ISC_RET_MUTUAL_AUTH = 0x2;
     private static final int SECURITY_NATIVE_DREP = 0x10;
+    private static final int SECBUFFER_DATA = 1;
     private static final int SECBUFFER_TOKEN = 2;
+    private static final int SECBUFFER_PADDING = 9;
+    private static final int SECBUFFER_STREAM = 10;
+    private static final int SECPKG_ATTR_SIZES = 0;
+    private static final int SECQOP_WRAP_NO_ENCRYPT = 0x80000001;
     /** CredHandle and CtxtHandle: two ULONG_PTRs. */
     private static final long HANDLE = 16;
     /** SecBuffer: ULONG cbBuffer, ULONG BufferType, void* pvBuffer. */
     private static final long SEC_BUFFER = 16;
     /** SecBufferDesc: ULONG ulVersion, ULONG cBuffers, SecBuffer* pBuffers. */
     private static final long SEC_BUFFER_DESC = 16;
+    /** SecPkgContext_Sizes: four ULONGs (cbMaxToken, cbMaxSignature, cbBlockSize, cbSecurityTrailer). */
+    private static final long SEC_PKG_SIZES = 16;
 
     private Sspi() {
     }
@@ -134,7 +142,7 @@ final class Sspi {
                 MemorySegment expiry = call.allocate(8);
                 int status = (int) Native.call(Native.INITIALIZE_CONTEXT, credentials,
                         started ? context : NULL, wideTarget,
-                        (mutual ? ISC_REQ_MUTUAL_AUTH : 0) | ISC_REQ_ALLOCATE_MEMORY, 0,
+                        (mutual ? (ISC_REQ_MUTUAL_AUTH | ISC_REQ_INTEGRITY) : 0) | ISC_REQ_ALLOCATE_MEMORY, 0,
                         SECURITY_NATIVE_DREP,
                         input, 0, context, output, attributes, expiry);
                 started = true;
@@ -167,6 +175,93 @@ final class Sspi {
         @Override
         public boolean complete() {
             return complete;
+        }
+
+        @Override
+        public byte[] unwrap(byte[] token) {
+            try (Arena call = Arena.ofConfined()) {
+                MemorySegment stream = call.allocate(token.length);
+                MemorySegment.copy(token, 0, stream, JAVA_BYTE, 0, token.length);
+                MemorySegment buffers = call.allocate(SEC_BUFFER * 2);
+                buffers.set(JAVA_INT, 0, token.length);
+                buffers.set(JAVA_INT, 4, SECBUFFER_STREAM);
+                buffers.set(ADDRESS, 8, stream);
+                buffers.set(JAVA_INT, SEC_BUFFER, 0);
+                buffers.set(JAVA_INT, SEC_BUFFER + 4, SECBUFFER_DATA);
+                buffers.set(ADDRESS, SEC_BUFFER + 8, NULL);
+                MemorySegment desc = call.allocate(SEC_BUFFER_DESC);
+                desc.set(JAVA_INT, 0, 0);
+                desc.set(JAVA_INT, 4, 2);
+                desc.set(ADDRESS, 8, buffers);
+                MemorySegment qop = call.allocate(JAVA_INT);
+                int status = (int) Native.call(Native.DECRYPT_MESSAGE, context, desc, 0, qop);
+                if (status != SEC_E_OK) {
+                    throw new IllegalStateException("the " + mechanism + " unwrap with "
+                            + target + " failed - SSPI says " + describe(status));
+                }
+                int size = buffers.get(JAVA_INT, SEC_BUFFER);
+                MemorySegment data = buffers.get(ADDRESS, SEC_BUFFER + 8);
+                byte[] bytes = new byte[size]; // seclume-allow: SASL security-layer bitmask and max-buffer size, not a secret
+                if (size > 0 && !data.equals(NULL)) {
+                    MemorySegment.copy(data.reinterpret(size), JAVA_BYTE, 0, bytes, 0, size);
+                }
+                return bytes;
+            }
+        }
+
+        @Override
+        public byte[] wrap(byte[] payload) {
+            try (Arena call = Arena.ofConfined()) {
+                MemorySegment sizes = call.allocate(SEC_PKG_SIZES);
+                int status = (int) Native.call(Native.QUERY_CONTEXT_ATTRIBUTES, context,
+                        SECPKG_ATTR_SIZES, sizes);
+                if (status != SEC_E_OK) {
+                    throw new IllegalStateException("the " + mechanism + " context sizes query with "
+                            + target + " failed - SSPI says " + describe(status));
+                }
+                int trailerLen = Math.max(sizes.get(JAVA_INT, 12), 64);
+                int padLen = Math.max(sizes.get(JAVA_INT, 8), 16);
+                MemorySegment trailer = call.allocate(trailerLen);
+                MemorySegment data = call.allocate(Math.max(payload.length, 1));
+                if (payload.length > 0) {
+                    MemorySegment.copy(payload, 0, data, JAVA_BYTE, 0, payload.length);
+                }
+                MemorySegment padding = call.allocate(padLen);
+                MemorySegment buffers = call.allocate(SEC_BUFFER * 3);
+                buffers.set(JAVA_INT, 0, trailerLen);
+                buffers.set(JAVA_INT, 4, SECBUFFER_TOKEN);
+                buffers.set(ADDRESS, 8, trailer);
+                buffers.set(JAVA_INT, SEC_BUFFER, payload.length);
+                buffers.set(JAVA_INT, SEC_BUFFER + 4, SECBUFFER_DATA);
+                buffers.set(ADDRESS, SEC_BUFFER + 8, data);
+                buffers.set(JAVA_INT, SEC_BUFFER * 2, padLen);
+                buffers.set(JAVA_INT, SEC_BUFFER * 2 + 4, SECBUFFER_PADDING);
+                buffers.set(ADDRESS, SEC_BUFFER * 2 + 8, padding);
+                MemorySegment desc = call.allocate(SEC_BUFFER_DESC);
+                desc.set(JAVA_INT, 0, 0);
+                desc.set(JAVA_INT, 4, 3);
+                desc.set(ADDRESS, 8, buffers);
+                status = (int) Native.call(Native.ENCRYPT_MESSAGE, context,
+                        SECQOP_WRAP_NO_ENCRYPT, desc, 0);
+                if (status != SEC_E_OK) {
+                    throw new IllegalStateException("the " + mechanism + " wrap with "
+                            + target + " failed - SSPI says " + describe(status));
+                }
+                int outTrailer = buffers.get(JAVA_INT, 0);
+                int outData = buffers.get(JAVA_INT, SEC_BUFFER);
+                int outPad = buffers.get(JAVA_INT, SEC_BUFFER * 2);
+                byte[] bytes = new byte[outTrailer + outData + outPad]; // seclume-allow: a signed SASL token, protocol data and not the key
+                if (outTrailer > 0) {
+                    MemorySegment.copy(trailer, JAVA_BYTE, 0, bytes, 0, outTrailer);
+                }
+                if (outData > 0) {
+                    MemorySegment.copy(data, JAVA_BYTE, 0, bytes, outTrailer, outData);
+                }
+                if (outPad > 0) {
+                    MemorySegment.copy(padding, JAVA_BYTE, 0, bytes, outTrailer + outData, outPad);
+                }
+                return bytes;
+            }
         }
 
         @Override
@@ -212,12 +307,15 @@ final class Sspi {
         static final MethodHandle FREE_CONTEXT_BUFFER;
         static final MethodHandle DELETE_CONTEXT;
         static final MethodHandle FREE_CREDENTIALS;
+        static final MethodHandle QUERY_CONTEXT_ATTRIBUTES;
+        static final MethodHandle DECRYPT_MESSAGE;
+        static final MethodHandle ENCRYPT_MESSAGE;
 
         /** Set in the static initialiser before the first bind, where the library is. */
         private static SymbolLookup lookup;
 
         static {
-            MethodHandle[] handles = new MethodHandle[5];
+            MethodHandle[] handles = new MethodHandle[8];
             boolean available = false;
             if (Platform.isWindows() && ValueLayout.ADDRESS.byteSize() == 8) {
                 try {
@@ -227,6 +325,9 @@ final class Sspi {
                     handles[2] = bind("FreeContextBuffer", JAVA_INT, ADDRESS);
                     handles[3] = bind("DeleteSecurityContext", JAVA_INT, ADDRESS);
                     handles[4] = bind("FreeCredentialsHandle", JAVA_INT, ADDRESS);
+                    handles[5] = bind("QueryContextAttributesW", JAVA_INT, ADDRESS, JAVA_INT, ADDRESS);
+                    handles[6] = bind("DecryptMessage", JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS);
+                    handles[7] = bind("EncryptMessage", JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT);
                     available = true;
                 } catch (Throwable absent) {
                     available = false;
@@ -238,6 +339,9 @@ final class Sspi {
             FREE_CONTEXT_BUFFER = handles[2];
             DELETE_CONTEXT = handles[3];
             FREE_CREDENTIALS = handles[4];
+            QUERY_CONTEXT_ATTRIBUTES = handles[5];
+            DECRYPT_MESSAGE = handles[6];
+            ENCRYPT_MESSAGE = handles[7];
         }
 
         private static MethodHandle bind(String name, ValueLayout result, ValueLayout... arguments) {

@@ -441,6 +441,73 @@ public final class OraConnection implements Connection, space.seclume.internal.j
         return statement;
     }
 
+    /** Key column types per table and columns, as described once on this connection. */
+    private final java.util.Map<String, int[]> keyTypes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** A column name: plain, or quoted without a quote in it. */
+    private static final java.util.regex.Pattern IDENTIFIER = java.util.regex.Pattern.compile(
+            "[\\w$#]+|\"[^\"]+\"");
+
+    /** {@code insert into t}, {@code update t}, {@code delete from t}: the table, quoted or not. */
+    private static final java.util.regex.Pattern DML_TABLE = java.util.regex.Pattern.compile(
+            "^\\s*(?:insert\\s+into|update|delete\\s+from|delete)\\s+"
+            + "((?:\"[^\"]+\"|[\\w$#]+)(?:\\.(?:\"[^\"]+\"|[\\w$#]+))?)",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * The types to bind a statement's {@code returning ... into} with - the
+     * key columns as the server describes them: a {@code select} of them
+     * that returns no row, once per table and columns on this connection.
+     * NUMBER stays NUMBER, which Spring's KeyHolder wants as a Number;
+     * VARCHAR2 and CHAR come back as text, RAW as bytes, a ROWID or anything
+     * else as its text. Where the table cannot be told, or the description
+     * fails, NUMBER - what every key was bound as before.
+     */
+    int[] keyTypes(String sql, String[] columns) {
+        int[] numbers = new int[columns.length];
+        java.util.Arrays.fill(numbers, space.seclume.oracle.net.OracleColumn.TYPE_NUMBER);
+        java.util.regex.Matcher table = DML_TABLE.matcher(sql);
+        if (!table.find()) {
+            return numbers;
+        }
+        // Only names go into the describe: the table the statement names and
+        // the columns the application asked for, each a plain or a quoted
+        // identifier - the same text the returning clause carries anyway.
+        for (String column : columns) {
+            if (column == null || !IDENTIFIER.matcher(column).matches()) {
+                return numbers;
+            }
+        }
+        String key = table.group(1) + "|" + String.join(",", columns);
+        int[] known = keyTypes.get(key);
+        if (known != null) {
+            return known;
+        }
+        try (Statement describe = createStatement();
+             // nosemgrep: java.lang.security.audit.formatted-sql-string.formatted-sql-string
+             java.sql.ResultSet none = describe.executeQuery("select " + String.join(", ", columns)
+                     + " from " + table.group(1) + " where 1 = 0")) {
+            java.sql.ResultSetMetaData meta = none.getMetaData();
+            int[] types = new int[columns.length];
+            for (int i = 0; i < columns.length; i++) {
+                types[i] = switch (meta.getColumnType(i + 1)) {
+                    case java.sql.Types.NUMERIC, java.sql.Types.DECIMAL, java.sql.Types.INTEGER,
+                         java.sql.Types.BIGINT, java.sql.Types.SMALLINT, java.sql.Types.TINYINT ->
+                            space.seclume.oracle.net.OracleColumn.TYPE_NUMBER;
+                    case java.sql.Types.BINARY, java.sql.Types.VARBINARY ->
+                            space.seclume.oracle.net.OracleColumn.TYPE_RAW;
+                    default -> space.seclume.oracle.net.OracleColumn.TYPE_VARCHAR;
+                };
+            }
+            keyTypes.put(key, types);
+            return types;
+        } catch (SQLException cannotTell) {
+            // A view, a synonym without select, a name the regex took wrongly:
+            // the statement itself will say what is wrong with it, if anything.
+            return numbers;
+        }
+    }
+
     @Override
     public PreparedStatement prepareStatement(String sql, int[] columnIndexes)
             throws SQLException {

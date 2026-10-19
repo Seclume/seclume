@@ -52,7 +52,8 @@ import space.seclume.secret.SecretProviders;
  *
  * <p>RSA and EC keys, PEM or DER - PKCS#8, PKCS#1 or SEC 1, without a
  * passphrase (a key encrypted at rest goes through {@code provider=encrypted}).
- * OpenSSL 3 on 64-bit Linux.
+ * OpenSSL 3 on 64-bit Linux, or CNG on Windows (RSA and EC; Ed25519 with
+ * OpenSSL only).
  */
 public final class SeclumeKeys {
 

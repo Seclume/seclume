@@ -58,7 +58,7 @@ class NoKeyOnTheHeapTest {
                 assertTrue(webhook.verifyGitHub(Files.readString(directory.resolve(
                         "github-header")), KeyMakerMain.BODY.getBytes(StandardCharsets.UTF_8)));
             }
-            if (OpenSslSigningKey.available()) {
+            if (space.seclume.crypto.PrivateSigningKey.available()) {
                 for (String[] key : new String[][] {{"RS256", "rsa"}, {"PS256", "rsa"},
                         {"ES256", "ec"}}) {
                     try (SeclumeJwt jwt = SeclumeJwt.of(key[0] + "?provider=file&path="

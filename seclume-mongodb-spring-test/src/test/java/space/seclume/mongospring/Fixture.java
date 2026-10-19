@@ -12,14 +12,14 @@ import org.junit.jupiter.api.Assumptions;
 import space.seclume.tck.TestHosts;
 
 /** Where the MongoDB fixtures are, and their URLs; a test without them is skipped. */
-final class Fixture {
+public final class Fixture {
 
     static final String HOST = System.getProperty("seclume.mongo.host", TestHosts.database());
 
     private Fixture() {
     }
 
-    static Path find(String name) {
+    public static Path find(String name) {
         for (Path candidate : List.of(Path.of(name), Path.of("..", name))) {
             if (Files.isReadable(candidate)) {
                 return candidate.toAbsolutePath().normalize();
@@ -42,7 +42,7 @@ final class Fixture {
     }
 
     /** The standalone server, or {@code null}. */
-    static String standalone() {
+    public static String standalone() {
         Path ca = find(".local-mongo-ca.pem");
         if (password() == null || ca == null || !reachable(27017)) {
             return null;
@@ -51,7 +51,7 @@ final class Fixture {
     }
 
     /** The replica set, or {@code null}. */
-    static String replicaSet() {
+    public static String replicaSet() {
         Path ca = find(".local-mongo-rs-ca.pem");
         if (password() == null || ca == null || !reachable(27021) || !reachable(27022)
                 || !reachable(27023)) {
@@ -61,7 +61,7 @@ final class Fixture {
                 "&replicaSet=slm-rs");
     }
 
-    static void assumeThere(String url, String what) {
+    public static void assumeThere(String url, String what) {
         Assumptions.assumeTrue(url != null, "no MongoDB " + what);
     }
 

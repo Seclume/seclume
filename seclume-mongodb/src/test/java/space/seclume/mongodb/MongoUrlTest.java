@@ -132,6 +132,36 @@ class MongoUrlTest {
                 refused.getMessage().contains("hunter2secret"), refused.getMessage());
     }
 
+    /**
+     * MONGODB-OIDC with the workload's own identity: Azure's managed identity
+     * (the user is its client id) and Google's identity token, both for the
+     * TOKEN_RESOURCE the cluster names - read by the metadata providers into
+     * native memory, not by the driver into a String.
+     */
+    @Test
+    void oidcTakesTheAzureAndGoogleIdentities() {
+        String oidc = "mongodb://%sdb.example:27017/?authMechanism=MONGODB-OIDC"
+                + "&authMechanismProperties=ENVIRONMENT:%s,TOKEN_RESOURCE:api%%3A%%2F%%2Fmongo-app";
+        MongoUrl azure = MongoUrl.parse(String.format(oidc, "3f1c-client@", "azure"));
+        assertEquals(space.seclume.secret.AzureManagedIdentitySecretProvider.class,
+                azure.secret().getClass());
+        MongoUrl gcp = MongoUrl.parse(String.format(oidc, "", "gcp"));
+        assertEquals(space.seclume.secret.GcpMetadataSecretProvider.class,
+                gcp.secret().getClass());
+        assertEquals(16384, gcp.secret().maxSecretLength());
+
+        for (String refusedUrl : new String[] {
+            // no TOKEN_RESOURCE
+            "mongodb://db.example/?authMechanism=MONGODB-OIDC&authMechanismProperties=ENVIRONMENT:azure",
+            // Google's identity has no user
+            String.format(oidc, "someone@", "gcp"),
+            // an environment nobody knows
+            String.format(oidc, "", "elsewhere")}) {
+            assertThrows(IllegalArgumentException.class, () -> MongoUrl.parse(refusedUrl),
+                    refusedUrl);
+        }
+    }
+
     /** A builder that brings its own credential is refused, not cleared behind its back. */
     @org.junit.jupiter.api.Test
     void aBuilderWithACredentialOfItsOwnIsRefused() {

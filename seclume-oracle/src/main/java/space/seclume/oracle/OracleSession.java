@@ -768,18 +768,21 @@ public final class OracleSession implements AutoCloseable {
                     // One exchange where the server takes FAST_AUTH (23ai),
                     // the three it took before everywhere else.
                     TtcAuth.Challenge challenge;
+                    // The URL's user, or a dynamic secret's own (Vault's database engine).
+                    String user = space.seclume.secret.DynamicUser.loginUser(settings.user(),
+                            settings.secret());
                     if (channel.supportsFastAuth()) {
-                        challenge = TtcFastAuth.open(channel, "seclume", settings.user());
+                        challenge = TtcFastAuth.open(channel, "seclume", user);
                     } else {
                         new TtcProtocol().negotiate(channel);
                         new TtcDataTypes().negotiate(channel);
                         // Withheld like the second step: no length of any
                         // login message is recorded, as with FAST_AUTH.
                         channel.nextPacketCarriesTheCredential();
-                        challenge = TtcAuth.phaseOne(channel, settings.user());
+                        challenge = TtcAuth.phaseOne(channel, user);
                     }
                     channel.nextPacketCarriesTheCredential();
-                    TtcLogin.phaseTwo(channel, settings.user(), settings.secret(), challenge,
+                    TtcLogin.phaseTwo(channel, user, settings.secret(), challenge,
                             settings.connectString(), settings.legacyVerifier11g());
                 }
                 // The login's answers are read: nothing is in flight now, which a
@@ -1569,9 +1572,11 @@ public final class OracleSession implements AutoCloseable {
             boolean loggedIn = false;
             try {
                 channel.nextPacketCarriesTheCredential();
-                TtcAuth.Challenge challenge = TtcAuth.phaseOne(channel, settings.user());
+                String user = space.seclume.secret.DynamicUser.loginUser(settings.user(),
+                        settings.secret());
+                TtcAuth.Challenge challenge = TtcAuth.phaseOne(channel, user);
                 channel.nextPacketCarriesTheCredential();
-                TtcLogin.phaseTwo(channel, settings.user(), settings.secret(), challenge,
+                TtcLogin.phaseTwo(channel, user, settings.secret(), challenge,
                         settings.connectString(), settings.legacyVerifier11g());
                 channel.answerRead();
                 loggedIn = true;

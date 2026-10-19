@@ -7,3 +7,7 @@ space.seclume.spring.SeclumeAwsAutoConfiguration
 space.seclume.spring.SeclumeLdapAutoConfiguration
 space.seclume.spring.SeclumeSshAutoConfiguration
 space.seclume.spring.SeclumeR2dbcAutoConfiguration
+space.seclume.spring.SeclumeMongoAutoConfiguration
+space.seclume.spring.SeclumeSearchAutoConfiguration
+space.seclume.spring.SeclumeMessagingAutoConfiguration
+space.seclume.spring.SeclumeRedisAutoConfiguration

@@ -278,8 +278,9 @@ jobs:
           SECLUME_RABBITMQCTL: sudo rabbitmqctl close_all_connections recovery-test
 
   # seclume's own MongoDB driver, the pre-authenticated socket for the official
-  # one, and Spring Data on the driver - against a standalone and a replica set
-  # of three, both with TLS required. Without this job every MongoDB test skips
+  # one, and Spring Data on the driver - against a standalone, a replica set
+  # of three and two mongos behind a load balancer, all with TLS required.
+  # Without this job every MongoDB test skips
   # itself, and a green build would say nothing about them.
   mongodb:
     runs-on: ubuntu-latest
@@ -296,17 +297,109 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - name: MongoDB standalone and replica set
         run: bash .github/scripts/mongo_fixtures.sh "$RUNNER_TEMP/mongo"
+      - name: MongoDB behind a load balancer
+        run: bash .github/scripts/mongo_lb_fixtures.sh "$RUNNER_TEMP/mongo-lb"
       - run: >-
-          ./mvnw -B -pl seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-spring-test -am
+          ./mvnw -B -pl seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-reactive,seclume-mongodb-spring-test -am
           test -Dseclume.mongo.host=127.0.0.1
       # Skipped is not passed: a test that found no server proves nothing.
       - name: Require executed MongoDB tests
         if: always()
         run: python3 .github/scripts/require_mongo_tests.py
+      - name: Control - the official driver's own login leaves the password on the heap
+        run: >-
+          ./mvnw -B -pl seclume-mongodb-driver -am test -Dseclume.mongo.host=127.0.0.1
+          -Dseclume.mongo.control=true -Dtest='ApmAgentHeapDumpTest#control*'
+          -Dsurefire.failIfNoSpecifiedTests=false
       - if: always()
         run: |
-          rm -f .local-mongo-password
+          rm -rf .local-mongo-password .local-certauth .local-mongo-lb-password
           docker rm -f mongo mongo-rs1 mongo-rs2 mongo-rs3 || true
+          docker rm -f slm-haproxy slm-mongos1 slm-mongos2 slm-shard slm-cfg || true
+
+  search:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Elasticsearch and OpenSearch with TLS
+        run: bash .github/scripts/search_fixtures.sh "$RUNNER_TEMP/search"
+      - run: >-
+          ./mvnw -B -pl seclume-elasticsearch -am test -Dseclume.search.host=127.0.0.1
+          -Dtest='space.seclume.elasticsearch.**' -Dsurefire.failIfNoSpecifiedTests=false
+      # Skipped is not passed here either.
+      - name: Require executed search tests
+        if: always()
+        run: python3 .github/scripts/require_mongo_tests.py 'seclume-elasticsearch' 'search'
+      - if: always()
+        run: |
+          rm -f .local-es-apikey .local-os-password .local-es-ca.pem
+          docker rm -f seclume-es seclume-os || true
+
+  # Redis (Jedis and Lettuce) and Kafka (SCRAM, PLAIN, OAUTHBEARER) against
+  # real servers with TLS 1.3 - the proof scripts the modules carry, here with
+  # docker. Then the controls: the vendors' own clients given the secret, and
+  # the same heap search finding it.
+  brokers:
+    runs-on: ubuntu-latest
+    env:
+      CONTAINER_ENGINE: docker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Redis and Kafka with TLS 1.3
+        run: |
+          bash seclume-redis/proof/redis.sh up 127.0.0.1
+          bash seclume-kafka/proof/broker.sh up 127.0.0.1
+          cp /tmp/seclume-redis/password .local-redis-password
+          cp /tmp/seclume-redis/ca.pem .local-redis-ca.pem
+          cp /tmp/seclume-kafka/password .local-kafka-password
+          cp /tmp/seclume-kafka/token .local-kafka-token
+          cp /tmp/seclume-kafka/ca.pem .local-kafka-ca.pem
+      - run: >-
+          ./mvnw -B -pl seclume-redis,seclume-kafka -am test
+          -Dseclume.redis.host=127.0.0.1 -Dseclume.kafka.host=127.0.0.1
+          -Dtest='space.seclume.redis.**,space.seclume.kafka.**' -Dsurefire.failIfNoSpecifiedTests=false
+      # Vault's database engine: the driver logs in as Vault's user, renews the
+      # lease and revokes it - against a real Vault and PostgreSQL.
+      - name: Vault with dynamic PostgreSQL credentials
+        run: |
+          bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/vault"
+          ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
+            -Dtest=LocalVaultDynamicCredentialsTest -Dsurefire.failIfNoSpecifiedTests=false
+          python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'Vault'
+      - name: Require executed Redis and Kafka tests
+        if: always()
+        run: python3 .github/scripts/require_mongo_tests.py 'seclume-redis,seclume-kafka' 'Redis and Kafka'
+      - name: Controls - the vendors' clients leave the secret on the heap
+        run: >-
+          ./mvnw -B -pl seclume-redis,seclume-kafka -am test
+          -Dseclume.redis.host=127.0.0.1 -Dseclume.kafka.host=127.0.0.1
+          -Dseclume.redis.control=true -Dseclume.kafka.control=true
+          -Dtest='LocalLettuceTest#control*,LocalKafkaSaslSslTest#control*'
+          -Dsurefire.failIfNoSpecifiedTests=false
+      - if: always()
+        run: |
+          rm -f .local-redis-* .local-kafka-* .local-vault-*
+          docker rm -f slm-vault slm-vault-pg || true
+          bash seclume-redis/proof/redis.sh down || true
+          bash seclume-kafka/proof/broker.sh down || true
 
   postgresql:
     runs-on: ubuntu-latest

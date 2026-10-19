@@ -137,7 +137,8 @@ final class Bsons {
         }
     }
 
-    static void maxTime(BsonDocument command, Long millis) {
+    /** The same for an option that may not be set at all. */
+    static void maxTimeIfSet(BsonDocument command, Long millis) {
         if (millis != null) {
             maxTime(command, millis.longValue());
         }
@@ -166,18 +167,10 @@ final class Bsons {
         }
     }
 
-    /**
-     * The write concern of a write; an unacknowledged one is refused rather
-     * than sent as if acknowledged - it needs moreToCome, which this driver
-     * does not speak yet.
-     */
+    /** The write concern of a write; {@code w: 0} goes as moreToCome (see Writes.run). */
     static void writeConcern(BsonDocument command, WriteConcern writeConcern) {
         if (writeConcern == null || writeConcern.isServerDefault()) {
             return;
-        }
-        if (!writeConcern.isAcknowledged()) {
-            throw new UnsupportedOperationException("unacknowledged writes (w: 0) are not "
-                    + "supported by seclume's MongoDB driver yet");
         }
         command.put("writeConcern", writeConcern.asDocument());
     }

@@ -31,9 +31,19 @@ final class ScramClient implements SaslClient {
     private final SecretProvider provider;
     private final Scram scram;
     private State state = State.FIRST;
+    /** The broker, as Kafka names it to the SASL client. */
+    private final String server;
+    /** The login as an event, from the first message to the server's signature. */
+    private space.seclume.jfr.SeclumeEvents.Authentication login;
 
     ScramClient(String mechanism, HashAlgorithm algorithm, String username,
                 SecretProvider provider) {
+        this(mechanism, algorithm, username, provider, "");
+    }
+
+    ScramClient(String mechanism, HashAlgorithm algorithm, String username,
+                SecretProvider provider, String server) {
+        this.server = server == null ? "" : server;
         this.mechanism = mechanism;
         this.username = username;
         this.provider = provider;
@@ -55,6 +65,7 @@ final class ScramClient implements SaslClient {
         try (Arena arena = Arena.ofConfined()) {
             switch (state) {
                 case FIRST -> {
+                    login = space.seclume.jfr.Observed.beginLogin();
                     MemorySegment out = arena.allocate(64 + 9L * username.length());
                     int length = scram.clientFirst(out, username);
                     state = State.FINAL;
@@ -75,6 +86,7 @@ final class ScramClient implements SaslClient {
                     MemorySegment in = copy(arena, challenge);
                     scram.verifyServerFinal(in, 0, challenge.length);
                     state = State.COMPLETE;
+                    space.seclume.jfr.Observed.endLogin(login, "kafka", server, mechanism, true);
                     return null;
                 }
                 default -> throw new SaslException("SCRAM is " + state.name().toLowerCase()
@@ -83,6 +95,7 @@ final class ScramClient implements SaslClient {
         } catch (IllegalStateException | IllegalArgumentException
                  | space.seclume.secret.SecretUnavailableException e) {
             state = State.FAILED;
+            space.seclume.jfr.Observed.endLogin(login, "kafka", server, mechanism, false);
             throw new SaslException(mechanism + " login of " + username + " failed: "
                     + e.getMessage(), e);
         }

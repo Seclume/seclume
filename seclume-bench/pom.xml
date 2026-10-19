@@ -18,6 +18,7 @@
 
   <properties>
     <jmh.version>1.37</jmh.version>
+    <mongodb.version>5.13.0</mongodb.version>
     <!-- Into no repository, nowhere at all. -->
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>
@@ -121,6 +122,23 @@
       <groupId>io.r2dbc</groupId>
       <artifactId>r2dbc-pool</artifactId>
       <version>1.0.2.RELEASE</version>
+    </dependency>
+    <!-- MongoDB: seclume's own driver, and the official one - with its own
+         SCRAM login, and on seclume's pre-authenticated socket. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb-driver</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.mongodb</groupId>
+      <artifactId>mongodb-driver-sync</artifactId>
+      <version>${mongodb.version}</version>
     </dependency>
   </dependencies>
 

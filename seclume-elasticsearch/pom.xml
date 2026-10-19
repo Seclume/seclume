@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.13.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-elasticsearch</artifactId>
+  <name>seclume Elasticsearch and OpenSearch</name>
+  <description>
+    The official Elasticsearch and OpenSearch Java clients with the API key,
+    token or password off the heap: the client is given a placeholder, and
+    seclume's TLS 1.3 engine writes the secret into each request head from
+    native memory on its way into the cipher. Request bodies go through
+    untouched.</description>
+
+  <properties>
+    <elasticsearch.version>9.5.5</elasticsearch.version>
+    <opensearch.version>3.10.0</opensearch.version>
+    <aws.sdk.version>2.55.16</aws.sdk.version>
+    <jackson.version>2.22.4</jackson.version>
+    <jackson3.version>3.1.8</jackson3.version>
+  </properties>
+
+  <!-- The search clients bring Jackson 2.22.2 (CVE-2026-89407 and the others
+       fixed in 2.22.3) and Jackson 3.1.0 (CVE-2026-68494, CVE-2026-54512, fixed in
+       3.1.4; CVE-2026-89407, CVE-2026-68497, fixed in 3.1.7). -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>tools.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson3.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-http</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- The application brings the clients it uses. -->
+    <dependency>
+      <groupId>co.elastic.clients</groupId>
+      <artifactId>elasticsearch-java</artifactId>
+      <version>${elasticsearch.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.elasticsearch.client</groupId>
+      <artifactId>elasticsearch-rest-client</artifactId>
+      <version>${elasticsearch.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.opensearch.client</groupId>
+      <artifactId>opensearch-java</artifactId>
+      <version>${opensearch.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <!-- Amazon OpenSearch Service with SigV4: the application brings the SDK. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-aws</artifactId>
+      <version>${project.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>aws-core</artifactId>
+      <version>${aws.sdk.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>apache5-client</artifactId>
+      <version>${aws.sdk.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

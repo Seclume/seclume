@@ -108,7 +108,8 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
     @Override
     public SSLEngine createClientSslEngine(String peerHost, int peerPort,
                                            String endpointIdentification) {
-        return new SeclumeSslEngine(peerHost, peerPort, trust, new SaslAuthenticateRewriter());
+        return new SeclumeSslEngine(peerHost, peerPort, trust, new SaslAuthenticateRewriter(
+                peerHost + ":" + peerPort));
     }
 
     @Override

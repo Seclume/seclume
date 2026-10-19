@@ -35,6 +35,12 @@ import space.seclume.internal.jdbc.TlsStack;
 final class MailWire implements AutoCloseable {
 
     private static final int MAX_LINE = 8192;
+    /**
+     * Lines one answer may have: a capability list, a multi-line reply.
+     * Each line is bounded already; without this their number was not, and
+     * a server sending {@code 250-} lines without end filled the heap.
+     */
+    static final int MAX_REPLY_LINES = 1000;
 
     private final MailSettings settings;
     private final SocketTransport transport;
@@ -114,6 +120,14 @@ final class MailWire implements AutoCloseable {
             while (bytes.hasRemaining()) {
                 transport.write(bytes);
             }
+        }
+    }
+
+    /** Refuses an answer that has gone on longer than any server's would. */
+    void countLine(int lines) throws MailException {
+        if (lines > MAX_REPLY_LINES) {
+            throw new MailException(-1, "an answer from " + settings.host + " of more than "
+                    + MAX_REPLY_LINES + " lines");
         }
     }
 

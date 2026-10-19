@@ -27,9 +27,10 @@ import org.junit.jupiter.api.Timeout;
  * a count between two selects was not a result of its own: the selects came
  * back, the insert between them did not.
  *
- * <p>And nothing else moves: executeQuery still takes the rows,
+ * <p>A prepared statement's and a procedure call's {@code execute()} the
+ * same. And nothing else moves: executeQuery still takes the rows,
  * executeUpdate the count, and a procedure that inserts before it selects
- * still answers a callable statement with its select.
+ * still answers a callable statement's executeQuery with its select.
  */
 @Timeout(120)
 class LocalResultsInOrderTest {
@@ -137,6 +138,62 @@ class LocalResultsInOrderTest {
             statement.execute("create table #zl_twice (n int)");
             assertTrue(statement.executeUpdate(
                     "insert into #zl_twice values (1); insert into #zl_twice values (2), (3)") > 0);
+        }
+    }
+
+    @Test
+    void aPreparedStatementsExecuteIsInOrderToo() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create table #zl_prep (n int)");
+            try (java.sql.PreparedStatement prepared = connection.prepareStatement(
+                    "insert into #zl_prep values (?), (?); select n from #zl_prep order by n")) {
+                prepared.setInt(1, 4);
+                prepared.setInt(2, 5);
+                assertFalse(prepared.execute(), "the insert's count comes first");
+                assertEquals(2, prepared.getUpdateCount());
+                assertTrue(prepared.getMoreResults());
+                try (ResultSet rows = prepared.getResultSet()) {
+                    assertTrue(rows.next());
+                    assertEquals(4, rows.getInt(1));
+                }
+                assertFalse(prepared.getMoreResults());
+                assertEquals(-1, prepared.getUpdateCount());
+            }
+        }
+    }
+
+    /**
+     * A procedure's {@code execute()}: what it counted, then what it selected,
+     * then the next count - the output parameter read apart, as before.
+     */
+    @Test
+    void aProcedureCallsExecuteIsInOrder() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url);
+             Statement statement = connection.createStatement()) {
+            statement.execute("create table #zl_call (n int)");
+            statement.execute("create or alter procedure zl_count_select_count @total int output "
+                    + "as begin insert into #zl_call values (1), (2), (3); "
+                    + "select n from #zl_call order by n; "
+                    + "delete from #zl_call where n > 1; "
+                    + "select @total = count(*) from #zl_call; end");
+            try (CallableStatement call = connection.prepareCall(
+                    "{call zl_count_select_count(?)}")) {
+                call.registerOutParameter(1, java.sql.Types.INTEGER);
+                assertFalse(call.execute(), "the insert's count comes first");
+                assertEquals(3, call.getUpdateCount());
+                assertTrue(call.getMoreResults());
+                try (ResultSet rows = call.getResultSet()) {
+                    assertTrue(rows.next());
+                    assertEquals(1, rows.getInt(1));
+                }
+                assertFalse(call.getMoreResults());
+                assertEquals(2, call.getUpdateCount(), "the delete's count");
+                assertFalse(call.getMoreResults());
+                assertEquals(1, call.getInt(1), "the output parameter");
+            } finally {
+                statement.execute("drop procedure zl_count_select_count");
+            }
         }
     }
 

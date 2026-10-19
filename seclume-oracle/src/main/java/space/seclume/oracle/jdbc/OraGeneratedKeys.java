@@ -13,20 +13,37 @@ import space.seclume.oracle.net.OracleNumber;
  * The keys an {@code insert ... returning ... into} wrote back.
  *
  * <p>A result set of its own, and small on purpose: what comes back are a
- * handful of numbers, not a query result. Building it out of a native block
+ * handful of keys, not a query result. Building it out of a native block
  * would mean inventing column descriptions the server never sent - here the
- * shape is known because the driver chose the {@code returning} clause itself.
+ * shape is known because the driver chose the {@code returning} clause
+ * itself, and the types from describing the key columns: numbers, text
+ * (VARCHAR2, CHAR, a ROWID as its text) or bytes (RAW, as a UUID often is).
  */
 final class OraGeneratedKeys extends ReadOnlyResultSet {
 
     private final List<String> names;
+    private final int[] types;
     private final List<byte[]> values;
     private int row = -1;
 
-    OraGeneratedKeys(Statement statement, List<String> names, List<byte[]> values) {
+    OraGeneratedKeys(Statement statement, List<String> names, int[] types, List<byte[]> values) {
         super(statement);
         this.names = List.copyOf(names);
+        this.types = types.clone();
         this.values = List.copyOf(values);
+    }
+
+    private int typeOf(int column) {
+        return column >= 0 && column < types.length ? types[column]
+                : space.seclume.oracle.net.OracleColumn.TYPE_NUMBER;
+    }
+
+    private boolean text(int column) {
+        return typeOf(column) == space.seclume.oracle.net.OracleColumn.TYPE_VARCHAR;
+    }
+
+    private boolean raw(int column) {
+        return typeOf(column) == space.seclume.oracle.net.OracleColumn.TYPE_RAW;
     }
 
     @Override
@@ -51,11 +68,26 @@ final class OraGeneratedKeys extends ReadOnlyResultSet {
 
     @Override
     protected String stringAt(int column) throws SQLException {
+        if (text(column)) {
+            // seclume-allow: a generated key, payload
+            return new String(at(column), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        if (raw(column)) {
+            return java.util.HexFormat.of().withUpperCase().formatHex(at(column)); // seclume-allow: a generated key, payload
+        }
         return String.valueOf(longAt(column));
     }
 
     @Override
     protected long longAt(int column) throws SQLException {
+        if (text(column) || raw(column)) {
+            try {
+                return Long.parseLong(stringAt(column).trim());
+            } catch (NumberFormatException notANumber) {
+                throw new SQLException("the generated key " + names.get(column) + " is not a "
+                        + "number - read it with getString or getObject", "22018");
+            }
+        }
         byte[] bytes = at(column);
         try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
             return OracleNumber.toLong(copy(arena, bytes), 0, bytes.length);
@@ -91,6 +123,12 @@ final class OraGeneratedKeys extends ReadOnlyResultSet {
 
     @Override
     protected Object objectAt(int column) throws SQLException {
+        if (text(column)) {
+            return stringAt(column);
+        }
+        if (raw(column)) {
+            return bytesAt(column);
+        }
         return longAt(column);
     }
 
@@ -106,7 +144,7 @@ final class OraGeneratedKeys extends ReadOnlyResultSet {
 
     @Override
     protected ResultSetMetaData metaData() {
-        return new Meta(names);
+        return new Meta(names, types);
     }
 
     @Override
@@ -122,7 +160,12 @@ final class OraGeneratedKeys extends ReadOnlyResultSet {
     }
 
     /** Just enough for {@code getMetaData} on a key set: names and a type. */
-    private record Meta(List<String> names) implements ResultSetMetaData {
+    private record Meta(List<String> names, int[] types) implements ResultSetMetaData {
+
+        private int typeOf(int column) {
+            return column >= 1 && column <= types.length ? types[column - 1]
+                    : space.seclume.oracle.net.OracleColumn.TYPE_NUMBER;
+        }
 
         @Override
         public int getColumnCount() {
@@ -141,17 +184,29 @@ final class OraGeneratedKeys extends ReadOnlyResultSet {
 
         @Override
         public int getColumnType(int column) {
-            return Types.NUMERIC;
+            return switch (typeOf(column)) {
+                case space.seclume.oracle.net.OracleColumn.TYPE_VARCHAR -> Types.VARCHAR;
+                case space.seclume.oracle.net.OracleColumn.TYPE_RAW -> Types.VARBINARY;
+                default -> Types.NUMERIC;
+            };
         }
 
         @Override
         public String getColumnTypeName(int column) {
-            return "NUMBER";
+            return switch (typeOf(column)) {
+                case space.seclume.oracle.net.OracleColumn.TYPE_VARCHAR -> "VARCHAR2";
+                case space.seclume.oracle.net.OracleColumn.TYPE_RAW -> "RAW";
+                default -> "NUMBER";
+            };
         }
 
         @Override
         public String getColumnClassName(int column) {
-            return Long.class.getName();
+            return switch (typeOf(column)) {
+                case space.seclume.oracle.net.OracleColumn.TYPE_VARCHAR -> String.class.getName();
+                case space.seclume.oracle.net.OracleColumn.TYPE_RAW -> byte[].class.getName();
+                default -> Long.class.getName();
+            };
         }
 
         @Override

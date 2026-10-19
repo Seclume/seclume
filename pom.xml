@@ -75,6 +75,8 @@
     <module>seclume-kafka</module>
     <module>seclume-mongodb</module>
     <module>seclume-mongodb-driver</module>
+    <module>seclume-mongodb-reactive</module>
+    <module>seclume-elasticsearch</module>
     <module>seclume-mongodb-spring-test</module>
     <module>seclume-redis</module>
     <module>seclume-mail</module>

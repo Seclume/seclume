@@ -38,11 +38,11 @@ public final class OpMsg {
 
     public static final int HEADER = 16;
     static final int OP_MSG = 2013;
-    static final int OP_COMPRESSED = 2012;
+    public static final int OP_COMPRESSED = 2012;
     static final int OP_REPLY = 1;
 
     static final int CHECKSUM_PRESENT = 1;
-    static final int MORE_TO_COME = 1 << 1;
+    public static final int MORE_TO_COME = 1 << 1;
     /**
      * Bits 0 to 15 are required: a receiver that does not know one must
      * refuse the message. 0 and 1 are the two known; 16 and up are optional.
@@ -67,6 +67,16 @@ public final class OpMsg {
      */
     public static ByteBuffer encode(int requestId, BsonDocument command, String db,
             String sequenceId, List<? extends BsonDocument> sequence, int maxMessageSize) {
+        return encode(requestId, command, db, sequenceId, sequence, maxMessageSize, 0);
+    }
+
+    /**
+     * The same with flag bits: {@link #MORE_TO_COME} on a request means the
+     * server sends no reply - an unacknowledged write.
+     */
+    public static ByteBuffer encode(int requestId, BsonDocument command, String db,
+            String sequenceId, List<? extends BsonDocument> sequence, int maxMessageSize,
+            int flags) {
         if (command.containsKey("$db")) {
             throw new IllegalArgumentException("the command names its database itself ($db)");
         }
@@ -83,7 +93,7 @@ public final class OpMsg {
         out.writeInt32(requestId);
         out.writeInt32(0);                                   // responseTo
         out.writeInt32(OP_MSG);
-        out.writeInt32(0);                                   // flag bits
+        out.writeInt32(flags);
         out.writeByte(0);
         writeDocument(out, body);
         if (sequenceId != null) {
@@ -108,6 +118,184 @@ public final class OpMsg {
     private static void writeDocument(BasicOutputBuffer out, BsonDocument document) {
         try (BsonBinaryWriter writer = new BsonBinaryWriter(out)) {
             CODEC.encode(writer, document, EncoderContext.builder().build());
+        }
+    }
+
+    /** The compressors of OP_COMPRESSED and their ids (the compression specification). */
+    public enum Compressor {
+        NOOP(0), SNAPPY(1), ZLIB(2), ZSTD(3);
+
+        final int id;
+
+        Compressor(int id) {
+            this.id = id;
+        }
+
+        /** The name in a URL's {@code compressors} and in {@code hello}. */
+        public String wireName() {
+            return name().toLowerCase(java.util.Locale.ROOT);
+        }
+
+        static Compressor byId(int id) {
+            for (Compressor compressor : values()) {
+                if (compressor.id == id) {
+                    return compressor;
+                }
+            }
+            return null;
+        }
+
+        /** {@code null} for a name that is none of them. */
+        public static Compressor byName(String name) {
+            for (Compressor compressor : values()) {
+                if (compressor != NOOP && compressor.wireName().equalsIgnoreCase(name.trim())) {
+                    return compressor;
+                }
+            }
+            return null;
+        }
+    }
+
+    /** An OP_MSG as OP_COMPRESSED with zlib; see {@link #compress(ByteBuffer, Compressor, int)}. */
+    public static ByteBuffer compress(ByteBuffer message, int level) {
+        return compress(message, Compressor.ZLIB, level);
+    }
+
+    /**
+     * An OP_MSG as OP_COMPRESSED: the header stays, the rest is compressed
+     * behind the original opcode, its size and the compressor id.
+     *
+     * @param level zlib's level; the others have none
+     */
+    public static ByteBuffer compress(ByteBuffer message, Compressor compressor, int level) {
+        ByteBuffer in = message.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        int start = in.position();
+        int length = in.remaining();
+        byte[] body = new byte[length - HEADER];
+        in.duplicate().position(start + HEADER).get(body);
+        byte[] packed = compressor == Compressor.ZLIB ? deflate(body, level)
+                : Airlift.compress(compressor, body);
+        ByteBuffer out = ByteBuffer.allocate(HEADER + 9 + packed.length) // seclume-allow: a command, compressed; the login is never compressed
+                .order(ByteOrder.LITTLE_ENDIAN);
+        out.putInt(HEADER + 9 + packed.length)
+                .putInt(in.getInt(start + 4))
+                .putInt(in.getInt(start + 8))
+                .putInt(OP_COMPRESSED)
+                .putInt(in.getInt(start + 12))
+                .putInt(body.length)
+                .put((byte) compressor.id)
+                .put(packed);
+        return out.flip();
+    }
+
+    private static byte[] deflate(byte[] body, int level) {
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater(level);
+        try {
+            deflater.setInput(body);
+            deflater.finish();
+            java.io.ByteArrayOutputStream deflated = new java.io.ByteArrayOutputStream(
+                    body.length / 2 + 64);
+            byte[] chunk = new byte[8192];
+            while (!deflater.finished()) {
+                int n = deflater.deflate(chunk);
+                deflated.write(chunk, 0, n);
+            }
+            return deflated.toByteArray();
+        } finally {
+            deflater.end();
+        }
+    }
+
+    /**
+     * An OP_COMPRESSED reply as the message it carries. Strict, as the
+     * parser is: the compressor has to be the one agreed, the size it
+     * announces within the agreed limit, and inflating has to give exactly
+     * that many bytes - a reply that inflates to more is refused when the
+     * limit is reached, not after it has filled the memory.
+     */
+    public static ByteBuffer decompress(ByteBuffer message, int maxMessageSize) {
+        return decompress(message, maxMessageSize, java.util.Set.of(Compressor.ZLIB));
+    }
+
+    /**
+     * The same for the compressors agreed in {@code hello}: a reply may come
+     * with any of them, or uncompressed ({@code noop}), but with no other.
+     */
+    public static ByteBuffer decompress(ByteBuffer message, int maxMessageSize,
+            java.util.Set<Compressor> agreed) {
+        ByteBuffer in = message.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        int start = in.position();
+        int length = in.remaining();
+        if (length < HEADER + 9) {
+            throw refused("a compressed reply of " + length + " bytes");
+        }
+        int original = in.getInt(start + HEADER);
+        int size = in.getInt(start + HEADER + 4);
+        int compressor = in.get(start + HEADER + 8) & 0xFF;
+        if (original != OP_MSG) {
+            throw refused("a compressed reply of opcode " + original + ", not OP_MSG");
+        }
+        Compressor used = Compressor.byId(compressor);
+        if (used == null || (used != Compressor.NOOP && !agreed.contains(used))) {
+            throw refused("a reply compressed with compressor " + compressor
+                    + ", though " + agreed + " were agreed");
+        }
+        if (size < SMALLEST - HEADER || size > maxMessageSize - HEADER) {
+            throw refused("a compressed reply announcing " + size + " bytes; at most "
+                    + (maxMessageSize - HEADER) + " were agreed");
+        }
+        byte[] packed = new byte[length - HEADER - 9];
+        in.duplicate().position(start + HEADER + 9).get(packed);
+        byte[] body = new byte[size];
+        if (used == Compressor.NOOP) {
+            if (packed.length != size) {
+                throw refused("an uncompressed reply of " + packed.length + " bytes where "
+                        + size + " were announced");
+            }
+            System.arraycopy(packed, 0, body, 0, size);
+        } else if (used != Compressor.ZLIB) {
+            if (Airlift.decompress(used, packed, body) != size) {
+                throw refused("a " + used.wireName() + " reply that is malformed or does not "
+                        + "decompress to the " + size + " bytes it announced");
+            }
+        } else {
+            inflate(packed, body);
+        }
+        ByteBuffer out = ByteBuffer.allocate(HEADER + size).order(ByteOrder.LITTLE_ENDIAN); // seclume-allow: a command reply, as readMessage holds it
+        out.putInt(HEADER + size).putInt(in.getInt(start + 4)).putInt(in.getInt(start + 8))
+                .putInt(OP_MSG).put(body);
+        return out.flip();
+    }
+
+    private static void inflate(byte[] packed, byte[] body) {
+        int size = body.length;
+        java.util.zip.Inflater inflater = new java.util.zip.Inflater();
+        try {
+            inflater.setInput(packed);
+            int at = 0;
+            while (at < size) {
+                int n = inflater.inflate(body, at, size - at);
+                if (n == 0) {
+                    if (inflater.finished() || inflater.needsInput() || inflater.needsDictionary()) {
+                        throw refused("a compressed reply that inflates to " + at
+                                + " bytes where " + size + " were announced");
+                    }
+                }
+                at += n;
+            }
+            byte[] probe = new byte[1];
+            if (!inflater.finished() && inflater.inflate(probe) > 0) {
+                throw refused("a compressed reply that inflates to more than the " + size
+                        + " bytes it announced");
+            }
+            if (inflater.getRemaining() > 0) {
+                throw refused("a compressed reply with bytes after its compressed data");
+            }
+        } catch (java.util.zip.DataFormatException e) {
+            throw new MongoInternalException("the server sent a compressed reply that is not "
+                    + "zlib: " + e.getMessage(), e);
+        } finally {
+            inflater.end();
         }
     }
 

@@ -17,7 +17,65 @@
 
   <properties>
     <spring.boot.version>4.1.1</spring.boot.version>
+    <spring-framework.version>7.0.9</spring-framework.version>
+    <tomcat.version>11.0.27</tomcat.version>
+    <spring-cloud-aws.version>4.2.0</spring-cloud-aws.version>
+    <aws-sdk.version>2.55.16</aws-sdk.version>
+    <spring-ldap.version>4.1.1</spring-ldap.version>
+    <sshd-core.version>2.20.0</sshd-core.version>
+    <spring-integration.version>7.1.1</spring-integration.version>
+    <jakarta.mail-api.version>2.1.5</jakarta.mail-api.version>
+    <angus-mail.version>2.0.5</angus-mail.version>
+    <elasticsearch-client.version>9.5.5</elasticsearch-client.version>
+    <opensearch-client.version>3.10.0</opensearch-client.version>
+    <spring-amqp.version>4.1.1</spring-amqp.version>
+    <jnats.version>2.26.4</jnats.version>
+    <spring-data-redis.version>4.1.1</spring-data-redis.version>
+    <lettuce.version>7.8.0.RELEASE</lettuce.version>
+    <micrometer.version>1.16.7</micrometer.version>
+    <opentelemetry.version>1.67.0</opentelemetry.version>
+    <jackson-annotations.version>2.22</jackson-annotations.version>
+    <jackson.version>2.22.4</jackson.version>
+    <jackson3.version>3.1.8</jackson3.version>
+    <amqp-client.version>5.37.0</amqp-client.version>
+    <netty.version>4.2.19.Final</netty.version>
   </properties>
+
+  <!-- The optional clients bring what has known holes: Jackson 2.22.2
+       (CVE-2026-89407 and others, fixed in 2.22.3), Jackson 3.1.0 (CVE-2026-68494,
+       CVE-2026-54512, CVE-2026-89407, CVE-2026-68497, fixed in 3.1.7), amqp-client 5.31.0 (CVE-2026-63337, fixed in
+       5.33.0, the version seclume-rabbitmq uses) and Netty 4.2.14 (CVE-2026-59901,
+       fixed in 4.2.16). -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>tools.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson3.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-bom</artifactId>
+        <version>${netty.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.rabbitmq</groupId>
+        <artifactId>amqp-client</artifactId>
+        <version>${amqp-client.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>
@@ -58,7 +116,7 @@
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-web</artifactId>
-      <version>7.0.9</version>
+      <version>${spring-framework.version}</version>
       <optional>true</optional>
     </dependency>
 
@@ -82,7 +140,7 @@
     <dependency>
       <groupId>org.apache.tomcat.embed</groupId>
       <artifactId>tomcat-embed-core</artifactId>
-      <version>11.0.27</version>
+      <version>${tomcat.version}</version>
       <optional>true</optional>
     </dependency>
 
@@ -97,19 +155,19 @@
     <dependency>
       <groupId>io.awspring.cloud</groupId>
       <artifactId>spring-cloud-aws-autoconfigure</artifactId>
-      <version>4.2.0</version>
+      <version>${spring-cloud-aws.version}</version>
       <optional>true</optional>
     </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>aws-core</artifactId>
-      <version>2.55.16</version>
+      <version>${aws-sdk.version}</version>
       <optional>true</optional>
     </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>http-auth-aws</artifactId>
-      <version>2.55.16</version>
+      <version>${aws-sdk.version}</version>
       <optional>true</optional>
     </dependency>
 
@@ -124,7 +182,7 @@
     <dependency>
       <groupId>org.springframework.ldap</groupId>
       <artifactId>spring-ldap-core</artifactId>
-      <version>4.1.1</version>
+      <version>${spring-ldap.version}</version>
       <optional>true</optional>
     </dependency>
 
@@ -139,13 +197,13 @@
     <dependency>
       <groupId>org.apache.sshd</groupId>
       <artifactId>sshd-core</artifactId>
-      <version>2.20.0</version>
+      <version>${sshd-core.version}</version>
       <optional>true</optional>
     </dependency>
     <dependency>
       <groupId>org.springframework.integration</groupId>
       <artifactId>spring-integration-sftp</artifactId>
-      <version>7.1.1</version>
+      <version>${spring-integration.version}</version>
       <optional>true</optional>
     </dependency>
 
@@ -161,19 +219,112 @@
     <dependency>
       <groupId>jakarta.mail</groupId>
       <artifactId>jakarta.mail-api</artifactId>
-      <version>2.1.5</version>
+      <version>${jakarta.mail-api.version}</version>
       <optional>true</optional>
     </dependency>
     <dependency>
       <groupId>org.eclipse.angus</groupId>
       <artifactId>angus-mail</artifactId>
-      <version>2.0.5</version>
+      <version>${angus-mail.version}</version>
       <optional>true</optional>
     </dependency>
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-context-support</artifactId>
-      <version>7.0.9</version>
+      <version>${spring-framework.version}</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- MongoDB, optional: seclume.mongodb.url turns into the MongoClient -
+         seclume's own driver when it is there, else the official driver on
+         seclume's socket - and the reactive one with seclume-mongodb-reactive. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb-driver</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-mongodb-reactive</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- Elasticsearch and OpenSearch, optional: seclume.elasticsearch.url and
+         seclume.opensearch.url turn into the clients. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-elasticsearch</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>co.elastic.clients</groupId>
+      <artifactId>elasticsearch-java</artifactId>
+      <version>${elasticsearch-client.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.opensearch.client</groupId>
+      <artifactId>opensearch-java</artifactId>
+      <version>${opensearch-client.version}</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- RabbitMQ, optional: seclume.rabbitmq.url turns into Spring AMQP's
+         connection factory. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-rabbitmq</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.amqp</groupId>
+      <artifactId>spring-rabbit</artifactId>
+      <version>${spring-amqp.version}</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- NATS, optional: seclume.nats.url turns into a Connection. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-nats</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>io.nats</groupId>
+      <artifactId>jnats</artifactId>
+      <version>${jnats.version}</version>
+      <optional>true</optional>
+    </dependency>
+
+    <!-- Redis, optional: seclume.redis.url turns into Spring Data Redis's
+         Lettuce connection factory. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-redis</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.data</groupId>
+      <artifactId>spring-data-redis</artifactId>
+      <version>${spring-data-redis.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <dependency>
+      <groupId>io.lettuce</groupId>
+      <artifactId>lettuce-core</artifactId>
+      <version>${lettuce.version}</version>
       <optional>true</optional>
     </dependency>
 
@@ -216,7 +367,7 @@
     <dependency>
       <groupId>org.springframework</groupId>
       <artifactId>spring-jdbc</artifactId>
-      <version>7.0.9</version>
+      <version>${spring-framework.version}</version>
       <optional>true</optional>
     </dependency>
 
@@ -225,7 +376,7 @@
     <dependency>
       <groupId>io.micrometer</groupId>
       <artifactId>micrometer-core</artifactId>
-      <version>1.16.7</version>
+      <version>${micrometer.version}</version>
       <optional>true</optional>
     </dependency>
     <!-- Tracing, also optional. The API only: a span is created against
@@ -234,7 +385,7 @@
     <dependency>
       <groupId>io.opentelemetry</groupId>
       <artifactId>opentelemetry-api</artifactId>
-      <version>1.67.0</version>
+      <version>${opentelemetry.version}</version>
       <optional>true</optional>
     </dependency>
     <!-- Only so that javac can resolve the annotations on Spring's
@@ -242,7 +393,7 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-annotations</artifactId>
-      <version>2.22</version>
+      <version>${jackson-annotations.version}</version>
       <scope>provided</scope>
     </dependency>
     <dependency>
@@ -263,7 +414,7 @@
     <dependency>
       <groupId>io.opentelemetry</groupId>
       <artifactId>opentelemetry-sdk-testing</artifactId>
-      <version>1.67.0</version>
+      <version>${opentelemetry.version}</version>
       <scope>test</scope>
     </dependency>
     <!-- Boot's own mail auto-configuration, to show it steps aside. -->
@@ -276,7 +427,7 @@
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
       <artifactId>s3</artifactId>
-      <version>2.55.16</version>
+      <version>${aws-sdk.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>

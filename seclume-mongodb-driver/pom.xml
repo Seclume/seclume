@@ -21,6 +21,8 @@
 
   <properties>
     <mongodb.version>5.13.0</mongodb.version>
+    <opentelemetry-javaagent.version>2.31.1</opentelemetry-javaagent.version>
+    <aircompressor.version>3.12</aircompressor.version>
   </properties>
 
   <dependencies>
@@ -43,10 +45,25 @@
       <artifactId>mongodb-driver-sync</artifactId>
       <version>${mongodb.version}</version>
     </dependency>
+    <!-- snappy and zstd, both in Java; optional, as in the official driver. -->
+    <dependency>
+      <groupId>io.airlift</groupId>
+      <artifactId>aircompressor-v3</artifactId>
+      <version>${aircompressor.version}</version>
+      <optional>true</optional>
+    </dependency>
     <dependency>
       <groupId>space.seclume</groupId>
       <artifactId>seclume-tck</artifactId>
       <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Only resolved, never on the class path at run time: ApmAgentHeapDumpTest
+         starts a JVM with it as -javaagent. -->
+    <dependency>
+      <groupId>io.opentelemetry.javaagent</groupId>
+      <artifactId>opentelemetry-javaagent</artifactId>
+      <version>${opentelemetry-javaagent.version}</version>
       <scope>test</scope>
     </dependency>
     <dependency>

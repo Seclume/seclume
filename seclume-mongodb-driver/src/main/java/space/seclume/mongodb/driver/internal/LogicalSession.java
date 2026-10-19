@@ -2,15 +2,19 @@ package space.seclume.mongodb.driver.internal;
 
 import java.nio.ByteBuffer;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import org.bson.BsonBinary;
 import org.bson.BsonBinarySubType;
 import org.bson.BsonBoolean;
 import org.bson.BsonDocument;
 import org.bson.BsonInt64;
+import org.bson.BsonString;
 import org.bson.BsonTimestamp;
 
 import com.mongodb.ReadConcern;
+import com.mongodb.ReadConcernLevel;
+import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
 import com.mongodb.WriteConcern;
 
@@ -40,6 +44,8 @@ public final class LogicalSession {
     private BsonDocument clusterTime;
     private BsonDocument recoveryToken;
     private ServerPool pinned;
+    private boolean snapshot;
+    private BsonTimestamp snapshotTime;
     private final java.util.Set<AutoCloseable> cursors = new java.util.LinkedHashSet<>();
 
     /**
@@ -67,7 +73,33 @@ public final class LogicalSession {
         operationTime = null;
         clusterTime = null;
         recoveryToken = null;
-        pinned = null;
+        unpin();
+        snapshot = false;
+        snapshotTime = null;
+    }
+
+    /**
+     * A snapshot session (sessions specification, "Snapshot reads"): every
+     * read sees the data as of one point in time - the first read's, which
+     * the server names in its reply ({@code atClusterTime}).
+     */
+    public synchronized void snapshot(boolean on) {
+        snapshot = on;
+        snapshotTime = null;
+    }
+
+    public synchronized boolean isSnapshot() {
+        return snapshot;
+    }
+
+    public synchronized BsonTimestamp snapshotTime() {
+        return snapshotTime;
+    }
+
+    public synchronized void snapshotTime(BsonTimestamp time) {
+        if (snapshot && snapshotTime == null) {
+            snapshotTime = time;
+        }
     }
 
     /**
@@ -81,6 +113,112 @@ public final class LogicalSession {
                         TransactionOptions transactionOptions, boolean causallyConsistent,
                         BsonTimestamp operationTime, BsonDocument clusterTime,
                         BsonDocument recoveryToken) {
+
+        /** As BSON - to be carried between processes; it holds no credential. */
+        public BsonDocument toBson() {
+            BsonDocument out = new BsonDocument("lsid", lsid.clone())
+                    .append("txnNumber", new BsonInt64(transactionNumber))
+                    .append("transaction", new BsonString(transaction.name()))
+                    .append("causallyConsistent", BsonBoolean.valueOf(causallyConsistent));
+            if (transactionOptions != null) {
+                out.put("transactionOptions", options(transactionOptions));
+            }
+            if (operationTime != null) {
+                out.put("operationTime", operationTime);
+            }
+            if (clusterTime != null) {
+                out.put("clusterTime", clusterTime.clone());
+            }
+            if (recoveryToken != null) {
+                out.put("recoveryToken", recoveryToken.clone());
+            }
+            return out;
+        }
+
+        /** The state {@link #toBson} wrote. */
+        public static State fromBson(BsonDocument in) {
+            return new State(in.getDocument("lsid").clone(),
+                    in.getInt64("txnNumber").getValue(),
+                    Transaction.valueOf(in.getString("transaction").getValue()),
+                    in.containsKey("transactionOptions")
+                            ? options(in.getDocument("transactionOptions")) : null,
+                    in.getBoolean("causallyConsistent").getValue(),
+                    in.containsKey("operationTime") ? in.getTimestamp("operationTime") : null,
+                    in.containsKey("clusterTime") ? in.getDocument("clusterTime").clone() : null,
+                    in.containsKey("recoveryToken") ? in.getDocument("recoveryToken").clone()
+                            : null);
+        }
+
+        private static BsonDocument options(TransactionOptions options) {
+            BsonDocument out = new BsonDocument();
+            if (options.getReadConcern() != null && options.getReadConcern().getLevel() != null) {
+                out.put("readConcern", new BsonString(options.getReadConcern().getLevel()
+                        .getValue()));
+            }
+            if (options.getWriteConcern() != null) {
+                out.put("writeConcern", options.getWriteConcern().asDocument());
+            }
+            if (options.getReadPreference() != null) {
+                out.put("readPreference", new BsonString(options.getReadPreference().getName()));
+            }
+            Long maxCommit = options.getMaxCommitTime(TimeUnit.MILLISECONDS);
+            if (maxCommit != null) {
+                out.put("maxCommitTimeMS", new BsonInt64(maxCommit));
+            }
+            return out;
+        }
+
+        private static TransactionOptions options(BsonDocument in) {
+            TransactionOptions.Builder options = TransactionOptions.builder();
+            if (in.containsKey("readConcern")) {
+                options.readConcern(new ReadConcern(ReadConcernLevel.fromString(
+                        in.getString("readConcern").getValue())));
+            }
+            if (in.containsKey("writeConcern")) {
+                options.writeConcern(writeConcern(in.getDocument("writeConcern")));
+            }
+            if (in.containsKey("readPreference")) {
+                options.readPreference(ReadPreference.valueOf(
+                        in.getString("readPreference").getValue()));
+            }
+            if (in.containsKey("maxCommitTimeMS")) {
+                options.maxCommitTime(in.getInt64("maxCommitTimeMS").getValue(),
+                        TimeUnit.MILLISECONDS);
+            }
+            return options.build();
+        }
+
+        private static WriteConcern writeConcern(BsonDocument in) {
+            WriteConcern concern = WriteConcern.ACKNOWLEDGED;
+            if (in.containsKey("w")) {
+                concern = in.get("w").isString()
+                        ? new WriteConcern(in.getString("w").getValue())
+                        : new WriteConcern(in.getNumber("w").intValue());
+            }
+            if (in.containsKey("wtimeout")) {
+                concern = concern.withWTimeout(in.getNumber("wtimeout").longValue(),
+                        TimeUnit.MILLISECONDS);
+            }
+            if (in.containsKey("j")) {
+                concern = concern.withJournal(in.getBoolean("j").getValue());
+            }
+            return concern;
+        }
+    }
+
+    /**
+     * Why this session cannot be carried on elsewhere, or null when it can:
+     * a snapshot session reads at a time the next client would not know to
+     * keep, and a transaction pinned to one mongos lives on that mongos only.
+     */
+    public synchronized String notCarriable() {
+        if (snapshot) {
+            return "a snapshot session";
+        }
+        if (pinned != null && inTransaction()) {
+            return "a transaction pinned to one mongos";
+        }
+        return null;
     }
 
     public synchronized State state() {
@@ -188,6 +326,10 @@ public final class LogicalSession {
     }
 
     public synchronized void startTransaction(TransactionOptions options) {
+        if (snapshot) {
+            throw new IllegalStateException("transactions are not supported in a snapshot "
+                    + "session");
+        }
         if (inTransaction()) {
             throw new IllegalStateException("a transaction is already in progress");
         }
@@ -200,7 +342,7 @@ public final class LogicalSession {
         transactionNumber++;
         transaction = Transaction.STARTING;
         recoveryToken = null;
-        pinned = null;
+        unpin();
     }
 
     synchronized void transactionSent() {
@@ -211,14 +353,39 @@ public final class LogicalSession {
 
     synchronized void transactionEnded(Transaction how) {
         transaction = how;
+        if (pinned != null && pinned.pinned()) {
+            // Behind a balancer the connection is given back with the
+            // transaction's end; a mongos stays pinned for a retried commit.
+            unpin();
+        }
     }
 
     synchronized ServerPool pinned() {
         return pinned;
     }
 
+    /**
+     * Keeps the transaction on {@code server}: a mongos, or behind a load
+     * balancer one connection, which the session then holds until
+     * {@link #unpin}.
+     */
     synchronized void pin(ServerPool server) {
+        if (pinned == server) {
+            return;
+        }
+        server.retain();
+        if (pinned != null) {
+            pinned.release();
+        }
         pinned = server;
+    }
+
+    /** Lets go of the pinned server, giving a held connection back. */
+    synchronized void unpin() {
+        if (pinned != null) {
+            pinned.release();
+            pinned = null;
+        }
     }
 
     synchronized BsonDocument recoveryToken() {
@@ -272,6 +439,15 @@ public final class LogicalSession {
                     command.put("readConcern", readConcern);
                 }
             }
+            return;
+        }
+        if (read && snapshot) {
+            BsonDocument readConcern = new BsonDocument("level",
+                    new org.bson.BsonString("snapshot"));
+            if (snapshotTime != null) {
+                readConcern.put("atClusterTime", snapshotTime);
+            }
+            command.put("readConcern", readConcern);
             return;
         }
         if (read && causallyConsistent && operationTime != null) {

@@ -41,14 +41,17 @@ public final class SeclumeMongoClients {
     /** A client with the application's codecs - POJOs, records, its own types. */
     public static MongoClient create(String url, CodecRegistry codecs) {
         MongoUrl parsed = MongoUrl.parse(url);
-        ConnectionString options = new ConnectionString(parsed.driverConnectionString());
         Topology topology = Topology.of(parsed);
+        ConnectionString options = topology.options();
         ReadPreference preference = options.getReadPreference() != null
                 ? options.getReadPreference() : ReadPreference.primary();
         WriteConcern concern = options.getWriteConcern() != null
                 ? options.getWriteConcern() : WriteConcern.ACKNOWLEDGED;
         ReadConcern readConcern = options.getReadConcern() != null
                 ? options.getReadConcern() : ReadConcern.DEFAULT;
-        return new SeclumeClient(topology, codecs, preference, concern, readConcern);
+        SeclumeClient client = new SeclumeClient(topology, codecs, preference, concern,
+                readConcern);
+        client.timeoutMillis = options.getTimeout();
+        return client;
     }
 }
