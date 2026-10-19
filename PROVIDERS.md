@@ -264,7 +264,12 @@ endpoint on loopback (`IDENTITY_ENDPOINT`) and a header value to send with it
 (`IDENTITY_HEADER`). When both are set, `azure-managed-identity` asks that endpoint instead, as
 the Azure SDK does; nothing else changes in the configuration.
 
-**Not covered yet:** Azure Arc (its endpoint first answers with a challenge file to read).
+**Azure Arc** machines set `IDENTITY_ENDPOINT` and `IMDS_ENDPOINT` without a header. Their agent
+first answers 401 and names a challenge file that only an administrator or the `himds` group can
+read; its content goes back as `Authorization: Basic ...`, written from native memory. Only a
+file in the agent's token directory, ending in `.key` and at most 4 KiB, is read - an endpoint
+cannot make the provider read any other file. Tested against a stand-in agent; not yet on a real
+Arc machine.
 
 ### No password: the certificate is the login
 

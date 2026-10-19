@@ -30,12 +30,19 @@ final class MetadataToken {
      */
     static int fetch(String who, String host, int port, int timeoutMillis, String path,
             Map<String, String> headers, MemorySegment target) {
+        return fetch(who, host, port, timeoutMillis, path, headers, java.util.List.of(), target);
+    }
+
+    /** The same with headers whose values are secrets, written from native memory. */
+    static int fetch(String who, String host, int port, int timeoutMillis, String path,
+            Map<String, String> headers, java.util.List<SecretFetch.SecretHeader> secretHeaders,
+            MemorySegment target) {
         try (Arena arena = Arena.ofConfined();
              SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE)) {
             SecretFetch.Response response;
             try {
                 response = SecretFetch.sendLinkLocal(host, port, timeoutMillis, "GET", path,
-                        headers, answer.segment());
+                        headers, secretHeaders, answer.segment());
             } catch (IOException unreachable) {
                 throw new SecretUnavailableException(who + " could not be reached at " + host
                         + ":" + port + " - " + unreachable.getMessage() + ". This provider "

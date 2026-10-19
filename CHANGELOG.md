@@ -20,7 +20,9 @@ All notable changes to seclume are recorded here. Versions follow
   `aws.auth#sigv4a` - an ECDSA P-256 key derived from the secret key in native memory, signed
   by OpenSSL; checked against AWS's SigV4a test suite.
 - **Azure App Service, Functions and Container Apps identities**: `azure-managed-identity` asks
-  `IDENTITY_ENDPOINT` with `IDENTITY_HEADER` where the platform sets them.
+  `IDENTITY_ENDPOINT` with `IDENTITY_HEADER` where the platform sets them; on **Azure Arc** it
+  answers the agent's challenge with the file it names, read only from the agent's token
+  directory.
 - **Desktop keyrings as providers**: `libsecret` (the Linux Secret Service, read as libsecret's
   wiped `SecretValue`) and `keychain` (macOS, not yet tested on a Mac).
 - **MongoDB**: snappy and zstd compression (aircompressor, optional), Atlas Search index

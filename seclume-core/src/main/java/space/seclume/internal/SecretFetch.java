@@ -97,8 +97,16 @@ public final class SecretFetch {
         }
     }
 
-    /** What the server said, with the body already in the caller's segment. */
-    public record Response(int status, int bodyLength) {
+    /**
+     * What the server said, with the body already in the caller's segment -
+     * and for a 401 its {@code WWW-Authenticate}, which Azure Arc's identity
+     * endpoint uses to name the file its challenge is in.
+     */
+    public record Response(int status, int bodyLength, String challenge) {
+
+        public Response(int status, int bodyLength) {
+            this(status, bodyLength, null);
+        }
 
         public boolean ok() {
             return status >= 200 && status < 300;
@@ -320,10 +328,12 @@ public final class SecretFetch {
                 throw new IOException("the secret manager sent no complete HTTP response");
             }
             int status = status(buffer);
+            String challenge = status == 401
+                    ? headerValue(buffer, headerEnd, "www-authenticate") : null;
             int length = chunked(buffer, headerEnd)
                     ? dechunk(buffer, headerEnd, body)
                     : copyBody(buffer, headerEnd, body);
-            return new Response(status, length);
+            return new Response(status, length, challenge);
         } finally {
             wipe(buffer);
         }
@@ -480,9 +490,10 @@ public final class SecretFetch {
     /**
      * A header's value, lower-cased name, searched in the header block only.
      *
-     * <p>Header names and the two values ever asked for here - a length and an
-     * encoding - are not secrets, so they may be {@code String}s. The body
-     * never passes through this method.
+     * <p>Header names and the values ever asked for here - a length, an
+     * encoding, and the name of Azure Arc's challenge file - are not secrets,
+     * so they may be {@code String}s. The body never passes through this
+     * method.
      */
     private static String headerValue(ByteBuffer buffer, int headerEnd, String name) {
         for (int at = 0; at < headerEnd; ) {
