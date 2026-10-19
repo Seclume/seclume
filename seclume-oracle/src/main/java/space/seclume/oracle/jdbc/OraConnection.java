@@ -444,6 +444,10 @@ public final class OraConnection implements Connection, space.seclume.internal.j
     /** Key column types per table and columns, as described once on this connection. */
     private final java.util.Map<String, int[]> keyTypes = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** A column name: plain, or quoted without a quote in it. */
+    private static final java.util.regex.Pattern IDENTIFIER = java.util.regex.Pattern.compile(
+            "[\\w$#]+|\"[^\"]+\"");
+
     /** {@code insert into t}, {@code update t}, {@code delete from t}: the table, quoted or not. */
     private static final java.util.regex.Pattern DML_TABLE = java.util.regex.Pattern.compile(
             "^\\s*(?:insert\\s+into|update|delete\\s+from|delete)\\s+"
@@ -466,12 +470,21 @@ public final class OraConnection implements Connection, space.seclume.internal.j
         if (!table.find()) {
             return numbers;
         }
+        // Only names go into the describe: the table the statement names and
+        // the columns the application asked for, each a plain or a quoted
+        // identifier - the same text the returning clause carries anyway.
+        for (String column : columns) {
+            if (column == null || !IDENTIFIER.matcher(column).matches()) {
+                return numbers;
+            }
+        }
         String key = table.group(1) + "|" + String.join(",", columns);
         int[] known = keyTypes.get(key);
         if (known != null) {
             return known;
         }
         try (Statement describe = createStatement();
+             // nosemgrep: java.lang.security.audit.formatted-sql-string.formatted-sql-string
              java.sql.ResultSet none = describe.executeQuery("select " + String.join(", ", columns)
                      + " from " + table.group(1) + " where 1 = 0")) {
             java.sql.ResultSetMetaData meta = none.getMetaData();

@@ -34,7 +34,7 @@ import space.seclume.internal.Platform;
  * <p>OpenSSL 3 on 64-bit Linux, where libcrypto is found; elsewhere
  * {@link #available()} says no.
  */
-public final class OpenSslSigningKey implements AutoCloseable {
+public final class OpenSslSigningKey implements PrivateSigningKey {
 
     /** The largest signature this makes: RSA-8192. */
     public static final int MAX_SIGNATURE = 1024;

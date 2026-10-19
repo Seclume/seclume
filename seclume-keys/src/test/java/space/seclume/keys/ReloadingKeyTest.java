@@ -28,7 +28,7 @@ class ReloadingKeyTest {
 
     @org.junit.jupiter.api.BeforeEach
     void needsOpenSsl() {
-        assumeTrue(space.seclume.crypto.OpenSslSigningKey.available(), "OpenSSL 3 on 64-bit Linux");
+        assumeTrue(space.seclume.crypto.PrivateSigningKey.available(), "OpenSSL 3 on 64-bit Linux or CNG on Windows");
     }
 
     private static void put(Path from, Path to) throws Exception {

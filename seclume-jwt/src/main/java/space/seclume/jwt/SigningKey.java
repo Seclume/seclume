@@ -11,6 +11,7 @@ import java.util.Map;
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Hmac;
 import space.seclume.crypto.OpenSslSigningKey;
+import space.seclume.crypto.PrivateSigningKey;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretProviders;
 import space.seclume.secret.SecretScope;
@@ -41,7 +42,7 @@ final class SigningKey implements AutoCloseable {
     final String kid;
     final Map<String, String> options;
     private final SecretProvider secret;
-    private OpenSslSigningKey privateKey;          // guarded by this
+    private PrivateSigningKey privateKey;          // guarded by this
 
     private SigningKey(String algorithm, Family family, String digest, HashAlgorithm hash,
                        int ecField, String kid, Map<String, String> options,
@@ -117,9 +118,9 @@ final class SigningKey implements AutoCloseable {
             case 'P' -> Family.RSA_PSS;
             default -> Family.EC;
         };
-        if (family != Family.HMAC && !OpenSslSigningKey.available()) {
-            throw new IllegalStateException(algorithm + " signs with OpenSSL 3, which needs "
-                    + "64-bit Linux; HS256/384/512 work everywhere");
+        if (family != Family.HMAC && !PrivateSigningKey.available()) {
+            throw new IllegalStateException(algorithm + " signs with OpenSSL 3 (64-bit Linux) "
+                    + "or CNG (Windows); HS256/384/512 work everywhere");
         }
         if (family != Family.HMAC && !options.containsKey("max-length")
                 && !options.containsKey("maxLength")) {
@@ -173,11 +174,11 @@ final class SigningKey implements AutoCloseable {
     }
 
     private byte[] signPrivate(byte[] input) {
-        OpenSslSigningKey key = privateKey();
+        PrivateSigningKey key = privateKey();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment message = arena.allocate(Math.max(1, input.length));
             MemorySegment.copy(input, 0, message, ValueLayout.JAVA_BYTE, 0, input.length);
-            MemorySegment out = arena.allocate(OpenSslSigningKey.MAX_SIGNATURE);
+            MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
             int n;
             synchronized (this) {
                 n = key.sign(digest, family == Family.RSA_PSS, message, input.length, out);
@@ -188,10 +189,10 @@ final class SigningKey implements AutoCloseable {
         }
     }
 
-    private synchronized OpenSslSigningKey privateKey() {
+    private synchronized PrivateSigningKey privateKey() {
         if (privateKey == null) {
             try (SecretScope encoded = SecretScope.fromProvider(secret)) {
-                OpenSslSigningKey decoded = OpenSslSigningKey.decode(encoded.segment(),
+                PrivateSigningKey decoded = PrivateSigningKey.decode(encoded.segment(),
                         encoded.length());
                 boolean fits = family == Family.EC ? decoded.is("EC")
                         : decoded.is("RSA") || decoded.is("RSA-PSS");

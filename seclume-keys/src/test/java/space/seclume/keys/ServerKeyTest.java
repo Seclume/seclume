@@ -54,7 +54,7 @@ class ServerKeyTest {
 
     @BeforeAll
     static void keys() throws Exception {
-        assumeTrue(OpenSslSigningKey.available(), "OpenSSL 3 on 64-bit Linux");
+        assumeTrue(space.seclume.crypto.PrivateSigningKey.available(), "OpenSSL 3 on 64-bit Linux or CNG on Windows");
         rsa = KeyFiles.make(directory.resolve("rsa"), "rsa:2048");
         ec256 = KeyFiles.make(directory.resolve("ec256"), "ec:P-256");
         ec384 = KeyFiles.make(directory.resolve("ec384"), "ec:P-384");

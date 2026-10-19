@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Signing with a private key on Windows** (`CngSigningKey`): seclume-keys, seclume-jwt and SigV4a
+  sign through CNG where there is no OpenSSL - RSA (PKCS#1 v1.5, PSS) and ECDSA on P-256, P-384,
+  P-521, the key imported from native memory into an ephemeral CNG key. Ed25519 stays with
+  OpenSSL.
+- **Dependencies:** Jackson 2.22.4 and 3.1.4, amqp-client 5.37.0 and Netty 4.2.19 where the new
+  search clients and the starter's optional clients brought versions with known holes.
 - **Vault dynamic database credentials, complete**: the drivers log in as the user Vault created
   (`DynamicUser`), the lease is renewed halfway instead of a new user being made, until
   `max_ttl` caps it; closing the provider revokes the lease. Fixed: a lease shorter than a

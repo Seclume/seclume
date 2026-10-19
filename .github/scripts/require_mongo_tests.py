@@ -12,7 +12,8 @@ seclume-mongodb* and MongoDB).
 """
 import pathlib
 import sys
-import xml.etree.ElementTree as ET
+# The reports are the build's own surefire output, not documents from outside.
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 
 
 def problems(root, modules="seclume-mongodb*", label="MongoDB"):

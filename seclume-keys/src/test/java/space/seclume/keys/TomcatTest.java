@@ -33,7 +33,7 @@ class TomcatTest {
 
     @Test
     void servesHttpsAndTheKeyStaysOffTheHeap() throws Exception {
-        assumeTrue(OpenSslSigningKey.available(), "OpenSSL 3 on 64-bit Linux");
+        assumeTrue(space.seclume.crypto.PrivateSigningKey.available(), "OpenSSL 3 on 64-bit Linux or CNG on Windows");
         for (String kind : new String[] {"rsa:2048", "ec:P-256"}) {
             KeyFiles files = KeyFiles.make(directory.resolve(kind.replace(':', '-')), kind);
             Tomcat tomcat = new Tomcat();

@@ -23,7 +23,31 @@
     <elasticsearch.version>9.5.5</elasticsearch.version>
     <opensearch.version>3.10.0</opensearch.version>
     <aws.sdk.version>2.55.16</aws.sdk.version>
+    <jackson.version>2.22.4</jackson.version>
+    <jackson3.version>3.1.4</jackson3.version>
   </properties>
+
+  <!-- The search clients bring Jackson 2.22.2 (CVE-2026-89407 and the others
+       fixed in 2.22.3) and Jackson 3.1.0 (CVE-2026-68494, CVE-2026-54512, fixed in
+       3.1.4). -->
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>tools.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson3.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>

@@ -66,10 +66,11 @@ up)
     $ENGINE exec $NAME /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 && break
     sleep 2
   done
-  # The password goes in through a file inside the container, not the command line.
-  $ENGINE cp $DIR/password $NAME:/tmp/pw
+  # The password goes in on standard input, not the command line - and not as a
+  # copied file either: docker cp leaves it root's and unreadable for the
+  # broker's user, podman cp does not, and the same script runs under both.
   # kafka-configs echoes its arguments on an error - nothing of it is shown.
-  $ENGINE exec $NAME sh -c 'P=$(cat /tmp/pw); rm /tmp/pw; C="/opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --entity-type users --entity-name orders"; $C --add-config "SCRAM-SHA-256=[iterations=8192,password=$P]" && $C --add-config "SCRAM-SHA-512=[password=$P]"' >/dev/null 2>&1 \
+  $ENGINE exec -i $NAME sh -c 'P=$(cat); C="/opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:9092 --alter --entity-type users --entity-name orders"; $C --add-config "SCRAM-SHA-256=[iterations=8192,password=$P]" && $C --add-config "SCRAM-SHA-512=[password=$P]"' < $DIR/password >/dev/null 2>&1 \
     || { echo "creating the user failed (output suppressed: it would show the password)"; exit 1; }
   echo "broker up on $ADDRESS: SASL_PLAINTEXT $PORT, SASL_SSL $SECURE, user orders"
   ;;

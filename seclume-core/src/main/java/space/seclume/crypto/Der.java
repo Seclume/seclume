@@ -112,6 +112,24 @@ final class Der {
             readAny();
         }
 
+        /** The next element whole - tag, length and content - as a range of the data. */
+        Range readWhole() {
+            long start = position;
+            readAny();
+            return new Range(start, position - start);
+        }
+
+        /** Where the content of the next element is, which has to carry {@code tag}. */
+        Range readTaggedRange(int tag) {
+            return readTagged(tag);
+        }
+
+        /** The content of the next element, which has to carry {@code tag}, read as DER. */
+        Reader readTaggedAsDer(int tag) {
+            Range content = readTagged(tag);
+            return new Reader(data, content.offset(), content.length());
+        }
+
         private Range readTagged(int expectedTag) {
             int tag = nextByte();
             if (tag != expectedTag) {

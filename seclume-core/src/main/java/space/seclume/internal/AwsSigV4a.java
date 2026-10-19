@@ -6,7 +6,7 @@ import java.lang.foreign.ValueLayout;
 
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Hmac;
-import space.seclume.crypto.OpenSslSigningKey;
+import space.seclume.crypto.PrivateSigningKey;
 
 /**
  * AWS Signature Version 4a: the same canonical request as SigV4, signed with
@@ -19,11 +19,13 @@ import space.seclume.crypto.OpenSslSigningKey;
  * {@code AWS4-ECDSA-P256-SHA256}, the access key id and a counter that moves
  * on while the candidate is not below the curve order less one). The secret,
  * the HMAC's input key, the candidate and the scalar are native memory, wiped
- * before this returns; the scalar goes to OpenSSL as a SEC 1 key without its
- * public point, which OpenSSL computes as it reads it, and signs there.
+ * before this returns; the scalar goes to OpenSSL or CNG as a PKCS#8 key
+ * without its public point, which either computes as it reads it, and signs
+ * there.
  *
  * <p>So, like seclume's other signing with a private key, OpenSSL 3 on
- * 64-bit Linux - {@link #available()}. The signature is public.
+ * 64-bit Linux or CNG on Windows - {@link #available()}. The signature is
+ * public.
  */
 public final class AwsSigV4a {
 
@@ -33,17 +35,20 @@ public final class AwsSigV4a {
     /** P-256's order less two, big-endian: a candidate above it is skipped. */
     private static final byte[] ORDER_MINUS_TWO = java.util.HexFormat.of().parseHex( // seclume-allow: the curve's public order
             "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc63254f");
-    /** {@code ECPrivateKey} of SEC 1 up to the scalar, and the P-256 parameters after it. */
-    private static final byte[] SEC1_HEAD = {0x30, 0x31, 0x02, 0x01, 0x01, 0x04, 0x20}; // seclume-allow: DER framing, public
-    private static final byte[] SEC1_TAIL = {(byte) 0xa0, 0x0a, 0x06, 0x08, 0x2a, (byte) 0x86, // seclume-allow: the P-256 OID, public
-            0x48, (byte) 0xce, 0x3d, 0x03, 0x01, 0x07};
+    /**
+     * PKCS#8 for P-256 up to the scalar: version 0, ecPublicKey with
+     * prime256v1, and an {@code ECPrivateKey} holding only the scalar - no
+     * public point, which OpenSSL and CNG each compute as they import it.
+     */
+    private static final byte[] PKCS8_HEAD = java.util.HexFormat.of().parseHex( // seclume-allow: DER framing and OIDs, public
+            "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420");
 
     private AwsSigV4a() {
     }
 
     /** Whether SigV4a can be signed here: OpenSSL 3 on 64-bit Linux. */
     public static boolean available() {
-        return OpenSslSigningKey.available();
+        return PrivateSigningKey.available();
     }
 
     /** The scope of a SigV4a signature: no region in it - the region set is a header. */
@@ -58,10 +63,10 @@ public final class AwsSigV4a {
      */
     public static String sign(AwsSigV4.SecretKey secretKey, String accessKeyId, String toSign) {
         try (Arena arena = Arena.ofConfined();
-             OpenSslSigningKey key = derive(arena, secretKey, accessKeyId)) {
+             PrivateSigningKey key = derive(arena, secretKey, accessKeyId)) {
             MemorySegment message = arena.allocate(toSign.length() * 3L + 1);
             int length = AwsSigV4.writeAscii(message, toSign);
-            MemorySegment signature = arena.allocate(OpenSslSigningKey.MAX_SIGNATURE);
+            MemorySegment signature = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
             int written = key.sign("SHA256", false, message, length, signature);
             return AwsSigV4.hex(signature.asSlice(0, written));
         }
@@ -73,21 +78,22 @@ public final class AwsSigV4a {
      */
     public static byte[] publicKey(AwsSigV4.SecretKey secretKey, String accessKeyId) {
         try (Arena arena = Arena.ofConfined();
-             OpenSslSigningKey key = derive(arena, secretKey, accessKeyId)) {
+             PrivateSigningKey key = derive(arena, secretKey, accessKeyId)) {
             return key.publicKey();
         }
     }
 
-    private static OpenSslSigningKey derive(Arena arena, AwsSigV4.SecretKey secretKey,
+    private static PrivateSigningKey derive(Arena arena, AwsSigV4.SecretKey secretKey,
             String accessKeyId) {
         if (!available()) {
-            throw new UnsupportedOperationException("SigV4a signs with ECDSA through OpenSSL 3, "
-                    + "on 64-bit Linux only - as seclume's other signing with a private key");
+            throw new UnsupportedOperationException("SigV4a signs with ECDSA through OpenSSL 3 "
+                    + "(64-bit Linux) or CNG (Windows) - as seclume's other signing with a private "
+                    + "key");
         }
         MemorySegment secret = arena.allocate(MAX_KEY_BYTES);
         MemorySegment input = arena.allocate(5 + MAX_KEY_BYTES);
         MemorySegment candidate = arena.allocate(32);
-        MemorySegment der = arena.allocate(SEC1_HEAD.length + 32 + SEC1_TAIL.length);
+        MemorySegment der = arena.allocate(PKCS8_HEAD.length + 32);
         try {
             int length = secretKey.write(secret);
             if (length <= 0) {
@@ -122,11 +128,9 @@ public final class AwsSigV4a {
                 }
             }
             addOne(candidate);
-            MemorySegment.copy(SEC1_HEAD, 0, der, ValueLayout.JAVA_BYTE, 0, SEC1_HEAD.length);
-            MemorySegment.copy(candidate, 0, der, SEC1_HEAD.length, 32);
-            MemorySegment.copy(SEC1_TAIL, 0, der, ValueLayout.JAVA_BYTE, SEC1_HEAD.length + 32,
-                    SEC1_TAIL.length);
-            return OpenSslSigningKey.decode(der, (int) der.byteSize());
+            MemorySegment.copy(PKCS8_HEAD, 0, der, ValueLayout.JAVA_BYTE, 0, PKCS8_HEAD.length);
+            MemorySegment.copy(candidate, 0, der, PKCS8_HEAD.length, 32);
+            return PrivateSigningKey.decode(der, (int) der.byteSize());
         } finally {
             secret.fill((byte) 0);
             input.fill((byte) 0);
