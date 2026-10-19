@@ -159,7 +159,7 @@ public class MongoBenchmark {
             TrustManagerFactory trust = TrustManagerFactory.getInstance(
                     TrustManagerFactory.getDefaultAlgorithm());
             trust.init(store);
-            SSLContext context = SSLContext.getInstance("TLS");
+            SSLContext context = SSLContext.getInstance("TLSv1.3"); // as seclume speaks it
             context.init(null, trust.getTrustManagers(), null);
             return context;
         } catch (Exception e) {
