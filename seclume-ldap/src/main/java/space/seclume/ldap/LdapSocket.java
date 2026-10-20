@@ -244,14 +244,27 @@ final class LdapSocket extends Socket {
     private void sendComplete() throws IOException {
         byte[] bytes = pending.toByteArray();
         int at = 0;
-        while (true) {
-            long[] header = header(bytes, at, bytes.length);
-            if (header == null || at + header[0] + header[1] > bytes.length) {
-                break;
+        try {
+            while (true) {
+                long[] header = header(bytes, at, bytes.length);
+                if (header == null || at + header[0] + header[1] > bytes.length) {
+                    break;
+                }
+                int end = (int) (at + header[0] + header[1]);
+                send(Arrays.copyOfRange(bytes, at, end));
+                at = end;
             }
-            int end = (int) (at + header[0] + header[1]);
-            send(Arrays.copyOfRange(bytes, at, end));
-            at = end;
+        } catch (IOException | RuntimeException failed) {
+            // A message that could not be sent ends the connection. JNDI's
+            // stream is buffered and keeps a write that failed: cleaning up,
+            // it flushes the same bytes again. A refused Kerberos bind went out
+            // a second time that way - and once the first one was over, JNDI's
+            // reader thread was free to read, could take the second answer,
+            // and left this thread waiting for it for good (the CI's LDAP test
+            // hung so, 20.10.2026). Closed, the flush fails at once instead.
+            pending.reset();
+            close();
+            throw failed;
         }
         pending.reset();
         pending.write(bytes, at, bytes.length - at);
