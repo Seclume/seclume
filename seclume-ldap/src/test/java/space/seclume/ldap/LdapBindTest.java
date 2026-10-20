@@ -45,6 +45,7 @@ import com.unboundid.ldap.sdk.Control;
 import com.unboundid.ldap.sdk.DN;
 import com.unboundid.ldap.sdk.ResultCode;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -70,6 +71,20 @@ class LdapBindTest {
     @BeforeAll
     static void start() throws Exception {
         server = LdapServer.start(directory);
+    }
+
+    /**
+     * Forgets which scheme each host and port was set up with. The registry
+     * is for the life of a process, where one server keeps its port; here
+     * every test's server takes a free one, and when the system handed a port
+     * that an ldaps:// server had used to a StartTLS listener, the next
+     * {@code SeclumeLdap.of} was refused as "already set up as ldaps://"
+     * (a red CI run, 20.10.2026). The tests in this module run one after the
+     * other, so nothing else is registering meanwhile.
+     */
+    @AfterEach
+    void forgetTheServersOfThisTest() {
+        SeclumeLdap.BY_AUTHORITY.clear();
     }
 
     @AfterAll
