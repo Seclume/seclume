@@ -135,7 +135,7 @@ jobs:
           echo "SOFTHSM2_CONF=$RUNNER_TEMP/softhsm/softhsm2.conf" >> "$GITHUB_ENV"
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-heapcheck,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: bash .github/scripts/dump_if_slow.sh 12 ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-verify,seclume-heapcheck,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # A red run names its failing tests as annotations, so that they can be
@@ -439,7 +439,7 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
-      - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
+      - run: bash .github/scripts/dump_if_slow.sh 14 ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
       # The password is nowhere in the process after a TLS login - searched in
       # all of its memory, not only the heap (ProcessMemoryTest). It needs a
       # server with TLS, which the service above is not: a second one, here.
