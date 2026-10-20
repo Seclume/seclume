@@ -6,6 +6,7 @@ import java.lang.foreign.ValueLayout;
 
 import space.seclume.crypto.Aes;
 import space.seclume.crypto.AesKey;
+import space.seclume.crypto.ConstantTime;
 import space.seclume.crypto.Digest;
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Pbkdf2;
@@ -348,6 +349,53 @@ public final class O5Login12c {
             } finally {
                 plain.fill((byte) 0);
                 cipher.fill((byte) 0);
+                iv.fill((byte) 0);
+            }
+        }
+    }
+
+    /** Where the proof's marker sits in the decrypted {@code AUTH_SVR_RESPONSE}. */
+    private static final int PROOF_MARKER_AT = 16;
+    /** The marker itself - a protocol constant, the same for every login. */
+    private static final byte[] PROOF_MARKER =
+            "SERVER_TO_CLIENT".getBytes(java.nio.charset.StandardCharsets.US_ASCII); // seclume-allow: a fixed public protocol constant, no secret
+
+    /**
+     * Whether {@code AUTH_SVR_RESPONSE} proves that the server knows the
+     * password.
+     *
+     * <p>The server answers a successful second stage with this value: 16
+     * random bytes and {@code SERVER_TO_CLIENT}, AES-CBC encrypted under the
+     * combo key with a zero IV. Only a server that derived the same combo key
+     * - from the password's verifier and both session-key halves - can make
+     * it. Without the check, anything that answers the login with a parameter
+     * message is taken for the database: it never needed the password, and
+     * the session that follows goes to it.
+     *
+     * <p>Compared in constant time, and nothing is read out of the decrypted
+     * bytes but the yes or no.
+     *
+     * @param response the value, already decoded from hex
+     */
+    public static boolean serverProofMatches(MemorySegment comboKey, long comboOffset,
+                                             int keyLength, MemorySegment response,
+                                             long responseOffset, int length) {
+        int marked = PROOF_MARKER_AT + PROOF_MARKER.length;
+        if (length < marked || length % Aes.BLOCK != 0) {
+            return false;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment iv = arena.allocate(Aes.BLOCK);
+            MemorySegment plain = arena.allocate(length);
+            MemorySegment marker = arena.allocate(PROOF_MARKER.length);
+            MemorySegment.copy(PROOF_MARKER, 0, marker, ValueLayout.JAVA_BYTE, 0,
+                    PROOF_MARKER.length);
+            try (AesKey key = new AesKey(comboKey, comboOffset, keyLength)) {
+                Aes.cbcDecrypt(key, iv, response, responseOffset, plain, 0, length);
+                return ConstantTime.equals(plain, PROOF_MARKER_AT, marker, 0,
+                        PROOF_MARKER.length);
+            } finally {
+                plain.fill((byte) 0);
                 iv.fill((byte) 0);
             }
         }
