@@ -163,6 +163,7 @@ public final class TlsConnection implements Transport {
             return readLocked(into);
         } finally {
             reading.unlock();
+            releaseIfDue();
         }
     }
 
@@ -202,6 +203,7 @@ public final class TlsConnection implements Transport {
             return writeLocked(from);
         } finally {
             writing.unlock();
+            releaseIfDue();
         }
     }
 
@@ -388,8 +390,11 @@ public final class TlsConnection implements Transport {
      * the nonce - of a record another thread was sealing at the same moment,
      * and the cipher state was freed under that thread's feet. A writer in
      * the middle of a record means no alert; the socket closes, which the
-     * peer cannot miss. The memory is freed as {@link #close} frees it, once
-     * no read and no write is using it.
+     * peer cannot miss. The memory is freed once no read and no write is
+     * using it - but without waiting for that here: a reader that waited for
+     * a writer could wait for as long as the writer's transport lets it,
+     * where it used to return at once. Whoever lets go of the last lock frees
+     * it ({@link #releaseIfDue}).
      */
     private void abort(int alert) {
         closed = true;
@@ -406,7 +411,8 @@ public final class TlsConnection implements Transport {
         } catch (RuntimeException ignored) {
             // it is being closed because of the refusal; that one is the news
         }
-        releaseWhenIdle();
+        releaseDue = true;
+        releaseIfDue();
     }
 
     /**
@@ -690,14 +696,54 @@ public final class TlsConnection implements Transport {
         try {
             writing.lock();
             try {
-                postHandshake.close();
-                records.close();
-                arena.close();
+                releaseNow();
             } finally {
                 writing.unlock();
             }
         } finally {
             reading.unlock();
         }
+    }
+
+    /**
+     * The cipher state is to be freed, by whichever thread finds both locks
+     * free - see {@link #abort}.
+     */
+    private volatile boolean releaseDue;
+    /** Freed already; read and written only under both locks. */
+    private boolean released;
+
+    /**
+     * Frees the cipher state if that is due and nobody is reading or writing
+     * now; otherwise leaves it to the thread that is. Called after every read
+     * and write lets go of its lock, so the last one out does it.
+     */
+    private void releaseIfDue() {
+        if (!releaseDue || !reading.tryLock()) {
+            return;
+        }
+        try {
+            if (!writing.tryLock()) {
+                return;
+            }
+            try {
+                releaseNow();
+            } finally {
+                writing.unlock();
+            }
+        } finally {
+            reading.unlock();
+        }
+    }
+
+    /** Under both locks; once only, whichever of close and abort gets here first. */
+    private void releaseNow() {
+        if (released) {
+            return;
+        }
+        released = true;
+        postHandshake.close();
+        records.close();
+        arena.close();
     }
 }

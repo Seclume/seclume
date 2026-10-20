@@ -118,6 +118,7 @@ class AbortWhileWritingTest {
                         writeEnded.set(e);
                     }
                 }, "writer");
+                writer.setDaemon(true);
                 writer.start();
                 assertTrue(writing.await(10, TimeUnit.SECONDS), "nothing could be written");
                 Thread reader = new Thread(() -> {
@@ -133,6 +134,7 @@ class AbortWhileWritingTest {
                         readEnded.set(e);
                     }
                 }, "reader");
+                reader.setDaemon(true);
                 reader.start();
 
                 reader.join(30_000);
