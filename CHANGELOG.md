@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Fixed: a refused record while another thread wrote** (`TlsConnection`). A record that does
+  not authenticate - one flipped bit on the wire is enough - made the reading thread send its
+  alert under the write key without the write lock, so it could take the sequence number, and
+  with it the AES-GCM nonce, of a record another thread was sealing; and it freed the cipher
+  state that thread was still using. The alert now goes out only when no record is being
+  written, and the memory is freed once the writer lets go, as `close` already did.
+- **Fixed: a closed OpenSSL AES-GCM key** handed a NULL context to libcrypto and the JVM died
+  with a SIGSEGV; it is refused with an `IllegalStateException`, as the Java version does.
+- **GHASH** reads its key H from the caller's native memory instead of copying it into heap
+  fields that could not be wiped; **HKDF-Expand** wipes its last block on the way out of an
+  exception too.
+
 - **Signing with a private key on Windows** (`CngSigningKey`): seclume-keys, seclume-jwt and SigV4a
   sign through CNG where there is no OpenSSL - RSA (PKCS#1 v1.5, PSS) and ECDSA on P-256, P-384,
   P-521, the key imported from native memory into an ephemeral CNG key. Ed25519 stays with

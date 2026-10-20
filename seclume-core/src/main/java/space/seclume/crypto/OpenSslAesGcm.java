@@ -68,6 +68,7 @@ final class OpenSslAesGcm implements AesGcmCipher {
     public void encrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad, long aadOffset,
                         long aadLength, MemorySegment in, long inOffset, long length,
                         MemorySegment out, long outOffset) {
+        checkOpen(encrypting);
         run(encrypting, nonce, nonceOffset, aad, aadOffset, aadLength, in, inOffset, length,
                 out, outOffset, encryptWritten);
         check(finish(encrypting, out.asSlice(outOffset + length), encryptWritten),
@@ -80,6 +81,7 @@ final class OpenSslAesGcm implements AesGcmCipher {
     public boolean decrypt(MemorySegment nonce, long nonceOffset, MemorySegment aad,
                            long aadOffset, long aadLength, MemorySegment in, long inOffset,
                            long length, MemorySegment out, long outOffset) {
+        checkOpen(decrypting);
         run(decrypting, nonce, nonceOffset, aad, aadOffset, aadLength, in, inOffset, length,
                 out, outOffset, decryptWritten);
         check(ctrl(decrypting, SET_TAG, in.asSlice(inOffset + length, AesGcm.TAG)),
@@ -137,6 +139,17 @@ final class OpenSslAesGcm implements AesGcmCipher {
         }
         if (arena.scope().isAlive()) {
             arena.close();
+        }
+    }
+
+    /**
+     * A closed key is refused here, as {@link JavaAesGcm} refuses one: after
+     * {@link #close} the context is NULL, and handing that to OpenSSL is at
+     * best an error code and at worst a dereference of it.
+     */
+    private static void checkOpen(MemorySegment context) {
+        if (context.equals(MemorySegment.NULL)) {
+            throw new IllegalStateException("this AES-GCM key is closed - its context was freed");
         }
     }
 

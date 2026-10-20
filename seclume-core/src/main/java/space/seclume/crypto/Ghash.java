@@ -28,24 +28,30 @@ import java.nio.ByteOrder;
  *
  * <p>The state is two {@code long}s rather than a segment on purpose: the
  * running hash is not the key. The key is, and it stays where the caller put
- * it.
+ * it - read from there for each block, never copied into a field: a field is
+ * on the heap, in every heap dump, and a {@code final} one cannot even be
+ * wiped. So the caller's segment has to stay alive until {@link #close}.
  */
 public final class Ghash implements AutoCloseable {
 
     /** The reduction polynomial of GF(2^128), x^128 + x^7 + x^2 + x + 1. */
     private static final long R = 0xe100000000000000L;
 
-    private final long keyHigh;
-    private final long keyLow;
+    private MemorySegment key;
+    private final long keyOffset;
     private long high;
     private long low;
 
     /**
-     * @param key the sixteen-byte hash subkey H, big endian as GCM defines it
+     * @param key the sixteen-byte hash subkey H, big endian as GCM defines it;
+     *            read, not copied, so it has to outlive this object
      */
     public Ghash(MemorySegment key, long offset) {
-        this.keyHigh = beLong(key, offset);
-        this.keyLow = beLong(key, offset + 8);
+        if (key.byteSize() - offset < 16) {
+            throw new IllegalArgumentException("the GHASH key is sixteen bytes");
+        }
+        this.key = key;
+        this.keyOffset = offset;
     }
 
     /** Feeds one sixteen-byte block. */
@@ -108,10 +114,13 @@ public final class Ghash implements AutoCloseable {
      * all zeroes and then applied unconditionally.
      */
     private void multiply() {
+        if (key == null) {
+            throw new IllegalStateException("this GHASH is closed");
+        }
         long zHigh = 0;
         long zLow = 0;
-        long vHigh = keyHigh;
-        long vLow = keyLow;
+        long vHigh = beLong(key, keyOffset);
+        long vLow = beLong(key, keyOffset + 8);
         long xHigh = high;
         long xLow = low;
 
@@ -145,10 +154,11 @@ public final class Ghash implements AutoCloseable {
                 value);
     }
 
-    /** Forgets the running hash. The key belongs to the caller. */
+    /** Forgets the running hash and lets go of the key, which belongs to the caller. */
     @Override
     public void close() {
         high = 0;
         low = 0;
+        key = null;
     }
 }

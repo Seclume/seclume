@@ -381,21 +381,32 @@ public final class TlsConnection implements Transport {
      * which is the wrong thing to tell a peer we are refusing. And no alert at
      * all while a snapshot may still be taken up elsewhere - it would be a
      * record under a nonce the copy may use again.
+     *
+     * <p>Called from the reading thread, which holds only the read lock. The
+     * alert is a record under the write key, so it goes out only with the
+     * write lock as well: without it, it took the sequence number - and so
+     * the nonce - of a record another thread was sealing at the same moment,
+     * and the cipher state was freed under that thread's feet. A writer in
+     * the middle of a record means no alert; the socket closes, which the
+     * peer cannot miss. The memory is freed as {@link #close} frees it, once
+     * no read and no write is using it.
      */
     private void abort(int alert) {
-        if (!copyOutstanding) {
-            records.abort(alert);
-        }
         closed = true;
         pendingLength = 0;
-        postHandshake.close();
-        records.close();
-        arena.close();
+        if (!copyOutstanding && writing.tryLock()) {
+            try {
+                records.abort(alert);
+            } finally {
+                writing.unlock();
+            }
+        }
         try {
             underlying.close();
         } catch (RuntimeException ignored) {
             // it is being closed because of the refusal; that one is the news
         }
+        releaseWhenIdle();
     }
 
     /**
