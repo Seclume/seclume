@@ -863,15 +863,15 @@ public final class MySession implements AutoCloseable {
     }
 
     /**
-     * The second part of the login: everything the server still demands after
-     * the first answer - plugin switch, full SHA-2 path, errors.
-     */
-    /**
      * This login has asked the server for its public key and not yet used the
      * answer - the one condition under which a key that arrives is taken.
      */
     private boolean publicKeyRequested;
 
+    /**
+     * The second part of the login: everything the server still demands after
+     * the first answer - plugin switch, full SHA-2 path, errors.
+     */
     private void finishAuthentication(Settings settings, String plugin, MemorySegment scramble,
                                       Arena arena) throws SQLException {
         publicKeyRequested = false;
