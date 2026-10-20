@@ -168,6 +168,30 @@ class AesGcmCipherTest {
         }
     }
 
+    /**
+     * A closed key is refused with an exception, whichever implementation
+     * held it. The OpenSSL one handed its freed - NULL - context to the
+     * library, and the JVM died with a SIGSEGV (20.10.2026); the record layer
+     * can meet that when one thread ends a connection another is using.
+     */
+    @Test
+    void aClosedKeyIsRefusedNotHandedToTheLibrary() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment key = arena.allocate(16);
+            MemorySegment nonce = arena.allocate(AesGcm.NONCE);
+            MemorySegment data = arena.allocate(16 + AesGcm.TAG);
+            for (AesGcmCipher cipher : new AesGcmCipher[] {
+                    AesGcmCipher.of(key, 0, 16), new JavaAesGcm(key, 0, 16)}) {
+                String which = cipher.implementation();
+                cipher.close();
+                assertThrows(IllegalStateException.class,
+                        () -> cipher.encrypt(nonce, 0, data, 0, 0, data, 0, 16, data, 0), which);
+                assertThrows(IllegalStateException.class,
+                        () -> cipher.decrypt(nonce, 0, data, 0, 0, data, 0, 16, data, 0), which);
+            }
+        }
+    }
+
     private static MemorySegment segment(Arena arena, byte[] bytes) {
         MemorySegment segment = arena.allocate(Math.max(bytes.length, 1));
         MemorySegment.copy(bytes, 0, segment, ValueLayout.JAVA_BYTE, 0, bytes.length);

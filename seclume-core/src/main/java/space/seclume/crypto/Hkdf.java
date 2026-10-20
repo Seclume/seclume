@@ -57,26 +57,30 @@ public final class Hkdf {
         try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
             MemorySegment previous = arena.allocate(macLength);
             MemorySegment block = arena.allocate(macLength);
-            int written = 0;
-            for (int counter = 1; counter <= blocks; counter++) {
-                try (Hmac hmac = new Hmac(algorithm, prk)) {
-                    if (counter > 1) {
-                        hmac.update(previous);
+            try {
+                int written = 0;
+                for (int counter = 1; counter <= blocks; counter++) {
+                    try (Hmac hmac = new Hmac(algorithm, prk)) {
+                        if (counter > 1) {
+                            hmac.update(previous);
+                        }
+                        if (info != null && info.byteSize() > 0) {
+                            hmac.update(info);
+                        }
+                        hmac.update((byte) counter);
+                        hmac.doFinal(block, 0);
                     }
-                    if (info != null && info.byteSize() > 0) {
-                        hmac.update(info);
-                    }
-                    hmac.update((byte) counter);
-                    hmac.doFinal(block, 0);
+                    int take = Math.min(macLength, length - written);
+                    MemorySegment.copy(block, 0, out, outOffset + written, take);
+                    MemorySegment.copy(block, 0, previous, 0, macLength);
+                    written += take;
                 }
-                int take = Math.min(macLength, length - written);
-                MemorySegment.copy(block, 0, out, outOffset + written, take);
-                MemorySegment.copy(block, 0, previous, 0, macLength);
-                written += take;
+            } finally {
+                // The last block held key material that nobody asked for - and
+                // on the way out of an exception, freeing is not wiping.
+                previous.fill((byte) 0);
+                block.fill((byte) 0);
             }
-            // The last block held key material that nobody asked for.
-            previous.fill((byte) 0);
-            block.fill((byte) 0);
         }
     }
 

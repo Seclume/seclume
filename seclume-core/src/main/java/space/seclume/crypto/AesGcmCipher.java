@@ -33,8 +33,11 @@ public interface AesGcmCipher extends AutoCloseable {
 
     /**
      * Decrypts {@code length} bytes of ciphertext, followed in {@code in} by
-     * the tag. Returns false - and leaves {@code out} zeroed - when the tag
-     * does not match.
+     * the tag. Returns false when the tag does not match, and then no byte of
+     * plaintext is left in {@code out}: the Java version checks the tag first
+     * and writes nothing, OpenSSL and CNG decrypt first and zero what they
+     * wrote. So {@code out}, and {@code in} where the two are the same
+     * memory, cannot be relied on after a refusal.
      */
     boolean decrypt(MemorySegment nonce, long nonceOffset,
                     MemorySegment aad, long aadOffset, long aadLength,
