@@ -1172,23 +1172,40 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                     + settings.getMaximumPoolSize() + ") and does not grow past its size for "
                     + "a connection it was handed", "08004");
         }
-        PoolEntry template = entries.isEmpty() ? null : entries.get(0);
-        PoolEntry entry = template == null
-                ? new PoolEntry(connection, true, false, connection.getTransactionIsolation())
-                : new PoolEntry(connection, template.initialAutoCommit(),
-                        template.initialReadOnly(), template.initialIsolation());
-        entry.credential(credentialTimes());
-        entries.add(entry);
-        adopted.increment();
-        entry.set(PoolEntry.State.IN_USE);
-        boolean watched = !settings.getLeakDetectionThreshold().isZero();
-        entry.markBorrowed(watched ? System.nanoTime() : 0,
-                watched ? new Throwable("this connection was adopted here") : null);
-        borrowed.increment();
-        PooledConnection handle = new PooledConnection(this, entry,
-                entry.statements(settings.getStatementCacheSize()));
-        handle.adopted();
-        return handle;
+        PoolEntry entry = null;
+        try {
+            PoolEntry template = entries.isEmpty() ? null : entries.get(0);
+            PoolEntry made = template == null
+                    ? new PoolEntry(connection, true, false, connection.getTransactionIsolation())
+                    : new PoolEntry(connection, template.initialAutoCommit(),
+                            template.initialReadOnly(), template.initialIsolation());
+            made.credential(credentialTimes());
+            entries.add(made);
+            entry = made;
+            entry.set(PoolEntry.State.IN_USE);
+            boolean watched = !settings.getLeakDetectionThreshold().isZero();
+            entry.markBorrowed(watched ? System.nanoTime() : 0,
+                    watched ? new Throwable("this connection was adopted here") : null);
+            PooledConnection handle = new PooledConnection(this, entry,
+                    entry.statements(settings.getStatementCacheSize()));
+            handle.adopted();
+            adopted.increment();
+            borrowed.increment();
+            return handle;
+        } catch (SQLException | RuntimeException e) {
+            // A connection that cannot say its state - closed, broken - is
+            // refused like one for a full pool: the caller's, not closed here.
+            // What was taken for it goes back: the entry, and the permit, or
+            // the pool is one connection smaller for good, as warmup() says of
+            // its own permits.
+            if (entry != null) {
+                entry.set(PoolEntry.State.CLOSED);
+                entry.closeStatements();
+                entries.remove(entry);
+            }
+            permits.release();
+            throw e;
+        }
     }
 
     /** Closes a connection for good and removes it from the inventory. */

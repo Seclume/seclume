@@ -185,6 +185,24 @@ final class FakeMySqlServer implements AutoCloseable {
         }
     }
 
+    /**
+     * After the login answer, send a public key nobody asked for - as a man
+     * in the middle of an unencrypted connection would - and keep what the
+     * client sends back, if anything.
+     */
+    FakeMySqlServer offerPublicKeyUnasked(byte[] pem) {
+        this.unaskedKey = pem.clone();
+        return this;
+    }
+
+    /** What the client sent after the unasked key: null for nothing at all. */
+    byte[] answerToUnaskedKey() {
+        return answerToUnaskedKey;
+    }
+
+    private volatile byte[] unaskedKey;
+    private volatile byte[] answerToUnaskedKey;
+
     FakeMySqlServer start() {
         thread.start();
         return this;
@@ -252,6 +270,18 @@ final class FakeMySqlServer implements AutoCloseable {
                 return;
             }
             checkLogin(login);
+            if (unaskedKey != null) {
+                ByteArrayOutputStream more = new ByteArrayOutputStream();
+                more.write(0x01);                               // AuthMoreData
+                more.writeBytes(unaskedKey);
+                writePacket(out, more.toByteArray(), 2);
+                try {
+                    answerToUnaskedKey = readPacket(in);
+                } catch (IOException hungUp) {
+                    // the client refused and hung up, as it should
+                }
+                return;
+            }
             if (kerberos) {
                 java.io.ByteArrayOutputStream request = new java.io.ByteArrayOutputStream();
                 request.write(0xfe);
