@@ -120,12 +120,23 @@ class ConstantTimeLeakageTest {
             // making them in the measured time was what the first version
             // of this test measured (t = -220, all of it the generator).
             MemorySegment randoms = random(arena, 16 * 4096, 7);
+            // And both classes read them from the same memory: the fixed block
+            // and a random one side by side in one cache line, the pair moving
+            // on every sample whichever class is drawn. With the fixed block in
+            // a buffer of its own, only the random class streamed 64 KiB through
+            // the cache - and the nightly run saw t = -8, the fixed class 2 ns
+            // faster in 4.7 us, which is what that layout predicts.
+            MemorySegment pairs = arena.allocate(32L * 4096, 64);
+            for (int i = 0; i < 4096; i++) {
+                MemorySegment.copy(fixed, 0, pairs, 32L * i, 16);
+                MemorySegment.copy(randoms, 16L * i, pairs, 32L * i + 16, 16);
+            }
             MemorySegment state = arena.allocate(16);
             int[] next = {0};
             try (AesKey aes = new AesKey(key)) {
                 // One block per sample: the next would encrypt the ciphertext.
-                double t = measure(1, klass -> MemorySegment.copy(klass == 0 ? fixed : randoms,
-                                klass == 0 ? 0 : 16L * (next[0]++ & 4095), state, 0, 16),
+                double t = measure(1, klass -> MemorySegment.copy(pairs,
+                                32L * (next[0]++ & 4095) + 16L * klass, state, 0, 16),
                         klass -> Aes.encryptBlock(aes, state));
                 assertTrue(Math.abs(t) < LEAK, "the Java AES leaks (t = " + t + ")");
             }
