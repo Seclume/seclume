@@ -66,6 +66,8 @@ public final class TtcLogin {
      * refuse. Both were found by the login sweep, in the same run.
      */
     private static final int MOST_ITERATIONS = 1_000_000;
+    /** The most pairs the answer to the second stage may carry; Oracle sends about thirty. */
+    private static final int MOST_ANSWER_PAIRS = 1024;
     /** Oracle's identifier for AL32UTF8. */
     private static final String CHARSET = "873";
     /** How the session shows up in the server's own view of its clients. */
@@ -476,9 +478,17 @@ public final class TtcLogin {
                 if (comboKey == null) {
                     return;
                 }
-                java.util.List<TtcParameters.Pair> pairs = TtcAuth.parametersAt(in, at);
+                // The same message the login has always taken for the
+                // success, now read: the server's answer has some thirty
+                // pairs about the session, its proof among them. Not searched
+                // for further on - past this point an error byte could be any
+                // byte of a pair: the first version of this check searched on,
+                // and the Oracle job's logins came back "refused".
+                java.util.List<TtcParameters.Pair> pairs =
+                        TtcAuth.parametersAt(in, at, MOST_ANSWER_PAIRS);
                 if (pairs == null) {
-                    continue;            // a byte 8 that is not the parameter message
+                    throw new IOException("the server's answer to the login could not be read, "
+                            + "so its proof of the password could not be checked");
                 }
                 checkServerProof(pairs, comboKey, keyLength);
                 return;

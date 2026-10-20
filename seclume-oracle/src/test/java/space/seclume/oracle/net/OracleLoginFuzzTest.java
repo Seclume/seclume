@@ -190,16 +190,28 @@ class OracleLoginFuzzTest {
      * derivation, which is what the sweep is after.
      */
     private static byte[] sessionParameters(boolean withProof) {
+        return sessionParameters(withProof, 0);
+    }
+
+    /**
+     * The same with {@code more} pairs about the session in front of the
+     * proof - a real server sends some thirty, and the first version of the
+     * check gave up on more than 32.
+     */
+    private static byte[] sessionParameters(boolean withProof, int more) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(TtcMessage.TYPE_PARAMETER);
         ByteArrayOutputStream pairs = new ByteArrayOutputStream();
         pair(pairs, "AUTH_VERSION_NO", "386138880", 0);
         pair(pairs, "AUTH_SESSION_ID", "42", 0);
         pair(pairs, "AUTH_SERIAL_NUM", "7", 0);
+        for (int i = 0; i < more; i++) {
+            pair(pairs, "AUTH_SC_FIELD_" + i, "4", 0);
+        }
         if (withProof) {
             pair(pairs, "AUTH_SVR_RESPONSE", hex(32, 0x5a), 0);
         }
-        number(out, withProof ? 4 : 3);
+        number(out, 3 + more + (withProof ? 1 : 0));
         out.writeBytes(pairs.toByteArray());
         return out.toByteArray();
     }
@@ -224,6 +236,9 @@ class OracleLoginFuzzTest {
         seeds.put("accepted with a proof under the wrong key", join(
                 data(challenge(32, VERIFIER_12C), large),
                 data(sessionParameters(true), large)));
+        seeds.put("forty pairs, then a proof under the wrong key", join(
+                data(challenge(32, VERIFIER_12C), large),
+                data(sessionParameters(true, 40), large)));
         seeds.put("wrong password", join(
                 data(challenge(32, VERIFIER_12C), large),
                 data(refusal("ORA-01017: invalid username/password; logon denied"), large)));
@@ -326,7 +341,8 @@ class OracleLoginFuzzTest {
     @Test
     void theHappyPathReachesTheServerProof() throws Exception {
         for (String seed : new String[] {"accepted without a proof",
-                "accepted with a proof under the wrong key"}) {
+                "accepted with a proof under the wrong key",
+                "forty pairs, then a proof under the wrong key"}) {
             NsChannel channel = NsChannel.over(
                     HostileTransport.of(seeds(true).get(seed)), NsPacket.VERSION_DESIRED);
             try {

@@ -172,7 +172,7 @@ public final class TtcAuth {
      * signature {@link #readChallenge} looks for. For the answer to the second
      * stage, which carries the server's proof.
      */
-    static List<TtcParameters.Pair> parametersAt(WireBuffer in, int at) {
+    static List<TtcParameters.Pair> parametersAt(WireBuffer in, int at, int maxCount) {
         int keep = in.position();
         try {
             if (at + 1 >= in.limit() || in.getByte(at) != TtcMessage.TYPE_PARAMETER) {
@@ -180,7 +180,7 @@ public final class TtcAuth {
             }
             in.position(at + 1);
             long count = TtcParameters.number(in);
-            if (count < 1 || count > MAX_PARAMETERS || !looksLikeAName(in)) {
+            if (count < 1 || count > maxCount || !looksLikeAName(in)) {
                 return null;
             }
             List<TtcParameters.Pair> pairs = new ArrayList<>((int) count);
