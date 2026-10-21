@@ -797,6 +797,25 @@ NLS, current schema, roles, temporary table rows - and checks each at its defaul
 pool's reset, a logoff and login on the same connection; and that an open transaction is
 rolled back, not committed by the logoff.
 
+**The tests themselves, by mutation.** PIT puts one small fault at a time into the code
+(a comparison flipped, a call left out, a constant changed) and the tests have to fail on
+each. A fault that survives marks a line the tests run without checking what it does. Not
+part of a build, a package at a time:
+
+```bash
+./mvnw -Pmutation -pl seclume-core test-compile org.pitest:pitest-maven:mutationCoverage \
+    -DtargetClasses='space.seclume.crypto.*' -DtargetTests='space.seclume.crypto.*'
+```
+
+The report lands in `target/pit-reports`. Tests that need a server skip there too, so their
+code counts as untested. Read the survivors, not only the score. Its first run made one test
+sharper: the OpenSSH key reader was checked only for producing something (46 % of mutants
+killed). Now `KeyFilesFuzzTest` reads what `ssh-keygen` writes (Ed25519, ECDSA P-256 and
+P-521, RSA), signs with the converted key and verifies with the public key `ssh-keygen` wrote,
+and compares RSA byte for byte with `ssh-keygen -m PKCS8`. That last check is needed because
+the JDK signs correctly even with wrong CRT values: it checks the result and falls back. That
+brought the score to 90 %; most of the rest change nothing that can be observed.
+
 **The native PBKDF2 against the own.** `NativePbkdf2Test` derives the same keys through
 OpenSSL or CNG and through seclume's own code, for SHA-1, SHA-256, SHA-384 and SHA-512, one
 round and 4096, shorter and longer than one hash.

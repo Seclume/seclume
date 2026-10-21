@@ -267,6 +267,54 @@
     </profile>
 
     <!--
+      Mutation testing with PIT: small faults are put into the code one at a
+      time - a flipped comparison, a skipped call, a constant changed - and
+      the tests have to notice each. A mutant that survives is a line the
+      tests run without checking what it does. Not part of a build; a module
+      at a time and a package at a time, it runs for minutes:
+
+        mvn -Pmutation -pl seclume-core test-compile org.pitest:pitest-maven:mutationCoverage \
+            -DtargetClasses='space.seclume.crypto.*' -DtargetTests='space.seclume.crypto.*'
+
+      The report lands in target/pit-reports. Tests that need a server skip
+      there as anywhere, so their code shows up as untested - read the
+      survivors, not only the score.
+    -->
+    <profile>
+      <id>mutation</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-maven</artifactId>
+            <version>1.30.0</version>
+            <dependencies>
+              <dependency>
+                <groupId>org.pitest</groupId>
+                <artifactId>pitest-junit5-plugin</artifactId>
+                <version>1.2.3</version>
+              </dependency>
+            </dependencies>
+            <configuration>
+              <jvmArgs>
+                <value>--enable-native-access=ALL-UNNAMED</value>
+              </jvmArgs>
+              <excludedTestClasses>
+                <param>*Local*</param>
+              </excludedTestClasses>
+              <timestampedReports>false</timestampedReports>
+              <outputFormats>
+                <param>HTML</param>
+                <param>XML</param>
+              </outputFormats>
+              <threads>4</threads>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!--
       Sources and javadoc travel with a release, and only with a release: they
       cost a minute of build time that an ordinary `mvn install` has no reason
       to pay. Activated by `mvn -Prelease deploy`.
