@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.14.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-opentelemetry</artifactId>
+  <name>seclume OpenTelemetry</name>
+  <description>
+    seclume's metrics through the OpenTelemetry API, without Micrometer: the
+    Flight Recorder events the drivers already emit (logins, TLS handshakes,
+    connections, secret reads and rotations, slow statements, failovers) as
+    OpenTelemetry instruments, and seclume's pool under the semantic
+    conventions for database connection pools. Off until started.
+  </description>
+
+  <properties>
+    <opentelemetry.version>1.67.0</opentelemetry.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- Only for the pool's instruments; an application without the pool
+         never loads the class that needs it. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-pool</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
+    <!-- The API only, which the application brings with its SDK or agent. -->
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-api</artifactId>
+      <version>${opentelemetry.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>io.opentelemetry</groupId>
+      <artifactId>opentelemetry-sdk-testing</artifactId>
+      <version>${opentelemetry.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

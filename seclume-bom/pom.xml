@@ -120,6 +120,11 @@
       </dependency>
       <dependency>
         <groupId>space.seclume</groupId>
+        <artifactId>seclume-opentelemetry</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
         <artifactId>seclume-keys</artifactId>
         <version>${project.version}</version>
       </dependency>

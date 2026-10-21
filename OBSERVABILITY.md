@@ -134,6 +134,36 @@ numbers also appear as `hikaricp.connections.*`, timers included.
 
 `demo/grafana` has a dashboard built on these and on the event meters above.
 
+### OpenTelemetry metrics, without Micrometer
+
+`seclume-opentelemetry` is the same bridge for an application that exports with OpenTelemetry
+and has no Micrometer, Spring or not. It depends on `opentelemetry-api` alone, which the
+application's SDK or agent brings:
+
+```java
+SeclumeMetrics metrics = SeclumeMetrics.start(openTelemetry);          // the events above
+AutoCloseable pool = SeclumePoolInstruments.observe(openTelemetry, seclumePool);
+...
+pool.close();
+metrics.close();
+```
+
+The event instruments have the starter's names and attributes, under the instrumentation scope
+`space.seclume`; the timers are histograms in seconds. The pool follows OpenTelemetry's
+semantic conventions for connection pools, so a dashboard built for those reads it as it is:
+
+| Instrument | Type | What |
+|---|---|---|
+| `db.client.connection.count` | up-down counter, `state` = `idle`/`used` | connections the pool holds |
+| `db.client.connection.max`, `.idle.min` | up-down counter | the configured limits |
+| `db.client.connection.pending_requests` | up-down counter | threads waiting for a connection |
+| `db.client.connection.timeouts` | counter | borrows that gave up waiting |
+| `db.client.connection.wait_time`, `.use_time`, `.create_time` | histogram (s) | getting a connection, holding it, opening one |
+| `seclume.pool.secret.rotations`, `seclume.pool.resets.refused` | counter | the two numbers only this pool has |
+
+Every instrument carries `db.client.connection.pool.name`. Like the starter's meters, nothing
+is measured until `start` is called: the stream is the application's decision.
+
 ## Tracing
 
 **Tracing is the one thing that needed a hook.** A span belongs to the request that caused it,
