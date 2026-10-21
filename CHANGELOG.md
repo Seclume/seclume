@@ -12,6 +12,11 @@ All notable changes to seclume are recorded here. Versions follow
   and checked in constant time, with both verifiers; the combo key is kept, in a wiped scope,
   for that one round trip.
 
+- **Fixed: an LDAP bind that failed could be sent again and hang** (`LdapSocket`). JNDI's
+  buffered stream keeps a write that failed and flushes it again while cleaning up; a refused
+  Kerberos bind went out a second time, JNDI's own reader could take its answer, and the
+  thread waiting for it waited for good. A message that cannot be sent now closes the socket.
+
 - **Fixed: a refused record while another thread wrote** (`TlsConnection`). A record that does
   not authenticate - one flipped bit on the wire is enough - made the reading thread send its
   alert under the write key without the write lock, so it could take the sequence number, and

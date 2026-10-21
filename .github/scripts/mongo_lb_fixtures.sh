@@ -15,6 +15,10 @@ work=$(mkdir -p "${1:?usage: mongo_lb_fixtures.sh <work directory> [address]}" &
 address=${2:-127.0.0.1}
 image=docker.io/library/mongo:8.0
 balancer=docker.io/library/haproxy:3.0
+# The image hands rseq to tcmalloc (glibc.pthread.rseq=0). On kernels 6.19 to
+# 7.0.13 that crashes, so mongod refuses to start there (SERVER-121912); with
+# glibc keeping rseq, tcmalloc does without it and mongod starts.
+rseq=(-e GLIBC_TUNABLES=glibc.pthread.rseq=1)
 net=slm-lb
 
 # One throwaway CA. The members reach each other by container name, and check
@@ -63,7 +67,7 @@ tls=(--bind_ip_all --keyFile /certs/keyfile --tlsMode requireTLS
 run() { # name, then the command
   local name=$1; shift
   docker run -d --name "$name" --hostname "$name" --network "$net" \
-    -v "$work":/certs:ro,z "$image" "$@" >/dev/null
+    -v "$work":/certs:ro,z "${rseq[@]}" "$image" "$@" >/dev/null
 }
 mongosh() { # container port, then mongosh arguments
   local name=$1 port=$2; shift 2
