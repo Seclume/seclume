@@ -112,6 +112,30 @@ class PostHandshakeTest {
         }
     }
 
+    /**
+     * The answer to update_requested, byte for byte: a KeyUpdate of one byte
+     * saying update_not_requested - anything else would have the server ask
+     * back, for ever - and what this client writes afterwards goes under its
+     * next key, the one the answer announced. The server opens only that.
+     */
+    @Test
+    void theAnswerIsUpdateNotRequestedAndWhatFollowsUsesTheNextKey() throws IOException {
+        ScriptedTlsServer server = server(Outgoing.keyUpdate(1), Outgoing.data(AFTER));
+        byte[] back = "written after the answer".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        try (TlsConnection connection = connect(server)) {
+            read(connection, ScriptedTlsServer.GREETING.length);
+            read(connection, AFTER.length);
+            ByteBuffer out = ByteBuffer.wrap(back);
+            while (out.hasRemaining()) {
+                connection.write(out);
+            }
+        }
+        assertEquals(1, server.clientKeyUpdates().size());
+        assertArrayEquals(new byte[] {24, 0, 0, 1, 0}, server.clientKeyUpdates().get(0));
+        assertArrayEquals(back, server.clientApplicationData(),
+                "the data after the KeyUpdate did not open under the next key");
+    }
+
     // ---- what is refused -------------------------------------------------
 
     static Stream<Arguments> refused() {
