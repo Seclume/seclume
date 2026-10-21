@@ -431,6 +431,15 @@ artifact. `tls-anvil/expected-results.json`, once committed from a reviewed run
 (`summarize.py --write-expected`), is the baseline: a test that passed there and fails later
 turns the run red.
 
+One result is expected to fail and says nothing about the client:
+`Fragmentation.recordFragmentationSupported` (TLS 1.2 offer). It relies on the scanner's
+`SUPPORTS_RECORD_FRAGMENTATION`, and the scanner's probe runs a handshake template without a
+ServerKeyExchange. The client offers ECDHE only, so it refuses the template already at the full
+record size of 16384 ("ServerHelloDone where ServerKeyExchange was due" in the client log), and
+the smaller sizes are never tried. `HandshakeFragmentationTest` checks the property itself: the
+server's handshake records are cut into pieces of 50 and of 1 byte, for TLS 1.2 and 1.3, and the
+handshake completes.
+
 The client runs without a trust store, because TLS-Anvil makes its certificates up per test:
 what is measured is how the protocol is handled. How certificates are trusted is the JDK's
 PKIX and is tested in `CertificateTrustTest` and `HostnameMatchTest`.
