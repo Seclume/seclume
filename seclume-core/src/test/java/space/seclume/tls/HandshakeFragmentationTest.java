@@ -124,10 +124,10 @@ class HandshakeFragmentationTest {
     }
 
     /**
-     * Passes the client's bytes through and re-cuts the server's records in
-     * the clear - handshake (22) and alert (21) - into pieces of {@code piece}
-     * bytes, until the first ChangeCipherSpec or encrypted record; from then
-     * on everything passes as it is.
+     * Passes the client's bytes through and re-cuts the server's handshake
+     * records in the clear (type 22) into pieces of {@code piece} bytes, until
+     * the first record of another type - ChangeCipherSpec or an encrypted one;
+     * from then on everything passes as it is.
      */
     private static void cut(ServerSocket proxy, int serverPort, int piece,
                             AtomicInteger pieces) {
@@ -137,8 +137,8 @@ class HandshakeFragmentationTest {
                 Socket server = new Socket(InetAddress.getLoopbackAddress(), serverPort);
                 daemon(() -> pump(client, server));
                 daemon(() -> {
-                    try (client; server) {
-                        DataInputStream in = new DataInputStream(server.getInputStream());
+                    try (client; server;
+                         DataInputStream in = new DataInputStream(server.getInputStream())) {
                         OutputStream out = client.getOutputStream();
                         byte[] header = new byte[5];
                         boolean clear = true;
