@@ -142,6 +142,121 @@ class RecordProtectionTest {
         assertArrayEquals(expected, ours);
     }
 
+    /**
+     * A sequence number in all eight bytes, against the JDK: every byte of it
+     * has to reach the nonce in its place - with sequence 5 only the last one
+     * is ever looked at.
+     */
+    @Test
+    void everyByteOfTheSequenceNumberReachesTheNonce() throws Exception {
+        long sequence = 0x0102030405060708L;
+        byte[] trafficSecret = random(32);
+        byte[] payload = random(9);
+        byte[] ours;
+        try (Arena arena = Arena.ofConfined();
+             RecordProtection protection = RecordProtection.fromSecret(HashAlgorithm.SHA_256,
+                     of(arena, trafficSecret), 16)) {
+            protection.sequence(sequence);
+            MemorySegment out = arena.allocate(RecordProtection.sealedLength(payload.length));
+            ours = bytes(out, protection.seal((byte) 23, of(arena, payload), 0, payload.length,
+                    out, 0));
+        }
+        byte[] key = expandLabel256(trafficSecret, "key", 16);
+        byte[] iv = expandLabel256(trafficSecret, "iv", 12);
+        for (int i = 0; i < 8; i++) {
+            iv[11 - i] ^= (byte) (sequence >>> (8 * i));
+        }
+        byte[] header = {23, 3, 3, 0, (byte) (payload.length + 1 + 16)};
+        byte[] inner = java.util.Arrays.copyOf(payload, payload.length + 1);
+        inner[payload.length] = 23;
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
+                new GCMParameterSpec(128, iv));
+        cipher.updateAAD(header);
+        byte[] body = cipher.doFinal(inner);
+        byte[] expected = new byte[5 + body.length];
+        System.arraycopy(header, 0, expected, 0, 5);
+        System.arraycopy(body, 0, expected, 5, body.length);
+        assertArrayEquals(expected, ours);
+    }
+
+    /**
+     * TLS 1.2's record (RFC 5288) against the JDK: the explicit nonce on the
+     * wire is the sequence number - a new one for every record, never a
+     * repeat - and the additional data is sequence number, type, version and
+     * length, a length of more than one byte included.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = {7, 300})
+    void aTls12RecordIsWhatRfc5288Says(int length) throws Exception {
+        byte[] keyBlock = random(16 + 4);                    // key, then the 4-byte salt
+        byte[] payload = random(length);
+        long sequence = 0x0102030405060708L;
+        java.util.List<byte[]> records = new java.util.ArrayList<>();
+        try (Arena arena = Arena.ofConfined();
+             RecordProtection protection = RecordProtection.forTls12(HashAlgorithm.SHA_256,
+                     of(arena, keyBlock), 0, 16, 16)) {
+            protection.sequence(sequence);
+            for (int i = 0; i < 2; i++) {
+                MemorySegment out = arena.allocate(5 + 8 + length + 16);
+                records.add(bytes(out, protection.seal((byte) 23, of(arena, payload), 0, length,
+                        out, 0)));
+            }
+        }
+        for (int i = 0; i < 2; i++) {
+            long seq = sequence + i;
+            byte[] explicit = java.nio.ByteBuffer.allocate(8).putLong(seq).array();
+            byte[] nonce = new byte[12];
+            System.arraycopy(keyBlock, 16, nonce, 0, 4);
+            System.arraycopy(explicit, 0, nonce, 4, 8);
+            byte[] additional = java.nio.ByteBuffer.allocate(13).putLong(seq).put((byte) 23)
+                    .put((byte) 3).put((byte) 3).putShort((short) length).array();
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(keyBlock, 0, 16, "AES"),
+                    new GCMParameterSpec(128, nonce));
+            cipher.updateAAD(additional);
+            byte[] body = cipher.doFinal(payload);
+            int total = 8 + body.length;
+            byte[] expected = java.nio.ByteBuffer.allocate(5 + total).put((byte) 23)
+                    .put((byte) 3).put((byte) 3).putShort((short) total).put(explicit).put(body)
+                    .array();
+            assertArrayEquals(expected, records.get(i), "record " + i);
+        }
+    }
+
+    /** The last sequence number is never used: it would wrap to 0 and repeat a nonce. */
+    @Test
+    void theLastSequenceNumberIsNeverUsed() {
+        byte[] payload = random(4);
+        try (Arena arena = Arena.ofConfined();
+             RecordProtection tls13 = RecordProtection.fromSecret(HashAlgorithm.SHA_256,
+                     of(arena, random(32)), 16);
+             RecordProtection tls12 = RecordProtection.forTls12(HashAlgorithm.SHA_256,
+                     of(arena, random(20)), 0, 16, 16)) {
+            for (RecordProtection protection : java.util.List.of(tls13, tls12)) {
+                MemorySegment out = arena.allocate(64);
+                protection.sequence(-2L);
+                protection.seal((byte) 23, of(arena, payload), 0, payload.length, out, 0);
+                assertTrue(protection.usedUp());
+                org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                        () -> protection.seal((byte) 23, of(arena, payload), 0,
+                                payload.length, out, 0));
+                org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                        () -> protection.open(out, 0, 5 + 8 + payload.length + 16,
+                                arena.allocate(64), 0));
+            }
+        }
+    }
+
+    private static byte[] expandLabel256(byte[] secret, String label, int length) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment out = arena.allocate(length);
+            Hkdf.expandLabel(HashAlgorithm.SHA_256, of(arena, secret), label, null, out, 0,
+                    length);
+            return bytes(out, length);
+        }
+    }
+
     /** Sealing and opening across sizes, including nothing at all. */
     @ParameterizedTest
     @ValueSource(ints = {0, 1, 15, 16, 17, 1000, 16384})
