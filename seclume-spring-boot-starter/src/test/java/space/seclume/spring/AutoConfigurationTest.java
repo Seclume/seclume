@@ -111,6 +111,31 @@ class AutoConfigurationTest {
         }
     }
 
+    /**
+     * The application's heap, context and all: the password is in none of
+     * its beans, property sources or connections while it runs, nor once
+     * the context is closed.
+     */
+    @Test
+    void thePasswordIsNotOnTheApplicationsHeap() throws Exception {
+        Map<String, Object> properties = postgres("seclume.datasources.main");
+        properties.put("seclume.datasources.main.pool.maximum-pool-size", "2");
+        properties.put("seclume.datasources.main.pool.warmup", "true");
+        try (AnnotationConfigApplicationContext context = context(properties)) {
+            DataSource dataSource = context.getBean(DataSource.class);
+            try (Connection one = dataSource.getConnection();
+                 Connection two = dataSource.getConnection();
+                 Statement statement = one.createStatement();
+                 ResultSet result = statement.executeQuery("select current_user")) {
+                assertTrue(result.next());
+                assertTrue(two.isValid(5));
+                space.seclume.tck.NoSecretInHeap.assertAbsent(passwordFile);
+            }
+            space.seclume.tck.NoSecretInHeap.assertAbsent(passwordFile);
+        }
+        space.seclume.tck.NoSecretInHeap.assertAbsent(passwordFile);
+    }
+
     @Test
     void poolSettingsComeFromTheConfiguration() {
         Map<String, Object> properties = postgres("seclume.datasources.main");

@@ -465,6 +465,14 @@ jobs:
           # Skipped is not passed: a missing server must not look like a proof.
           grep -q 'Tests run: 3, Failures: 0, Errors: 0, Skipped: 0' \
             seclume-postgresql/target/surefire-reports/*ProcessMemoryTest.txt
+          # R2DBC's heap against the same server; the other three databases
+          # are not in this job and skip. Case [1] is PostgreSQL, and it must
+          # have run and passed - a self-closed testcase has no <skipped/>.
+          ./mvnw -B -pl seclume-r2dbc -am test \
+            -Dtest='LocalR2dbcFourDatabasesTest#thePasswordIsNotOnTheHeap' \
+            -Dsurefire.failIfNoSpecifiedTests=false
+          grep -qE 'name="thePasswordIsNotOnTheHeap\(Db\)\[1\]"[^>]*/>' \
+            seclume-r2dbc/target/surefire-reports/TEST-*LocalR2dbcFourDatabasesTest.xml
       - if: always()
         run: |
           rm -f .local-pgtls-password

@@ -127,6 +127,61 @@ class PoolWithPostgresTest {
         }
     }
 
+    /**
+     * Three logins side by side, then one more for a session the server
+     * killed: the password is on the heap neither while the pool holds its
+     * connections nor once it is closed.
+     */
+    @Test
+    void thePasswordIsNotOnTheHeapOfAPoolThatLoggedInAgain() throws Exception {
+        PoolSettings settings = settings(3);
+        settings.setValidationBypassWindow(Duration.ZERO);
+        try (SeclumePool pool = new SeclumePool(dataSource(), settings)) {
+            useAllThree(pool);
+            assertEquals(3, pool.statistics().created());
+            space.seclume.tck.NoSecretInHeap.assertAbsent(passwordFile);
+
+            long killed = backendPid(pool);
+            killEverySessionExceptMine(killed);
+            awaitGone(killed);
+            useAllThree(pool);      // whichever of them was killed is among the three
+            assertEquals(4, pool.statistics().created(), "the killed session was not replaced");
+            space.seclume.tck.NoSecretInHeap.assertAbsent(passwordFile);
+        }
+        space.seclume.tck.NoSecretInHeap.assertAbsent(passwordFile);
+    }
+
+    /** pg_terminate_backend only asks; waits until the session is really gone. */
+    private static void awaitGone(long pid) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        try (Connection connection = dataSource().getConnection();
+             PreparedStatement statement = connection.prepareStatement(
+                     "select count(*) from pg_stat_activity where pid = ?")) {
+            statement.setLong(1, pid);
+            while (true) {
+                try (ResultSet result = statement.executeQuery()) {
+                    assertTrue(result.next());
+                    if (result.getLong(1) == 0) {
+                        return;
+                    }
+                }
+                assertTrue(System.nanoTime() < deadline, "session " + pid + " did not end");
+                Thread.sleep(50);
+            }
+        }
+    }
+
+    private static void useAllThree(SeclumePool pool) throws Exception {
+        try (Connection a = pool.getConnection(); Connection b = pool.getConnection();
+             Connection c = pool.getConnection()) {
+            for (Connection each : List.of(a, b, c)) {
+                try (Statement statement = each.createStatement()) {
+                    statement.execute("select 1");
+                }
+            }
+        }
+    }
+
     /** Ends the pooled session from a connection of its own. */
     private static void killEverySessionExceptMine(long pid) throws Exception {
         try (Connection connection = dataSource().getConnection();
