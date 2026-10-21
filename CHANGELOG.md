@@ -3,14 +3,14 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.13.1] - 2026-10-21
 
 - **Fixed: `seclume-heapcheck` shipped the TCK's fuzz harness** - its classes and the
   scripted transport registered as a `TransportProvider` service. Only a URL asking for
   `transport=scripted` reached it, and without a script it refused, but test code has no
   place in the tool. The shade plugin now leaves `space/seclume/tck/fuzz` and the service
   entry out.
-- **Maven Central, prepared**: `-Prelease,central deploy` uploads the bundle to the Central
+- **On Maven Central** from this release on, as well as GitHub Packages. `-Prelease,central deploy` uploads the bundle to the Central
   Portal, which validates it and waits for "Publish" there (`autoPublish=false`). The modules
   that skip deploy are left out. `seclume-quarkus-deployment` got its description, the one
   piece of required POM metadata that was missing.
@@ -4211,6 +4211,7 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.13.1]: https://github.com/Seclume/seclume/releases/tag/v0.13.1
 [0.13.0]: https://github.com/Seclume/seclume/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Seclume/seclume/releases/tag/v0.12.0
 [0.11.1]: https://github.com/Seclume/seclume/releases/tag/v0.11.1
