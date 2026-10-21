@@ -45,6 +45,12 @@ import space.seclume.internal.jdbc.TlsStack;
  * <p>The bad record is made by a proxy in the middle that flips the last byte
  * of the server's twentieth encrypted record - one bit of its tag - which is
  * all an attacker on the network needs to do to get here.
+ *
+ * <p>Server and proxy run on platform threads. On virtual threads, on
+ * Windows, the proxy's pumps and the JSSE server stalled with full buffers
+ * on both sides, and every round timed out with both seclume threads
+ * waiting correctly in their socket calls - a hang in the harness, not in
+ * the code under test.
  */
 @Timeout(300)
 @org.junit.jupiter.api.parallel.Isolated
@@ -159,10 +165,10 @@ class AbortWhileWritingTest {
         while (!listener.isClosed()) {
             try {
                 Socket socket = listener.accept();
-                Thread.ofVirtual().start(() -> {
+                Thread.ofPlatform().daemon().start(() -> {
                     try (socket; OutputStream out = socket.getOutputStream()) {
                         InputStream in = socket.getInputStream();
-                        Thread.ofVirtual().start(() -> drain(in));
+                        Thread.ofPlatform().daemon().start(() -> drain(in));
                         while (true) {
                             out.write(chunk);
                         }
@@ -185,8 +191,8 @@ class AbortWhileWritingTest {
             try {
                 Socket client = proxy.accept();
                 Socket server = new Socket(InetAddress.getLoopbackAddress(), serverPort);
-                Thread.ofVirtual().start(() -> pump(client, server));
-                Thread.ofVirtual().start(() -> {
+                Thread.ofPlatform().daemon().start(() -> pump(client, server));
+                Thread.ofPlatform().daemon().start(() -> {
                     try (client; server) {
                         DataInputStream in = new DataInputStream(server.getInputStream());
                         OutputStream out = client.getOutputStream();
