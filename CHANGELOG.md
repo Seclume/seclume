@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The login methods a server may ask for, restricted.** The method is the server's choice;
+  until now the drivers answered whatever they were asked. `requireAuth` for PostgreSQL
+  (libpq's `require_auth`, also accepted under that name) lists the methods allowed -
+  `scram-sha-256`, `gss`, `oauth`, `password`, `md5`, `sspi`, `none` - or, negated, the ones
+  refused: `requireAuth=!md5,!password`. `disabledAuthenticationPlugins` for MySQL and MariaDB
+  (Connector/J's option) names plugins a login may never use, `mysql_native_password` above
+  all. A refused method is refused before anything is computed or sent for it; an unknown name
+  is a configuration error, not an exclusion that excludes nothing. Both are on the
+  `DataSource` as well.
+- **Small server keys can be switched off for the own TLS stack too.** It leaves path
+  validation to the JDK, so `jdk.certpath.disabledAlgorithms` (for example
+  `RSA keySize < 2048`) applies to it as to JSSE; `KeyLengthPolicyTest` proves it in a JVM
+  started with that policy. TLS.md says which key sizes the stack uses and how to raise the floor.
+
 - **OpenTelemetry metrics without Micrometer** (`seclume-opentelemetry`). `SeclumeMetrics.start`
   turns the drivers' Flight Recorder events into OpenTelemetry instruments with the starter's
   names and attributes (histograms in seconds), and `SeclumePoolInstruments.observe` reads a

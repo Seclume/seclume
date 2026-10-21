@@ -161,8 +161,28 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
     /** PostgreSQL 17's direct TLS - {@code tlsNegotiation=direct} in the URL. */
     private boolean directTls;
 
+    /** The login methods the server may ask for - {@code requireAuth} in the URL. */
+    private space.seclume.postgresql.RequireAuth requireAuth =
+            space.seclume.postgresql.RequireAuth.ANY;
+
     /** The trust the URL chose - {@code tlsRootCert}, {@code tlsPin} - or null for the JVM's. */
     private space.seclume.internal.TrustChoice.Choice trust;
+
+    /**
+     * libpq's {@code require_auth}: {@code scram-sha-256}, or {@code !md5,!password}
+     * - see {@link space.seclume.postgresql.RequireAuth}.
+     */
+    public void setRequireAuth(String methods) throws SQLException {
+        try {
+            this.requireAuth = space.seclume.postgresql.RequireAuth.of(methods);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException(e.getMessage(), "08001", e);
+        }
+    }
+
+    public String getRequireAuth() {
+        return requireAuth.toString();
+    }
 
     public void setTransport(String transport) {
         this.transport = transport == null || transport.isBlank() ? null : transport.trim();
@@ -205,6 +225,7 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
         this.tlsStack = settings.tlsStack();
         this.identity = settings.identity();
         this.directTls = settings.directTls();
+        this.requireAuth = settings.requireAuth();
         this.database = settings.database();
         this.applicationName = settings.applicationName();
         this.tls = settings.tls();
@@ -261,7 +282,7 @@ public final class SeclumeDataSource implements DataSource, ExpiringCredentials 
                 provider, applicationName, connectTimeoutMillis,
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity(), directTls);
+                resolvedIdentity(), directTls, requireAuth);
         PgSession session = space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> PgSession.open(settings)));

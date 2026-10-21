@@ -98,9 +98,35 @@ final class MyUrl {
                     // On by default, as in Connector/J: a tinyint(1) is a
                     // boolean to every ORM that writes one. tinyInt1isBit=false
                     // gives back the integer for whoever wants the raw column.
-                    parsed.flag("tinyInt1isBit", true));
+                    parsed.flag("tinyInt1isBit", true),
+                    // Connector/J's disabledAuthenticationPlugins: a server that
+                    // asks for one of these gets no answer computed with it.
+                    disabledPlugins(parsed.option("disabledAuthenticationPlugins", null)));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }
+    }
+
+    /**
+     * {@code disabledAuthenticationPlugins=mysql_native_password,...} - plugin
+     * names, as Connector/J takes them. A name the driver does not know is an
+     * error rather than a no-op: a misspelt exclusion would quietly exclude
+     * nothing.
+     */
+    static java.util.Set<String> disabledPlugins(String value) {
+        if (value == null || value.isBlank()) {
+            return java.util.Set.of();
+        }
+        java.util.Set<String> plugins = new java.util.LinkedHashSet<>();
+        for (String part : value.split(",", -1)) {
+            String plugin = part.strip().toLowerCase(java.util.Locale.ROOT);
+            if (!MySession.PLUGINS.contains(plugin)) {
+                throw new IllegalArgumentException("disabledAuthenticationPlugins names '"
+                        + part.strip() + "' - it knows " + String.join(", ",
+                        new java.util.TreeSet<>(MySession.PLUGINS)));
+            }
+            plugins.add(plugin);
+        }
+        return plugins;
     }
 }
