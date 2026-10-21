@@ -364,6 +364,30 @@ class CloudVaultProvidersTest {
         }
     }
 
+    /**
+     * A refusal says what AWS said - its error type and message, either
+     * spelling of "message" - so a missing secret and a missing right read
+     * differently; a character that is not printable becomes '?', and an
+     * answer with neither says so.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+        "{\"__type\":\"ResourceNotFoundException\",\"message\":\"Secrets Manager can't find the specified secret.\"}"
+                + "|ResourceNotFoundException Secrets Manager can't find the specified secret.",
+        "{\"__type\":\"AccessDeniedException\",\"Message\":\"User is not authorized\"}"
+                + "|AccessDeniedException User is not authorized",
+        "{\"message\":\"line\\nbreak\"}|line?break",
+        "{\"unrelated\":1}|no reason given"})
+    void awsSaysWhatItWasRefusedWith(String answer, String said) throws Exception {
+        try (Endpoint endpoint = new Endpoint(400, answer);
+             AwsSecretsManagerSecretProvider provider = aws(endpoint, null)) {
+            SecretUnavailableException refused = assertThrows(SecretUnavailableException.class,
+                    () -> read(provider));
+            assertTrue(refused.getMessage().endsWith(": " + said), refused.getMessage());
+            assertTrue(refused.getMessage().contains("answered 400"), refused.getMessage());
+        }
+    }
+
     // ---------------------------------------------- Azure Key Vault ------
 
     @Test

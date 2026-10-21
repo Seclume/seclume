@@ -13,6 +13,8 @@ import java.util.Arrays;
 import java.util.function.Function;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import space.seclume.internal.Transport;
 
@@ -88,6 +90,50 @@ class Tls12ServerHelloTest {
                 () -> ClientHandshake.connectWithoutAuthenticating(peer, "db.example.com"));
         assertEquals(TlsAlertException.PROTOCOL_VERSION,
                 ((TlsProtocolException) refused.getCause()).alert());
+    }
+
+    // ---- the server's flight, out of order ----------------------------------
+
+    /**
+     * After the ServerHello the flight is Certificate, ServerKeyExchange,
+     * CertificateRequest if any, ServerHelloDone - in that order. Anything
+     * else in the Certificate's place is refused with unexpected_message
+     * before it is read: a ServerHelloDone that would skip the server's
+     * proof, a key exchange without a certificate to check it against, a
+     * request for ours, a Finished, a message type that does not exist.
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(ints = {14, 12, 13, 20, 99})
+    void aMessageWhereTheCertificateIsDueIsRefused(int type) {
+        Peer peer = new Peer(id -> concat(acceptedHello(), handshake(type, new byte[0])));
+        TlsProtocolException refused = refused(peer);
+        assertEquals(TlsAlertException.UNEXPECTED_MESSAGE, refused.alert(), refused.getMessage());
+        assertTrue(refused.getMessage().contains("Certificate"), refused.getMessage());
+        assertEquals(TlsAlertException.UNEXPECTED_MESSAGE, peer.alertSent());
+    }
+
+    /** Application data in the middle of the server's flight is refused, not read. */
+    @Test
+    void applicationDataInTheFlightIsRefused() {
+        byte[] data = {23, 3, 3, 0, 4, 1, 2, 3, 4};
+        Peer peer = new Peer(id -> concat(acceptedHello(), data));
+        TlsProtocolException refused = refused(peer);
+        assertEquals(TlsAlertException.UNEXPECTED_MESSAGE, refused.alert(), refused.getMessage());
+        assertTrue(refused.getMessage().contains("type 23"), refused.getMessage());
+    }
+
+    /** A ServerHello the client accepts: TLS 1.2, ECDHE-RSA-AES128-GCM, both extensions. */
+    private static byte[] acceptedHello() {
+        return serverHello(0x0303, plainRandom(), 0xC02F,
+                concat(extendedMasterSecret(), renegotiationInfo()));
+    }
+
+    /** One handshake message in a plaintext record of its own. */
+    private static byte[] handshake(int type, byte[] body) {
+        byte[] message = concat(new byte[] {(byte) type, 0, (byte) (body.length >>> 8),
+                (byte) body.length}, body);
+        return concat(new byte[] {22, 3, 3, (byte) (message.length >>> 8),
+                (byte) message.length}, message);
     }
 
     // ---- the peer -----------------------------------------------------------
