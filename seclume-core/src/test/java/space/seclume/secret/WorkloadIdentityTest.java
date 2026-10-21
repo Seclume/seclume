@@ -389,8 +389,13 @@ class WorkloadIdentityTest {
                         for (String line : head.split("\r\n")) {
                             if (line.toLowerCase(java.util.Locale.ROOT)
                                     .startsWith("content-length:")) {
-                                int len = Integer.parseInt(
-                                        line.substring(line.indexOf(':') + 1).trim());
+                                int len;
+                                try {
+                                    len = Integer.parseInt(
+                                            line.substring(line.indexOf(':') + 1).trim());
+                                } catch (NumberFormatException e) {
+                                    throw new IOException("bad " + line, e);
+                                }
                                 byte[] body = in.readNBytes(len);
                                 recorded.append(new String(body, StandardCharsets.UTF_8));
                             }

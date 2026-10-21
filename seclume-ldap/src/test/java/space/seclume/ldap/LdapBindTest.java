@@ -181,7 +181,9 @@ class LdapBindTest {
                      InputStream in = client.getInputStream();
                      OutputStream out = client.getOutputStream()) {
                     byte[] req = new byte[64];
-                    in.read(req);
+                    if (in.read(req) < 0) {
+                        return;                          // the client went away
+                    }
                     // ExtendedResponse (0x78) with resultCode=53 (unwillingToPerform)
                     byte[] resp = new byte[] {
                             0x30, 0x0c,
@@ -219,7 +221,9 @@ class LdapBindTest {
                      InputStream in = client.getInputStream();
                      OutputStream out = client.getOutputStream()) {
                     byte[] req = new byte[64];
-                    in.read(req);
+                    if (in.read(req) < 0) {
+                        return;                          // the client went away
+                    }
                     // ExtendedResponse (0x78) with resultCode=0, plus injected trailing plaintext byte
                     byte[] respWithInjectedByte = new byte[] {
                             0x30, 0x0c,

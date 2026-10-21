@@ -120,8 +120,9 @@ class ProcessMemoryTest {
                     + "it - start the test without it");
         }
         Process child = builder.start();
-        try {
-            long pid = awaitReady(child);
+        try (BufferedReader output = new BufferedReader(new InputStreamReader(
+                child.getInputStream(), StandardCharsets.UTF_8))) {
+            long pid = awaitReady(output);
             Scan scan = scan(pid, needles);
             assertTrue(scan.bytes() > 50L << 20, "too little memory read to mean anything: "
                     + scan);
@@ -135,14 +136,16 @@ class ProcessMemoryTest {
         }
     }
 
-    private static long awaitReady(Process child) throws IOException {
-        BufferedReader output = new BufferedReader(new InputStreamReader(
-                child.getInputStream(), StandardCharsets.UTF_8));
+    private static long awaitReady(BufferedReader output) throws IOException {
         StringBuilder seen = new StringBuilder();
         String line;
         while ((line = output.readLine()) != null) {
             if (line.startsWith("READY ")) {
-                return Long.parseLong(line.substring(6).trim());
+                try {
+                    return Long.parseLong(line.substring(6).trim());
+                } catch (NumberFormatException e) {
+                    throw new AssertionError("the probe said no pid: " + line, e);
+                }
             }
             seen.append(line).append('\n');
         }

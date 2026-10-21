@@ -62,5 +62,6 @@ public class PacedPoolBenchmark extends PoolBenchmark {
                 hole.consume(result.getInt(1));
             }
         }
+        hole.consume(pace);                          // its setup is the pause
     }
 }

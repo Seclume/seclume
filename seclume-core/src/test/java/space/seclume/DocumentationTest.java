@@ -93,7 +93,7 @@ class DocumentationTest {
         Matcher count = Pattern.compile("\\| (\\d+) providers plus `none`")
                 .matcher(read(root.resolve("README.md")));
         assertTrue(count.find(), "the README's feature table no longer says how many providers");
-        assertEquals(kinds.size(), Integer.parseInt(count.group(1)),
+        assertEquals(String.valueOf(kinds.size()), count.group(1),
                 "the README counts the providers wrong: " + kinds);
 
         String providers = read(root.resolve("PROVIDERS.md"));

@@ -566,14 +566,14 @@ class SeclumeLettuceTopologyTest {
             if (first != '*') {
                 throw new IOException("expected '*', got " + (char) first);
             }
-            int count = Integer.parseInt(readLine(in));
+            int count = readCount(in);
             List<byte[]> args = new ArrayList<>(count);
             for (int i = 0; i < count; i++) {
                 int dollar = in.read();
                 if (dollar != '$') {
                     throw new IOException("expected '$', got " + (char) dollar);
                 }
-                int len = Integer.parseInt(readLine(in));
+                int len = readCount(in);
                 byte[] data = in.readNBytes(len);
                 if (data.length < len) {
                     throw new EOFException();
@@ -584,6 +584,15 @@ class SeclumeLettuceTopologyTest {
                 args.add(data);
             }
             return args;
+        }
+
+        private static int readCount(InputStream in) throws IOException {
+            String line = readLine(in);
+            try {
+                return Integer.parseInt(line);
+            } catch (NumberFormatException e) {
+                throw new IOException("not a length: " + line, e);
+            }
         }
 
         private static String readLine(InputStream in) throws IOException {

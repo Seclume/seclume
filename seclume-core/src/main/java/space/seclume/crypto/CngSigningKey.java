@@ -7,6 +7,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.math.BigInteger; // seclume-allow: a public key's numbers
 import java.security.AlgorithmParameters;
 import java.security.GeneralSecurityException;
@@ -95,7 +96,7 @@ public final class CngSigningKey implements PrivateSigningKey {
         IMPORT = importKey;
         EXPORT = exportKey;
         SIGN = sign;
-        FREE = free;
+        FREE = free == null ? null : MethodHandles.dropReturn(free);   // a failed free changes nothing
         PROVIDER = provider;
     }
 
@@ -468,7 +469,7 @@ public final class CngSigningKey implements PrivateSigningKey {
     public synchronized void close() {
         if (key != 0) {
             try {
-                int _ = (int) FREE.invokeExact(key);
+                FREE.invokeExact(key);
             } catch (Throwable ignored) {
                 // nothing else frees it
             }

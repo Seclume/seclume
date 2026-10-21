@@ -48,7 +48,7 @@ public final class Srv {
     private static final java.util.regex.Pattern TXT_VALUE = java.util.regex.Pattern.compile(
             "[A-Za-z0-9_.$-]{1,255}");
     private static final java.util.regex.Pattern PORT = java.util.regex.Pattern.compile(
-            "[1-9][0-9]{0,4}");
+            "[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]");
 
     private static final Set<String> TXT_OPTIONS = Set.of("authsource", "replicaset",
             "loadbalanced");
@@ -147,8 +147,7 @@ public final class Srv {
             // Only a host name and a port go into the URL: a target that
             // carried '/', '?', '@' or ',' would end in the domain and still
             // name another host, or options, once it is part of the URL.
-            if (!HOST_NAME.matcher(name).matches() || !PORT.matcher(port).matches()
-                    || Integer.parseInt(port) > 65_535) {
+            if (!HOST_NAME.matcher(name).matches() || !PORT.matcher(port).matches()) {
                 throw new MongoConfigurationException("the SRV record of " + host + " names "
                         + "'" + target + "', which is not a host name and port");
             }
