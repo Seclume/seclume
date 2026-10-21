@@ -97,6 +97,7 @@ Java 25, Spring Boot 4.x / Spring Framework 7.x. No runtime dependency beyond th
 
 OpenSSF best practices assessment:
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15186/badge)](https://www.bestpractices.dev/en/projects/15186)
+[![Maven Central](https://img.shields.io/maven-central/v/space.seclume/seclume-core)](https://central.sonatype.com/namespace/space.seclume)
 
 ---
 
@@ -123,6 +124,10 @@ seclume.datasources.main.secret-uri=file:/run/secrets/db-password
 
 That is the whole integration. Spring gets a pooled `DataSource`, and Spring Data, Hibernate
 and Flyway work on it as they would on any other.
+
+Releases are on **Maven Central** from 0.13.1 on: no repository entry and no token are needed.
+Every file is signed with the release key in [SECURITY.md](SECURITY.md#verifying-a-release).
+`seclume-bom` keeps the versions of all modules in step.
 
 Without Spring, the same thing as a URL:
 
