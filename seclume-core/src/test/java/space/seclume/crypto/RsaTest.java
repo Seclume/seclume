@@ -171,6 +171,54 @@ class RsaTest {
         }
     }
 
+    /**
+     * Leading zero bytes - the one DER puts in front of a modulus whose top
+     * bit is set, and any more - are not part of the key; one byte always
+     * stays, even of a number that is all zeros.
+     */
+    @Test
+    void leadingZeroBytesAreNotPartOfTheKey() {
+        RSAPublicKey jca = (RSAPublicKey) keyPair2048.getPublic();
+        byte[] modulus = jca.getModulus().toByteArray();          // 257 bytes: 0x00 first
+        assertEquals(257, modulus.length);
+        byte[] padded = new byte[modulus.length + 2];
+        System.arraycopy(modulus, 0, padded, 2, modulus.length);
+        try (Arena arena = Arena.ofConfined();
+             RsaPublicKey key = RsaPublicKey.of(Segments.bytes(arena, padded),
+                     Segments.bytes(arena, new byte[] {0, 0, 0, 1, 0, 1}))) {
+            assertEquals(256, key.modulusBytes());
+            assertEquals(3, key.exponentLength());
+            assertArrayEquals(new byte[] {1, 0, 1},
+                    key.exponentBytes().toArray(java.lang.foreign.ValueLayout.JAVA_BYTE));
+            assertEquals("RsaPublicKey[bits=2048]", key.toString());
+        }
+        try (Arena arena = Arena.ofConfined();
+             RsaPublicKey zeros = RsaPublicKey.of(Segments.bytes(arena, new byte[] {0, 0}),
+                     Segments.bytes(arena, new byte[] {0, 0}))) {
+            assertEquals(1, zeros.modulusBytes());
+            assertEquals(1, zeros.exponentLength());
+        }
+    }
+
+    /** A closed key is refused, its memory is gone, and closing twice is harmless. */
+    @Test
+    void aClosedKeyIsRefusedAndItsMemoryGone() {
+        try (Arena arena = Arena.ofConfined()) {
+            RsaPublicKey key = publicKey(arena, (RSAPublicKey) keyPair1024.getPublic());
+            MemorySegment words = key.modulusWords();
+            MemorySegment exponent = key.exponentBytes();
+            key.close();
+            key.close();
+            assertThrows(IllegalStateException.class, key::modulusBytes);
+            assertThrows(IllegalStateException.class, key::modulusWords);
+            assertThrows(IllegalStateException.class, key::exponentBytes);
+            assertThrows(IllegalStateException.class,
+                    () -> words.get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0));
+            assertThrows(IllegalStateException.class,
+                    () -> exponent.get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0));
+        }
+    }
+
     private static RsaPublicKey publicKey(Arena arena, RSAPublicKey key) {
         return RsaPublicKey.of(
                 Segments.bytes(arena, key.getModulus().toByteArray()),
