@@ -3,6 +3,8 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
 ## [0.13.1] - 2026-10-21
 
 - **Fixed: `seclume-heapcheck` shipped the TCK's fuzz harness** - its classes and the
