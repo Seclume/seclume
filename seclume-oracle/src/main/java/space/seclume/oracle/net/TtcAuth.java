@@ -183,8 +183,9 @@ public final class TtcAuth {
             if (count < 1 || count > maxCount || !looksLikeAName(in)) {
                 return null;
             }
-            List<TtcParameters.Pair> pairs = new ArrayList<>((int) count);
-            for (int i = 0; i < count; i++) {
+            int pairCount = (int) count;
+            List<TtcParameters.Pair> pairs = new ArrayList<>(pairCount);
+            for (int i = 0; i < pairCount; i++) {
                 pairs.add(TtcParameters.readPair(in));
             }
             return pairs;
