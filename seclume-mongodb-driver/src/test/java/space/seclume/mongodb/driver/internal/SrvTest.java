@@ -153,4 +153,11 @@ class SrvTest {
     void aPlainUrlIsLeftAlone() {
         assertEquals("mongodb://h:1/", Srv.expand("mongodb://h:1/", CLUSTER));
     }
+
+    @Test
+    void srvMaxHostsThatIsNoNumberIsAConfigurationError() {
+        MongoConfigurationException refused = assertThrows(MongoConfigurationException.class,
+                () -> Srv.expand("mongodb+srv://cluster0.example.com/?srvMaxHosts=two", CLUSTER));
+        assertTrue(refused.getMessage().contains("srvMaxHosts"), refused.getMessage());
+    }
 }

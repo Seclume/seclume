@@ -593,7 +593,12 @@ public final class MongoSession implements AutoCloseable {
                         }
                     }
                 } else if (key.equals("zlibcompressionlevel")) {
-                    level = Integer.parseInt(value.trim());
+                    try {
+                        level = Integer.parseInt(value.trim());
+                    } catch (NumberFormatException e) {
+                        throw new com.mongodb.MongoConfigurationException(
+                                "zlibCompressionLevel is not a number: " + value);
+                    }
                 }
             }
             return new Compression(List.copyOf(compressors), level);

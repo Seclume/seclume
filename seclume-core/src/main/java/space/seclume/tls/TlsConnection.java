@@ -177,6 +177,7 @@ public final class TlsConnection implements Transport {
      * see {@link Transport#bytesWaiting()}. Records are read exactly, header
      * then body, so nothing sits between the two.
      */
+    @Override
     public int bytesWaiting() {
         int opened = pendingLength;
         return opened > 0 ? opened : records.transport().bytesWaiting();

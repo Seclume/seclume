@@ -288,7 +288,7 @@ final class ScriptedMongoServer implements AutoCloseable {
             String name = readCString(buf);
             if ("payload".equals(name) && type == 0x05) {
                 int binLen = buf.getInt();
-                byte subtype = buf.get();
+                buf.get();                                  // the binary subtype
                 byte[] bytes = new byte[binLen];
                 buf.get(bytes);
                 return new String(bytes, StandardCharsets.UTF_8);

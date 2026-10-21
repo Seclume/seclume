@@ -60,14 +60,13 @@ class BsonCodecTest {
             writer.putDouble("ok", 1.0);
 
             // Write embedded array
-            long arrayStart = writer.currentPosition();
             // We write an array element manually to test array decoding
             // type 0x04, name "saslSupportedMechs", doc
             MemorySegment arraySeg = arena.allocate(256);
             BsonWriter arrayWriter = new BsonWriter(arraySeg, 0);
             arrayWriter.putString("0", "SCRAM-SHA-256");
             arrayWriter.putString("1", "SCRAM-SHA-1");
-            int arrayDocLen = arrayWriter.finish();
+            arrayWriter.finish();
 
             // Write into main doc
             BsonWriter mainWriter = new BsonWriter(seg, 0);

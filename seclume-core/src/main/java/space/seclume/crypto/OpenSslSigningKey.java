@@ -96,6 +96,7 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
     }
 
     /** {@code RSA}, {@code EC}, {@code RSA-PSS} ... - whether this key is of that type. */
+    @Override
     public boolean is(String type) {
         checkOpen();
         try (Arena arena = Arena.ofConfined()) {
@@ -108,6 +109,7 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
      * certificate carries and {@code X509EncodedKeySpec} reads. Public, and so
      * a {@code byte[]}.
      */
+    @Override
     public byte[] publicKey() {
         checkOpen();
         int length = (int) Native.invoke(Native.PUBLIC_KEY, key, NULL);
@@ -134,6 +136,7 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
      *
      * @return how many bytes of {@code signature} were written
      */
+    @Override
     public int sign(String digest, boolean pss, MemorySegment message, long length,
                     MemorySegment signature) {
         checkOpen();

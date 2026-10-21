@@ -177,13 +177,13 @@ class PoolStateMachineTest {
                         everRefused.add(e.getKey());
                     }
                 }
-                check(pool, held, trail, seed);
+                check(pool, held);
             }
             for (Connection handle : new ArrayList<>(held.keySet())) {
                 handle.close();
             }
             held.clear();
-            check(pool, held, trail, seed);
+            check(pool, held);
         } catch (AssertionError | Exception e) {
             throw new AssertionError("seed " + seed + ", pool of " + size + ", after: "
                     + String.join(", ", tail(trail)), e);
@@ -231,8 +231,7 @@ class PoolStateMachineTest {
         held.put(handle, physical);
     }
 
-    private static void check(SeclumePool pool, Map<Connection, ?> held, List<String> trail,
-                              long seed) {
+    private static void check(SeclumePool pool, Map<Connection, ?> held) {
         assertEquals(held.size(), pool.activeCount(), "activeCount is not the handles held");
     }
 

@@ -22,13 +22,15 @@ import space.seclume.tck.NoSecretInHeap;
 
 class ScriptedMongoServerTest {
 
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     @TempDir
     Path tempDir;
 
     @Test
     void successfulHandshakeAndPingAndHeapCheck() throws Exception {
         byte[] pw = new byte[24];
-        new SecureRandom().nextBytes(pw);
+        RANDOM.nextBytes(pw);
         for (int i = 0; i < pw.length; i++) {
             pw[i] = (byte) ('a' + (pw[i] & 0x7f) % 26);
         }

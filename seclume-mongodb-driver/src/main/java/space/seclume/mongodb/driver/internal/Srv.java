@@ -79,7 +79,13 @@ public final class Srv {
         String service = query.getOrDefault("srvservicename", "mongodb");
         List<String> hosts = new ArrayList<>(seeds(host, service, resolver));
         if (query.containsKey("srvmaxhosts")) {
-            int max = Integer.parseInt(query.get("srvmaxhosts"));
+            int max;
+            try {
+                max = Integer.parseInt(query.get("srvmaxhosts"));
+            } catch (NumberFormatException e) {
+                throw new MongoConfigurationException("srvMaxHosts is not a number: "
+                        + query.get("srvmaxhosts"));
+            }
             if (max > 0 && hosts.size() > max) {
                 Collections.shuffle(hosts);
                 hosts = hosts.subList(0, max);

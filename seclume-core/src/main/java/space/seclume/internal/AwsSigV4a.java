@@ -103,7 +103,8 @@ public final class AwsSigV4a {
             AwsSigV4.writeAscii(input, "AWS4A");
             MemorySegment.copy(secret, 0, input, 5, length);
             MemorySegment fixed = arena.allocate(4 + 64 + accessKeyId.length() * 3L + 6);
-            for (int counter = 1; counter <= 254; counter++) {
+            boolean derived = false;
+            for (int counter = 1; counter <= 254 && !derived; counter++) {
                 // 1 (the KDF's own counter, one block) || label || 0 || id || counter || 256
                 int at = 0;
                 fixed.set(ValueLayout.JAVA_INT_UNALIGNED.withOrder(java.nio.ByteOrder.BIG_ENDIAN),
@@ -120,12 +121,10 @@ public final class AwsSigV4a {
                     mac.update(fixed, 0, at);
                     mac.doFinal(candidate, 0);
                 }
-                if (!above(candidate)) {
-                    break;
-                }
-                if (counter == 254) {
-                    throw new IllegalStateException("no SigV4a key could be derived");
-                }
+                derived = !above(candidate);
+            }
+            if (!derived) {
+                throw new IllegalStateException("no SigV4a key could be derived");
             }
             addOne(candidate);
             MemorySegment.copy(PKCS8_HEAD, 0, der, ValueLayout.JAVA_BYTE, 0, PKCS8_HEAD.length);

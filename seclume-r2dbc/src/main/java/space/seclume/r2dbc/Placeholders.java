@@ -134,8 +134,7 @@ final class Placeholders {
             // $1, $2 ... by number, not by first appearance: bind(0) is $1
             // even where $2 is written first.
             found.entrySet().stream()
-                    .sorted((a, b) -> Integer.compare(Integer.parseInt(a.getKey().substring(1)),
-                            Integer.parseInt(b.getKey().substring(1))))
+                    .sorted((a, b) -> byNumber(a.getKey().substring(1), b.getKey().substring(1)))
                     .forEach(e -> positions.put(e.getKey(), toArray(e.getValue())));
         } else {
             found.forEach((k, v) -> positions.put(k, toArray(v)));
@@ -199,6 +198,13 @@ final class Placeholders {
             return close < 0 ? n : close + tag.length();
         }
         return i;
+    }
+
+    /** Two runs of digits by their value, however long: $99999999999 is no int. */
+    private static int byNumber(String a, String b) {
+        String x = a.replaceFirst("^0+(?=.)", "");
+        String y = b.replaceFirst("^0+(?=.)", "");
+        return x.length() != y.length() ? Integer.compare(x.length(), y.length()) : x.compareTo(y);
     }
 
     private static int digitsEnd(String sql, int from) {

@@ -240,21 +240,25 @@ class ReactiveCollection<TDocument> implements com.mongodb.reactivestreams.clien
     }
 
     @Override
+    @Deprecated
     public com.mongodb.reactivestreams.client.MapReducePublisher<TDocument> mapReduce(java.lang.String arg0, java.lang.String arg1) {
         return new MapReducePublisherImpl<>(sync.mapReduce(arg0, arg1));
     }
 
     @Override
+    @Deprecated
     public <TResult> com.mongodb.reactivestreams.client.MapReducePublisher<TResult> mapReduce(java.lang.String arg0, java.lang.String arg1, java.lang.Class<TResult> arg2) {
         return new MapReducePublisherImpl<>(sync.mapReduce(arg0, arg1, arg2));
     }
 
     @Override
+    @Deprecated
     public com.mongodb.reactivestreams.client.MapReducePublisher<TDocument> mapReduce(com.mongodb.reactivestreams.client.ClientSession arg0, java.lang.String arg1, java.lang.String arg2) {
         return new MapReducePublisherImpl<>(sync.mapReduce(Sessions.sync(arg0), arg1, arg2));
     }
 
     @Override
+    @Deprecated
     public <TResult> com.mongodb.reactivestreams.client.MapReducePublisher<TResult> mapReduce(com.mongodb.reactivestreams.client.ClientSession arg0, java.lang.String arg1, java.lang.String arg2, java.lang.Class<TResult> arg3) {
         return new MapReducePublisherImpl<>(sync.mapReduce(Sessions.sync(arg0), arg1, arg2, arg3));
     }

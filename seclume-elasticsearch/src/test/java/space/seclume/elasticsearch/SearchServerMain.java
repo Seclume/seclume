@@ -16,13 +16,15 @@ import java.util.Base64;
  */
 public final class SearchServerMain {
 
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     private SearchServerMain() {
     }
 
     public static void main(String[] args) throws Exception {
         TestPki pki = TestPki.load(Path.of(args[0]));
         byte[] random = new byte[30];
-        new SecureRandom().nextBytes(random);
+        RANDOM.nextBytes(random);
         String key = Base64.getEncoder().encodeToString(random);
         Files.writeString(Path.of(args[1]).resolve("es.key"), key);
         try (FakeHttpsServer server = new FakeHttpsServer(pki.serverContext())) {

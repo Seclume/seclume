@@ -48,11 +48,12 @@ class EndlessAnswerTest {
             throws IOException {
         ServerSocket listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
         Thread.ofVirtual().start(() -> {
-            try (Socket client = listener.accept()) {
+            try (Socket client = listener.accept();
+                 BufferedReader in = new BufferedReader(new InputStreamReader(
+                         client.getInputStream(), StandardCharsets.US_ASCII))) {
                 OutputStream out = client.getOutputStream();
                 out.write((greeting + "\r\n").getBytes(StandardCharsets.US_ASCII));
-                new BufferedReader(new InputStreamReader(client.getInputStream(),
-                        StandardCharsets.US_ASCII)).readLine();
+                in.readLine();
                 if (first != null) {
                     out.write((first + "\r\n").getBytes(StandardCharsets.US_ASCII));
                 }
