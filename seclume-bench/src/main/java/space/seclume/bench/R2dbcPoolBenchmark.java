@@ -77,7 +77,7 @@ public class R2dbcPoolBenchmark {
             factory = vendor;
         }
         // The first borrow outside the measurement.
-        Mono.usingWhen(factory.create(), c -> Mono.just(1), Connection::close).block(WAIT);
+        Mono.from(factory.create()).flatMap(c -> Mono.from(c.close())).block(WAIT);
     }
 
     @TearDown(Level.Trial)

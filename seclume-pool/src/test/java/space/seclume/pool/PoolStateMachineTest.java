@@ -121,6 +121,7 @@ class PoolStateMachineTest {
         List<String> trail = new ArrayList<>();
         Map<Connection, StubDataSource.StubConnection> held = new LinkedHashMap<>();
         Set<StubDataSource.StubConnection> everRefused = new HashSet<>();
+        List<Statement> leftOpen = new ArrayList<>();
         SeclumePool pool = new SeclumePool(source, settings);
         try {
             for (int step = 0; step < STEPS; step++) {
@@ -138,7 +139,7 @@ class PoolStateMachineTest {
                 } else if (action < 50 && !held.isEmpty()) {
                     Connection handle = pick(random, held);
                     try {
-                        handle.createStatement();     // and never closed
+                        leftOpen.add(handle.createStatement());     // and never closed
                         trail.add("leave a statement open " + id(held.get(handle)));
                     } catch (SQLException brokenAlready) {
                         trail.add("open failed " + id(held.get(handle)));
@@ -193,6 +194,10 @@ class PoolStateMachineTest {
         for (StubDataSource.StubConnection physical : source.handedOut()) {
             assertTrue(physical.closed.get(), "seed " + seed
                     + ": a connection outlived the pool");
+        }
+        for (Statement statement : leftOpen) {
+            assertTrue(statement.isClosed(), "seed " + seed
+                    + ": a statement left open outlived the pool");
         }
     }
 

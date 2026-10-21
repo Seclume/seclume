@@ -79,7 +79,13 @@ class TlsInteropTest {
                 continue;
             }
             String[] field = trimmed.split("\\s+", 4);
-            cases.add(new Case(field[0], Integer.parseInt(field[1]), field[2].equals("ok"),
+            int port;
+            try {
+                port = Integer.parseInt(field[1]);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("no port in " + CASES + ": " + line, e);
+            }
+            cases.add(new Case(field[0], port, field[2].equals("ok"),
                     field.length > 3 ? field[3] : ""));
         }
         return cases.stream();

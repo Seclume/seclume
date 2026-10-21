@@ -199,10 +199,7 @@ class LocalLoadBalancedTest {
             }
             orders.insertMany(documents);
             for (int round = 0; round < 10; round++) {
-                int all = 0;
-                for (Document ignored : orders.find().batchSize(5)) {
-                    all++;
-                }
+                int all = orders.find().batchSize(5).into(new ArrayList<>()).size();
                 assertEquals(50 + round, all);         // one committed per round before
                 try (MongoCursor<Document> early = orders.find().batchSize(5).iterator()) {
                     early.next();

@@ -7,6 +7,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -105,7 +106,7 @@ public final class LibsecretSecretProvider implements SecretProvider {
         VALUE_GET = valueGet;
         VALUE_UNREF = valueUnref;
         TABLE_NEW = tableNew;
-        TABLE_INSERT = tableInsert;
+        TABLE_INSERT = tableInsert == null ? null : MethodHandles.dropReturn(tableInsert);
         TABLE_UNREF = tableUnref;
         ERROR_FREE = errorFree;
         STR_HASH = strHash;
@@ -157,7 +158,7 @@ public final class LibsecretSecretProvider implements SecretProvider {
                     MemorySegment name = arena.allocateFrom(attribute.getKey());
                     schema.set(ValueLayout.ADDRESS, 16 + at * 16L, name);
                     schema.set(ValueLayout.JAVA_INT, 16 + at * 16L + 8, 0);   // a string
-                    int _ = (int) TABLE_INSERT.invokeExact(table, name,
+                    TABLE_INSERT.invokeExact(table, name,
                             arena.allocateFrom(attribute.getValue()));
                     at++;
                 }

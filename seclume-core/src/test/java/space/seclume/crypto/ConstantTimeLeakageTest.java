@@ -7,6 +7,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.Arrays;
 import java.util.Random;
+import java.util.SplittableRandom;
 import java.util.function.IntConsumer;
 
 import org.junit.jupiter.api.Assumptions;
@@ -200,7 +201,7 @@ class ConstantTimeLeakageTest {
 
     private static MemorySegment random(Arena arena, int length, long seed) {
         byte[] bytes = new byte[length];
-        new Random(seed).nextBytes(bytes);
+        new SplittableRandom(seed).nextBytes(bytes);
         return arena.allocateFrom(ValueLayout.JAVA_BYTE, bytes);
     }
 

@@ -56,8 +56,14 @@ class LocalReactiveTest {
         assumeTrue(password != null && caFile != null, "no MongoDB fixture files");
         for (String host : hosts.split(",")) {
             String[] part = host.split(":");
+            int port;
+            try {
+                port = Integer.parseInt(part[1]);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("not host:port: " + host, e);
+            }
             try (Socket probe = new Socket()) {
-                probe.connect(new InetSocketAddress(part[0], Integer.parseInt(part[1])), 2000);
+                probe.connect(new InetSocketAddress(part[0], port), 2000);
             } catch (IOException e) {
                 assumeTrue(false, "no MongoDB on " + host);
             }

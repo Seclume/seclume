@@ -131,6 +131,9 @@ final class StubDataSource implements DataSource {
                 case "getSchema" -> state.schema;
                 case "close" -> {
                     state.closed.set(true);
+                    for (StubStatement statement : state.statementsHandedOut) {
+                        statement.closed.set(true);       // as a driver closes them with it
+                    }
                     yield null;
                 }
                 case "isClosed" -> state.closed.get();
