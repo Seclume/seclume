@@ -164,6 +164,15 @@ semantic conventions for connection pools, so a dashboard built for those reads 
 Every instrument carries `db.client.connection.pool.name`. Like the starter's meters, nothing
 is measured until `start` is called: the stream is the application's decision.
 
+In a Spring Boot application the starter does both with one property, through the application's
+own `OpenTelemetry` bean, for every configured data source:
+
+```properties
+seclume.metrics.opentelemetry=true        # with seclume-opentelemetry and an OpenTelemetry bean
+seclume.metrics.query-threshold=10ms      # shared with the Micrometer meters
+seclume.metrics.query-fingerprints=100
+```
+
 ## Tracing
 
 **Tracing is the one thing that needed a hook.** A span belongs to the request that caused it,

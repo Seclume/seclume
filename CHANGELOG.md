@@ -10,6 +10,8 @@ All notable changes to seclume are recorded here. Versions follow
   names and attributes (histograms in seconds), and `SeclumePoolInstruments.observe` reads a
   pool under the semantic conventions for connection pools (`db.client.connection.*`). Depends
   on `opentelemetry-api` alone; nothing is measured until started.
+  In the Spring Boot starter, `seclume.metrics.opentelemetry=true` starts it through the
+  application's `OpenTelemetry` bean and observes every configured pool.
 
 ## [0.13.1] - 2026-10-21
 

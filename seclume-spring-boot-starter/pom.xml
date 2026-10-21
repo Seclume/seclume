@@ -388,6 +388,14 @@
       <version>${opentelemetry.version}</version>
       <optional>true</optional>
     </dependency>
+    <!-- OpenTelemetry metrics, optional as well: with seclume.metrics.opentelemetry=true
+         the events and every pool are measured through the application's SDK. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-opentelemetry</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
     <!-- Only so that javac can resolve the annotations on Spring's
          health classes; at runtime the Actuator brings them anyway. -->
     <dependency>
