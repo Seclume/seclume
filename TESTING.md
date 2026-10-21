@@ -427,9 +427,12 @@ commit; `seclume-tls-anvil` is the client it drives, one connection per trigger.
 
 It runs weekly, by hand, and on pull requests that touch `tls/` or `crypto/`, and takes the
 better part of an hour. The results are the job summary, a comment on the pull request, and an
-artifact. `tls-anvil/expected-results.json`, once committed from a reviewed run
-(`summarize.py --write-expected`), is the baseline: a test that passed there and fails later
-turns the run red.
+artifact. `tls-anvil/expected-results-default.json` and `-tls12.json`, one per offer, are the
+baseline: a test that passed there and fails later turns the run red, and so does a new test
+that fails. They were taken on 21.10.2026 from a run that six runs in a row had matched test
+for test (437 tests per offer, no result changing between runs), so a red run means a change
+and not noise. After a reviewed change of behaviour, `summarize.py --write-expected` writes
+the new one.
 
 One result is expected to fail and says nothing about the client:
 `Fragmentation.recordFragmentationSupported` (TLS 1.2 offer). It relies on the scanner's
@@ -824,6 +827,16 @@ P-521, RSA), signs with the converted key and verifies with the public key `ssh-
 and compares RSA byte for byte with `ssh-keygen -m PKCS8`. That last check is needed because
 the JDK signs correctly even with wrong CRT values: it checks the result and falls back. That
 brought the score to 90 %; most of the rest change nothing that can be observed.
+
+Where it stands (21.10.2026, Windows; Linux adds the OpenSSL paths): `tls` 82 % of 2206
+mutants killed, 91 % of those the tests reach; `crypto` 66 % and 88 %; `secret` 58 % and 76 %,
+most of the gap in cloud and keyring paths no local test reaches. The second round raised
+`NativePbkdf2` and `RsaPublicKey` from 39 % to 88 %. The PBKDF2 test had assumed the native
+path away when it answered no, so a broken one only made the test skip. It now has to be taken
+where OpenSSL or CNG offers it (CNG leaves SHA-384 and SHA-512 to the Java code on purpose).
+`EnvFileModelTest` checks the env-file reader against a model written with strings, over 3000
+random files, and `SecretWatchTest` checks that an unreadable source is logged once and its
+return once, not at every tick.
 
 **The native PBKDF2 against the own.** `NativePbkdf2Test` derives the same keys through
 OpenSSL or CNG and through seclume's own code, for SHA-1, SHA-256, SHA-384 and SHA-512, one

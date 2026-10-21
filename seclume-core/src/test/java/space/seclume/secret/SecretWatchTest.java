@@ -131,6 +131,59 @@ class SecretWatchTest {
         assertEquals(0, rotations.get());
     }
 
+    /**
+     * A source that cannot be read is reported once, not at every look, and
+     * once again when it can be read; a rotation taken up says so. The log is
+     * what an operator sees - a warning per tick would bury the rest.
+     */
+    @Test
+    void anUnreadableSourceIsReportedOnceAndItsReturnToo() throws Exception {
+        Path secret = directory.resolve("s");
+        Files.writeString(secret, "one");
+        java.util.logging.Logger jul = java.util.logging.Logger.getLogger(
+                SecretWatch.class.getName());
+        List<java.util.logging.LogRecord> records =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                records.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        java.util.logging.Level before = jul.getLevel();
+        jul.setLevel(java.util.logging.Level.ALL);
+        jul.addHandler(handler);
+        try (SecretWatch watch = SecretWatch.start("db", file(secret), Duration.ofHours(1),
+                () -> { })) {
+            Files.delete(secret);
+            assertFalse(watch.checkNow());
+            assertFalse(watch.checkNow());
+            assertFalse(watch.checkNow());
+            replace(secret, "one");
+            assertFalse(watch.checkNow(), "the same secret back is no rotation");
+            assertFalse(watch.checkNow());
+            replace(secret, "two");
+            assertTrue(watch.checkNow());
+        } finally {
+            jul.removeHandler(handler);
+            jul.setLevel(before);
+        }
+        List<String> seen = records.stream()
+                .map(r -> r.getLevel() + " " + r.getMessage()).toList();
+        assertEquals(3, seen.size(), seen.toString());
+        assertTrue(seen.get(0).startsWith("WARNING the secret for db cannot be read"), seen.get(0));
+        assertTrue(seen.get(1).startsWith("INFO the secret for db can be read again"), seen.get(1));
+        assertTrue(seen.get(2).startsWith("INFO the secret for db was rotated"), seen.get(2));
+    }
+
     @Test
     void anIntervalOfZeroIsRefused() throws Exception {
         Path secret = directory.resolve("s");
