@@ -6,7 +6,7 @@
   <parent>
     <groupId>space.seclume</groupId>
     <artifactId>seclume-parent</artifactId>
-    <version>0.13.0</version>
+    <version>0.14.0-SNAPSHOT</version>
   </parent>
   <artifactId>seclume-mongodb-spring-test</artifactId>
   <name>seclume MongoDB driver with Spring Data</name>
