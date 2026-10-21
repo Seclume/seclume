@@ -139,7 +139,7 @@ class PoolStateMachineTest {
                 } else if (action < 50 && !held.isEmpty()) {
                     Connection handle = pick(random, held);
                     try {
-                        leftOpen.add(handle.createStatement());     // and never closed
+                        leftOpen.add(leaveOpen(handle));
                         trail.add("leave a statement open " + id(held.get(handle)));
                     } catch (SQLException brokenAlready) {
                         trail.add("open failed " + id(held.get(handle)));
@@ -238,6 +238,15 @@ class PoolStateMachineTest {
 
     private static void check(SeclumePool pool, Map<Connection, ?> held) {
         assertEquals(held.size(), pool.activeCount(), "activeCount is not the handles held");
+    }
+
+    /**
+     * A statement the borrower never closes - the leak the pool has to clean
+     * up. Kept by the caller only to check, after the pool is closed, that it
+     * did not outlive it.
+     */
+    private static Statement leaveOpen(Connection handle) throws SQLException {
+        return handle.createStatement();
     }
 
     private static Connection pick(Random random, Map<Connection, ?> held) {
