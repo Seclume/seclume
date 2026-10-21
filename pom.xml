@@ -395,6 +395,44 @@
     </profile>
 
     <!--
+      Maven Central, through the Central Portal: `mvn -Prelease,central deploy`
+      from a worktree at the signed tag. The token is the `central` server in
+      ~/.m2/settings.xml. Nothing is published by the upload itself: the
+      portal validates the bundle and waits, and the release goes out with
+      "Publish" there - a version on Central can never be changed or removed.
+      The modules that skip deploy (benchmarks, proofs, test harnesses) are
+      left out here as well.
+    -->
+    <profile>
+      <id>central</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.11.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+              <waitUntil>validated</waitUntil>
+              <deploymentName>seclume ${project.version}</deploymentName>
+              <excludeArtifacts>
+                <artifact>seclume-bench</artifact>
+                <artifact>seclume-diff</artifact>
+                <artifact>seclume-jasperreports-proof</artifact>
+                <artifact>seclume-mongodb-spring-test</artifact>
+                <artifact>seclume-quarkus-native-it</artifact>
+                <artifact>seclume-spring-test</artifact>
+                <artifact>seclume-tls-anvil</artifact>
+              </excludeArtifacts>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!--
       What changed in the public API since the last release: `mvn -Papicheck
       verify` compares every module's jar with the released one (from the local
       repository) and writes target/japicmp/. Before 1.0 it reports and does not

@@ -66,6 +66,16 @@
                     <exclude>META-INF/*.RSA</exclude>
                   </excludes>
                 </filter>
+                <!-- The TCK's fuzz harness is for seclume's own tests: its
+                     scripted transport, registered as a service, has no
+                     place in a tool people run on their heap dumps. -->
+                <filter>
+                  <artifact>space.seclume:seclume-tck</artifact>
+                  <excludes>
+                    <exclude>space/seclume/tck/fuzz/**</exclude>
+                    <exclude>META-INF/services/space.seclume.internal.TransportProvider</exclude>
+                  </excludes>
+                </filter>
               </filters>
             </configuration>
           </execution>

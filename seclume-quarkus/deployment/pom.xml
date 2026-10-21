@@ -12,6 +12,10 @@
 
   <artifactId>seclume-quarkus-deployment</artifactId>
   <name>seclume Quarkus extension - deployment</name>
+  <description>
+    The build-time half of the seclume Quarkus extension: registers the
+    seclume drivers with Agroal and Quarkus' datasource configuration.
+  </description>
 
   <dependencies>
     <dependency>

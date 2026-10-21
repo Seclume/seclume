@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Fixed: `seclume-heapcheck` shipped the TCK's fuzz harness** - its classes and the
+  scripted transport registered as a `TransportProvider` service. Only a URL asking for
+  `transport=scripted` reached it, and without a script it refused, but test code has no
+  place in the tool. The shade plugin now leaves `space/seclume/tck/fuzz` and the service
+  entry out.
+- **Maven Central, prepared**: `-Prelease,central deploy` uploads the bundle to the Central
+  Portal, which validates it and waits for "Publish" there (`autoPublish=false`). The modules
+  that skip deploy are left out. `seclume-quarkus-deployment` got its description, the one
+  piece of required POM metadata that was missing.
+
 ## [0.13.0] - 2026-10-21
 
 - **Faster: a MongoDB cursor reads its documents once** (`OpMsg`, `Bsons`). The documents of
