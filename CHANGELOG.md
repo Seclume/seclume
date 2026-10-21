@@ -3,7 +3,7 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.13.0] - 2026-10-21
 
 - **Faster: a MongoDB cursor reads its documents once** (`OpMsg`, `Bsons`). The documents of
   `firstBatch` and `nextBatch` used to become a `BsonDocument` tree first and were then decoded
@@ -4199,6 +4199,7 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.13.0]: https://github.com/Seclume/seclume/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Seclume/seclume/releases/tag/v0.12.0
 [0.11.1]: https://github.com/Seclume/seclume/releases/tag/v0.11.1
 [0.11.0]: https://github.com/Seclume/seclume/releases/tag/v0.11.0
