@@ -166,6 +166,38 @@ public final class TtcAuth {
                 + "the answer was " + (end - start) + " bytes long");
     }
 
+    /**
+     * The pairs of a parameter message whose type byte is at {@code at}, or
+     * {@code null} when what is there does not read as one - the same
+     * signature {@link #readChallenge} looks for. For the answer to the second
+     * stage, which carries the server's proof.
+     */
+    static List<TtcParameters.Pair> parametersAt(WireBuffer in, int at, int maxCount) {
+        int keep = in.position();
+        try {
+            if (at + 1 >= in.limit() || in.getByte(at) != TtcMessage.TYPE_PARAMETER) {
+                return null;
+            }
+            in.position(at + 1);
+            long count = TtcParameters.number(in);
+            if (count < 1 || count > maxCount || !looksLikeAName(in)) {
+                return null;
+            }
+            int pairCount = (int) count;
+            List<TtcParameters.Pair> pairs = new ArrayList<>(pairCount);
+            for (int i = 0; i < pairCount; i++) {
+                pairs.add(TtcParameters.readPair(in));
+            }
+            return pairs;
+        } catch (RuntimeException | IOException misread) {
+            // A count that was not one runs off the end - this was not the
+            // parameter message.
+            return null;
+        } finally {
+            in.position(keep);
+        }
+    }
+
     /** Whether a parameter name follows at the current position. */
     private static boolean looksLikeAName(WireBuffer in) {
         int at = in.position();

@@ -182,15 +182,36 @@ class OracleLoginFuzzTest {
         return out.toByteArray();
     }
 
-    /** The answer to the second stage when the server agreed. */
-    private static byte[] sessionParameters() {
+    /**
+     * The answer to the second stage when the server agreed - but from a
+     * script, which cannot know the combo key, so without a proof
+     * ({@code AUTH_SVR_RESPONSE}) or with one made under a wrong key. Both are
+     * refused since 20.10.2026; a login that gets this far has run the whole
+     * derivation, which is what the sweep is after.
+     */
+    private static byte[] sessionParameters(boolean withProof) {
+        return sessionParameters(withProof, 0);
+    }
+
+    /**
+     * The same with {@code more} pairs about the session in front of the
+     * proof - a real server sends some thirty, and the first version of the
+     * check gave up on more than 32.
+     */
+    private static byte[] sessionParameters(boolean withProof, int more) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(TtcMessage.TYPE_PARAMETER);
         ByteArrayOutputStream pairs = new ByteArrayOutputStream();
         pair(pairs, "AUTH_VERSION_NO", "386138880", 0);
         pair(pairs, "AUTH_SESSION_ID", "42", 0);
         pair(pairs, "AUTH_SERIAL_NUM", "7", 0);
-        number(out, 3);
+        for (int i = 0; i < more; i++) {
+            pair(pairs, "AUTH_SC_FIELD_" + i, "4", 0);
+        }
+        if (withProof) {
+            pair(pairs, "AUTH_SVR_RESPONSE", hex(32, 0x5a), 0);
+        }
+        number(out, 3 + more + (withProof ? 1 : 0));
         out.writeBytes(pairs.toByteArray());
         return out.toByteArray();
     }
@@ -209,9 +230,15 @@ class OracleLoginFuzzTest {
 
     private static Map<String, byte[]> seeds(boolean large) {
         Map<String, byte[]> seeds = new LinkedHashMap<>();
-        seeds.put("logged in", join(
+        seeds.put("accepted without a proof", join(
                 data(challenge(32, VERIFIER_12C), large),
-                data(sessionParameters(), large)));
+                data(sessionParameters(false), large)));
+        seeds.put("accepted with a proof under the wrong key", join(
+                data(challenge(32, VERIFIER_12C), large),
+                data(sessionParameters(true), large)));
+        seeds.put("forty pairs, then a proof under the wrong key", join(
+                data(challenge(32, VERIFIER_12C), large),
+                data(sessionParameters(true, 40), large)));
         seeds.put("wrong password", join(
                 data(challenge(32, VERIFIER_12C), large),
                 data(refusal("ORA-01017: invalid username/password; logon denied"), large)));
@@ -228,7 +255,7 @@ class OracleLoginFuzzTest {
         seeds.put("a session key of a length nobody established",
                 data(challenge(24, VERIFIER_12C), large));
         seeds.put("the challenge and then silence", data(challenge(32, VERIFIER_12C), large));
-        seeds.put("no challenge at all", data(sessionParameters(), large));
+        seeds.put("no challenge at all", data(sessionParameters(false), large));
         return seeds;
     }
 
@@ -302,25 +329,38 @@ class OracleLoginFuzzTest {
     }
 
     /**
-     * The control: the unspoilt seeds have to reach the two ends they name.
+     * The control: the unspoilt seeds have to reach the ends they name.
      *
      * <p>Without it a mistake in the challenge - a pair the reader skips, a
      * length off by one - would make every case above fail identically at the
      * first packet, the password would never be touched, and the report would
-     * look exactly the same.
+     * look exactly the same. The scripted server cannot prove the password,
+     * so the furthest a seed gets is the server proof - which is the last
+     * step of the login, after every derivation, and so far enough.
      */
     @Test
-    void theHappyPathReallyLogsIn() throws Exception {
-        NsChannel channel = NsChannel.over(
-                HostileTransport.of(seeds(true).get("logged in")), NsPacket.VERSION_DESIRED);
-        try {
-            TtcAuth.Challenge answer = TtcFastAuth.open(channel, "seclume", USER);
-            assertTrue(answer.is12c(), "the seed does not offer the 12c verifier");
-            assertTrue(answer.sessionKey().length() == 64,
-                    "the seed's session key is " + answer.sessionKey().length() + " hex digits");
-            TtcLogin.phaseTwo(channel, USER, secret(), answer, CONNECT_STRING);
-        } finally {
-            channel.close();
+    void theHappyPathReachesTheServerProof() throws Exception {
+        for (String seed : new String[] {"accepted without a proof",
+                "accepted with a proof under the wrong key",
+                "forty pairs, then a proof under the wrong key"}) {
+            NsChannel channel = NsChannel.over(
+                    HostileTransport.of(seeds(true).get(seed)), NsPacket.VERSION_DESIRED);
+            try {
+                TtcAuth.Challenge answer = TtcFastAuth.open(channel, "seclume", USER);
+                assertTrue(answer.is12c(), "the seed does not offer the 12c verifier");
+                assertTrue(answer.sessionKey().length() == 64, "the seed's session key is "
+                        + answer.sessionKey().length() + " hex digits");
+                TtcLogin.phaseTwo(channel, USER, secret(), answer, CONNECT_STRING);
+                throw new AssertionError(seed + ": a server that never proved the password "
+                        + "was accepted");
+            } catch (SQLException expected) {
+                assertTrue("28000".equals(expected.getSQLState()),
+                        seed + ": a refusal has to be 28000, not " + expected.getSQLState());
+                assertTrue(expected.getMessage().contains("AUTH_SVR_RESPONSE"),
+                        seed + ": refused for another reason: " + expected.getMessage());
+            } finally {
+                channel.close();
+            }
         }
 
         NsChannel refused = NsChannel.over(

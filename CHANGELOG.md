@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Fixed: Oracle never checked the server's proof of the password.** The answer to O5LOGON's
+  second stage carries `AUTH_SVR_RESPONSE` - `SERVER_TO_CLIENT` encrypted under the combo key,
+  which only a server that knows the password can derive. Nothing looked at it, so whatever
+  answered the login with a parameter message was taken for the database. It is now required
+  and checked in constant time, with both verifiers; the combo key is kept, in a wiped scope,
+  for that one round trip.
+
 - **Fixed: an LDAP bind that failed could be sent again and hang** (`LdapSocket`). JNDI's
   buffered stream keeps a write that failed and flushes it again while cleaning up; a refused
   Kerberos bind went out a second time, JNDI's own reader could take its answer, and the

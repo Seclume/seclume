@@ -66,6 +66,8 @@ public final class TtcLogin {
      * refuse. Both were found by the login sweep, in the same run.
      */
     private static final int MOST_ITERATIONS = 1_000_000;
+    /** The most pairs the answer to the second stage may carry; Oracle sends about thirty. */
+    private static final int MOST_ANSWER_PAIRS = 1024;
     /** Oracle's identifier for AL32UTF8. */
     private static final String CHARSET = "873";
     /** How the session shows up in the server's own view of its clients. */
@@ -139,6 +141,20 @@ public final class TtcLogin {
         checkIterations("AUTH_PBKDF2_VGEN_COUNT", challenge.generationCount());
         checkIterations("AUTH_PBKDF2_SDER_COUNT", challenge.derivationCount());
 
+        // The combo key outlives the password by one round trip: the server's
+        // answer carries its proof, made with that key (checkServerProof).
+        try (SecretScope proofKey = SecretScope.allocate(O5Login12c.COMBO_KEY_LENGTH)) {
+            sendPhaseTwo12c(channel, user, secret, challenge, connectString, keyLength,
+                    proofKey.segment());
+            readAnswer(channel, proofKey.segment(), O5Login12c.COMBO_KEY_LENGTH);
+        }
+    }
+
+    /** The second stage with the 12c verifier, sent; its combo key copied to {@code proofKey}. */
+    private static void sendPhaseTwo12c(NsChannel channel, String user, SecretProvider secret,
+                                        TtcAuth.Challenge challenge, String connectString,
+                                        int keyLength, MemorySegment proofKey)
+            throws IOException {
         try (Arena arena = Arena.ofConfined();
              SecretScope password = SecretScope.fromProvider(secret)) {
             MemorySegment verifier = hexToBytes(arena, challenge.salt());
@@ -168,6 +184,8 @@ public final class TtcLogin {
                 O5Login12c.comboKey32(clientHalf, 0, serverHalf, 0,
                         cskSalt, 0, (int) cskSalt.byteSize(),
                         challenge.derivationCount(), comboKey, 0);
+                MemorySegment.copy(comboKey, 0, proofKey, 0,
+                        O5Login12c.COMBO_KEY_LENGTH);
 
                 WireBuffer out = channel.beginData();
                 putHeader(out, user, PAIR_COUNT);
@@ -194,7 +212,6 @@ public final class TtcLogin {
                 salt.fill((byte) 0);
             }
         }
-        readAnswer(channel);
     }
 
     /**
@@ -222,6 +239,18 @@ public final class TtcLogin {
             throw new IOException("the server sent an 11g session key of " + keyLength
                     + " bytes; the 11g verifier uses " + O5Login12c.SESSION_KEY_LENGTH);
         }
+        try (SecretScope proofKey = SecretScope.allocate(O5Login.KEY_LENGTH)) {
+            sendPhaseTwo11g(channel, user, secret, challenge, connectString, keyLength,
+                    proofKey.segment());
+            readAnswer(channel, proofKey.segment(), O5Login.KEY_LENGTH);
+        }
+    }
+
+    /** The second stage with the 11g verifier, sent; its combo key copied to {@code proofKey}. */
+    private static void sendPhaseTwo11g(NsChannel channel, String user, SecretProvider secret,
+                                        TtcAuth.Challenge challenge, String connectString,
+                                        int keyLength, MemorySegment proofKey)
+            throws IOException {
         try (Arena arena = Arena.ofConfined();
              SecretScope password = SecretScope.fromProvider(secret)) {
             MemorySegment verifier = hexToBytes(arena, challenge.salt());
@@ -242,6 +271,7 @@ public final class TtcLogin {
                 O5Login.encryptSessionKey(passwordHash, 0, clientHalf, 0,
                         keyLength, clientEncrypted, 0);
                 O5Login12c.comboKey(serverHalf, 0, clientHalf, 0, comboKey, 0);
+                MemorySegment.copy(comboKey, 0, proofKey, 0, O5Login.KEY_LENGTH);
 
                 WireBuffer out = channel.beginData();
                 putHeader(out, user, PAIR_COUNT - 1);
@@ -259,7 +289,6 @@ public final class TtcLogin {
                 salt.fill((byte) 0);
             }
         }
-        readAnswer(channel);
     }
 
     /** The pairs after the credential, the same for both verifiers. */
@@ -416,6 +445,15 @@ public final class TtcLogin {
      * session that may not exist.
      */
     private static void readAnswer(NsChannel channel) throws IOException, SQLException {
+        readAnswer(channel, null, 0);
+    }
+
+    /**
+     * The same, and with a combo key the server's answer has to carry its
+     * proof of the password - see {@link #checkServerProof}.
+     */
+    private static void readAnswer(NsChannel channel, MemorySegment comboKey, int keyLength)
+            throws IOException, SQLException {
         // A refused login arrives behind a marker handshake, like every other
         // failure in this protocol - see NsChannel.answerMarkers. Without this
         // the driver reported "the login failed" with SQLState 08001, which
@@ -437,10 +475,81 @@ public final class TtcLogin {
                         : "the server refused the login: " + said, "28000");
             }
             if (type == TtcMessage.TYPE_PARAMETER) {
+                if (comboKey == null) {
+                    return;
+                }
+                // The same message the login has always taken for the
+                // success, now read: the server's answer has some thirty
+                // pairs about the session, its proof among them. Not searched
+                // for further on - past this point an error byte could be any
+                // byte of a pair: the first version of this check searched on,
+                // and the Oracle job's logins came back "refused".
+                java.util.List<TtcParameters.Pair> pairs =
+                        TtcAuth.parametersAt(in, at, MOST_ANSWER_PAIRS);
+                if (pairs == null) {
+                    throw new IOException("the server's answer to the login could not be read, "
+                            + "so its proof of the password could not be checked");
+                }
+                checkServerProof(pairs, comboKey, keyLength);
                 return;
             }
         }
         throw new IOException("the server neither confirmed nor refused the login");
+    }
+
+    /**
+     * {@code AUTH_SVR_RESPONSE}: the server's proof that it knows the
+     * password, required before the login counts.
+     *
+     * <p>The client proves itself with {@code AUTH_PASSWORD}; this is the
+     * other direction, and until 20.10.2026 nothing looked at it. Whatever
+     * answered the second stage with a parameter message was taken for the
+     * database - it never needed the password - and the session that
+     * followed, statements and all, went to it. PostgreSQL's SCRAM has the
+     * same check in its final message, and it is enforced there.
+     */
+    private static void checkServerProof(java.util.List<TtcParameters.Pair> pairs,
+                                         MemorySegment comboKey, int keyLength)
+            throws SQLException {
+        String proof = null;
+        for (TtcParameters.Pair pair : pairs) {
+            if ("AUTH_SVR_RESPONSE".equals(pair.name())) {
+                proof = pair.value();
+            }
+        }
+        if (proof == null || proof.isEmpty()) {
+            throw new java.sql.SQLInvalidAuthorizationSpecException("the server accepted the "
+                    + "login without proving that it knows the password (no AUTH_SVR_RESPONSE) "
+                    + "- refused as a server that may not be the database", "28000");
+        }
+        boolean proved;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment bytes = hexOrNull(arena, proof);
+            proved = bytes != null && O5Login12c.serverProofMatches(comboKey, 0, keyLength,
+                    bytes, 0, (int) bytes.byteSize());
+        }
+        if (!proved) {
+            throw new java.sql.SQLInvalidAuthorizationSpecException("the server could not "
+                    + "prove that it knows the password (AUTH_SVR_RESPONSE does not match) - "
+                    + "refused as a server that may not be the database", "28000");
+        }
+    }
+
+    /** Hex text into bytes, or null for anything that is not even-length hex. */
+    private static MemorySegment hexOrNull(Arena arena, String hex) {
+        if (hex.length() % 2 != 0) {
+            return null;
+        }
+        MemorySegment out = arena.allocate(Math.max(1, hex.length() / 2));
+        for (int i = 0; i < hex.length() / 2; i++) {
+            int high = Character.digit(hex.charAt(i * 2), 16);
+            int low = Character.digit(hex.charAt(i * 2 + 1), 16);
+            if (high < 0 || low < 0) {
+                return null;
+            }
+            out.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, (byte) ((high << 4) | low));
+        }
+        return out.asSlice(0, hex.length() / 2);
     }
 
     /**
