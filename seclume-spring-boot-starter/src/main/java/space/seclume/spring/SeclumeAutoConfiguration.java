@@ -144,6 +144,38 @@ public class SeclumeAutoConfiguration {
         }
     }
 
+    /**
+     * OpenTelemetry metrics without Micrometer - with the API and
+     * {@code seclume-opentelemetry} on the class path, an {@code OpenTelemetry}
+     * bean to measure through, and {@code seclume.metrics.opentelemetry=true}.
+     * Off otherwise, for the same reason as the Micrometer events: it starts
+     * a recording stream.
+     */
+    @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = {"io.opentelemetry.api.OpenTelemetry",
+        "space.seclume.opentelemetry.SeclumeMetrics"})
+    static class OpenTelemetryMetricsConfiguration {
+
+        @Bean(destroyMethod = "close")
+        @ConditionalOnMissingBean(SeclumeOpenTelemetryMetrics.class)
+        @org.springframework.boot.autoconfigure.condition.ConditionalOnBean(
+                io.opentelemetry.api.OpenTelemetry.class)
+        @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+                name = "seclume.metrics.opentelemetry", havingValue = "true")
+        SeclumeOpenTelemetryMetrics seclumeOpenTelemetryMetrics(
+                io.opentelemetry.api.OpenTelemetry openTelemetry,
+                org.springframework.beans.factory.ObjectProvider<SeclumePool> pools,
+                Environment environment) {
+            java.time.Duration threshold = environment.getProperty(
+                    "seclume.metrics.query-threshold", java.time.Duration.class,
+                    java.time.Duration.ofMillis(10));
+            int bound = environment.getProperty(
+                    "seclume.metrics.query-fingerprints", Integer.class, 100);
+            return new SeclumeOpenTelemetryMetrics(openTelemetry, pools.stream().toList(),
+                    threshold, bound);
+        }
+    }
+
     /** The health check - only when the health API is on the class path. */
     @org.springframework.context.annotation.Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
