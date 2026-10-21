@@ -21,7 +21,7 @@ All notable changes to seclume are recorded here. Versions follow
   `firstBatch` and `nextBatch` used to become a `BsonDocument` tree first and were then decoded
   again into the application's type. Now they stay as bytes in the reply (a `RawBsonDocument`
   each, without a copy) and are decoded once. A find of 1000 documents: 1281 to 1079 µs, the
-  official driver 1039 µs (mtx, before and after in one session).
+  official driver 1039 µs (the benchmark host, before and after in one session).
 
 - **Fixed: Oracle never checked the server's proof of the password.** The answer to O5LOGON's
   second stage carries `AUTH_SVR_RESPONSE` - `SERVER_TO_CLIENT` encrypted under the combo key,

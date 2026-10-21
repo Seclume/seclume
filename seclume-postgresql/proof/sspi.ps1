@@ -13,7 +13,7 @@
 #   sspi.ps1 check    what is left: nothing, or it says what
 param(
     [Parameter(Mandatory)][ValidateSet('setup', 'run', 'teardown', 'check')][string]$Step,
-    [string]$Server = '192.168.88.156',
+    [string]$Server,
     [string]$Jars,
     [string]$PasswordFile,
     [string]$Proof = (Join-Path $PSScriptRoot 'KerberosProof.java'),
@@ -28,6 +28,7 @@ $Marker = '# seclume-sspi-proof'
 
 switch ($Step) {
     'setup' {
+        if (-not $Server) { throw 'setup needs -Server <host>: the host running sspi-server.sh' }
         New-Item -ItemType Directory -Force $State | Out-Null
         $original = [IO.File]::ReadAllBytes($HostsFile)
         [IO.File]::WriteAllBytes("$State\hosts.orig", $original)
