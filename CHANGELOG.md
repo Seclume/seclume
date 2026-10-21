@@ -3,6 +3,8 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
 ## [0.13.0] - 2026-10-21
 
 - **Faster: a MongoDB cursor reads its documents once** (`OpMsg`, `Bsons`). The documents of
