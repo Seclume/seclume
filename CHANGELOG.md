@@ -18,6 +18,20 @@ All notable changes to seclume are recorded here. Versions follow
   written, and the memory is freed once the writer lets go, as `close` already did.
 - **Fixed: a closed OpenSSL AES-GCM key** handed a NULL context to libcrypto and the JVM died
   with a SIGSEGV; it is refused with an `IllegalStateException`, as the Java version does.
+- **Fixed: a frozen connection could still write** (`TlsConnection`). `freeze` does not wait for
+  a reader blocked on the peer, and that read went on after it: a KeyUpdate asking for an answer,
+  a HelloRequest or a refused record made it send a record under the frozen write state - the
+  nonce the thawed connection's next record uses again. A frozen connection now sends nothing,
+  and a refusal after the freeze leaves the socket, which belongs to the continuation, alone.
+- **Fixed: thawing wrote into the blob it read** (`TlsMigration`): it zeroed the checksum field
+  in place and put it back, which failed on a read-only segment and raced with a second reader.
+  The checksum is the same value, so blobs from earlier builds still thaw.
+- **Fixed: MySQL took a public key nobody asked for.** A key arriving as `AuthMoreData` was used
+  to encrypt the password whatever the plugin and whether one had been requested, so
+  `allowPublicKeyRetrieval=false` guarded only the request; a man in the middle of an
+  unencrypted connection could send his own. It is refused unless the login asked for it.
+- **Fixed: `SeclumePool.adopt`** kept its permit when the connection could not report its state,
+  and the pool stayed one connection smaller for good.
 - **GHASH** reads its key H from the caller's native memory instead of copying it into heap
   fields that could not be wiped; **HKDF-Expand** wipes its last block on the way out of an
   exception too.

@@ -63,7 +63,12 @@ public final class TlsConnection implements Transport {
     private long pendingOffset;
     private int pendingLength;
     private volatile boolean closed;
-    private boolean frozen;
+    /**
+     * The state was handed on by {@link #freeze}. Volatile, because a read
+     * that began before the freeze goes on after it on another thread, and
+     * must see that nothing may be written from here any more.
+     */
+    private volatile boolean frozen;
 
     /**
      * Held for the length of a read and of a write. Reading and writing may
@@ -394,22 +399,29 @@ public final class TlsConnection implements Transport {
      * using it - but without waiting for that here: a reader that waited for
      * a writer could wait for as long as the writer's transport lets it,
      * where it used to return at once. Whoever lets go of the last lock frees
-     * it ({@link #releaseIfDue}).
+     * it ({@link #releaseIfDue}). A frozen connection, whose socket and write
+     * state are someone else's now, sends nothing and closes nothing but its
+     * own memory.
      */
     private void abort(int alert) {
+        boolean handedOn = frozen;
         closed = true;
         pendingLength = 0;
-        if (!copyOutstanding && writing.tryLock()) {
+        if (!handedOn && !copyOutstanding && writing.tryLock()) {
             try {
                 records.abort(alert);
             } finally {
                 writing.unlock();
             }
         }
-        try {
-            underlying.close();
-        } catch (RuntimeException ignored) {
-            // it is being closed because of the refusal; that one is the news
+        // A frozen connection's socket belongs to whoever continues it - as
+        // in close(), it is left alone and only this side's memory goes.
+        if (!handedOn) {
+            try {
+                underlying.close();
+            } catch (RuntimeException ignored) {
+                // it is being closed because of the refusal; that one is the news
+            }
         }
         releaseDue = true;
         releaseIfDue();
@@ -565,6 +577,16 @@ public final class TlsConnection implements Transport {
      * sends nothing.
      */
     private void checkNoCopyOutstanding() throws IOException {
+        // Frozen is the same and stronger: the copy is not "may be" but is
+        // being carried on. freeze() does not wait for a reader blocked on the
+        // peer, so a read that started before it can still get here - with a
+        // KeyUpdate to answer or a HelloRequest to decline - and anything it
+        // sent would repeat the nonce of the thawed connection's next record
+        // (found in review, 20.10.2026).
+        if (frozen) {
+            throw new IOException("this connection was frozen and its write state now belongs "
+                    + "to whoever thaws it - a record from here would reuse its nonce");
+        }
         if (copyOutstanding) {
             throw new IOException("a snapshot of this connection may still be taken "
                     + "up elsewhere, and a record written now would reuse the nonce the copy "

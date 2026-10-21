@@ -172,6 +172,43 @@ class TlsMigrationTest {
         }
     }
 
+    /**
+     * Thawing reads the blob and nothing else. It used to zero the checksum
+     * field in place and put it back, which failed on a read-only segment and
+     * could make a second thread reading the same blob see it as damaged.
+     */
+    @Test
+    void aReadOnlyBlobIsThawedWithoutBeingWrittenTo() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment blob = valid(arena);
+            byte[] before = blob.toArray(ValueLayout.JAVA_BYTE);
+            TlsMigration.Thawed thawed = TlsMigration.decode(blob.asReadOnly(), 0,
+                    (int) blob.byteSize());
+            thawed.reading().close();
+            thawed.writing().close();
+            assertArrayEquals(before, blob.toArray(ValueLayout.JAVA_BYTE));
+        }
+    }
+
+    /**
+     * The checksum is CRC-32 over the blob with its own field as zero - the
+     * format blobs written by earlier builds carry, which a session moved
+     * during a rolling upgrade still has to be thawed from.
+     */
+    @Test
+    void theChecksumIsTheCrcOfTheBlobWithItsOwnFieldZeroed() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment blob = valid(arena);
+            byte[] bytes = blob.toArray(ValueLayout.JAVA_BYTE);
+            int stored = ((bytes[12] & 0xff) << 24) | ((bytes[13] & 0xff) << 16)
+                    | ((bytes[14] & 0xff) << 8) | (bytes[15] & 0xff);
+            java.util.Arrays.fill(bytes, 12, 16, (byte) 0);
+            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+            crc.update(bytes);
+            assertEquals((int) crc.getValue(), stored);
+        }
+    }
+
     // ---- fixtures ---------------------------------------------------------
 
     private static MemorySegment valid(Arena arena) {

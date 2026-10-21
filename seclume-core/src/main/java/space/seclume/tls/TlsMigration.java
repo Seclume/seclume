@@ -250,20 +250,26 @@ final class TlsMigration {
 
     /**
      * Corruption, not tampering - see the class note. The checksum is
-     * computed with its own field zeroed, so that it does not depend on
-     * whatever happened to be there.
+     * computed with its own field counted as zero, so that it does not depend
+     * on whatever happened to be there.
+     *
+     * <p>Counted as zero, not written as zero: {@link #decode} must not write
+     * into the blob it is given. It used to zero the field and put it back,
+     * which failed on a read-only segment and raced with a second thread
+     * reading the same blob - for whom the checksum then did not match. The
+     * value is the same as before, so blobs written by earlier builds still
+     * thaw.
      */
     private static int checksum(MemorySegment data, long offset, int length) {
-        int saved = getInt(data, offset + CHECKSUM_AT);
-        putInt(data, offset + CHECKSUM_AT, 0);
-        try {
-            CRC32 crc = new CRC32();
-            crc.update(data.asSlice(offset, length).asByteBuffer());
-            return (int) crc.getValue();
-        } finally {
-            putInt(data, offset + CHECKSUM_AT, saved);
-        }
+        CRC32 crc = new CRC32();
+        crc.update(data.asSlice(offset, CHECKSUM_AT).asByteBuffer());
+        crc.update(CHECKSUM_FIELD_AS_ZERO);
+        crc.update(data.asSlice(offset + CHECKSUM_AT + 4, length - CHECKSUM_AT - 4L)
+                .asByteBuffer());
+        return (int) crc.getValue();
     }
+
+    private static final byte[] CHECKSUM_FIELD_AS_ZERO = new byte[4];
 
     private static void putInt(MemorySegment out, long at, int value) {
         out.set(ValueLayout.JAVA_BYTE, at, (byte) (value >>> 24));

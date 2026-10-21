@@ -863,11 +863,18 @@ public final class MySession implements AutoCloseable {
     }
 
     /**
+     * This login has asked the server for its public key and not yet used the
+     * answer - the one condition under which a key that arrives is taken.
+     */
+    private boolean publicKeyRequested;
+
+    /**
      * The second part of the login: everything the server still demands after
      * the first answer - plugin switch, full SHA-2 path, errors.
      */
     private void finishAuthentication(Settings settings, String plugin, MemorySegment scramble,
                                       Arena arena) throws SQLException {
+        publicKeyRequested = false;
         try {
             String currentPlugin = plugin;
             while (true) {
@@ -1098,7 +1105,23 @@ public final class MySession implements AutoCloseable {
             requestPublicKey(plugin);
             return plugin;
         }
-        // Everything else is the public key in PEM format.
+        // Everything else is the public key in PEM format - and only ever the
+        // answer to a request for it. Taken unasked, it let a man in the
+        // middle of an unencrypted connection have the password encrypted
+        // under his own key, past allowPublicKeyRetrieval=false, which guarded
+        // only the request (found in review, 20.10.2026). sha256_password's
+        // empty first answer stands for the request; it counts as one only
+        // where retrieval is allowed and the connection is not encrypted.
+        boolean asked = publicKeyRequested
+                || ("sha256_password".equals(plugin) && !channel.isEncrypted()
+                    && settings.allowPublicKeyRetrieval());
+        if (!asked) {
+            throw new java.sql.SQLInvalidAuthorizationSpecException(
+                    "the server sent a public key the driver did not ask for - it would have "
+                    + "encrypted the password under it. A server does not do that; something "
+                    + "between here and the server might. Nothing was sent.", "28000");
+        }
+        publicKeyRequested = false;
         int length = in.remaining();
         MemorySegment pem = in.slice(in.position(), length);
         RsaPublicKey key;
@@ -1139,6 +1162,7 @@ public final class MySession implements AutoCloseable {
     }
 
     private void requestPublicKey(String plugin) throws IOException {
+        publicKeyRequested = true;
         byte request = "sha256_password".equals(plugin)
                 ? 0x01 : CachingSha2Password.REQUEST_PUBLIC_KEY;
         WireBuffer out = channel.beginPacket();
