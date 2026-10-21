@@ -21,7 +21,8 @@ expose a vulnerability or sensitive data.
 ## Verifying a release
 
 From 0.11.0 on, every release tag and every published file (jar, sources,
-javadoc, POM and SBOM) is signed with this OpenPGP key:
+javadoc, POM and SBOM) is signed with this OpenPGP key - on Maven Central
+(from 0.13.1) and in GitHub Packages alike:
 
 ```
 seclume <dev@seclume.space>
