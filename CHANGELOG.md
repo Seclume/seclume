@@ -5,13 +5,23 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Fixed: `seclume-heapcheck` shipped the TCK's fuzz harness** - its classes and the
+  scripted transport registered as a `TransportProvider` service. Only a URL asking for
+  `transport=scripted` reached it, and without a script it refused, but test code has no
+  place in the tool. The shade plugin now leaves `space/seclume/tck/fuzz` and the service
+  entry out.
+- **Maven Central, prepared**: `-Prelease,central deploy` uploads the bundle to the Central
+  Portal, which validates it and waits for "Publish" there (`autoPublish=false`). The modules
+  that skip deploy are left out. `seclume-quarkus-deployment` got its description, the one
+  piece of required POM metadata that was missing.
+
 ## [0.13.0] - 2026-10-21
 
 - **Faster: a MongoDB cursor reads its documents once** (`OpMsg`, `Bsons`). The documents of
   `firstBatch` and `nextBatch` used to become a `BsonDocument` tree first and were then decoded
   again into the application's type. Now they stay as bytes in the reply (a `RawBsonDocument`
   each, without a copy) and are decoded once. A find of 1000 documents: 1281 to 1079 µs, the
-  official driver 1039 µs (mtx, before and after in one session).
+  official driver 1039 µs (the benchmark host, before and after in one session).
 
 - **Fixed: Oracle never checked the server's proof of the password.** The answer to O5LOGON's
   second stage carries `AUTH_SVR_RESPONSE` - `SERVER_TO_CLIENT` encrypted under the combo key,
