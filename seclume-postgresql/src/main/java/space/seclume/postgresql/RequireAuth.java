@@ -46,18 +46,18 @@ public final class RequireAuth {
             return ANY;
         }
         Set<String> methods = new LinkedHashSet<>();
-        Boolean negated = null;
-        for (String part : value.split(",", -1)) {
+        String[] parts = value.split(",", -1);
+        boolean negated = parts[0].strip().startsWith("!");     // the first says which kind
+        for (String part : parts) {
             String method = part.strip().toLowerCase(Locale.ROOT);
             boolean not = method.startsWith("!");
             if (not) {
                 method = method.substring(1).strip();
             }
-            if (negated != null && negated != not) {
+            if (not != negated) {
                 throw new IllegalArgumentException("requireAuth=" + value + " mixes methods "
                         + "and negated methods - it is all of one kind, as in libpq");
             }
-            negated = not;
             if (!METHODS.contains(method)) {
                 throw new IllegalArgumentException("requireAuth names '" + part.strip()
                         + "' - it knows password, md5, gss, sspi, scram-sha-256, oauth and none");

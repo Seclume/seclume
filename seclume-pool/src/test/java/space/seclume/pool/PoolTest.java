@@ -528,12 +528,19 @@ class PoolTest {
             assertEquals(8, pool.idleCount(), "the connections did not come back");
 
             // After that nothing happens any more - the pool has to give back.
+            // Waited for as total and idle together, and checked as seen: the
+            // housekeeper may be validating one of the two at any instant
+            // (idle=1, total=2 in a CI run), which is no shrinking too far.
             long deadline = System.currentTimeMillis() + 5000;
-            while (pool.idleCount() > 2 && System.currentTimeMillis() < deadline) {
+            int total;
+            int idle;
+            do {
                 Thread.sleep(50);
-            }
-            assertEquals(2, pool.idleCount(), "the pool did not shrink back to minimumIdle");
-            assertEquals(2, pool.totalCount());
+                total = pool.totalCount();
+                idle = pool.idleCount();
+            } while ((total != 2 || idle != 2) && System.currentTimeMillis() < deadline);
+            assertEquals(2, idle, "the pool did not shrink back to minimumIdle");
+            assertEquals(2, total);
             assertTrue(pool.statistics().retired() >= 6,
                     "the surplus connections were not closed: " + pool.statistics());
 
