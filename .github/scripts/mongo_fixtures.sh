@@ -11,6 +11,10 @@
 set -euo pipefail
 work=$(mkdir -p "${1:?usage: mongo_fixtures.sh <work directory>}" && cd "$1" && pwd)
 image=docker.io/library/mongo:8.0
+# The image hands rseq to tcmalloc (glibc.pthread.rseq=0). On kernels 6.19 to
+# 7.0.13 that crashes, so mongod refuses to start there (SERVER-121912); with
+# glibc keeping rseq, tcmalloc does without it and mongod starts.
+rseq=(-e GLIBC_TUNABLES=glibc.pthread.rseq=1)
 
 # One throwaway CA; the server certificate also authenticates the members to
 # each other, so it needs clientAuth as well as serverAuth.
@@ -53,12 +57,12 @@ cd - >/dev/null
 tls=(--tlsMode requireTLS --tlsCertificateKeyFile /certs/server.pem --tlsCAFile /certs/ca.pem
      --tlsAllowConnectionsWithoutCertificates --wiredTigerCacheSizeGB 0.25)
 
-docker run -d --name mongo --network host -v "$work":/certs:ro \
+docker run -d --name mongo --network host -v "$work":/certs:ro "${rseq[@]}" \
   -e MONGO_INITDB_ROOT_USERNAME=seclume_test -e MONGO_INITDB_ROOT_PASSWORD_FILE=/certs/pw \
   "$image" mongod --port 27017 "${tls[@]}" >/dev/null
 
 for i in 1 2 3; do
-  docker run -d --name mongo-rs$i --network host -v "$work":/certs:ro "$image" \
+  docker run -d --name mongo-rs$i --network host -v "$work":/certs:ro "${rseq[@]}" "$image" \
     mongod --replSet slm-rs --port $((27020 + i)) --bind_ip_all --keyFile /certs/keyfile \
       "${tls[@]}" --setParameter enableTestCommands=1 >/dev/null
 done
