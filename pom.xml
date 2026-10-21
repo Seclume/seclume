@@ -84,6 +84,7 @@
     <module>seclume-jwt</module>
     <module>seclume-rabbitmq</module>
     <module>seclume-nats</module>
+    <module>seclume-opentelemetry</module>
     <module>seclume-keys</module>
     <module>seclume-ssh</module>
     <module>seclume-aws</module>

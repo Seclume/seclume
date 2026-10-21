@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **OpenTelemetry metrics without Micrometer** (`seclume-opentelemetry`). `SeclumeMetrics.start`
+  turns the drivers' Flight Recorder events into OpenTelemetry instruments with the starter's
+  names and attributes (histograms in seconds), and `SeclumePoolInstruments.observe` reads a
+  pool under the semantic conventions for connection pools (`db.client.connection.*`). Depends
+  on `opentelemetry-api` alone; nothing is measured until started.
+
 ## [0.13.1] - 2026-10-21
 
 - **Fixed: `seclume-heapcheck` shipped the TCK's fuzz harness** - its classes and the
