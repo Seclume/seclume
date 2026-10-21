@@ -434,6 +434,85 @@ class WorkloadIdentityTest {
         assertEquals(openBefore, SecretScope.open());
     }
 
+    /**
+     * The pod's token goes over plain HTTP, so only to this machine or to
+     * AWS's link-local agent - never to an ordinary address, even when the
+     * configuration says so. The address is refused before a connection is
+     * tried: 192.0.2.10 is a documentation address nobody answers on, and the
+     * refusal comes long before a connect could time out.
+     */
+    @Test
+    @Timeout(10)
+    void theContainerTokenIsNeverSentToAnOrdinaryAddress(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path tokenFile = dir.resolve("container-token");
+        java.nio.file.Files.writeString(tokenFile, "eks-pod-identity-secret-token");
+        try (SecretProvider provider = SecretProviders.of(Map.of(
+                "provider", "rds-iam", "credentials", "container",
+                "container-uri", "http://192.0.2.10:8080/v1/credentials",
+                "container-token-file", tokenFile.toString(),
+                "region", "eu-central-1", "host", "db.example.com", "port", "5432",
+                "user", "app"))) {
+            long started = System.nanoTime();
+            RuntimeException refused = assertThrows(RuntimeException.class, () -> read(provider));
+            assertTrue(System.nanoTime() - started < 2_000_000_000L, "a connection was tried");
+            StringBuilder messages = new StringBuilder();
+            for (Throwable t = refused; t != null; t = t.getCause()) {
+                messages.append(t.getMessage()).append(" | ");
+            }
+            assertTrue(messages.toString().contains("refusing plain HTTP"), messages.toString());
+            assertFalse(messages.toString().contains("eks-pod-identity-secret-token"),
+                    "the token is in a message");
+        }
+    }
+
+    /** {@code containerUri} and {@code containerTokenFile} as well as the dashed spellings. */
+    @Test
+    void containerSettingsAreFoundInEitherSpelling(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path tokenFile = dir.resolve("container-token");
+        java.nio.file.Files.writeString(tokenFile, "eks-pod-identity-secret-token");
+        String credentialsJson = "{\"AccessKeyId\":\"ASIACAMELCASEEXAMPLE\","
+                + "\"SecretAccessKey\":\"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY\","
+                + "\"Token\":\"FwoGZXIvYXdzECamelCaseSessionToken\","
+                + "\"Expiration\":\"" + java.time.Instant.now().plusSeconds(3600) + "\"}";
+        try (Metadata endpoint = new Metadata(200, credentialsJson);
+             SecretProvider provider = SecretProviders.of(Map.of(
+                     "provider", "rds-iam", "credentials", "container",
+                     "containerUri", "http://127.0.0.1:" + endpoint.port() + "/v1/credentials",
+                     "containerTokenFile", tokenFile.toString(),
+                     "region", "eu-central-1", "host", "db.example.com", "port", "5432",
+                     "user", "app"))) {
+            assertTrue(read(provider).contains("ASIACAMELCASEEXAMPLE"));
+            assertTrue(endpoint.request.contains(
+                    "\r\nAuthorization: eks-pod-identity-secret-token\r\n"), endpoint.request);
+        }
+    }
+
+    /**
+     * A full container URI needs its token file - EKS Pod Identity always
+     * hands one out - while ECS's relative URI comes with none. Only where the
+     * environment does not supply either itself.
+     */
+    @Test
+    void aFullContainerUriNeedsATokenFileARelativeOneDoesNot() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                System.getenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE") == null,
+                "the environment supplies a container token file");
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> SecretProviders.of(Map.of(
+                        "provider", "rds-iam", "credentials", "container",
+                        "container-uri", "http://127.0.0.1:1/v1/credentials",
+                        "region", "eu-central-1", "host", "db.example.com", "port", "5432",
+                        "user", "app")).close());
+        assertTrue(missing.getMessage().contains("container-token-file"), missing.getMessage());
+        SecretProviders.of(Map.of(
+                "provider", "rds-iam", "credentials", "container",
+                "container-relative-uri", "v2/credentials/task",
+                "region", "eu-central-1", "host", "db.example.com", "port", "5432",
+                "user", "app")).close();
+    }
+
     private static String read(SecretProvider provider) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment target = arena.allocate(provider.maxSecretLength());
