@@ -71,4 +71,12 @@ class PlaceholdersTest {
         Placeholders.Parsed parsed = Placeholders.parse("select $1", Dialect.POSTGRESQL);
         assertThrows(IndexOutOfBoundsException.class, () -> parsed.nameOf(1));
     }
+
+    @Test
+    void numbersBeyondAnIntAreStillOrderedByValue() {
+        Placeholders.Parsed parsed = Placeholders.parse(
+                "select $99999999999, $10, $9, $010", Dialect.POSTGRESQL);
+        assertEquals(List.of("$9", "$10", "$010", "$99999999999"),
+                List.copyOf(parsed.positions().keySet()));
+    }
 }

@@ -13,6 +13,7 @@ import org.bson.BsonInt32;
 import org.bson.BsonString;
 import org.junit.jupiter.api.Test;
 
+import com.mongodb.MongoConfigurationException;
 import com.mongodb.MongoInternalException;
 
 /** OP_COMPRESSED with zlib, snappy and zstd: the round trip, and every way a reply is refused. */
@@ -162,5 +163,13 @@ class CompressionTest {
         MongoInternalException refused = assertThrows(MongoInternalException.class,
                 () -> OpMsg.decompress(message, MAX));
         assertTrue(refused.getMessage().contains(why), refused.getMessage());
+    }
+
+    @Test
+    void aLevelThatIsNoNumberIsAConfigurationError() {
+        MongoConfigurationException refused = assertThrows(MongoConfigurationException.class,
+                () -> MongoSession.Compression.of(
+                        "mongodb://h/?compressors=zlib&zlibCompressionLevel=high"));
+        assertTrue(refused.getMessage().contains("zlibCompressionLevel"), refused.getMessage());
     }
 }

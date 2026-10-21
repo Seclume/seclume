@@ -193,8 +193,8 @@ class AbortWhileWritingTest {
                 Socket server = new Socket(InetAddress.getLoopbackAddress(), serverPort);
                 Thread.ofPlatform().daemon().start(() -> pump(client, server));
                 Thread.ofPlatform().daemon().start(() -> {
-                    try (client; server) {
-                        DataInputStream in = new DataInputStream(server.getInputStream());
+                    try (client; server;
+                         DataInputStream in = new DataInputStream(server.getInputStream())) {
                         OutputStream out = client.getOutputStream();
                         byte[] header = new byte[5];
                         int encrypted = 0;
