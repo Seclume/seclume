@@ -48,7 +48,21 @@ public final class PgSession implements AutoCloseable {
                            TlsMode tls,
                            space.seclume.internal.jdbc.TlsStack tlsStack,
                            space.seclume.tls.ClientIdentity identity,
-                           boolean directTls) {
+                           boolean directTls, RequireAuth requireAuth) {
+
+        public Settings {
+            requireAuth = requireAuth == null ? RequireAuth.ANY : requireAuth;
+        }
+
+        /** Whatever login method the server asks for - what a URL without requireAuth means. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
+                        TlsMode tls, space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity, boolean directTls) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    hosts, resultLimit, tls, tlsStack, identity, directTls, RequireAuth.ANY);
+        }
 
         /** Asking for TLS first, as every server before PostgreSQL 17 needs. */
         public Settings(String host, int port, String database, String user,
@@ -126,7 +140,7 @@ public final class PgSession implements AutoCloseable {
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, hosts, resultLimit, tls, tlsStack,
-                    identity, directTls);
+                    identity, directTls, requireAuth);
         }
 
     }
@@ -605,6 +619,7 @@ public final class PgSession implements AutoCloseable {
             boolean scramStarted = false;
             boolean scramServerProved = false;
             boolean oauthStarted = false;
+            boolean asked = false;
             while (true) {
                 byte tag = channel.nextMessage();
                 WireBuffer in = channel.message();
@@ -632,6 +647,9 @@ public final class PgSession implements AutoCloseable {
                 switch (code) {
                     case PgProtocol.AUTH_OK -> {
                         channel.endMessage();
+                        if (!asked) {
+                            settings.requireAuth().check("none");
+                        }
                         // An OK is only as good as the exchange before it. A
                         // server that skips SCRAM's final message never proved
                         // it knows the password (and skips channel binding with
@@ -662,11 +680,15 @@ public final class PgSession implements AutoCloseable {
                         return;
                     }
                     case PgProtocol.AUTH_CLEARTEXT -> {
+                        settings.requireAuth().check("password");
+                        asked = true;
                         authenticationMethod = "password";
                         channel.endMessage();
                         sendPassword(secret.secret());
                     }
                     case PgProtocol.AUTH_MD5 -> {
+                        settings.requireAuth().check("md5");
+                        asked = true;
                         authenticationMethod = "md5";
                         MemorySegment salt = in.slice(in.position(), 4);
                         sendMd5(loginUser, secret.secret(), salt);
@@ -674,6 +696,9 @@ public final class PgSession implements AutoCloseable {
                     }
                     case PgProtocol.AUTH_SASL -> {
                         String mechanism = chooseMechanism(in, scram, settings);
+                        settings.requireAuth().check(OAUTHBEARER.equals(mechanism) ? "oauth"
+                                : "scram-sha-256");
+                        asked = true;
                         authenticationMethod = mechanism.toLowerCase(java.util.Locale.ROOT);
                         channel.endMessage();
                         if (OAUTHBEARER.equals(mechanism)) {
@@ -716,6 +741,8 @@ public final class PgSession implements AutoCloseable {
                         // Kerberos: the ticket is the operating system's, in its
                         // credential cache - nothing secret passes through here.
                         channel.endMessage();
+                        settings.requireAuth().check("gss");
+                        asked = true;
                         if (!space.seclume.internal.Gssapi.available()) {
                             throw new SQLException("this server asks for Kerberos (GSSAPI), "
                                     + "which seclume speaks through the system's GSSAPI library "
@@ -734,12 +761,16 @@ public final class PgSession implements AutoCloseable {
                         kerberos(gss, in.segment(), in.position(), channel.messageRemaining());
                         channel.endMessage();
                     }
-                    case PgProtocol.AUTH_SSPI, PgProtocol.AUTH_KERBEROS_V5 ->
-                            throw new SQLException(
+                    case PgProtocol.AUTH_SSPI, PgProtocol.AUTH_KERBEROS_V5 -> {
+                        if (code == PgProtocol.AUTH_SSPI) {
+                            settings.requireAuth().check("sspi");
+                        }
+                        throw new SQLException(
                                     "this server asks for " + (code == PgProtocol.AUTH_SSPI
                                     ? "SSPI" : "Kerberos V5 (the pre-GSSAPI kind)")
                                     + " authentication, which seclume does not speak - "
                                     + "GSSAPI ('gss' in pg_hba.conf) it does", "28000");
+                    }
                     default -> throw new SQLException(
                             "unknown authentication request " + code, "28000");
                 }

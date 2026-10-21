@@ -123,6 +123,12 @@ providers each have a page of their own: [TLS.md](TLS.md),
 - **MariaDB's logins by signature: `client_ed25519` and `parsec`.** The server stores only a
   public key, so a stolen `mysql.global_priv` does not let anyone log in. Nothing to set: the
   server switches the login, and the driver answers.
+
+- **Plugins a login may never use**, with `disabledAuthenticationPlugins` (Connector/J's
+  option): `disabledAuthenticationPlugins=mysql_native_password` keeps the single SHA-1 round
+  out of every login. When the server proposes a disabled plugin, the first answer goes out
+  under `caching_sha2_password` instead, and a server that switches back to the disabled one
+  is refused before anything is computed for it. A name the driver does not know is an error.
   - **`client_ed25519`** (MariaDB 10.1.22+): the server's 32 random bytes, signed with Ed25519
     under the key MariaDB expands from the password.
   - **`parsec`** (MariaDB 11.6+): the key's seed is derived with PBKDF2-SHA-512 from the password
@@ -210,6 +216,11 @@ providers each have a page of their own: [TLS.md](TLS.md),
 - **CockroachDB and YugabyteDB** run on the PostgreSQL driver, each with a password:
   CockroachDB over TLS with SCRAM-SHA-256, YugabyteDB with md5. The tests assert which method
   the server asked for, so neither can quietly stop asking.
+- **The login methods the server may ask for**, with `requireAuth` (libpq's `require_auth`,
+  under either name). `pg_hba.conf` picks the method; `requireAuth=scram-sha-256` refuses
+  every other one, `requireAuth=!md5,!password` refuses just those. A refused method is
+  refused before anything of the answer is sent, so a server - or anybody in the middle -
+  that asks for an md5 hash gets none. `none` stands for a server that asks for nothing.
 
 ## Writing, retrying, and not guessing
 

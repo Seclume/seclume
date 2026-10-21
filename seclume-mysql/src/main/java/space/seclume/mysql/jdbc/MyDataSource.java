@@ -43,6 +43,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
     private String applicationName = "seclume";
     private int connectTimeoutMillis = 10_000;
     private boolean allowPublicKeyRetrieval;
+    private java.util.Set<String> disabledAuthenticationPlugins = java.util.Set.of();
     private SecretProvider secret;
     private space.seclume.tls.ClientIdentity identity;
     private PrintWriter logWriter;
@@ -120,6 +121,22 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
      */
     public void setAllowPublicKeyRetrieval(boolean allow) {
         this.allowPublicKeyRetrieval = allow;
+    }
+
+    /**
+     * Connector/J's {@code disabledAuthenticationPlugins}: plugin names a login
+     * may never use, {@code mysql_native_password} above all.
+     */
+    public void setDisabledAuthenticationPlugins(String plugins) throws SQLException {
+        try {
+            this.disabledAuthenticationPlugins = MyUrl.disabledPlugins(plugins);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException(e.getMessage(), "08001", e);
+        }
+    }
+
+    public String getDisabledAuthenticationPlugins() {
+        return String.join(",", disabledAuthenticationPlugins);
     }
 
     /** The provider directly, when the application builds it itself. */
@@ -210,6 +227,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
         this.database = settings.database();
         this.applicationName = settings.applicationName();
         this.allowPublicKeyRetrieval = settings.allowPublicKeyRetrieval();
+        this.disabledAuthenticationPlugins = settings.disabledAuthenticationPlugins();
         this.tls = settings.tls();
     }
 
@@ -262,7 +280,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
                 provider, applicationName, connectTimeoutMillis, allowPublicKeyRetrieval,
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity());
+                resolvedIdentity(), true, disabledAuthenticationPlugins);
         return new MyConnection(space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> MySession.allowingLocalData(loadDataLocal,

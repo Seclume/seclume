@@ -83,7 +83,25 @@ public final class MySession implements AutoCloseable {
                            HostList hosts, ResultLimit resultLimit, TlsMode tls,
                            space.seclume.internal.jdbc.TlsStack tlsStack,
                            space.seclume.tls.ClientIdentity identity,
-                           boolean tinyInt1isBit) {
+                           boolean tinyInt1isBit,
+                           java.util.Set<String> disabledAuthenticationPlugins) {
+
+        public Settings {
+            disabledAuthenticationPlugins = disabledAuthenticationPlugins == null
+                    ? java.util.Set.of() : java.util.Set.copyOf(disabledAuthenticationPlugins);
+        }
+
+        /** Every plugin the driver speaks allowed - what a URL without the option means. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity, boolean tinyInt1isBit) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, tls, tlsStack, identity,
+                    tinyInt1isBit, java.util.Set.of());
+        }
 
         /**
          * With everything but the boolean mapping, which almost nobody sets.
@@ -171,7 +189,8 @@ public final class MySession implements AutoCloseable {
             // silently did nothing while every test stayed green.
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
-                    resultLimit, tls, tlsStack, identity, tinyInt1isBit);
+                    resultLimit, tls, tlsStack, identity, tinyInt1isBit,
+                    disabledAuthenticationPlugins);
         }
 
     }
@@ -576,7 +595,7 @@ public final class MySession implements AutoCloseable {
             // that answer, so anything later would be too late.
             clientCapabilities = negotiateTls(channel, settings, clientCapabilities, greeting);
 
-            String plugin = greeting.plugin();
+            String plugin = firstPlugin(settings, greeting.plugin());
             // From here on it is the login and nothing else - the greeting is
             // read and TLS is up. Timed apart because the three phases of an
             // open are slow for three different reasons; see
@@ -904,6 +923,7 @@ public final class MySession implements AutoCloseable {
                     case MyPackets.AUTH_SWITCH -> {
                         in.skip(1);
                         currentPlugin = in.readCString();
+                        refuseDisabled(settings, currentPlugin);
                         if (KERBEROS_PLUGIN.equals(currentPlugin)) {
                             String principal = in.readCString();
                             channel.endPacket();
@@ -1185,6 +1205,40 @@ public final class MySession implements AutoCloseable {
         }
         channel.end();
         channel.flush();
+    }
+
+    /** The plugins a login may never use, as Connector/J's option names them. */
+    public static final java.util.Set<String> PLUGINS = java.util.Set.of("mysql_native_password",
+            "caching_sha2_password", "sha256_password", "mysql_clear_password",
+            "auth_gssapi_client", "client_ed25519", "parsec");
+
+    /**
+     * The plugin the first answer is computed with. The server proposes one;
+     * when that one is disabled, the answer goes out under
+     * {@code caching_sha2_password} instead and nothing of the disabled one is
+     * computed - a server that insists switches back, and is refused there.
+     */
+    static String firstPlugin(Settings settings, String proposed) throws SQLException {
+        java.util.Set<String> disabled = settings.disabledAuthenticationPlugins();
+        if (!disabled.contains(proposed)) {
+            return proposed;
+        }
+        if (!disabled.contains("caching_sha2_password")) {
+            return "caching_sha2_password";
+        }
+        throw new java.sql.SQLInvalidAuthorizationSpecException("the server proposes " + proposed
+                + ", and it and caching_sha2_password are both in disabledAuthenticationPlugins; "
+                + "nothing was sent", "28000");
+    }
+
+    /** Refuses a switch to a disabled plugin - before anything is computed for it. */
+    private static void refuseDisabled(Settings settings, String plugin)
+            throws java.sql.SQLInvalidAuthorizationSpecException {
+        if (settings.disabledAuthenticationPlugins().contains(plugin)) {
+            throw new java.sql.SQLInvalidAuthorizationSpecException("the server switches the "
+                    + "login to " + plugin + ", which disabledAuthenticationPlugins excludes; "
+                    + "nothing was sent", "28000");
+        }
     }
 
     /** The answer to a plugin switch - the same computation, a new packet. */

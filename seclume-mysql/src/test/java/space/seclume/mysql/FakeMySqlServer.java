@@ -105,6 +105,30 @@ final class FakeMySqlServer implements AutoCloseable {
     }
 
     /**
+     * Take the first answer whatever plugin it names, then switch the login
+     * back to {@code mysql_native_password} - as a server does for an account
+     * that only has a native hash - and record what comes after.
+     */
+    FakeMySqlServer switchBackToNative() {
+        this.switchBack = true;
+        return this;
+    }
+
+    /** The plugin the client's first answer named, with switchBackToNative. */
+    String firstAnswerPlugin() {
+        return firstAnswerPlugin;
+    }
+
+    /** What the client sent after the switch back: null for nothing at all. */
+    byte[] answerToSwitchBack() {
+        return answerToSwitchBack;
+    }
+
+    private volatile boolean switchBack;
+    private volatile String firstAnswerPlugin;
+    private volatile byte[] answerToSwitchBack;
+
+    /**
      * Answer the login with a switch to {@code client_ed25519} or
      * {@code parsec}, and check the signature that comes back - with the
      * JDK: for {@code client_ed25519} against the public key MariaDB documents
@@ -260,6 +284,21 @@ final class FakeMySqlServer implements AutoCloseable {
              OutputStream out = socket.getOutputStream()) {
             sendHandshake(out);
             byte[] login = readPacket(in);
+            if (switchBack) {
+                firstAnswerPlugin = pluginOf(login);
+                ByteArrayOutputStream request = new ByteArrayOutputStream();
+                request.write(0xfe);                                // AuthSwitchRequest
+                request.writeBytes("mysql_native_password\0".getBytes(StandardCharsets.US_ASCII));
+                request.writeBytes(SCRAMBLE);
+                request.write(0);
+                writePacket(out, request.toByteArray(), 2);
+                try {
+                    answerToSwitchBack = readPacket(in);
+                } catch (IOException hungUp) {
+                    // the client refused and hung up, as it should
+                }
+                return;
+            }
             if (rejectLogin) {
                 // Checked first anyway: a driver that sends a wrong hash and
                 // is then told "wrong password" would pass the test for the
@@ -381,6 +420,29 @@ final class FakeMySqlServer implements AutoCloseable {
         payload.writeBytes("mysql_native_password".getBytes(StandardCharsets.US_ASCII));
         payload.write(0);
         writePacket(out, payload.toByteArray(), 0);
+    }
+
+    /** The plugin name at the end of a HandshakeResponse41. */
+    private static String pluginOf(byte[] packet) {
+        int capabilities = (packet[0] & 0xff) | (packet[1] & 0xff) << 8
+                | (packet[2] & 0xff) << 16 | (packet[3] & 0xff) << 24;
+        int at = 4 + 4 + 1 + 23;
+        while (packet[at] != 0) {
+            at++;                                               // the user
+        }
+        at++;
+        at += 1 + (packet[at] & 0xff);                          // the answer
+        if ((capabilities & MyCapabilities.CONNECT_WITH_DB) != 0) {
+            while (packet[at] != 0) {
+                at++;
+            }
+            at++;
+        }
+        int end = at;
+        while (packet[end] != 0) {
+            end++;
+        }
+        return new String(packet, at, end - at, StandardCharsets.US_ASCII);
     }
 
     /** Checks the login answer with the JCA - independently of the driver code. */

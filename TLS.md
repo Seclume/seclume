@@ -122,6 +122,20 @@ independent review. That is why it is not the default. It keeps the risky parts 
   hardware-accelerated. A platform without them falls back to a constant-time Java AES,
   which is much slower.
 
+**Key sizes.** The own stack's keys are fixed and none is below 128-bit security: key exchange
+on X25519, P-256 or P-384 (and the ML-KEM hybrid), records with AES-128-GCM or AES-256-GCM.
+The server's key is whatever its certificate carries, and that is the JDK's path validation to
+judge - so `jdk.certpath.disabledAlgorithms` applies to the own stack as it does to JSSE. Its
+defaults refuse RSA below 1024 bits; a security properties file with
+
+```
+jdk.certpath.disabledAlgorithms=<the JDK's list>, RSA keySize < 2048, EC keySize < 256
+```
+
+(`-Djava.security.properties=...`) switches smaller keys off completely. `KeyLengthPolicyTest`
+starts a JVM with such a policy and checks that a 1536-bit server key is refused and a
+2048-bit one accepted.
+
 Written here, in Java, are the handshake state machines, the HKDF key schedule and the TLS 1.2
 PRF, the record framing and the transcript. Everything a server can send before a key exists is fuzzed
 (`ServerHelloFuzzTest`).

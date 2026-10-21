@@ -78,7 +78,11 @@ final class SeclumeUrl {
                     // tlsNegotiation=direct (libpq's sslnegotiation=direct):
                     // PostgreSQL 17 and later, one round trip fewer per connect.
                     directTls(parsed.option("tlsNegotiation",
-                            parsed.option("sslnegotiation", "postgres"))));
+                            parsed.option("sslnegotiation", "postgres"))),
+                    // requireAuth (libpq's require_auth): the login methods the
+                    // server may ask for - md5 or the password itself refused.
+                    space.seclume.postgresql.RequireAuth.of(parsed.option("requireAuth",
+                            parsed.option("require_auth", null))));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }
