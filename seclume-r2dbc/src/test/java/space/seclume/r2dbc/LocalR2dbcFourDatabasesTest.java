@@ -50,7 +50,7 @@ class LocalR2dbcFourDatabasesTest {
             return name;
         }
 
-        ConnectionFactory factory() {
+        Path password() {
             Path password = null;
             for (Path candidate : List.of(Path.of(passwordFile), Path.of("..", passwordFile))) {
                 if (Files.exists(candidate)) {
@@ -58,6 +58,11 @@ class LocalR2dbcFourDatabasesTest {
                 }
             }
             Assumptions.assumeTrue(password != null, "no " + passwordFile);
+            return password;
+        }
+
+        ConnectionFactory factory() {
+            Path password = password();
             String host = TestHosts.database();
             try (Socket probe = new Socket()) {
                 probe.connect(new InetSocketAddress(host, port), 2000);
@@ -193,6 +198,27 @@ class LocalR2dbcFourDatabasesTest {
                 Connection::close).block(WAIT);
         assertEquals(0L, gone);
         run(factory, String.format(db.drop(), table));
+    }
+
+    /**
+     * Logged in, a statement run and its row read: the password is on the
+     * heap neither while the connection is open nor once it is closed and
+     * back in the pool.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void thePasswordIsNotOnTheHeap(Db db) throws Exception {
+        ConnectionFactory factory = db.factory();
+        Connection connection = Mono.from(factory.create()).block(WAIT);
+        try {
+            assertEquals(1L, count(connection, "select count(*) from "
+                    + (db.protocol().equals("oracle") ? "dual" : "(select 1 as one) t"))
+                    .block(WAIT));
+            space.seclume.tck.NoSecretInHeap.assertAbsent(db.password());
+        } finally {
+            Mono.from(connection.close()).block(WAIT);
+        }
+        space.seclume.tck.NoSecretInHeap.assertAbsent(db.password());
     }
 
     /** Two of a thousand rows, the rest never read - and the connection goes on. */
