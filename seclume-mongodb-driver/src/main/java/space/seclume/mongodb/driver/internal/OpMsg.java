@@ -13,6 +13,8 @@ import org.bson.BsonDocument;
 import org.bson.BSONException;
 import org.bson.BsonMaximumSizeExceededException;
 import org.bson.BsonString;
+import org.bson.BsonType;
+import org.bson.RawBsonDocument;
 import org.bson.codecs.BsonDocumentCodec;
 import org.bson.codecs.DecoderContext;
 import org.bson.codecs.EncoderContext;
@@ -436,7 +438,7 @@ public final class OpMsg {
         ByteBuffer slice = in.duplicate().position(at).limit(at + size).slice()
                 .order(ByteOrder.LITTLE_ENDIAN);
         try (BsonBinaryReader reader = new BsonBinaryReader(slice)) {
-            BsonDocument document = CODEC.decode(reader, DecoderContext.builder().build());
+            BsonDocument document = new ReplyReader(reader, slice).document(false);
             if (reader.getBsonInput().getPosition() != size) {
                 throw refused("a document of " + size + " bytes that ends after "
                         + reader.getBsonInput().getPosition());
@@ -449,6 +451,74 @@ public final class OpMsg {
                     + e.getMessage(), e);
         }
     }
+
+    /**
+     * A reply read into documents, except a cursor's batch: the documents in
+     * {@code cursor.firstBatch} and {@code cursor.nextBatch} stay their bytes,
+     * a {@link RawBsonDocument} each, and are decoded once - straight into
+     * what the application asked for - when the cursor hands them out. Read
+     * into documents here, they were read twice, and a find of many documents
+     * paid for it (24 % behind the official driver, which reads them once).
+     * {@link #checkBounds} has walked every length of them before.
+     */
+    private static final class ReplyReader {
+
+        private final BsonBinaryReader reader;
+        private final ByteBuffer bytes;
+
+        ReplyReader(BsonBinaryReader reader, ByteBuffer bytes) {
+            this.reader = reader;
+            this.bytes = bytes;
+        }
+
+        BsonDocument document(boolean cursor) {
+            BsonDocument document = new BsonDocument();
+            reader.readStartDocument();
+            while (reader.readBsonType() != BsonType.END_OF_DOCUMENT) {
+                String name = reader.readName();
+                BsonType type = reader.getCurrentBsonType();
+                if (cursor && type == BsonType.ARRAY
+                        && (name.equals("firstBatch") || name.equals("nextBatch"))) {
+                    document.put(name, batch());
+                } else if (type == BsonType.DOCUMENT) {
+                    document.put(name, document(!cursor && name.equals("cursor")));
+                } else {
+                    document.put(name, CODEC_VALUES.decode(reader, CONTEXT));
+                }
+            }
+            reader.readEndDocument();
+            return document;
+        }
+
+        private BsonArray batch() {
+            BsonArray batch = new BsonArray();
+            reader.readStartArray();
+            while (reader.readBsonType() != BsonType.END_OF_DOCUMENT) {   // skips an array's names
+                if (reader.getCurrentBsonType() != BsonType.DOCUMENT) {
+                    batch.add(CODEC_VALUES.decode(reader, CONTEXT));
+                    continue;
+                }
+                int start = reader.getBsonInput().getPosition();
+                reader.skipValue();
+                int size = reader.getBsonInput().getPosition() - start;
+                if (bytes.hasArray()) {
+                    // The reply's own array: no copy per document.
+                    batch.add(new RawBsonDocument(bytes.array(), bytes.arrayOffset() + start,
+                            size));
+                } else {
+                    byte[] document = new byte[size];
+                    bytes.get(start, document);
+                    batch.add(new RawBsonDocument(document));
+                }
+            }
+            reader.readEndArray();
+            return batch;
+        }
+    }
+
+    private static final org.bson.codecs.BsonValueCodec CODEC_VALUES =
+            new org.bson.codecs.BsonValueCodec();
+    private static final DecoderContext CONTEXT = DecoderContext.builder().build();
 
     /** Deeper than the server nests (100 levels); bounds the recursion here and in the codec. */
     private static final int MAX_DEPTH = 200;

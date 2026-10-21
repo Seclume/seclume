@@ -13,6 +13,7 @@ import org.bson.BsonInt64;
 import org.bson.BsonObjectId;
 import org.bson.BsonString;
 import org.bson.BsonValue;
+import org.bson.RawBsonDocument;
 import org.bson.codecs.Codec;
 import org.bson.codecs.CollectibleCodec;
 import org.bson.codecs.Decoder;
@@ -80,6 +81,10 @@ final class Bsons {
     static <T> T decode(BsonDocument document, Decoder<T> decoder) {
         if (document == null) {
             return null;
+        }
+        if (document instanceof RawBsonDocument raw) {
+            // A cursor's document as it came: read once, from its bytes.
+            return raw.decode(decoder);
         }
         return decoder.decode(new BsonDocumentReader(document), DECODING);
     }

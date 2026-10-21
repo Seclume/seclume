@@ -65,6 +65,34 @@ class OpMsgTest {
                 () -> OpMsg.encode(1, big, "db", null, null, 1000));
     }
 
+    /**
+     * A cursor's batch stays bytes, a RawBsonDocument per document, equal to
+     * what was sent; the rest of the reply - the cursor document itself, an
+     * array of the same name outside a cursor - is read as before and can be
+     * changed.
+     */
+    @Test
+    void aCursorsBatchStaysItsBytes() {
+        BsonDocument first = new BsonDocument("_id", new BsonInt32(1))
+                .append("nested", new BsonDocument("a", new BsonArray(List.of(new BsonInt32(2)))));
+        BsonDocument second = new BsonDocument("_id", new BsonInt32(2));
+        BsonDocument sent = new BsonDocument("cursor", new BsonDocument("id", new BsonInt32(0))
+                .append("ns", new BsonString("db.c"))
+                .append("firstBatch", new BsonArray(List.of(first, second))))
+                .append("firstBatch", new BsonArray(List.of(new BsonDocument("x", new BsonInt32(3)))))
+                .append("ok", new BsonInt32(1));
+        BsonDocument body = OpMsg.parse(reply(9, 0, body(sent)), 9);
+
+        assertEquals(sent, body);
+        BsonArray batch = body.getDocument("cursor").getArray("firstBatch");
+        assertTrue(batch.get(0) instanceof org.bson.RawBsonDocument, batch.get(0).getClass().getName());
+        assertTrue(batch.get(1) instanceof org.bson.RawBsonDocument);
+        assertEquals(first, batch.get(0));
+        assertTrue(!(body.getArray("firstBatch").get(0) instanceof org.bson.RawBsonDocument),
+                "an array named firstBatch outside the cursor");
+        body.getDocument("cursor").put("changed", new BsonInt32(1));   // still a plain document
+    }
+
     @Test
     void aPlainReplyIsItsBody() {
         BsonDocument body = OpMsg.parse(reply(9, 0, body(new BsonDocument("ok",
