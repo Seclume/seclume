@@ -538,9 +538,17 @@ class PoolTest {
                     "the surplus connections were not closed: " + pool.statistics());
 
             // And it stays stable at two - no oscillating between closing
-            // and refilling.
+            // and refilling. Asked of the counters, not of idleCount at one
+            // instant: the housekeeper may be validating one of the two right
+            // then (total=2, idle=1 in a CI run), which is no oscillation.
+            long createdBefore = pool.statistics().created();
+            long retiredBefore = pool.statistics().retired();
             Thread.sleep(700);
-            assertEquals(2, pool.idleCount(), "the pool oscillates: " + pool.statistics());
+            assertEquals(createdBefore, pool.statistics().created(),
+                    "the pool oscillates - it opened again: " + pool.statistics());
+            assertEquals(retiredBefore, pool.statistics().retired(),
+                    "the pool oscillates - it closed again: " + pool.statistics());
+            assertEquals(2, pool.totalCount(), "the pool oscillates: " + pool.statistics());
         }
     }
 
