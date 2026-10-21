@@ -81,6 +81,8 @@ final class ScriptedTlsServer implements Transport {
     private int alertReceived = -1;
     private boolean clientFinishedSeen;
     private final List<Integer> clientMessages = new ArrayList<>();
+    private final List<byte[]> clientKeyUpdates = new ArrayList<>();
+    private final java.io.ByteArrayOutputStream clientData = new java.io.ByteArrayOutputStream();
 
     /**
      * One record the server sends once the handshake is over, under its
@@ -148,6 +150,19 @@ final class ScriptedTlsServer implements Transport {
     /** The handshake message types the client sent after its Finished, in order. */
     List<Integer> clientMessagesAfterFinished() {
         return List.copyOf(clientMessages);
+    }
+
+    /** Each KeyUpdate the client sent, header and body, as it was in the record. */
+    List<byte[]> clientKeyUpdates() {
+        return List.copyOf(clientKeyUpdates);
+    }
+
+    /**
+     * The application data the client sent after its Finished, as far as it
+     * opened - under the key generation the client's KeyUpdates announced.
+     */
+    byte[] clientApplicationData() {
+        return clientData.toByteArray();
     }
 
     // ---- Transport --------------------------------------------------------
@@ -234,12 +249,18 @@ final class ScriptedTlsServer implements Transport {
             }
             if (result.contentType() == 21 && result.length() >= 2) {
                 alertReceived = out.get(ValueLayout.JAVA_BYTE, 1) & 0xff;
+            } else if (result.contentType() == 23 && clientFinishedSeen) {
+                clientData.writeBytes(out.asSlice(0, result.length()).toArray(ValueLayout.JAVA_BYTE));
             } else if (result.contentType() == 22 && result.length() >= 1) {
                 int type = out.get(ValueLayout.JAVA_BYTE, 0) & 0xff;
                 if (!clientFinishedSeen && type == Handshake.FINISHED) {
                     clientFinishedSeen = true;
                 } else if (clientFinishedSeen) {
                     clientMessages.add(type);
+                    if (type == 24) {
+                        clientKeyUpdates.add(out.asSlice(0, result.length())
+                                .toArray(ValueLayout.JAVA_BYTE));
+                    }
                     if (type == 24 && clientApplicationReader != null) {
                         RecordProtection next = clientApplicationReader.next();
                         clientApplicationReader.close();
