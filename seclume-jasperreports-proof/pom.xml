@@ -24,7 +24,7 @@
          the module must not be installed either. -->
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>
-    <jasperreports.version>7.0.8</jasperreports.version>
+    <jasperreports.version>7.1.0</jasperreports.version>
   </properties>
 
   <!-- JasperReports brings Jackson 2.18.8: CVE-2026-68497 (fixed in 2.18.10), CVE-2026-89407/-89425/
@@ -34,7 +34,7 @@
       <dependency>
         <groupId>com.fasterxml.jackson</groupId>
         <artifactId>jackson-bom</artifactId>
-        <version>2.18.11</version>
+        <version>2.18.12</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>

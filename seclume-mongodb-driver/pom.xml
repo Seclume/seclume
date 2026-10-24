@@ -21,8 +21,8 @@
 
   <properties>
     <mongodb.version>5.13.0</mongodb.version>
-    <opentelemetry-javaagent.version>2.31.1</opentelemetry-javaagent.version>
-    <aircompressor.version>3.12</aircompressor.version>
+    <opentelemetry-javaagent.version>2.32.0</opentelemetry-javaagent.version>
+    <aircompressor.version>3.13</aircompressor.version>
   </properties>
 
   <dependencies>

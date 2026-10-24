@@ -20,7 +20,7 @@
 
   <properties>
     <r2dbc.version>1.0.0.RELEASE</r2dbc.version>
-    <reactor.version>3.7.19</reactor.version>
+    <reactor.version>3.8.7</reactor.version>
   </properties>
 
   <dependencies>
