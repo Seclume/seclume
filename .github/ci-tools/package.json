@@ -6,6 +6,7 @@
     "azurite": "3.37.0"
   },
   "overrides": {
-    "uuid": "11.1.1"
+    "uuid": "11.1.1",
+    "@azure/msal-node": "7.1.1"
   }
 }
