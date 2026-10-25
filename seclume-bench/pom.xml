@@ -94,12 +94,12 @@
     <dependency>
       <groupId>com.mysql</groupId>
       <artifactId>mysql-connector-j</artifactId>
-      <version>26.7.0</version>
+      <version>26.10.0</version>
     </dependency>
     <dependency>
       <groupId>com.microsoft.sqlserver</groupId>
       <artifactId>mssql-jdbc</artifactId>
-      <version>13.6.0.jre11</version>
+      <version>13.6.1.jre11</version>
     </dependency>
     <dependency>
       <groupId>com.oracle.database.jdbc</groupId>
