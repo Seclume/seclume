@@ -80,7 +80,7 @@ class LocalVaultLoginTest {
         }
     }
 
-    private static SeclumeDataSource source(SecretProvider vault) {
+    private static SeclumeDataSource source(SecretProvider vault) throws SQLException {
         SeclumeDataSource source = new SeclumeDataSource();
         source.setUrl("jdbc:seclume:postgresql://" + host + ":5440/postgres?user=not-this-one"
                 + "&tls=verify-full&tlsRootCert=" + ca.toString().replace('\\', '/')

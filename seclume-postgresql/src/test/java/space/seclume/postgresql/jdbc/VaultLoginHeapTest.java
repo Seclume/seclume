@@ -1,4 +1,4 @@
-package space.seclume.secret;
+package space.seclume.postgresql.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -24,8 +24,9 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import space.seclume.secret.SecretProviders;
+import space.seclume.secret.VaultSecretProvider;
 import space.seclume.tck.NoSecretInHeap;
-import space.seclume.tls.TestCertificates;
 
 /**
  * The claim itself: after a JWT login to Vault, a database credential read
@@ -33,6 +34,9 @@ import space.seclume.tls.TestCertificates;
  * <b>none of the three secrets is on this JVM's heap</b> - not the JWT that
  * went into the login, not the client token that came back and went into
  * three requests, not the password.
+ *
+ * <p>Here rather than beside {@code VaultLogin} in seclume-core: the heap
+ * search is seclume-tck's, and the TCK is built on the core.
  *
  * <p>Vault is {@link FakeVaultLoginMain} in another JVM: a server in this one
  * would hold all three as strings and the search would find them there. With
@@ -45,12 +49,13 @@ class VaultLoginHeapTest {
     @Test
     @SuppressWarnings("try")
     void theJwtTheTokenAndThePasswordAreNotOnTheHeap() throws Exception {
-        Assumptions.assumeTrue(TestCertificates.available(), "no keytool in this JDK");
+        Assumptions.assumeTrue(Files.isExecutable(Path.of(System.getProperty("java.home"),
+                "bin", System.getProperty("os.name").startsWith("Windows") ? "keytool.exe"
+                        : "keytool")), "no keytool in this JDK");
         Path directory = Files.createTempDirectory("seclume-vault-login-proof");
         Process server = new ProcessBuilder(List.of(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "--enable-native-access=ALL-UNNAMED",
-                "--add-exports", "java.base/sun.security.tools.keytool=ALL-UNNAMED",
                 "-cp", System.getProperty("java.class.path"),
                 FakeVaultLoginMain.class.getName(),
                 directory.toString()))
