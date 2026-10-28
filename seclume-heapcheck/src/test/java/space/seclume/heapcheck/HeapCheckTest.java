@@ -111,6 +111,64 @@ class HeapCheckTest {
                 + AuditReport.quote(Empty.class.getName())), report);
     }
 
+    /**
+     * {@code --discover} on a real process: it holds credentials nobody named
+     * - a JWT, a private key, a connection string with its password, a Vault
+     * token in a {@code char[]} - and the tool finds each kind without being
+     * told what to look for, and says so without saying what they are.
+     */
+    @Test
+    void discoveryFindsWhatNobodyNamed(@TempDir Path directory) throws Exception {
+        Path json = directory.resolve("discover.json");
+        Path markdown = directory.resolve("discover.md");
+        Path unused = directory.resolve("unused");
+        Files.writeString(unused, "nothing", StandardCharsets.UTF_8);
+        withProbe(unused, Unnamed.class, pid -> assertEquals(1, HeapCheck.run(
+                new HeapCheck.Options(pid, null, List.of(), List.of(json, markdown), null,
+                        true, java.util.Set.of()))));
+        String report = Files.readString(json);
+        for (String detector : List.of("jwt", "private-key", "url-password", "vault-token")) {
+            assertTrue(report.contains("\"detector\": \"" + detector + "\""),
+                    detector + " was not discovered: " + report);
+        }
+        assertTrue(report.contains("\"encoding\": \"UTF-16BE\""),
+                "the char[] was not found as UTF-16BE: " + report);
+        assertTrue(report.contains("\"verdict\": \"NOT_FOUND\""), "no secret was named");
+        String md = Files.readString(markdown);
+        assertTrue(md.contains("## Found without being named"), md);
+        // The probe writes parts of what it made up next to the file it was given.
+        for (String value : Files.readAllLines(directory.resolve("unused.values"))) {
+            assertTrue(!report.contains(value) && !md.contains(value), "a report holds a value");
+        }
+    }
+
+    /**
+     * And a JVM that holds no credential: the detectors must not find one in
+     * what every JVM carries - the class library, its URLs, its key headers.
+     * A false alarm here would be one in every audit.
+     */
+    @Test
+    void discoveryFindsNothingInAPlainJvm(@TempDir Path directory) throws Exception {
+        Path json = directory.resolve("clean.json");
+        Path unused = directory.resolve("unused");
+        Files.writeString(unused, "nothing", StandardCharsets.UTF_8);
+        withProbe(unused, Empty.class, pid -> {
+            int exit = HeapCheck.run(new HeapCheck.Options(pid, null, List.of(), List.of(json),
+                    null, true, java.util.Set.of()));
+            assertEquals(0, exit, () -> Files.exists(json) ? read(json) : "no report");
+        });
+        assertTrue(Files.readString(json)
+                .contains("\"discovery\": {\n    \"verdict\": \"NOT_FOUND\""));
+    }
+
+    private static String read(Path file) {
+        try {
+            return Files.readString(file);
+        } catch (java.io.IOException e) {
+            return e.toString();
+        }
+    }
+
     interface Check {
         void with(String pid) throws Exception;
     }
@@ -195,6 +253,49 @@ class HeapCheckTest {
             System.in.read();
             // Touched once at the very end, so the field is live until here.
             if (password.isEmpty()) {
+                System.out.println("never");
+            }
+        }
+    }
+
+    /**
+     * A process that keeps credentials of four known shapes, made up at
+     * random when it starts - none of them in a file the check is given - and
+     * writes parts of them to {@code <file>.values} so the test can make sure
+     * no report repeats them.
+     */
+    public static final class Unnamed {
+
+        static String jwt;
+        static String pem;
+        static String url;
+        static char[] vaultToken;
+
+        public static void main(String[] arguments) throws Exception {
+            java.security.SecureRandom random = new java.security.SecureRandom();
+            java.util.Base64.Encoder url64 = java.util.Base64.getUrlEncoder().withoutPadding();
+            byte[] bytes = new byte[96];
+            random.nextBytes(bytes);
+            String payload = url64.encodeToString(bytes);
+            random.nextBytes(bytes);
+            String signature = url64.encodeToString(bytes);
+            jwt = "eyJhbGciOiJSUzI1NiJ9.eyJ" + payload + "." + signature;
+            random.nextBytes(bytes);
+            String key = java.util.Base64.getEncoder().encodeToString(bytes);
+            pem = "-----BEGIN PRIVATE KEY-----\n" + key + "\n-----END PRIVATE KEY-----\n";
+            random.nextBytes(bytes);
+            String password = url64.encodeToString(bytes).substring(0, 20);
+            url = "postgresql://app:" + password + "@db.internal:5432/app";
+            random.nextBytes(bytes);
+            String token = "hvs." + url64.encodeToString(bytes).substring(0, 48);
+            vaultToken = token.toCharArray();
+            java.nio.file.Files.write(Path.of(arguments[0] + ".values"), List.of( // seclume-allow: this probe leaks on purpose - see the class comment
+                    payload.substring(0, 24), key.substring(0, 24), password,
+                    token.substring(4, 28)));
+            System.out.println("ready");
+            System.out.flush();
+            System.in.read();
+            if (jwt.isEmpty() || pem.isEmpty() || url.isEmpty() || vaultToken.length == 0) {
                 System.out.println("never");
             }
         }

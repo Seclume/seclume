@@ -70,4 +70,51 @@ class CommandLineTest {
                         secret.toString()), 60);
         assertEquals(2, result.exitCode(), result.output());
     }
+
+    @Test
+    void theDetectorsCanBeListed() throws Exception {
+        ChildJvm.Result result = ChildJvm.run(HeapCheck.class, List.of("--list-detectors"), 60);
+        assertEquals(0, result.exitCode(), result.output());
+        for (String id : Discovery.ids()) {
+            assertTrue(result.output().contains(id), id + " missing: " + result.output());
+        }
+    }
+
+    /** --discover alone is a check; a detector that does not exist is a typo, not a filter. */
+    @Test
+    void discoverAloneRunsAndAnUnknownDetectorIsRefused(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path dump = dir.resolve("app.hprof");
+        java.nio.file.Files.writeString(dump, "\u0001\u0002 nothing like a credential \u0003");
+        ChildJvm.Result clean = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", dump.toString(), "--discover"), 60);
+        assertEquals(0, clean.exitCode(), clean.output());
+        assertTrue(clean.output().contains("DISCOVERED nothing"), clean.output());
+
+        // Made up here rather than written down: a token-shaped literal in the
+        // repository is what secret scanning is there to stop.
+        byte[] random = new byte[24];
+        new java.security.SecureRandom().nextBytes(random);
+        String body = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random);
+        java.nio.file.Files.writeString(dump, "\u0001 hvs." + body + " \u0002");
+        ChildJvm.Result found = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", dump.toString(), "--discover"), 60);
+        assertEquals(1, found.exitCode(), found.output());
+        assertTrue(found.output().contains("`vault-token`"), found.output());
+        assertTrue(!found.output().contains(body.substring(0, 16)),
+                "the value was printed: " + found.output());
+
+        ChildJvm.Result ignored = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", dump.toString(), "--discover", "--ignore", "vault-token"), 60);
+        assertEquals(0, ignored.exitCode(), ignored.output());
+
+        ChildJvm.Result typo = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", dump.toString(), "--discover", "--ignore", "vault-tokens"), 60);
+        assertEquals(2, typo.exitCode(), typo.output());
+        assertTrue(typo.output().contains("no such detector"), typo.output());
+
+        ChildJvm.Result withoutDiscover = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", dump.toString(), "--ignore", "jwt"), 60);
+        assertEquals(2, withoutDiscover.exitCode(), withoutDiscover.output());
+    }
 }

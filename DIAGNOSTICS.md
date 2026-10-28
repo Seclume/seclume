@@ -43,6 +43,39 @@ java --enable-native-access=ALL-UNNAMED -jar seclume-heapcheck.jar \
 python3 seclume-heapcheck/ci/compare.py previous.json heapcheck.json
 ```
 
+## Credentials nobody named: `--discover`
+
+```sh
+java --enable-native-access=ALL-UNNAMED -jar seclume-heapcheck.jar \
+  --dump app.hprof --discover --report discover.json --report discover.md
+java -jar seclume-heapcheck.jar --list-detectors
+```
+
+`--secret-file` answers whether *this* secret is in the heap. `--discover` answers what
+*else* is: it goes through every run of printable text in the dump - as single bytes and as
+UTF-16 in both byte orders, the way a `String`, a `byte[]` and a `char[]` lie in an HPROF
+file - and holds it against 17 credential shapes: private keys in PEM, signed JWTs, AWS,
+Vault/OpenBao, GitHub, GitLab, Slack, Stripe, Google, npm and AI-provider keys, Azure Storage
+keys and SAS signatures, passwords in URLs and URL parameters, and `Authorization` header
+values. It runs alone or together with named secrets.
+
+A report names the detector, numbers the distinct values it found (#1, #2 - meaningless
+outside that report), counts how often each occurs and gives the first positions. It never
+holds a value, a part of one or a hash. In JSON the result is a `discovery` object with its
+own `verdict`; the top-level `verdict` keeps meaning the named secrets, so `compare.py` and
+other readers of the existing format are unaffected (`compare.py` compares named secrets only
+and needs at least one). SARIF gets one rule per detector (`SECLUME-HEAP-DISCOVER-<ID>`) and
+one result per distinct value. Exit code 1 when anything is found, named or discovered.
+
+What it does not do: a credential without a recognisable shape - a plain password, a key
+without a prefix - looks like any other string; name it with `--secret-file`. A match has the
+shape of a credential and can still be a test key, an expired token or an example a library
+carries; templates (`${...}`), masks (`****`) and the word `password` itself are left out.
+`--ignore <detector>` leaves a detector out when its findings are understood; an unknown id is
+an error, not a filter that filters nothing. It reads about 40 MB of dump a second.
+
+## Reports and baselines
+
 `.sarif` and `.sarif.json` select SARIF 2.1.0. Each leaked credential has one
 `SECLUME-HEAP-001` result with a logical location identifying its source file;
 heap addresses and duplicate encodings do not create extra alerts. SARIF does not

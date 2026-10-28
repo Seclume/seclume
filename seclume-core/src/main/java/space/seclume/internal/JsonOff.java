@@ -118,6 +118,30 @@ public final class JsonOff {
         return -value;
     }
 
+    /**
+     * The literal {@code true} or {@code false} at {@code path} - Vault's
+     * {@code renewable}, so far. Anything else, a quoted {@code "true"}
+     * among it, is refused rather than read as one or the other.
+     */
+    public static boolean bool(MemorySegment json, int length, String... path) {
+        Cursor cursor = new Cursor(json, length);
+        cursor.walk(path);
+        cursor.skipWhitespace();
+        String literal = cursor.hasMore() && cursor.peek() == 't' ? "true" : "false";
+        for (int i = 0; i < literal.length(); i++) {
+            if (!cursor.hasMore() || cursor.next() != literal.charAt(i)) {
+                throw new NotFound("the value at " + String.join(".", path)
+                        + " is not a boolean");
+            }
+        }
+        cursor.skipWhitespace();
+        if (cursor.hasMore() && cursor.peek() != ',' && cursor.peek() != '}'
+                && cursor.peek() != ']') {
+            throw new NotFound("the value at " + String.join(".", path) + " is not a boolean");
+        }
+        return literal.equals("true");
+    }
+
     /** Whether the path exists at all - for an optional field. */
     public static boolean has(MemorySegment json, int length, String... path) {
         try {

@@ -5,6 +5,27 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The Vault provider logs in by itself** (`VaultLogin`). `auth-method=kubernetes`, `jwt` or
+  `approle` replaces the token file a Vault Agent had to keep fresh: the pod's
+  service-account token, any JWT the mount trusts, or an AppRole secret id goes into the
+  login request from native memory, and the client token that comes back is held off the
+  heap, renewed halfway through its TTL, replaced by a new login when Vault will not renew it,
+  and revoked when the provider closes. Since Vault revokes a lease with the token that
+  created it, the token's end now bounds `credentialsValidUntil()`, and a credential of a
+  replaced token is fetched again instead of renewed. A 403 gets one new login before the
+  provider gives up. `VaultLoginHeapTest` proves the JWT, the token and the password stay
+  off the heap, with a negative control; the CI fixture logs in by AppRole and JWT against a
+  real Vault and, with the same fixture, against OpenBao. `JsonOff.bool` reads `renewable`.
+- **`seclume-heapcheck --discover`: credentials nobody named.** Every run of printable text in
+  a dump - single bytes and UTF-16 in both byte orders - is held against 17 credential
+  shapes (`--list-detectors`): PEM private keys, JWTs, AWS, Vault/OpenBao, GitHub, GitLab,
+  Slack, Stripe, Google, npm and AI-provider keys, Azure Storage keys and SAS signatures,
+  passwords in URLs, `Authorization` values. Reports say which kind, how many distinct values,
+  how often and where - never a value or a hash of one; JSON gets a `discovery` object with
+  its own verdict, so the existing `verdict` and `compare.py` are unchanged; SARIF one rule per
+  detector. `--ignore <detector>` leaves one out. Tested on synthetic dumps across window
+  edges and encodings, on a real process holding four kinds, and on a plain JVM, which must
+  come out clean.
 - **The login methods a server may ask for, restricted.** The method is the server's choice;
   until now the drivers answered whatever they were asked. `requireAuth` for PostgreSQL
   (libpq's `require_auth`, also accepted under that name) lists the methods allowed -

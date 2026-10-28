@@ -45,6 +45,30 @@ class JsonOffTest {
         }
     }
 
+    private static boolean readBool(String json, String... path) {
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+            MemorySegment document = arena.allocate(bytes.length);
+            MemorySegment.copy(bytes, 0, document, ValueLayout.JAVA_BYTE, 0, bytes.length);
+            return JsonOff.bool(document, bytes.length, path);
+        }
+    }
+
+    /** Vault's renewable: the two literals and nothing that merely looks like one. */
+    @Test
+    void aBooleanIsTheLiteralAndNothingElse() {
+        assertTrue(readBool("{\"auth\":{\"renewable\":true}}", "auth", "renewable"));
+        assertFalse(readBool("{\"auth\":{\"renewable\" : false ,\"x\":1}}", "auth", "renewable"));
+        assertTrue(readBool("{\"a\":[1],\"b\":true}", "b"));
+        for (String wrong : new String[] {"\"true\"", "1", "null", "tru", "truex", "falsey",
+                "True"}) {
+            assertThrows(JsonOff.NotFound.class, () -> readBool("{\"b\":" + wrong + "}", "b"),
+                    wrong);
+        }
+        assertThrows(JsonOff.NotFound.class, () -> readBool("{\"b\":tru", "b"));
+        assertThrows(JsonOff.NotFound.class, () -> readBool("{\"a\":true}", "b"));
+    }
+
     @Test
     void aNestedFieldIsFound() {
         assertEquals("hunter2", read(
