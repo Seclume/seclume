@@ -156,11 +156,12 @@ public final class SecretProviders {
             // HashiCorp Vault over HTTPS, with the answer parsed in native
             // memory. "token-" says where the Vault token comes from - it is
             // a secret too and gets a provider of its own, not a property.
+            // Or "auth-method" says how to log in for one - see vaultToken.
             case "vault" -> new VaultSecretProvider(
                     required(settings, "address", "vault"),
                     required(settings, "path", "vault"),
                     settings.getOrDefault("field", "password"),
-                    of(nested(settings, "token-")),
+                    vaultToken(settings),
                     value(settings, "namespace"),
                     !"false".equalsIgnoreCase(settings.getOrDefault("verify", "true")),
                     Integer.parseInt(settings.getOrDefault("timeout-millis", "10000")),
@@ -227,6 +228,74 @@ public final class SecretProviders {
                     + "vault, aws-secrets-manager, azure-key-vault, gcp-secret-manager, "
                     + "azure-managed-identity, gcp-metadata, none");
         };
+    }
+
+    /**
+     * Where the Vault provider's token comes from.
+     *
+     * <p>{@code auth-method=token}, the default: from the provider the
+     * {@code token-} settings name. {@code kubernetes}, {@code jwt} or
+     * {@code approle}: from a {@link VaultLogin}, at {@code auth-mount}
+     * (the method's name by default), as {@code auth-role}
+     * ({@code auth-role-id} for AppRole). The JWT comes from the
+     * {@code jwt-} settings - for Kubernetes the pod's service-account token
+     * when they are left out - and AppRole's secret id from the
+     * {@code secret-id-} settings.
+     */
+    private static SecretProvider vaultToken(Map<String, String> settings) {
+        String method = value(settings, "auth-method");
+        boolean tokenSettings = !nested(settings, "token-").isEmpty();
+        if (method == null || method.isBlank() || "token".equalsIgnoreCase(method.trim())) {
+            return of(nested(settings, "token-"));
+        }
+        VaultLogin.Method login = VaultLogin.Method.of(method);
+        if (tokenSettings) {
+            throw new IllegalArgumentException("the Vault provider has auth-method=" + method
+                    + " and token- settings: the token comes from the login, so the token- "
+                    + "settings would be ignored. Remove one of the two");
+        }
+        Map<String, String> credentialSettings;
+        String role;
+        switch (login) {
+            case APPROLE -> {
+                credentialSettings = nested(settings, "secret-id-");
+                if (credentialSettings.isEmpty()) {
+                    throw new IllegalArgumentException("an AppRole login needs the secret id's "
+                            + "source: secret-id-provider=file and secret-id-path=...");
+                }
+                role = required(settings, "auth-role-id", "vault with auth-method=approle");
+            }
+            case KUBERNETES -> {
+                credentialSettings = nested(settings, "jwt-");
+                if (credentialSettings.isEmpty()) {
+                    credentialSettings = Map.of("provider", "file",
+                            "path", VaultLogin.KUBERNETES_TOKEN);
+                }
+                role = required(settings, "auth-role", "vault with auth-method=kubernetes");
+            }
+            default -> {
+                credentialSettings = nested(settings, "jwt-");
+                if (credentialSettings.isEmpty()) {
+                    throw new IllegalArgumentException("a JWT login needs the token's source: "
+                            + "jwt-provider=file and jwt-path=...");
+                }
+                role = value(settings, "auth-role");
+            }
+        }
+        // A JWT is far longer than a password; the password bound would refuse it.
+        Map<String, String> sized = new java.util.LinkedHashMap<>(credentialSettings);
+        if (value(sized, "max-length") == null) {
+            sized.put("max-length", "16384");
+        }
+        return new VaultLogin(
+                required(settings, "address", "vault"),
+                login,
+                value(settings, "auth-mount"),
+                role,
+                of(sized),
+                value(settings, "namespace"),
+                !"false".equalsIgnoreCase(settings.getOrDefault("verify", "true")),
+                Integer.parseInt(settings.getOrDefault("timeout-millis", "10000")));
     }
 
     /**

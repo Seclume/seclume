@@ -377,13 +377,27 @@ jobs:
           -Dseclume.redis.host=127.0.0.1 -Dseclume.kafka.host=127.0.0.1
           -Dtest='space.seclume.redis.**,space.seclume.kafka.**' -Dsurefire.failIfNoSpecifiedTests=false
       # Vault's database engine: the driver logs in as Vault's user, renews the
-      # lease and revokes it - against a real Vault and PostgreSQL.
+      # lease and revokes it - against a real Vault and PostgreSQL. The Vault
+      # token from a file, and from an AppRole and a JWT login.
       - name: Vault with dynamic PostgreSQL credentials
         run: |
           bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/vault"
           ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
-            -Dtest=LocalVaultDynamicCredentialsTest -Dsurefire.failIfNoSpecifiedTests=false
+            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'Vault'
+      # The same against OpenBao, the open-source fork: the same API, so the
+      # same fixture and the same tests.
+      - name: OpenBao with dynamic PostgreSQL credentials
+        run: |
+          rm -f .local-vault-*
+          docker rm -f slm-vault slm-vault-pg || true
+          VAULT_IMAGE=quay.io/openbao/openbao:2 VAULT_CLI=bao \
+            bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/openbao"
+          ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
+            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest' \
+            -Dsurefire.failIfNoSpecifiedTests=false
+          python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'OpenBao'
       - name: Require executed Redis and Kafka tests
         if: always()
         run: python3 .github/scripts/require_mongo_tests.py 'seclume-redis,seclume-kafka' 'Redis and Kafka'

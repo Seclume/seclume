@@ -68,9 +68,12 @@ import space.seclume.internal.SecretFetch;
  * than at the end of its lease.
  *
  * <p>The Vault token itself is a secret and comes from another provider - a
- * file, an agent socket, the Kubernetes service-account path. It is written
- * into the request from native memory and never concatenated into a header
- * string.
+ * file a Vault Agent keeps fresh, an agent socket - or from a
+ * {@link VaultLogin}, which logs in with the workload's Kubernetes or JWT
+ * identity or an AppRole and holds the token it gets in native memory. It is
+ * written into the request from native memory and never concatenated into a
+ * header string. A token from a login takes its leases with it when it ends,
+ * so its end bounds {@link #credentialsValidUntil()} as well.
  */
 public final class VaultSecretProvider implements SecretProvider, ExpiringCredentials,
         DynamicUser {
@@ -106,6 +109,12 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     private String username;
     /** Set when the user was handed out: the password read next is that user's, unchanged. */
     private boolean userHandedOut;
+    /**
+     * With a {@link VaultLogin}: the login the credential in hand was fetched
+     * under. Vault revokes a lease together with the token that created it,
+     * so that token's end is the credential's end too.
+     */
+    private long tokenGeneration;
 
     /**
      * @param address   the Vault address, e.g. {@code https://vault:8200}
@@ -186,7 +195,32 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
 
     @Override
     public synchronized Instant credentialsValidUntil() {
-        return validUntil;
+        return effectiveUntil();
+    }
+
+    /** The token source when it is a login, whose tokens end and take their leases with them. */
+    private VaultLogin login() {
+        return token instanceof VaultLogin login ? login : null;
+    }
+
+    /**
+     * When the credential in hand stops working: the end of its lease, or
+     * the end of the token it was fetched with when that comes first. A
+     * static secret has neither - KV secrets do not belong to a token.
+     */
+    private Instant effectiveUntil() {
+        VaultLogin login = login();
+        if (validUntil == null || login == null) {
+            return validUntil;
+        }
+        Instant tokenEnd = login.validUntil(tokenGeneration);
+        return tokenEnd == null || tokenEnd.isAfter(validUntil) ? validUntil : tokenEnd;
+    }
+
+    /** Whether the login has a newer token than the one the credential in hand was fetched with. */
+    private boolean tokenReplaced() {
+        VaultLogin login = login();
+        return login != null && login.generation() != tokenGeneration;
     }
 
     /**
@@ -212,7 +246,16 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
      * by its role's {@code max_ttl} ends whatever is asked for.
      */
     private void renewOrRefresh() {
-        if (cached != null && leaseId != null && renew()) {
+        // A lease fetched under a token that has since been replaced is
+        // revoked with that token, however often it is renewed: fetch anew.
+        // Checked again afterwards, since the renewal itself may have needed
+        // a new login.
+        VaultLogin login = login();
+        if (login != null && cached != null && leaseId != null) {
+            login.ensureFresh();
+        }
+        if (cached != null && leaseId != null && !tokenReplaced() && renew()
+                && !tokenReplaced()) {
             return;
         }
         refresh();
@@ -263,15 +306,22 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
         if (validUntil == null) {
             return false;                       // no lease: a static secret does not go stale
         }
+        if (tokenReplaced()) {
+            return true;
+        }
+        Instant end = effectiveUntil();
+        if (!end.isAfter(fetchedAt)) {
+            return true;                        // its token is gone already
+        }
         Instant now = clock.instant();
-        Duration whole = Duration.between(fetchedAt, validUntil);
+        Duration whole = Duration.between(fetchedAt, end);
         Instant half = fetchedAt.plus(Duration.ofMillis((long) (whole.toMillis() * REFRESH_AT)));
         // Thirty seconds, or half a lease shorter than a minute: thirty
         // seconds before the end of a twenty second lease lie before it began,
         // and every connection fetched a new user.
         Duration margin = whole.dividedBy(2).compareTo(LATEST_REFRESH) < 0 ? whole.dividedBy(2)
                 : LATEST_REFRESH;
-        Instant latest = validUntil.minus(margin);
+        Instant latest = end.minus(margin);
         return now.isAfter(half) || now.isAfter(latest);
     }
 
@@ -280,6 +330,13 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
              SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE)) {
 
             SecretFetch.Response response = fetch(answer.segment());
+            VaultLogin login = login();
+            if (response.status() == 403 && login != null) {
+                // A token from a login can be revoked from outside or end
+                // early; one new login is worth trying before giving up.
+                login.forget(true);
+                response = fetch(answer.segment());
+            }
             if (!response.ok()) {
                 throw new SecretUnavailableException("Vault answered " + response.status()
                         + " for " + path + ". 403 means the token may not read this path, "
@@ -316,6 +373,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 // The database engine's user, beside the password; a KV secret
                 // nests its fields one level deeper and names no user here.
                 username = text(answer, "data", "username");
+                tokenGeneration = login == null ? 0 : login.generation();
                 if (previous != null) {
                     previous.close();           // the old credential is wiped, not dropped
                 }

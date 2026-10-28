@@ -14,7 +14,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat; // seclume-allow: the checksum of a dump, as hex - no secret
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import space.seclume.tck.HeapDumpScanner;
@@ -57,9 +59,20 @@ public final class HeapCheck {
     private HeapCheck() {
     }
 
-    /** What the command line asked for. */
+    /**
+     * What the command line asked for.
+     *
+     * @param discover whether to look for credentials of known shapes as well
+     *                 as - or instead of - the named ones
+     * @param ignore   detectors to leave out of the discovery
+     */
     record Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
-                   Path keep) {
+                   Path keep, boolean discover, Set<String> ignore) {
+
+        Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
+                Path keep) {
+            this(pid, dumpFile, secretFiles, reports, keep, false, Set.of());
+        }
     }
 
     public static void main(String[] arguments) {
@@ -68,8 +81,16 @@ public final class HeapCheck {
         Path keep = null;
         List<Path> secretFiles = new ArrayList<>();
         List<Path> reports = new ArrayList<>();
+        boolean discover = false;
+        Set<String> ignore = new LinkedHashSet<>();
         for (int i = 0; i < arguments.length; i++) {
             switch (arguments[i]) {
+                case "--discover" -> discover = true;
+                case "--ignore" -> ignore.add(next(arguments, ++i, "--ignore"));
+                case "--list-detectors" -> {
+                    System.out.print(Discovery.describe());
+                    System.exit(0);
+                }
                 case "--pid" -> pid = next(arguments, ++i, "--pid");
                 case "--dump" -> dumpFile = Path.of(next(arguments, ++i, "--dump"));
                 case "--secret-file" -> secretFiles.add(Path.of(next(arguments, ++i,
@@ -94,7 +115,21 @@ public final class HeapCheck {
                 }
             }
         }
-        if ((pid == null) == (dumpFile == null) || secretFiles.isEmpty()) {
+        if (!ignore.isEmpty() && !discover) {
+            System.err.println("--ignore leaves a detector out of --discover, which was not "
+                    + "asked for");
+            System.exit(2);
+            return;
+        }
+        for (String id : ignore) {
+            if (!Discovery.ids().contains(id)) {
+                System.err.println("--ignore " + id + ": no such detector - known are "
+                        + String.join(", ", Discovery.ids()));
+                System.exit(2);
+                return;
+            }
+        }
+        if ((pid == null) == (dumpFile == null) || (secretFiles.isEmpty() && !discover)) {
             if (pid != null && dumpFile != null) {
                 System.err.println("--pid and --dump both given - one of them, please: a "
                         + "process to dump, or a dump that exists");
@@ -109,7 +144,8 @@ public final class HeapCheck {
             System.exit(2);
             return;
         }
-        System.exit(run(new Options(pid, dumpFile, secretFiles, reports, keep)));
+        System.exit(run(new Options(pid, dumpFile, secretFiles, reports, keep, discover,
+                Set.copyOf(ignore))));
     }
 
     /** The one-process, one-secret check, as it always was. */
@@ -151,15 +187,18 @@ public final class HeapCheck {
             }
             long size = Files.size(dump);
             System.out.println("dump is " + size / (1024 * 1024) + " MB, searching for "
-                    + secrets.size() + " secret(s)");
+                    + secrets.size() + " secret(s)"
+                    + (options.discover() ? " and for credentials of known shapes" : ""));
             List<AuditReport.SecretResult> results = new ArrayList<>();
             for (Secret secret : secrets) {
                 results.add(new AuditReport.SecretResult(secret.source().toString(),
                         secret.binary(), secret.scan(dump)));
             }
+            Discovery.Result discovery = options.discover()
+                    ? Discovery.scan(dump, options.ignore()) : null;
             AuditReport report = new AuditReport(Instant.now(), host(),
                     target, new AuditReport.Dump(size, sha256(dump), !takesDump
-                            || options.keep() != null), results);
+                            || options.keep() != null), results, discovery);
             print(report);
             for (Path file : options.reports()) {
                 String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
@@ -201,13 +240,28 @@ public final class HeapCheck {
                 System.out.println("  " + finding);
             }
         }
+        if (report.discovery() != null) {
+            System.out.println();
+            if (report.discovery().clean()) {
+                System.out.println("DISCOVERED nothing - no credential of a known shape is in "
+                        + where + ".");
+            }
+            for (Discovery.Found found : report.discovery().found()) {
+                System.out.println("DISCOVERED - a " + found.detector().name() + " (`"
+                        + found.detector().id() + "`, value #" + found.value() + ") is in "
+                        + where + ", " + found.count() + " time(s):");
+                for (Discovery.Occurrence at : found.occurrences()) {
+                    System.out.println("  " + at);
+                }
+            }
+        }
         System.out.println();
         if (report.clean()) {
             System.out.println("That is a statement about this moment, not a guarantee: "
                     + "a secret can arrive in the heap later, and one that was there "
                     + "may have been overwritten already.");
         } else {
-            System.out.println("Every heap dump of this process carries the password - "
+            System.out.println("Every heap dump of this process carries these credentials - "
                     + "including the one that goes to a vendor's support.");
         }
     }
@@ -316,8 +370,10 @@ public final class HeapCheck {
     private static void usage() {
         System.err.println("""
                 usage: java -jar seclume-heapcheck.jar (--pid <pid> | --dump <file.hprof>)
-                                                       (--secret-file <path> | --secret-dir <dir>)...
+                                                       [--secret-file <path> | --secret-dir <dir>]...
+                                                       [--discover [--ignore <detector>]...]
                                                        [--report <file>]... [--keep-dump <path>]
+                       java -jar seclume-heapcheck.jar --list-detectors
 
                   --pid          the Java process to examine; its heap is dumped, searched
                                  and the dump deleted again
@@ -328,12 +384,19 @@ public final class HeapCheck {
                                  every process on this machine; may be given again
                   --secret-dir   every file in this directory is a secret - a mounted
                                  Kubernetes secret, say
+                  --discover     also look for credentials nobody named, by their shape:
+                                 private keys, JWTs, cloud and platform tokens, passwords
+                                 in URLs. Reports say which kind, how often and where -
+                                 never the value. At least one of --secret-file,
+                                 --secret-dir and --discover is needed
+                  --ignore       leave one detector out of --discover; may be given again
+                  --list-detectors  the detectors --discover uses, and their ids
                   --report       SARIF for .sarif or .sarif.json, JSON for .json,
                                  Markdown otherwise; may be given again. It names
                                  secrets by their files and holds none of them
                   --keep-dump    with --pid: write the dump here and keep it
 
-                exit code: 0 nothing found, 1 a secret is in the heap, 2 the check
-                could not run.""");
+                exit code: 0 nothing found, 1 a secret is in the heap - named or
+                discovered -, 2 the check could not run.""");
     }
 }

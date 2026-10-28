@@ -34,7 +34,7 @@ nested provider rather than a value.
 | `keychain` | the macOS Keychain, a generic password | no | — | one lookup |
 | `encrypted` | an AES-GCM ciphertext | no | **two**: `cipher-`, `key-` | one decrypt |
 | `rds-iam` | built, not stored — a signed RDS token | 15 min (AWS fixes it) | `key-` | four HMACs |
-| `vault` | HashiCorp Vault over HTTPS | **yes**, with its lease | `token-` | one HTTPS request |
+| `vault` | HashiCorp Vault or OpenBao over HTTPS | **yes**, with its lease | `token-`, or a login: `jwt-` / `secret-id-` | one HTTPS request |
 | `aws-secrets-manager` | AWS Secrets Manager | no | `key-`, optional `session-token-` | one HTTPS request |
 | `azure-key-vault` | Azure Key Vault | **yes**, when the secret has `exp` | `token-` | one HTTPS request |
 | `gcp-secret-manager` | Google Secret Manager | no | `token-` | one HTTPS request |
@@ -172,7 +172,55 @@ lease is what feeds the pool machinery above. The user comes with the password: 
 lease it is **renewed** (`sys/leases/renew`) - the same user, no new one in the database - for
 as long as Vault extends it; when the role's `max_ttl` caps the renewal, a new credential is
 fetched. **Closing the provider revokes the lease**, and Vault drops the user at once.
-Tested against a real Vault and PostgreSQL (`.github/scripts/vault_fixtures.sh`).
+Tested against a real Vault and PostgreSQL (`.github/scripts/vault_fixtures.sh`), and the
+same fixture against OpenBao.
+
+#### Logging in instead of a token file
+
+The Vault token is the secret that unlocks the others, and a file holding it is only as
+good as whatever keeps it fresh - usually a Vault Agent sidecar. `auth-method` lets the
+provider log in itself, with an identity the workload already has, and hold the token it
+gets in native memory:
+
+```properties
+# Kubernetes: the pod's service-account token against a role bound to it
+auth-method=kubernetes
+auth-role=app
+auth-mount=kubernetes                          # default: the method's name
+jwt-provider=file  jwt-path=/var/run/secrets/kubernetes.io/serviceaccount/token   # the default
+
+# JWT: any token the mount trusts - a projected token with its own audience, a
+# SPIFFE JWT-SVID, a CI system's OIDC token
+auth-method=jwt
+auth-role=app                                  # optional: the mount's default role
+jwt-provider=file  jwt-path=/var/run/secrets/tokens/vault
+
+# AppRole: the role id is an identifier, the secret id a secret
+auth-method=approle
+auth-role-id=8d4b5e2c-...
+secret-id-provider=file  secret-id-path=/run/secrets/vault-secret-id
+```
+
+`auth-method=token`, the default, is the token from `token-` as before; both at once are
+refused. The JWT and the secret id go into the login request from native memory; the answer
+is parsed off the heap and only `auth.client_token` is kept, locked and wiped when replaced.
+Halfway through the token's TTL it is renewed (`auth/token/renew-self`); when Vault will not
+renew it, or grants less than half a TTL more, the login is done again - with the JWT read
+anew, since the kubelet rotates it. Closing the provider revokes the lease first and then the
+token (`auth/token/revoke-self`). A request Vault refuses with 403 gets one new login before
+the provider gives up: a token revoked from outside is replaced, a path the role may not read
+still fails.
+
+**The token bounds the credential.** Vault revokes a lease together with the token that
+created it. So the provider reports the earlier of the two ends to the pool, renews both
+halfway through the shorter one, and a credential fetched under a token that has since been
+replaced is fetched again under the new one rather than renewed. Give the login role a token
+TTL at least as long as the database role's, and a `token_max_ttl` well above it; otherwise
+every new login also means a new database user.
+
+The heap half is proven by `VaultLoginHeapTest`: Vault in another JVM, a JWT login, a
+credential read, lease and token revoked - and neither the JWT, nor the token, nor the
+password in this JVM's heap, with a control that puts the token there on purpose and is found.
 
 ### The three cloud vaults
 

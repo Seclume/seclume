@@ -64,7 +64,9 @@ java -jar seclume-heapcheck.jar --pid <pid> --secret-file /run/secrets/db-passwo
 It attaches to the running JVM, takes a dump, searches it for the secret in every encoding it
 could be in, and deletes the dump again. The secret comes from a file, never from the command
 line. For audits it also checks existing dumps and several secrets at once, and writes a
-Markdown or JSON report: `--dump`, `--secret-dir`, `--report`.
+Markdown or JSON report: `--dump`, `--secret-dir`, `--report`. And `--discover` finds what
+nobody named - private keys, JWTs, cloud and platform tokens, passwords in URLs - by their
+shape, reporting which kind, how often and where, never the value.
 
 For CI, `--report heapcheck.sarif` adds SARIF output. A ready-to-use GitHub Action
 and a comparison of successive JSON reports are in [DIAGNOSTICS.md](DIAGNOSTICS.md).
@@ -152,7 +154,7 @@ that shows it.
 **Where the secret comes from** is a provider, never a value. A secret is never a setting,
 and `password=` is refused. The providers are `file`, `env-file`, `process`, `unix-socket`,
 `dpapi`, `credential-manager`, `encrypted`, `rds-iam`, `vault` (including dynamic database
-credentials), `aws-secrets-manager`, `azure-key-vault`, `gcp-secret-manager`,
+credentials, and logging in by Kubernetes, JWT or AppRole), `aws-secrets-manager`, `azure-key-vault`, `gcp-secret-manager`,
 `azure-managed-identity`, `gcp-metadata`, `none` (the client certificate is the login), and
 `callback` for your own code. **[PROVIDERS.md](PROVIDERS.md)** has every setting of every
 provider and says which one to pick.
