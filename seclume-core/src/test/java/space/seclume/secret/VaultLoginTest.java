@@ -527,7 +527,10 @@ class VaultLoginTest {
         settings.put("provider", "vault");
         settings.put("address", "https://127.0.0.1:8200");
         settings.put("path", "database/creds/app");
-        for (int i = 0; i < pairs.length; i += 2) {
+        if (pairs.length % 2 != 0) {
+            throw new IllegalArgumentException("settings come in pairs: " + pairs.length);
+        }
+        for (int i = 0; i + 1 < pairs.length; i += 2) {
             settings.put(pairs[i], pairs[i + 1]);
         }
         return settings;

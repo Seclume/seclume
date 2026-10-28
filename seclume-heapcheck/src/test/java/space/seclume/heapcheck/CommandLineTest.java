@@ -22,6 +22,8 @@ import space.seclume.tck.ChildJvm;
  */
 class CommandLineTest {
 
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+
     @Test
     void withoutArgumentsItExplainsItselfAndFailsAsAMisuse() throws Exception {
         ChildJvm.Result result = ChildJvm.run(HeapCheck.class, List.of(), 60);
@@ -94,7 +96,7 @@ class CommandLineTest {
         // Made up here rather than written down: a token-shaped literal in the
         // repository is what secret scanning is there to stop.
         byte[] random = new byte[24];
-        new java.security.SecureRandom().nextBytes(random);
+        RANDOM.nextBytes(random);
         String body = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random);
         java.nio.file.Files.writeString(dump, "\u0001 hvs." + body + " \u0002");
         ChildJvm.Result found = ChildJvm.run(HeapCheck.class,

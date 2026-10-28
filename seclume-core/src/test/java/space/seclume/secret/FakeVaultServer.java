@@ -179,10 +179,22 @@ final class FakeVaultServer implements AutoCloseable {
                         lines[i].substring(colon + 1).trim());
             }
         }
-        int length = Integer.parseInt(headers.getOrDefault("content-length", "0"));
-        byte[] body = in.readNBytes(length);
+        byte[] body = in.readNBytes(contentLength(headers));
         return new Request(requestLine[0], requestLine[1], headers,
                 new String(body, StandardCharsets.UTF_8));
+    }
+
+    /** The declared body length; a header that is no number is a request this server will not read. */
+    private static int contentLength(Map<String, String> headers) throws IOException {
+        try {
+            int length = Integer.parseInt(headers.getOrDefault("content-length", "0").trim());
+            if (length < 0) {
+                throw new IOException("a negative Content-Length");
+            }
+            return length;
+        } catch (NumberFormatException e) {
+            throw new IOException("a Content-Length that is no number", e);
+        }
     }
 
     @Override

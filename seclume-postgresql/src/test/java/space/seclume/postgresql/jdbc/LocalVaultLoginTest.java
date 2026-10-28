@@ -95,7 +95,10 @@ class LocalVaultLoginTest {
         Map<String, String> settings = new LinkedHashMap<>(Map.of("provider", "vault",
                 "address", "https://" + host + ":8210", "path", "database/creds/app",
                 "verify", "false"));
-        for (int i = 0; i < pairs.length; i += 2) {
+        if (pairs.length % 2 != 0) {
+            throw new IllegalArgumentException("settings come in pairs: " + pairs.length);
+        }
+        for (int i = 0; i + 1 < pairs.length; i += 2) {
             settings.put(pairs[i], pairs[i + 1]);
         }
         return settings;

@@ -165,7 +165,15 @@ public final class FakeVaultLoginMain {
                         lines[i].substring(colon + 1).trim());
             }
         }
-        int length = Integer.parseInt(headers.getOrDefault("content-length", "0"));
+        int length;
+        try {
+            length = Integer.parseInt(headers.getOrDefault("content-length", "0").trim());
+        } catch (NumberFormatException e) {
+            throw new IOException("a Content-Length that is no number", e);
+        }
+        if (length < 0) {
+            throw new IOException("a negative Content-Length");
+        }
         return new Request(requestLine[0], requestLine[1], headers,
                 new String(in.readNBytes(length), StandardCharsets.UTF_8));
     }
