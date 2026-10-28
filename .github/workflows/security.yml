@@ -51,7 +51,18 @@ jobs:
           ./mvnw -B -DskipTests install &&
           ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
           -DincludeTestScope=true -DoutputFormat=json
+      # Each finding also becomes an annotation on the check - package, version,
+      # advisory and the version that fixes it - so a red run says what to bump
+      # without anyone having to open the log.
       - name: Known vulnerabilities
-        run: >
-          docker run --rm -v "$PWD/target:/w" aquasec/trivy:0.74.0
-          sbom --scanners vuln --severity HIGH,CRITICAL --exit-code 1 /w/bom.json
+        run: |
+          status=0
+          docker run --rm -v "$PWD/target:/w" aquasec/trivy:0.74.0 \
+            sbom --scanners vuln --severity HIGH,CRITICAL --exit-code 1 \
+            --format json --output /w/trivy.json /w/bom.json || status=$?
+          if [ -f target/trivy.json ]; then
+            jq -r '.Results[]?.Vulnerabilities[]? |
+              "::error title=\(.VulnerabilityID) (\(.Severity))::\(.PkgName) \(.InstalledVersion) - fixed in \(.FixedVersion // "no release yet") - \(.Title // "" | .[0:120])"' \
+              target/trivy.json | sort -u
+          fi
+          exit "$status"
