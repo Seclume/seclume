@@ -169,17 +169,20 @@ class CommandLineTest {
                     java.nio.file.StandardCopyOption.ATOMIC_MOVE);
             long deadline = System.nanoTime() + 60_000_000_000L;
             List<String> names = List.of();
+            String log = "";
             while (System.nanoTime() < deadline) {
                 try (java.util.stream.Stream<java.nio.file.Path> files =
                              java.nio.file.Files.list(folder)) {
                     names = files.map(f -> f.getFileName().toString()).toList();
                 }
-                if (names.size() == 1 && names.get(0).endsWith(".redacted.hprof")) {
+                log = java.nio.file.Files.readString(dir.resolve("watch.log"));
+                // The copy is in place before the watcher says so: wait for both.
+                if (names.size() == 1 && names.get(0).endsWith(".redacted.hprof")
+                        && log.contains("redacted to")) {
                     break;
                 }
                 Thread.sleep(200);
             }
-            String log = java.nio.file.Files.readString(dir.resolve("watch.log"));
             assertTrue(names.size() == 1 && names.get(0).endsWith(".redacted.hprof"),
                     names + "\n" + log);
             assertTrue(watcher.isAlive(), "the watcher stopped: " + log);
