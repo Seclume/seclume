@@ -243,8 +243,11 @@ public final class SecretProviders {
      * {@code secret-id-} settings. {@code aws} signs with the {@code aws-}
      * settings' credentials; {@code gcp} and {@code azure} ask the machine's
      * metadata service.
+     *
+     * <p>Public for the other Vault clients - seclume-keys' PKI certificates -
+     * so that they log in exactly as the provider does, from the same settings.
      */
-    private static SecretProvider vaultToken(Map<String, String> settings) {
+    public static SecretProvider vaultToken(Map<String, String> settings) {
         String method = value(settings, "auth-method");
         boolean tokenSettings = !nested(settings, "token-").isEmpty();
         if (method == null || method.isBlank() || "token".equalsIgnoreCase(method.trim())) {

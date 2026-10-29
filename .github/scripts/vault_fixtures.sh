@@ -11,7 +11,9 @@
 #
 # Writes into the working directory: .local-vault-token (the root token of
 # this throwaway server), .local-vault-role-id and .local-vault-secret-id (the
-# AppRole login), .local-vault-jwt (a JWT the JWT mount accepts). The
+# AppRole login), .local-vault-jwt (a JWT the JWT mount accepts),
+# .local-vault-pki-ca.pem (the root of the PKI engine at pki/, whose role
+# "client" signs client certificates under seclume.test). The
 # PostgreSQL password stays in the work directory, read by Vault from its file
 # and by nobody else.
 #
@@ -111,6 +113,7 @@ vault policy write db-app - >/dev/null <<'POLICY'
 path "database/creds/app" { capabilities = ["read"] }
 path "sys/leases/renew"   { capabilities = ["update"] }
 path "sys/leases/revoke"  { capabilities = ["update"] }
+path "pki/sign/client"    { capabilities = ["update"] }
 POLICY
 vault auth enable approle >/dev/null
 vault write auth/approle/role/app token_policies=db-app token_ttl=30s token_max_ttl=90s \
@@ -120,10 +123,20 @@ vault write auth/jwt/config jwt_validation_pubkeys=@/certs/jwt.pub bound_issuer=
 vault write auth/jwt/role/app role_type=jwt user_claim=sub bound_audiences=vault \
   bound_subject=ci-app token_policies=db-app token_ttl=30s token_max_ttl=90s >/dev/null
 
+# The PKI engine, for seclume-keys' certificates: a root CA made inside Vault
+# and a role that signs client certificates under seclume.test, for a key
+# whose request it is given (pki/sign) - an hour at most.
+vault secrets enable pki >/dev/null
+vault secrets tune -max-lease-ttl=24h pki >/dev/null
+vault write -field=certificate pki/root/generate/internal common_name="seclume CI PKI" \
+  ttl=24h > .local-vault-pki-ca.pem
+vault write pki/roles/client allowed_domains=seclume.test allow_subdomains=true \
+  max_ttl=1h client_flag=true server_flag=false key_type=any >/dev/null
+
 sudo cat "$work/token" > .local-vault-token
 sudo cat "$work/jwt" > .local-vault-jwt
 vault read -field=role_id auth/approle/role/app/role-id > .local-vault-role-id
 vault write -f -field=secret_id auth/approle/role/app/secret-id > .local-vault-secret-id
 cp "$work/ca.pem" .local-vault-pg-ca.pem
 echo "$vault_cli on 8210 (dev, TLS), database/creds/app for PostgreSQL 17 on 5440," \
-  "logins: approle, jwt"
+  "logins: approle, jwt; pki/sign/client"

@@ -130,6 +130,46 @@ public final class SeclumeKeys {
     }
 
     /**
+     * A key manager whose certificate comes from Vault's PKI engine and whose
+     * key was generated in OpenSSL - it is never on the heap, never in a file,
+     * and Vault never sees it: a P-256 key, a certification request signed
+     * with it, and {@code pki/sign/<role>}. Renewed with a new key once two
+     * thirds of the certificate's lifetime have passed; close it to stop.
+     *
+     * <pre>
+     * address=https://vault:8200&amp;pki-role=client&amp;common-name=orders.svc
+     *   &amp;auth-method=kubernetes&amp;auth-role=orders
+     * </pre>
+     *
+     * <p>{@code pki-mount} ({@code pki}), {@code pki-role}, {@code common-name},
+     * and optionally {@code alt-names}, {@code ip-sans}, {@code ttl},
+     * {@code renew-at} (0.67); the Vault token as {@code provider=vault} takes
+     * it - {@code auth-method=kubernetes|jwt|approle|aws|gcp|azure} or the
+     * {@code token-} settings - and {@code namespace}, {@code verify},
+     * {@code timeout-millis}.
+     */
+    public static X509ExtendedKeyManager vaultPkiKeyManager(String spec) {
+        SeclumeKeyProvider.install();
+        return new VaultPkiKeyManager(options(spec), java.time.Clock.systemUTC());
+    }
+
+    /** {@link #vaultPkiKeyManager} as a factory. */
+    public static KeyManagerFactory vaultPkiKeyManagerFactory(String spec) {
+        return new Factory(vaultPkiKeyManager(spec));
+    }
+
+    /** A TLS 1.3 client context with {@link #vaultPkiKeyManager} and the JVM's default trust. */
+    public static SSLContext vaultPkiSslContext(String spec) {
+        try {
+            SSLContext context = SSLContext.getInstance("TLSv1.3");
+            context.init(new KeyManager[] {vaultPkiKeyManager(spec)}, null, null);
+            return context;
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("the TLS context could not be made", e);
+        }
+    }
+
+    /**
      * A TLS context with the key manager and the JVM's default trust - enough
      * for a server; for a client with a certificate, the server it trusts is
      * the JVM's too.
@@ -159,16 +199,22 @@ public final class SeclumeKeys {
         }
     }
 
-    private static SecretProvider provider(String keySpec) {
-        String spec = keySpec.startsWith("?") ? keySpec.substring(1) : keySpec;
+    /** {@code name=value&...}, URL-decoded, as a JDBC URL's parameters are. */
+    static Map<String, String> options(String spec) {
+        String query = spec.startsWith("?") ? spec.substring(1) : spec;
         Map<String, String> options = new LinkedHashMap<>();
-        for (String pair : spec.split("&")) {
+        for (String pair : query.split("&")) {
             int equals = pair.indexOf('=');
             if (equals > 0) {
                 options.put(URLDecoder.decode(pair.substring(0, equals), StandardCharsets.UTF_8),
                         URLDecoder.decode(pair.substring(equals + 1), StandardCharsets.UTF_8));
             }
         }
+        return options;
+    }
+
+    private static SecretProvider provider(String keySpec) {
+        Map<String, String> options = options(keySpec);
         if (!options.containsKey("provider")) {
             throw new IllegalArgumentException("no key named: give the secret provider's "
                     + "options, e.g. provider=file&path=/run/secrets/tls.key");

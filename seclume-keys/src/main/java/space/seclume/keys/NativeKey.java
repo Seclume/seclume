@@ -39,10 +39,7 @@ final class NativeKey {
 
     /** Reads the key once from {@code secret}, PEM or DER, and decodes it in OpenSSL. */
     static NativeKey read(SecretProvider secret) {
-        if (!PrivateSigningKey.available()) {
-            throw new IllegalStateException("a private key off the heap needs OpenSSL 3 on "
-                    + "64-bit Linux or CNG on Windows, which are not there");
-        }
+        requireBackend();
         PrivateSigningKey decoded;
         try (SecretScope encoded = SecretScope.fromProvider(secret)) {
             if (OpenSshPrivateKey.is(encoded.segment(), encoded.length())) {
@@ -56,6 +53,23 @@ final class NativeKey {
                 decoded = PrivateSigningKey.decode(encoded.segment(), encoded.length());
             }
         }
+        return of(decoded);
+    }
+
+    /** A new P-256 key, made in OpenSSL or CNG; it never existed anywhere else. */
+    static NativeKey generateP256() {
+        requireBackend();
+        return of(PrivateSigningKey.generateP256());
+    }
+
+    private static void requireBackend() {
+        if (!PrivateSigningKey.available()) {
+            throw new IllegalStateException("a private key off the heap needs OpenSSL 3 on "
+                    + "64-bit Linux or CNG on Windows, which are not there");
+        }
+    }
+
+    private static NativeKey of(PrivateSigningKey decoded) {
         try {
             String type;
             if (decoded.is("RSA")) {
