@@ -2,6 +2,7 @@ package space.seclume.heapcheck;
 
 import space.seclume.heapdump.Attribution;
 import space.seclume.heapdump.Discovery;
+import space.seclume.heapdump.DumpFolder;
 import space.seclume.heapdump.Redactor;
 
 import java.io.IOException;
@@ -133,6 +134,10 @@ public final class HeapCheck {
         Path dumpDir = null;
         boolean inTarget = false;
         List<Path> secretDirs = new ArrayList<>();
+        Path redactDir = null;
+        Path watch = null;
+        java.time.Duration interval = java.time.Duration.ofSeconds(10);
+        boolean deleteUnredactable = false;
         Set<String> ignore = new LinkedHashSet<>();
         for (int i = 0; i < arguments.length; i++) {
             switch (arguments[i]) {
@@ -152,6 +157,10 @@ public final class HeapCheck {
                         "--secret-dir")));
                 case "--dump-dir" -> dumpDir = Path.of(next(arguments, ++i, "--dump-dir"));
                 case "--in-target" -> inTarget = true;
+                case "--redact-dir" -> redactDir = Path.of(next(arguments, ++i, "--redact-dir"));
+                case "--watch" -> watch = Path.of(next(arguments, ++i, "--watch"));
+                case "--interval" -> interval = seconds(next(arguments, ++i, "--interval"));
+                case "--delete-unredactable" -> deleteUnredactable = true;
                 case "--report" -> reports.add(Path.of(next(arguments, ++i, "--report")));
                 case "--keep-dump" -> keep = Path.of(next(arguments, ++i, "--keep-dump"));
                 // Somebody typing this is one keystroke from putting a password
@@ -198,6 +207,33 @@ public final class HeapCheck {
             System.exit(2);
             return;
         }
+        if (redactDir != null || watch != null) {
+            if (pid != null || dumpFile != null || redact != null || keep != null
+                    || !reports.isEmpty() || inTarget || dumpDir != null
+                    || (redactDir != null && watch != null)) {
+                System.err.println("--redact-dir and --watch redact the dumps in a folder: "
+                        + "one of the two, with --secret-file, --secret-dir, --discover and "
+                        + "--ignore - not with a process, a dump or a report");
+                System.exit(2);
+                return;
+            }
+            for (Path dir : secretDirs) {
+                secretFiles.addAll(directory(dir));
+            }
+            if (secretFiles.isEmpty() && !discover) {
+                System.err.println("nothing to redact: name a secret or --discover");
+                System.exit(2);
+                return;
+            }
+            System.exit(folder(redactDir != null ? redactDir : watch, watch != null, interval,
+                    secretFiles, discover, Set.copyOf(ignore), deleteUnredactable));
+            return;
+        }
+        if (deleteUnredactable) {
+            System.err.println("--delete-unredactable goes with --redact-dir or --watch");
+            System.exit(2);
+            return;
+        }
         Options mapping = new Options(pid, null, List.of(), List.of(), null, false, Set.of(),
                 true, null, null, inTarget);
         for (Path dir : secretDirs) {
@@ -228,6 +264,86 @@ public final class HeapCheck {
         }
         System.exit(run(new Options(pid, dumpFile, secretFiles, reports, keep, discover,
                 Set.copyOf(ignore), attribute, redact, dumpDir, inTarget)));
+    }
+
+    /** {@code 30s}, {@code 5m}, {@code 1h} or plain seconds. */
+    static java.time.Duration seconds(String text) {
+        String value = text.trim().toLowerCase(java.util.Locale.ROOT);
+        long unit = 1;
+        if (value.endsWith("s")) {
+            value = value.substring(0, value.length() - 1);
+        } else if (value.endsWith("m")) {
+            unit = 60;
+            value = value.substring(0, value.length() - 1);
+        } else if (value.endsWith("h")) {
+            unit = 3600;
+            value = value.substring(0, value.length() - 1);
+        }
+        try {
+            long amount = Long.parseLong(value);
+            if (amount > 0) {
+                return java.time.Duration.ofSeconds(Math.multiplyExact(amount, unit));
+            }
+        } catch (NumberFormatException | ArithmeticException notADuration) {
+            // said below, with what was given
+        }
+        System.err.println("--interval " + text + ": a duration such as 10s, 5m or 1h");
+        System.exit(2);
+        return java.time.Duration.ZERO;
+    }
+
+    /**
+     * The dumps in {@code folder}, redacted where they lie: once, or - with
+     * {@code watch} - every dump that is finished there from now on, until the
+     * process is stopped. 0 when every dump taken was redacted, 2 otherwise.
+     */
+    static int folder(Path folder, boolean watch, java.time.Duration interval,
+            List<Path> secretFiles, boolean discover, Set<String> ignore,
+            boolean deleteUnredactable) {
+        if (!Files.isDirectory(folder)) {
+            System.err.println("no folder at " + folder);
+            return 2;
+        }
+        List<Redactor.Needle> needles = new ArrayList<>();
+        for (Path file : secretFiles) {
+            Secret secret = Secret.read(file, file);
+            if (secret == null) {
+                return 2;
+            }
+            needles.add(secret.binary() ? Redactor.Needle.bytes(file.toString(), secret.bytes())
+                    : Redactor.Needle.text(file.toString(), secret.text()));
+        }
+        DumpFolder.Settings settings = new DumpFolder.Settings(needles, discover, ignore,
+                deleteUnredactable);
+        if (watch) {
+            System.out.println("watching " + folder + " every " + interval.toSeconds()
+                    + "s: a finished heap dump is redacted next to itself and deleted");
+            DumpFolder.Watch watching = DumpFolder.watch(folder, settings, interval,
+                    outcome -> (outcome.ok() ? System.out : System.err)
+                            .println(outcome.describe()));
+            Runtime.getRuntime().addShutdownHook(new Thread(watching::close));
+            try {
+                Thread.currentThread().join();       // until the process is stopped
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return 0;
+        }
+        try {
+            List<DumpFolder.Outcome> outcomes = DumpFolder.redactAll(folder, settings);
+            if (outcomes.isEmpty()) {
+                System.out.println("no finished heap dump in " + folder);
+            }
+            boolean failed = false;
+            for (DumpFolder.Outcome outcome : outcomes) {
+                (outcome.ok() ? System.out : System.err).println(outcome.describe());
+                failed |= !outcome.ok();
+            }
+            return failed ? 2 : 0;
+        } catch (IOException e) {
+            System.err.println("could not read " + folder + " - " + e.getMessage());
+            return 2;
+        }
     }
 
     /** The one-process, one-secret check, as it always was. */
@@ -552,6 +668,10 @@ public final class HeapCheck {
                                                        [--report <file>]... [--keep-dump <path>]
                                                        [--redact <copy.hprof>]
                                                        [--dump-dir <dir>] [--in-target]
+                       java -jar seclume-heapcheck.jar (--redact-dir <dir> | --watch <dir>)
+                                                       [--secret-file ... | --secret-dir ...]
+                                                       [--discover [--ignore ...]]
+                                                       [--interval 10s] [--delete-unredactable]
                        java -jar seclume-heapcheck.jar --list-detectors
 
                   --pid          the Java process to examine; its heap is dumped, searched
@@ -584,6 +704,16 @@ public final class HeapCheck {
                   --dump-dir     with --pid: the directory the process writes its dump
                                  to (absolute, as the process sees it); the temporary
                                  directory by default
+                  --redact-dir   redact every finished heap dump in this folder next to
+                                 itself (name-<time>.redacted.hprof) and delete it:
+                                 the dumps -XX:+HeapDumpOnOutOfMemoryError leaves in
+                                 -XX:HeapDumpPath. Exit 0 when all were redacted
+                  --watch        the same, for every dump finished there from now on,
+                                 until stopped - beside the application, a sidecar
+                  --interval     how often --watch looks (10s); a dump is taken when it
+                                 is finished and has not grown since the last look
+                  --delete-unredactable  a dump that cannot be made clean is deleted
+                                 rather than kept
                   --in-target    with --pid: this check runs beside the process, in a
                                  container of its own (kubectl debug --target): the
                                  secret files and --dump-dir are in the process's file

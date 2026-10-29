@@ -273,6 +273,38 @@ class HeapCheckTest {
         }
     }
 
+    /**
+     * {@code --redact-dir}: a folder as {@code -XX:HeapDumpPath} leaves it,
+     * with a real dump holding a named secret. Afterwards it holds a redacted
+     * copy only, and a check of that copy finds nothing.
+     */
+    @Test
+    void aFolderOfDumpsIsRedactedWhereItLies(@TempDir Path directory) throws Exception {
+        Path secretFile = directory.resolve("db-password");
+        Files.writeString(secretFile, SECRET, StandardCharsets.UTF_8);
+        Path folder = Files.createDirectory(directory.resolve("dumps"));
+        Path dump = folder.resolve("java_pid1.hprof");
+        withProbe(secretFile, Holder.class, pid ->
+                assertEquals(1, HeapCheck.run(pid, secretFile, dump)));
+
+        assertEquals(0, HeapCheck.folder(folder, false, java.time.Duration.ofSeconds(1),
+                List.of(secretFile), true, java.util.Set.of(), false));
+
+        List<Path> left;
+        try (java.util.stream.Stream<Path> files = Files.list(folder)) {
+            left = files.toList();
+        }
+        assertEquals(1, left.size(), "the original or a partial copy is left: " + left);
+        assertTrue(left.get(0).getFileName().toString().matches(
+                "java_pid1-\\d{8}T\\d{6}Z\\.redacted\\.hprof"), left.get(0).toString());
+        assertEquals(0, HeapCheck.run(new HeapCheck.Options(null, left.get(0),
+                List.of(secretFile), List.of(), null, true, java.util.Set.of())),
+                "the redacted copy still holds the secret, or something discovery knows");
+        // Nothing left to do is not a failure.
+        assertEquals(0, HeapCheck.folder(folder, false, java.time.Duration.ofSeconds(1),
+                List.of(secretFile), true, java.util.Set.of(), false));
+    }
+
     private static String read(Path file) {
         try {
             return Files.readString(file);

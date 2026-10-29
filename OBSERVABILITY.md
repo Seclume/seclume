@@ -284,6 +284,11 @@ seclume.heapdump.ignore=jwt           # optional: detectors to leave out; a typo
 seclume.heapdump.redact=false         # optional: Boot's endpoint, unredacted
 ```
 
+**The dumps the JVM writes by itself.** With `-XX:+HeapDumpOnOutOfMemoryError` the starter
+also watches where they land and redacts each one next to itself, deleting the original - see
+[DIAGNOSTICS.md](DIAGNOSTICS.md#the-dumps-nobody-asked-for---redact-dir---watch)
+(`seclume.heapdump.oom.*`).
+
 What it cannot reach: a credential of no known shape. The application's own secrets are not
 known to the endpoint, and are not put on its heap to look for them; a password that is only a
 password, held in a `String`, stays. Find those with `seclume-heapcheck --secret-file` or

@@ -99,6 +99,58 @@ SARIF message; only class and field names, never a value. It takes three more pa
 dump, reading it in windows, so dumps over 2 GB work too; `--no-attribution` leaves it out.
 A dump whose structure cannot be read still gets its report, without holders.
 
+## The dumps nobody asked for: `--redact-dir`, `--watch`
+
+`-XX:+HeapDumpOnOutOfMemoryError` writes everything the JVM holds, every secret included, to
+`-XX:HeapDumpPath`. There the dump outlives the container, gets copied into a ticket, and is
+the most common way a heap dump leaves. These two commands redact such dumps where they lie:
+
+```sh
+java -jar seclume-heapcheck.jar --redact-dir /dumps --discover --secret-dir /run/secrets/app
+java -jar seclume-heapcheck.jar --watch /dumps --discover --secret-dir /run/secrets/app
+```
+
+`--redact-dir` handles every finished dump in the folder once. `--watch` keeps watching until
+it is stopped, for example as a sidecar sharing the folder with the application:
+
+```yaml
+containers:
+  - name: app
+    env: [{name: JAVA_TOOL_OPTIONS, value: "-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/dumps"}]
+    volumeMounts: [{name: dumps, mountPath: /dumps}]
+  - name: redact-dumps
+    image: eclipse-temurin:25-jre
+    command: [java, -jar, /opt/seclume-heapcheck.jar, --watch, /dumps, --discover,
+              --secret-dir, /run/secrets/app]
+    volumeMounts: [{name: dumps, mountPath: /dumps}, {name: app-secret, mountPath: /run/secrets/app}]
+```
+
+How it works:
+
+- **A copy, then the original goes.** Each dump is redacted as `--redact` does it (named
+  secrets, the shapes and their echoes, String hashes). The copy goes next to the dump as
+  `java_pid1-20261030T001500Z.redacted.hprof`, stamped with the dump's time, so the next dump
+  of a process with the same pid finds its name free. Then the original is deleted.
+- **Only finished dumps.** A dump counts as finished when it ends with the `HEAP DUMP END`
+  record HotSpot writes last. `--watch` also waits until the size has not changed between two
+  looks (`--interval`, 10s).
+- **Partial copies.** Copies left by a redaction that died are removed after an hour.
+- **When a dump cannot be made clean.** It stays, and the failure is reported once, not on
+  every look. `--delete-unredactable` deletes it instead, which loses the dump but not the
+  secrets. `--redact-dir` exits 2 if any dump failed.
+
+**In the application itself.** The Spring Boot starter does the same in the application's own
+JVM. It watches wherever the JVM writes its dumps, if it writes any:
+
+- `HeapDumpPath`, or the working directory when that is not set;
+- `seclume.heapdump.oom.folder` names another folder;
+- `seclume.heapdump.oom.interval` sets how often it looks (default 30s);
+- `seclume.heapdump.oom.redact=false` turns it off.
+
+A dump from before a restart is redacted once the application is up again. A JVM that exits on
+the error (`-XX:+ExitOnOutOfMemoryError`) leaves the dump to that next start. The starter knows
+the shapes only; `--watch` beside it can also look for the secrets themselves.
+
 ## Inside a Kubernetes pod: `kubectl seclume heapcheck`
 
 ```sh
