@@ -29,11 +29,12 @@ import space.seclume.secret.VaultSecretProvider;
 import space.seclume.tck.NoSecretInHeap;
 
 /**
- * The claim itself: after a JWT login to Vault, a database credential read
- * with the token it gave, and the lease and the token revoked at the end,
- * <b>none of the three secrets is on this JVM's heap</b> - not the JWT that
- * went into the login, not the client token that came back and went into
- * three requests, not the password.
+ * The claim itself: after a login to Vault - by JWT, and by AWS IAM - a
+ * database credential read with the token it gave, and the lease and the
+ * token revoked at the end, <b>none of the secrets is on this JVM's heap</b>:
+ * not the JWT, the AWS secret key or session token that went into the login,
+ * not the client token that came back and went into three requests, not the
+ * password.
  *
  * <p>Here rather than beside {@code VaultLogin} in seclume-core: the heap
  * search is seclume-tck's, and the TCK is built on the core.
@@ -47,8 +48,42 @@ import space.seclume.tck.NoSecretInHeap;
 class VaultLoginHeapTest {
 
     @Test
-    @SuppressWarnings("try")
     void theJwtTheTokenAndThePasswordAreNotOnTheHeap() throws Exception {
+        prove(directory -> Map.of(
+                "auth-method", "jwt",
+                "auth-role", "app",
+                "jwt-provider", "file",
+                "jwt-path", directory.resolve("jwt.txt").toString()),
+                List.of("jwt.txt", "client-token.txt", "password.txt"));
+    }
+
+    /**
+     * An AWS IAM login: the secret access key signs, the session token is
+     * signed and sent, the signature goes to Vault inside base64'd headers -
+     * and none of them, nor the token Vault gives back, nor the password, is
+     * on the heap. The fake Vault checks the signature as AWS would, so a
+     * login that gets through was signed right.
+     */
+    @Test
+    void theAwsKeyTheSessionTokenTheTokenAndThePasswordAreNotOnTheHeap() throws Exception {
+        prove(directory -> Map.of(
+                "auth-method", "aws",
+                "auth-role", "app",
+                "aws-access-key-id", "AKIASECLUMEHEAPTEST1",
+                "aws-key-provider", "file",
+                "aws-key-path", directory.resolve("aws-key.txt").toString(),
+                "aws-session-token-provider", "file",
+                "aws-session-token-path", directory.resolve("aws-session.txt").toString()),
+                List.of("aws-key.txt", "aws-session.txt", "client-token.txt", "password.txt"));
+    }
+
+    /** The settings of one login method, given the directory the fake Vault wrote into. */
+    private interface Login {
+        Map<String, String> settings(Path directory);
+    }
+
+    @SuppressWarnings("try")
+    private static void prove(Login login, List<String> secrets) throws Exception {
         Assumptions.assumeTrue(Files.isExecutable(Path.of(System.getProperty("java.home"),
                 "bin", System.getProperty("os.name").startsWith("Windows") ? "keytool.exe"
                         : "keytool")), "no keytool in this JDK");
@@ -67,15 +102,13 @@ class VaultLoginHeapTest {
             assertTrue(ready != null && ready.startsWith("READY "), "Vault said: " + ready);
             String port = ready.substring("READY ".length()).trim();
 
-            VaultSecretProvider vault = (VaultSecretProvider) SecretProviders.of(Map.of(
+            Map<String, String> settings = new java.util.LinkedHashMap<>(Map.of(
                     "provider", "vault",
                     "address", "https://127.0.0.1:" + port,
                     "path", "database/creds/app",
-                    "verify", "false",              // a CA made for this run in the other JVM
-                    "auth-method", "jwt",
-                    "auth-role", "app",
-                    "jwt-provider", "file",
-                    "jwt-path", directory.resolve("jwt.txt").toString()));
+                    "verify", "false"));            // a CA made for this run in the other JVM
+            settings.putAll(login.settings(directory));
+            VaultSecretProvider vault = (VaultSecretProvider) SecretProviders.of(settings);
 
             assertEquals("v-app-1", vault.currentUser());
             try (Arena arena = Arena.ofConfined()) {
@@ -94,7 +127,7 @@ class VaultLoginHeapTest {
             assertEquals("DONE logins=1 renewals=0 fetches=1 lease-revocations=1 "
                     + "token-revocations=1", out.readLine());
 
-            for (String secret : List.of("jwt.txt", "client-token.txt", "password.txt")) {
+            for (String secret : secrets) {
                 NoSecretInHeap.assertAbsent(directory.resolve(secret));
             }
 

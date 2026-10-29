@@ -16,7 +16,7 @@
 # and by nobody else.
 #
 # VAULT_IMAGE and VAULT_CLI choose the server: HashiCorp Vault by default,
-# OpenBao with VAULT_IMAGE=quay.io/openbao/openbao:2 VAULT_CLI=bao - the same
+# OpenBao with VAULT_IMAGE=quay.io/openbao/openbao:2.7.2 VAULT_CLI=bao - the same
 # API, the same fixture.
 #
 #   .github/scripts/vault_fixtures.sh <work directory> [address the tests use]

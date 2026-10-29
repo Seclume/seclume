@@ -50,6 +50,8 @@ public final class GcpMetadataSecretProvider implements SecretProvider {
     private final String account;
     private final String scopes;
     private final String audience;
+    /** An identity token with the instance's details in it ({@code format=full}). */
+    private final boolean full;
     private final int maxLength;
 
     /**
@@ -76,11 +78,39 @@ public final class GcpMetadataSecretProvider implements SecretProvider {
     /** The same against another address, for an identity token - for tests. */
     public GcpMetadataSecretProvider(String host, int port, int timeoutMillis, String account,
             String scopes, String audience, int maxLength) {
+        this(host, port, timeoutMillis, account, scopes, audience, false, maxLength);
+    }
+
+    /**
+     * An identity token with {@code format=full}: the project, zone and
+     * instance in its claims, which Vault's {@code gce} login checks the role's
+     * bounds against.
+     */
+    public static GcpMetadataSecretProvider fullIdentity(String account, String audience,
+            int maxLength) {
+        return new GcpMetadataSecretProvider(METADATA_HOST, 80, 5_000, account, null, audience,
+                true, maxLength);
+    }
+
+    /** {@link #fullIdentity} against another address - for tests. */
+    static GcpMetadataSecretProvider fullIdentity(String host, int port, String account,
+            String audience, int maxLength) {
+        return new GcpMetadataSecretProvider(host, port, 5_000, account, null, audience, true,
+                maxLength);
+    }
+
+    private GcpMetadataSecretProvider(String host, int port, int timeoutMillis, String account,
+            String scopes, String audience, boolean full, int maxLength) {
         if (audience != null && scopes != null && !scopes.isBlank()) {
             throw new IllegalArgumentException("gcp-metadata takes scopes for an access token "
                     + "or audience for an identity token, not both");
         }
         this.audience = audience == null || audience.isBlank() ? null : audience;
+        if (full && this.audience == null) {
+            throw new IllegalArgumentException("format=full is for an identity token, which "
+                    + "needs an audience");
+        }
+        this.full = full;
         this.host = host;
         this.port = port;
         this.timeoutMillis = timeoutMillis;
@@ -99,7 +129,8 @@ public final class GcpMetadataSecretProvider implements SecretProvider {
         if (audience != null) {
             String identity = "/computeMetadata/v1/instance/service-accounts/"
                     + URLEncoder.encode(account, StandardCharsets.UTF_8) + "/identity?audience="
-                    + URLEncoder.encode(audience, StandardCharsets.UTF_8);
+                    + URLEncoder.encode(audience, StandardCharsets.UTF_8)
+                    + (full ? "&format=full" : "");
             return MetadataToken.fetchRaw("the GCP metadata server", host, port, timeoutMillis,
                     identity, Map.of("Metadata-Flavor", "Google"), target);
         }
