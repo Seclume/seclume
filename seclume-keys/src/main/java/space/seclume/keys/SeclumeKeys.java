@@ -251,7 +251,8 @@ public final class SeclumeKeys {
         String socket = options.get("socket");
         return new space.seclume.secret.SpiffeWorkloadApi(socket == null || socket.isBlank()
                 ? null : space.seclume.secret.SpiffeWorkloadApi.socketOf(socket),
-                Integer.parseInt(options.getOrDefault("timeout-millis", "10000")));
+                space.seclume.secret.SpiffeWorkloadApi.timeoutMillis("timeout-millis",
+                        options.get("timeout-millis"), 10_000));
     }
 
     /** {@link #vaultPkiKeyManager} as a factory. */

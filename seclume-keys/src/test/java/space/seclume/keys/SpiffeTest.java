@@ -216,6 +216,15 @@ class SpiffeTest {
                 SpiffeWorkloadApi.socketOf("unix:/run/spire/agent.sock"));
         assertThrows(IllegalArgumentException.class,
                 () -> SpiffeWorkloadApi.socketOf("tcp://127.0.0.1:8081"));
+        assertEquals(10_000, SpiffeWorkloadApi.timeoutMillis("timeout-millis", null, 10_000));
+        assertEquals(250, SpiffeWorkloadApi.timeoutMillis("timeout-millis", " 250 ", 10_000));
+        for (String wrong : new String[] {"soon", "0", "-5"}) {
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> SeclumeKeys.spiffeKeyManager("socket=unix:///nowhere&timeout-millis="
+                            + wrong));
+            assertTrue(refused.getMessage().contains("timeout-millis is how many milliseconds")
+                    && refused.getMessage().endsWith("not " + wrong), refused.getMessage());
+        }
     }
 
     /** The SVID as a database connection's client certificate, with seclume's own TLS. */

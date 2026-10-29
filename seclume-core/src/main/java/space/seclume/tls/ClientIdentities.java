@@ -140,8 +140,8 @@ public final class ClientIdentities {
             String where = spiffe.trim();
             java.nio.file.Path socket = where.equalsIgnoreCase("true") ? null
                     : space.seclume.secret.SpiffeWorkloadApi.socketOf(where);
-            int timeout = Integer.parseInt(settings.getOrDefault(SPIFFE + "-timeout-millis",
-                    "10000"));
+            int timeout = space.seclume.secret.SpiffeWorkloadApi.timeoutMillis(
+                    SPIFFE + "-timeout-millis", settings.get(SPIFFE + "-timeout-millis"), 10_000);
             return IDENTITIES.computeIfAbsent("spiffe " + where.toLowerCase(java.util.Locale.ROOT),
                     ignored -> new SpiffeClientIdentity(new space.seclume.secret.SpiffeWorkloadApi(
                             socket, timeout), java.time.Clock.systemUTC()));

@@ -202,20 +202,35 @@ public final class FakeWorkloadApi implements AutoCloseable {
         StringBuilder out = new StringBuilder();
         int at = 0;
         while (at < block.length) {
-            int kind = block[at++] & 0xff;
+            int kind = block[at] & 0xff;
             if (kind != 0x00 && kind != 0x10) {
                 out.append("(not a plain literal)\n");
                 break;
             }
-            int nameLength = block[at++] & 0x7f;
+            // kind, name length, name, value length, value - each there before it is read
+            int nameAt = at + 2;
+            if (nameAt > block.length) {
+                out.append("(cut short)\n");
+                break;
+            }
+            int nameLength = block[at + 1] & 0x7f;
+            int valueLengthAt = nameAt + nameLength;
+            if (valueLengthAt >= block.length) {
+                out.append("(cut short)\n");
+                break;
+            }
+            int valueLength = block[valueLengthAt] & 0x7f;
+            int valueAt = valueLengthAt + 1;
+            if (valueAt + valueLength > block.length) {
+                out.append("(cut short)\n");
+                break;
+            }
             // seclume-allow: a fake agent's own made-up data, no application secret
-            String name = new String(block, at, nameLength, StandardCharsets.US_ASCII);
-            at += nameLength;
-            int valueLength = block[at++] & 0x7f;
+            String name = new String(block, nameAt, nameLength, StandardCharsets.US_ASCII);
             // seclume-allow: a fake agent's own made-up data, no application secret
-            String value = new String(block, at, valueLength, StandardCharsets.US_ASCII);
-            at += valueLength;
+            String value = new String(block, valueAt, valueLength, StandardCharsets.US_ASCII);
             out.append(name).append(": ").append(value).append('\n');
+            at = valueAt + valueLength;
         }
         return out.toString();
     }

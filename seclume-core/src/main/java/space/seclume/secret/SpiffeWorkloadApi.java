@@ -92,6 +92,26 @@ public final class SpiffeWorkloadApi {
         return Path.of(value);
     }
 
+    /**
+     * A {@code timeout-millis} setting: a positive number of milliseconds,
+     * {@code fallback} when it is left out.
+     */
+    public static int timeoutMillis(String setting, String value, int fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            int millis = Integer.parseInt(value.trim());
+            if (millis > 0) {
+                return millis;
+            }
+        } catch (NumberFormatException e) {
+            // said below, with the setting's name
+        }
+        throw new IllegalArgumentException(setting + " is how many milliseconds a call to the "
+                + "Workload API may take, a positive whole number - not " + value);
+    }
+
     private static Path fromEnvironment() {
         String named = System.getenv(SOCKET_VARIABLE); // seclume-allow: the socket's path, which is no secret
         if (named == null || named.isBlank()) {
