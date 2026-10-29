@@ -122,6 +122,23 @@ class CommandLineTest {
         assertEquals(2, withoutDiscover.exitCode(), withoutDiscover.output());
     }
 
+    /** --in-target and --dump-dir only where they can mean something. */
+    @Test
+    void besideAProcessNeedsTheProcess(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path secret = java.nio.file.Files.writeString(dir.resolve("s"),
+                "some-secret-value");
+        for (List<String> misuse : List.of(
+                List.of("--dump", "x.hprof", "--in-target", "--secret-file", secret.toString()),
+                List.of("--pid", "1", "--in-target", "--keep-dump", "k.hprof", "--secret-file",
+                        secret.toString()),
+                List.of("--pid", "1", "--dump-dir", "relative/dir", "--secret-file",
+                        secret.toString()))) {
+            ChildJvm.Result result = ChildJvm.run(HeapCheck.class, misuse, 60);
+            assertEquals(2, result.exitCode(), misuse + ": " + result.output());
+        }
+    }
+
     /** --redact never overwrites a file: the one there may be the only copy of something. */
     @Test
     void aRedactionDoesNotOverwriteAFile(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)

@@ -13,6 +13,6 @@ class Probe {
         if (args[0].equals("leak")) held = Files.readString(Path.of(args[1]));
         if (args[0].equals("token")) held = "hvs." + Files.readString(Path.of(args[1])).strip();
         System.out.println("ready");
-        Thread.sleep(120_000);
+        Thread.sleep(args.length > 2 ? Long.parseLong(args[2]) : 120_000);
     }
 }

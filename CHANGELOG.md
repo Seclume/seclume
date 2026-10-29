@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **`kubectl seclume heapcheck <pod>`** (`seclume-heapcheck/kubectl/kubectl-seclume`): the
+  check runs in an ephemeral container beside the application's JVM, the dump stays in the
+  pod and is deleted there, and only the report comes out - Markdown, JSON or SARIF on stdout,
+  the check's exit code as the command's. For it, `seclume-heapcheck --in-target` reads the
+  secret files and the dump through `/proc/<pid>/root` while reports name them as given, and
+  `--dump-dir` says where the process writes its dump. Tested end to end in CI on a kind
+  cluster: a leaking, a clean and a token-holding JVM running as an unprivileged user.
 - **`/actuator/heapdump` serves a redacted copy** (`SeclumeHeapDumpWebEndpoint`). The starter
   puts it in the place of Boot's endpoint: the dump is taken as before, every credential of a
   known shape and its copies and parts are overwritten by `seclume-heapdump`, String hashes
