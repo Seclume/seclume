@@ -164,6 +164,96 @@ public final class SeclumeKeys {
         return RotatingKeyManager.all();
     }
 
+    /**
+     * The workload's X.509-SVID from the SPIFFE Workload API as a key manager,
+     * its key read into native memory and kept in OpenSSL or CNG - renewed
+     * when the agent rotates it. {@code socket=unix:///run/spire/agent.sock}
+     * ({@code SPIFFE_ENDPOINT_SOCKET} when left out), {@code timeout-millis}.
+     * Close it to stop asking.
+     */
+    public static X509ExtendedKeyManager spiffeKeyManager(String spec) {
+        SeclumeKeyProvider.install();
+        Map<String, String> options = options(spec);
+        return new SpiffeKeyManager(workloadApi(options), options.get("name"),
+                java.time.Clock.systemUTC());
+    }
+
+    /**
+     * A TLS 1.3 context for mutual TLS between SPIFFE workloads: the SVID as
+     * {@link #spiffeKeyManager}, and a peer trusted when its chain leads to the
+     * trust bundle the agent gave and - with {@code peer-ids=spiffe://a,spiffe://b}
+     * - its SPIFFE ID is one of those. Host names are not checked: an SVID has
+     * none.
+     */
+    public static SSLContext spiffeSslContext(String spec) {
+        Spiffe both = spiffe(spec);
+        try {
+            SSLContext context = SSLContext.getInstance("TLSv1.3");
+            context.init(both.keys().getKeyManagers(), both.trust().getTrustManagers(), null);
+            return context;
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("the TLS context could not be made", e);
+        }
+    }
+
+    /**
+     * The key manager and the trust manager of {@link #spiffeSslContext} as
+     * factories, for whatever takes them apart - a Spring SSL bundle, Netty,
+     * gRPC. Both share one SVID source.
+     */
+    public record Spiffe(KeyManagerFactory keys, javax.net.ssl.TrustManagerFactory trust) {
+    }
+
+    /** See {@link Spiffe}; {@code name} is what the SVID is listed under. */
+    public static Spiffe spiffe(String spec) {
+        Map<String, String> options = options(spec);
+        SeclumeKeyProvider.install();
+        SpiffeKeyManager keys = new SpiffeKeyManager(workloadApi(options), options.get("name"),
+                java.time.Clock.systemUTC());
+        java.util.Set<String> peers = new java.util.LinkedHashSet<>();
+        String named = options.get("peer-ids");
+        if (named != null) {
+            for (String id : named.split(",")) {
+                if (!id.isBlank()) {
+                    peers.add(id.trim());
+                }
+            }
+        }
+        return new Spiffe(new Factory(keys),
+                new TrustFactory(new SpiffeTrustManager(keys::bundle, peers)));
+    }
+
+    /** A {@code TrustManagerFactory} that hands out the one trust manager it was made with. */
+    private static final class TrustFactory extends javax.net.ssl.TrustManagerFactory {
+
+        TrustFactory(javax.net.ssl.TrustManager manager) {
+            super(new javax.net.ssl.TrustManagerFactorySpi() {
+                @Override
+                protected void engineInit(KeyStore ks) {
+                    // the trust is already there
+                }
+
+                @Override
+                protected void engineInit(ManagerFactoryParameters spec) {
+                    // the trust is already there
+                }
+
+                @Override
+                protected javax.net.ssl.TrustManager[] engineGetTrustManagers() {
+                    return new javax.net.ssl.TrustManager[] {manager};
+                }
+            }, SeclumeKeyProvider.install(), "SeclumeSpiffe");
+        }
+    }
+
+    private static space.seclume.secret.SpiffeWorkloadApi workloadApi(
+            Map<String, String> options) {
+        String socket = options.get("socket");
+        return new space.seclume.secret.SpiffeWorkloadApi(socket == null || socket.isBlank()
+                ? null : space.seclume.secret.SpiffeWorkloadApi.socketOf(socket),
+                Integer.parseInt(options.getOrDefault("timeout-millis", "10000")));
+    }
+
     /** {@link #vaultPkiKeyManager} as a factory. */
     public static KeyManagerFactory vaultPkiKeyManagerFactory(String spec) {
         return new Factory(vaultPkiKeyManager(spec));

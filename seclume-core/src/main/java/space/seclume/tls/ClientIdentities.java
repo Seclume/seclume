@@ -96,6 +96,13 @@ public final class ClientIdentities {
      */
     public static final String VAULT_PKI_PREFIX = "clientCertVaultPki-";
 
+    /**
+     * The workload's X.509-SVID from the SPIFFE Workload API as the client
+     * certificate: the agent's socket ({@code unix:///run/spire/agent.sock}),
+     * or {@code true} for the one {@code SPIFFE_ENDPOINT_SOCKET} names.
+     */
+    public static final String SPIFFE = "clientCertSpiffe";
+
     /** How long a client key file may be unless {@code clientKey-max-length} says otherwise. */
     static final int KEY_MAX_LENGTH = 4096;
 
@@ -115,6 +122,30 @@ public final class ClientIdentities {
      *         configuration says it does
      */
     public static ClientIdentity of(Map<String, String> settings) {
+        String spiffe = settings.get(SPIFFE);
+        if (spiffe != null && !spiffe.isBlank()) {
+            for (String other : new String[] {CERTIFICATE, THUMBPRINT, SUBJECT, PKCS11}) {
+                String value = settings.get(other);
+                if (value != null && !value.isBlank()) {
+                    throw new IllegalArgumentException(SPIFFE + " presents the workload's SVID, "
+                            + "and " + other + " names another certificate - one connection "
+                            + "presents one");
+                }
+            }
+            if (!nested(settings, VAULT_PKI_PREFIX).isEmpty()) {
+                throw new IllegalArgumentException(SPIFFE + " and " + VAULT_PKI_PREFIX
+                        + " settings both get a client certificate - one connection presents "
+                        + "one");
+            }
+            String where = spiffe.trim();
+            java.nio.file.Path socket = where.equalsIgnoreCase("true") ? null
+                    : space.seclume.secret.SpiffeWorkloadApi.socketOf(where);
+            int timeout = Integer.parseInt(settings.getOrDefault(SPIFFE + "-timeout-millis",
+                    "10000"));
+            return IDENTITIES.computeIfAbsent("spiffe " + where.toLowerCase(java.util.Locale.ROOT),
+                    ignored -> new SpiffeClientIdentity(new space.seclume.secret.SpiffeWorkloadApi(
+                            socket, timeout), java.time.Clock.systemUTC()));
+        }
         Map<String, String> vault = nested(settings, VAULT_PKI_PREFIX);
         if (!vault.isEmpty()) {
             for (String other : new String[] {CERTIFICATE, THUMBPRINT, SUBJECT, PKCS11}) {

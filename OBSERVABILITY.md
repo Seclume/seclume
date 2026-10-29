@@ -232,8 +232,8 @@ endpoint and the health details also grade each data source: `ok`, `note`, `warn
 | note | TLS 1.2 where the server offers no 1.3; a SQL Server login with a password |
 
 **The application's own certificates.** Certificates that seclume-keys keeps current appear
-under `certificates`: one from Vault's PKI (`vault-pki`), or a pair reloaded from disk
-(`reload-interval`). Each entry shows its subject, validity, next renewal, how many pairs it
+under `certificates`: one from Vault's PKI (`vault-pki`), a SPIFFE X.509-SVID (`spiffe`), or a
+pair reloaded from disk (`reload-interval`). Each entry shows its subject, validity, next renewal, how many pairs it
 has had, the last failure to replace it with its reason, and a grade of its own.
 
 - **A certificate that renews itself** is judged by its own lifetime. A 24-hour Vault

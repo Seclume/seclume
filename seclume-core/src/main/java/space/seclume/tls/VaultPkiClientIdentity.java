@@ -1,23 +1,10 @@
 package space.seclume.tls;
 
 import java.io.IOException;
-import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
-import java.security.cert.CertificateEncodingException;
-import java.security.cert.X509Certificate;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import space.seclume.crypto.PrivateSigningKey;
 import space.seclume.secret.VaultPkiIssuer;
 
 /**
@@ -33,241 +20,58 @@ import space.seclume.secret.VaultPkiIssuer;
  * and the next handshake presents it; a handshake under way keeps the one it
  * began with ({@link #forHandshake()}), which is closed - its key leaving
  * native memory - a minute later. A renewal that fails is tried again, sooner
- * the closer the end, while the certificate in hand still works.
+ * the closer the end, while the certificate in hand still works
+ * ({@link RenewingClientIdentity}).
  */
-final class VaultPkiClientIdentity implements ClientIdentity {
-
-    /** How long a replaced key stays usable for handshakes already under way. */
-    static final long GRACE_MILLIS = 60_000;
-
-    private static final System.Logger LOG =
-            System.getLogger(VaultPkiClientIdentity.class.getName());
-
-    /** One key and the chain Vault signed for it: what a handshake holds. */
-    static final class Generation implements ClientIdentity {
-
-        private final List<byte[]> chain;
-        private final PrivateSigningKey key;
-        private final Instant notAfter;
-        private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-        private boolean closed;
-
-        Generation(VaultPkiIssuer.Issued issued) {
-            List<byte[]> der = new ArrayList<>();
-            try {
-                for (X509Certificate certificate : issued.chain()) {
-                    der.add(certificate.getEncoded());
-                }
-            } catch (CertificateEncodingException e) {
-                issued.key().close();
-                throw new IllegalStateException("Vault's certificate could not be encoded", e);
-            }
-            this.chain = List.copyOf(der);
-            this.key = issued.key();
-            this.notAfter = issued.notAfter();
-        }
-
-        @Override
-        public List<byte[]> chain() {
-            return chain;
-        }
-
-        @Override
-        public int signatureScheme() {
-            return HandshakeSignature.ECDSA_SECP256R1_SHA256;
-        }
-
-        @Override
-        public byte[] sign(byte[] content) {
-            lock.readLock().lock();
-            try {
-                if (closed) {
-                    throw new IllegalStateException("this client identity is closed");
-                }
-                try (Arena arena = Arena.ofConfined()) {
-                    // Public on both sides: the content comes from a transcript
-                    // the server has too, and a signature is meant to be seen.
-                    MemorySegment message = arena.allocate(Math.max(1, content.length));
-                    MemorySegment.copy(content, 0, message, ValueLayout.JAVA_BYTE, 0,
-                            content.length);
-                    MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
-                    int written = key.sign("SHA256", false, message, content.length, out);
-                    return out.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
-                }
-            } finally {
-                lock.readLock().unlock();
-            }
-        }
-
-        @Override
-        public void close() {
-            lock.writeLock().lock();
-            try {
-                if (!closed) {
-                    closed = true;
-                    key.close();
-                }
-            } finally {
-                lock.writeLock().unlock();
-            }
-        }
-    }
+final class VaultPkiClientIdentity extends RenewingClientIdentity {
 
     private final VaultPkiIssuer issuer;
-    private final Clock clock;
-    private final ScheduledExecutorService scheduler;
-    private final List<Generation> retiring = new ArrayList<>();
-    private Generation current;
-    private Instant nextRenewal;
-    private int generations;
-    private boolean closed;
 
     /** Issues the first certificate now, so that a configuration that cannot work fails where it is configured. */
     VaultPkiClientIdentity(Map<String, String> settings, Clock clock) {
-        this.clock = clock;
+        super(clock);
         this.issuer = new VaultPkiIssuer(settings);
         try {
-            this.current = issue();
+            start("seclume-vault-pki " + issuer.commonName());
         } catch (IOException | RuntimeException e) {
-            issuer.close();
+            close();
             // An argument of the connection, as the drivers read it: they turn
             // it into the SQLException (08001) a connect that cannot work is.
             // Not cached - the next connect asks Vault again.
             throw new IllegalArgumentException("no client certificate from Vault at "
                     + issuer.address() + issuer.signPath() + ": " + e.getMessage(), e);
         }
-        this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "seclume-vault-pki " + issuer.commonName());
-            thread.setDaemon(true);
-            return thread;
-        });
-        schedule(Duration.between(clock.instant(), nextRenewal));
-    }
-
-    private Generation issue() throws IOException {
-        space.seclume.jfr.SeclumeEvents.CertificateRenewal event =
-                space.seclume.jfr.Observed.beginCertificateRenewal();
-        try {
-            VaultPkiIssuer.Issued issued = issuer.issue();
-            Generation next = new Generation(issued);
-            synchronized (this) {
-                nextRenewal = issuer.renewalTime(issued);
-                generations++;
-            }
-            space.seclume.jfr.Observed.endCertificateRenewal(event, issuer.name(),
-                    issuer.signPath(), true, next.notAfter.toEpochMilli(), null);
-            return next;
-        } catch (IOException | RuntimeException e) {
-            Generation now = current;
-            space.seclume.jfr.Observed.endCertificateRenewal(event, issuer.name(),
-                    issuer.signPath(), false, now == null ? 0 : now.notAfter.toEpochMilli(),
-                    e.getMessage());
-            throw e;
-        }
-    }
-
-    /** Replaces the certificate now - a new key, a new request; the next handshake presents it. */
-    void renewNow() throws IOException {
-        Generation next = issue();
-        synchronized (this) {
-            if (closed) {
-                next.close();
-                return;
-            }
-            Generation previous = current;
-            current = next;
-            retire(previous);
-        }
-        LOG.log(System.Logger.Level.INFO, "a new client certificate for {0} from {1}, valid "
-                + "until {2}; the next handshake presents it", issuer.commonName(),
-                issuer.signPath(), next.notAfter);
-    }
-
-    private void schedule(Duration delay) {
-        scheduler.schedule(this::renewOrRetry, Math.max(0, delay.toMillis()),
-                TimeUnit.MILLISECONDS);
-    }
-
-    private void renewOrRetry() {
-        synchronized (this) {
-            if (closed) {
-                return;
-            }
-        }
-        try {
-            renewNow();
-            schedule(Duration.between(clock.instant(), nextRenewal()));
-        } catch (IOException | RuntimeException e) {
-            Duration retry = VaultPkiIssuer.retryAfter(clock.instant(), notAfter());
-            LOG.log(System.Logger.Level.WARNING, "the client certificate for {0} could not be "
-                    + "renewed ({1}); the one in hand ends {2}, trying again in {3}s",
-                    issuer.commonName(), e.getMessage(), notAfter(), retry.toSeconds());
-            schedule(retry);
-        }
-    }
-
-    /** Closed after the grace period, unless the whole identity is closed first. */
-    private void retire(Generation previous) {
-        retiring.add(previous);
-        scheduler.schedule(() -> {
-            synchronized (this) {
-                if (retiring.remove(previous)) {
-                    previous.close();
-                }
-            }
-        }, GRACE_MILLIS, TimeUnit.MILLISECONDS);
-    }
-
-    synchronized Instant notAfter() {
-        return current.notAfter;
-    }
-
-    synchronized Instant nextRenewal() {
-        return nextRenewal;
-    }
-
-    /** How many certificates it has had, the first included. */
-    synchronized int generations() {
-        return generations;
     }
 
     @Override
-    public synchronized ClientIdentity forHandshake() {
-        if (closed) {
-            throw new IllegalStateException("this client identity is closed");
-        }
-        return current;
+    Generation obtain(Generation current) throws IOException {
+        VaultPkiIssuer.Issued issued = issuer.issue();
+        return new Generation(issued.chain(), issued.key());
     }
 
     @Override
-    public synchronized List<byte[]> chain() {
-        return current.chain();
+    Instant nextLook(Generation generation) {
+        return VaultPkiIssuer.renewalTime(generation.notBefore, generation.notAfter,
+                issuer.renewAt());
     }
 
     @Override
-    public synchronized int signatureScheme() {
-        return current.signatureScheme();
+    String name() {
+        return issuer.name();
     }
 
     @Override
-    public byte[] sign(byte[] content) {
-        return forHandshake().sign(content);
+    String source() {
+        return issuer.signPath();
     }
 
     @Override
-    public void close() {
-        synchronized (this) {
-            if (closed) {
-                return;
-            }
-            closed = true;
-            current.close();
-            for (Generation old : retiring) {
-                old.close();
-            }
-            retiring.clear();
-        }
-        scheduler.shutdownNow();
+    void release() {
         issuer.close();
+    }
+
+    /** When the certificate is to be replaced. */
+    Instant nextRenewal() {
+        return nextLook();
     }
 }

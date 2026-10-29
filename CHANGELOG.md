@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **SPIFFE X.509-SVIDs with the key off the heap.** `SpiffeWorkloadApi` (core) calls the
+  Workload API's `FetchX509SVID` over the agent's Unix socket with a small HTTP/2 client of its
+  own - no gRPC or Netty needed - reads the answer into locked native memory and parses it
+  there, the PKCS#8 key going straight into OpenSSL or CNG. `SeclumeKeys.spiffeSslContext` /
+  `spiffe` / `spiffeKeyManager` (seclume-keys) give mutual TLS between workloads, the trust
+  domain's bundle as the trust and `peer-ids` as the allowed SPIFFE IDs;
+  `seclume.ssl.bundles.<name>.spiffe` makes it a Spring SSL bundle; `clientCertSpiffe=true`
+  presents the SVID as a database client certificate on seclume's TLS. Rotated SVIDs are taken
+  up from the next handshake on, listed (kind `spiffe`), graded and metered like Vault PKI
+  certificates. `FakeWorkloadApi` (seclume-tck) is a stand-in agent for tests. The renewal of
+  JDBC client certificates is shared by Vault PKI and SPIFFE (`RenewingClientIdentity`).
 - **The application's own secrets are redacted from its dumps - searched for off the heap.**
   `/actuator/heapdump` and the OOM-dump redaction look for every data source's password and
   `seclume.heapdump.secrets.<label>.*` (a secret provider's settings) as well as the shapes:

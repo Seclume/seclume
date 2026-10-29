@@ -156,6 +156,11 @@ public final class VaultPkiIssuer implements AutoCloseable {
         return name;
     }
 
+    /** The fraction of a certificate's lifetime after which it is replaced. */
+    public double renewAt() {
+        return renewAt;
+    }
+
     /** When a certificate from {@link #issue()} is to be replaced. */
     public Instant renewalTime(Issued issued) {
         return renewalTime(issued.notBefore(), issued.notAfter(), renewAt);
