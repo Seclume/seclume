@@ -136,6 +136,24 @@ class HeapCheckTest {
         assertTrue(report.contains("\"verdict\": \"NOT_FOUND\""), "no secret was named");
         String md = Files.readString(markdown);
         assertTrue(md.contains("## Found without being named"), md);
+
+        // And what holds each one - the line of code an audit asks for.
+        String probe = Unnamed.class.getName();
+        for (String holder : List.of(
+                "String in static " + probe + ".jwt",
+                "char[] in static " + probe + ".vaultToken",
+                "String in " + Unnamed.Config.class.getName() + ".apiKey",
+                "String as element of java.lang.Object[]")) {
+            assertTrue(report.contains("\"heldBy\": " + AuditReport.quote(holder)),
+                    holder + " was not named: " + report);
+            assertTrue(md.contains(holder), holder + " is not in the Markdown report");
+        }
+        // Garbage, if the collector has not been there yet: then it says so.
+        if (report.contains("\"detector\": \"stripe-key\"")) {
+            int stripe = report.indexOf("\"detector\": \"stripe-key\"");
+            String entry = report.substring(stripe, report.indexOf("]", stripe));
+            assertTrue(entry.contains("unreferenced"), "garbage named as held: " + entry);
+        }
         // The probe writes parts of what it made up next to the file it was given.
         for (String value : Files.readAllLines(directory.resolve("unused.values"))) {
             assertTrue(!report.contains(value) && !md.contains(value), "a report holds a value");
@@ -270,6 +288,24 @@ class HeapCheckTest {
         static String pem;
         static String url;
         static char[] vaultToken;
+        /** An instance field, as a configuration object keeps one. */
+        static Config config;
+        /** A list element, as a cache or a collection of settings keeps one. */
+        static List<Object> list;
+
+        /** Holds its key the way configuration classes do. */
+        static final class Config {
+            String apiKey;
+        }
+
+        private static String alnum(java.security.SecureRandom random, int length) {
+            String letters = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+            StringBuilder out = new StringBuilder();
+            for (int i = 0; i < length; i++) {
+                out.append(letters.charAt(random.nextInt(letters.length())));
+            }
+            return out.toString();
+        }
 
         public static void main(String[] arguments) throws Exception {
             java.security.SecureRandom random = new java.security.SecureRandom();
@@ -289,13 +325,26 @@ class HeapCheckTest {
             random.nextBytes(bytes);
             String token = "hvs." + url64.encodeToString(bytes).substring(0, 48);
             vaultToken = token.toCharArray();
+            config = new Config();
+            String github = alnum(random, 36);
+            config.apiKey = "ghp_" + github;
+            String slack = alnum(random, 30);
+            list = new java.util.ArrayList<>();
+            list.add("xoxb-" + slack);
+            // Made and dropped: garbage, which a dump without a collection keeps.
+            String stripe = alnum(random, 24);
+            if (("sk_live_" + stripe).hashCode() == 42) {
+                System.out.println("unlikely");
+            }
             java.nio.file.Files.write(Path.of(arguments[0] + ".values"), List.of( // seclume-allow: this probe leaks on purpose - see the class comment
                     payload.substring(0, 24), key.substring(0, 24), password,
-                    token.substring(4, 28)));
+                    token.substring(4, 28), github.substring(0, 20), slack.substring(0, 20),
+                    stripe.substring(0, 16)));
             System.out.println("ready");
             System.out.flush();
             System.in.read();
-            if (jwt.isEmpty() || pem.isEmpty() || url.isEmpty() || vaultToken.length == 0) {
+            if (jwt.isEmpty() || pem.isEmpty() || url.isEmpty() || vaultToken.length == 0
+                    || config.apiKey.isEmpty() || list.isEmpty()) {
                 System.out.println("never");
             }
         }

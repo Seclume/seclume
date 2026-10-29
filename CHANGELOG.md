@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **`seclume-heapcheck` says what holds a finding** (`Attribution`). Every match in the dump
+  file, named or discovered, is followed to the `byte[]` or `char[]` it lies in, through a
+  `String` where there is one, to the instance field, static field or object array that keeps
+  it - "String in com.acme.Config.apiKey" rather than a byte offset - or reported as
+  `unreferenced` garbage or `outside any object`. In all three report formats (`heldBy` in
+  JSON), class and field names only; three windowed passes, so dumps past 2 GB work;
+  `--no-attribution` to skip. Tested on hand-written HPROF files for every holder kind with 4-
+  and 8-byte ids and records across the read window, and on a real dump.
+- **Discovery in the CI tools.** `compare.py` compares `--discover` results by detector -
+  `new`, `persistent`, `resolved`, `not_checked`, `more_values` - with an ignored or skipped
+  detector counting as not checked, never as fixed; a discovery-only report is a valid scope.
+  The GitHub Action takes `discover` and `ignore`, and `secret-directory` becomes optional
+  with `discover`. The `heapcheck-action` job adds a clean run, a negative control and an
+  ignored detector with discovery on.
 - **The Vault provider logs in by itself** (`VaultLogin`). `auth-method=kubernetes`, `jwt` or
   `approle` replaces the token file a Vault Agent had to keep fresh: the pod's
   service-account token, any JWT the mount trusts, or an AppRole secret id goes into the

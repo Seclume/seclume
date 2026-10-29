@@ -74,6 +74,31 @@ carries; templates (`${...}`), masks (`****`) and the word `password` itself are
 `--ignore <detector>` leaves a detector out when its findings are understood; an unknown id is
 an error, not a filter that filters nothing. It reads about 40 MB of dump a second.
 
+## What holds it
+
+An offset says a credential is in the dump; an audit needs the line of code. So for every
+finding in the dump file - named or discovered - heapcheck works out what holds it:
+
+```
+FOUND - the secret from /run/secrets/api is in the heap dump, 2 time(s):
+  raw file: UTF-8 match of 40 bytes at 81234567 - held by String in com.acme.Config.apiKey
+DISCOVERED - a JSON Web Token (signed) (`jwt`, value #1) is in the heap dump, 1 time(s):
+  raw file: ASCII match of 612 bytes at 90311002 - held by String in static com.acme.TokenCache.current
+```
+
+It finds the `byte[]` or `char[]` the match lies in, then what refers to that array, and where
+the array is the value of a `String`, what refers to the `String`: an instance field (named by
+the class that declares it, inherited fields included), a static field, or an element of an
+object array (`as element of java.lang.Object[]` - a list or a map behind it). Up to three
+holders are named per finding. `unreferenced` is garbage the collector had not reclaimed when
+the dump was taken - a dump with `live=false` keeps it, and so does an attacker's copy of the
+file. `outside any object` is a match in the dump's own bookkeeping or memory no object owns.
+
+Reports carry it as `heldBy` per finding in JSON, a column in Markdown and a sentence in the
+SARIF message; only class and field names, never a value. It takes three more passes over the
+dump, reading it in windows, so dumps over 2 GB work too; `--no-attribution` leaves it out.
+A dump whose structure cannot be read still gets its report, without holders.
+
 ## Reports and baselines
 
 `.sarif` and `.sarif.json` select SARIF 2.1.0. Each leaked credential has one
@@ -93,6 +118,13 @@ Removing a secret from the scan never counts as resolving its leak. The tool
 compares presence by source and kind, not credential identity or finding count.
 It cannot detect that a credential file's contents changed between runs.
 
+With `--discover` in either report, a `discovery` object compares by detector - value
+numbers are counted per report and mean nothing across two: `new`, `persistent`,
+`resolved` and `not_checked` detector ids, and `more_values` for a detector that found more
+distinct values than before. A detector left out with `--ignore`, or a run without
+`--discover`, makes the old findings `not_checked`, not `resolved`. A report with discovery
+and no named secret is a valid scope.
+
 Exit 0 means the current report is clean and all previous sources were checked;
 1 means a current leak or incomplete coverage; 2 means invalid/unreadable input.
 **A baseline never suppresses a known leak.** Keep baselines from a trusted
@@ -106,7 +138,9 @@ dump of your application after login or rotation, use the composite action:
   with:
     jar: seclume-heapcheck/target/seclume-heapcheck-0.13.1.jar
     dump: app.hprof
-    secret-directory: /run/secrets/app
+    secret-directory: /run/secrets/app   # optional with discover
+    discover: 'true'                       # optional: credentials nobody named
+    ignore: 'jwt'                          # optional, space-separated detector ids
     baseline: previous.json # optional
     artifact-name: heapcheck # change if calling twice in one job
 ```
@@ -117,4 +151,6 @@ scanner errors. Reports contain source file names; choose artifact access
 accordingly. Neither credential files nor heap dumps are uploaded. Supplied
 `--dump` files remain caller-owned: delete them after the step, including failures.
 The repository's `heapcheck-action` job tests both a clean process and a leaking
-negative control using disposable credentials.
+negative control using disposable credentials, and the same with `discover`: the clean
+process must stay clean, a token nobody named must be found, and ignoring its detector
+must let it pass.

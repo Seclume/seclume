@@ -12,8 +12,14 @@ inputs:
     description: Path to the existing heap dump (never uploaded)
     required: true
   secret-directory:
-    description: Directory of secret files (never uploaded)
-    required: true
+    description: Directory of secret files (never uploaded); may be empty when discover is true
+    default: ''
+  discover:
+    description: Also look for credentials nobody named, by their shape (--discover)
+    default: 'false'
+  ignore:
+    description: Space-separated detector ids to leave out of the discovery (--ignore)
+    default: ''
   baseline:
     description: Optional previous heapcheck JSON report; source paths must be stable
     default: ''
@@ -31,13 +37,26 @@ runs:
         HEAPCHECK_DUMP: ${{ inputs.dump }}
         HEAPCHECK_SECRETS: ${{ inputs.secret-directory }}
         HEAPCHECK_BASELINE: ${{ inputs.baseline }}
+        HEAPCHECK_DISCOVER: ${{ inputs.discover }}
+        HEAPCHECK_IGNORE: ${{ inputs.ignore }}
         HEAPCHECK_ACTION: ${{ github.action_path }}
       run: |
         report_dir=$(mktemp -d "$RUNNER_TEMP/heapcheck-reports.XXXXXX")
         echo "reports=$report_dir" >> "$GITHUB_OUTPUT"
+        args=(--dump "$HEAPCHECK_DUMP")
+        if [ -n "$HEAPCHECK_SECRETS" ]; then args+=(--secret-dir "$HEAPCHECK_SECRETS"); fi
+        case "$HEAPCHECK_DISCOVER" in
+          true)
+            args+=(--discover)
+            for detector in $HEAPCHECK_IGNORE; do args+=(--ignore "$detector"); done ;;
+          false)
+            if [ -n "$HEAPCHECK_IGNORE" ]; then
+              echo '::error::ignore needs discover: true'; echo "status=2" >> "$GITHUB_OUTPUT"; exit 0
+            fi ;;
+          *) echo '::error::discover is true or false'; echo "status=2" >> "$GITHUB_OUTPUT"; exit 0 ;;
+        esac
         set +e
-        java --enable-native-access=ALL-UNNAMED -jar "$HEAPCHECK_JAR" \
-          --dump "$HEAPCHECK_DUMP" --secret-dir "$HEAPCHECK_SECRETS" \
+        java --enable-native-access=ALL-UNNAMED -jar "$HEAPCHECK_JAR" "${args[@]}" \
           --report "$report_dir/heapcheck.json" --report "$report_dir/heapcheck.sarif" \
           --report "$report_dir/heapcheck.md"
         status=$?

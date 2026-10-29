@@ -3,6 +3,7 @@ package space.seclume.heapcheck;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import space.seclume.tck.HeapDumpScanner;
 
@@ -22,13 +23,45 @@ import space.seclume.tck.HeapDumpScanner;
  * @param secrets   one result per secret, in the order given
  * @param discovery what {@code --discover} found without being told what to
  *                  look for, or {@code null} when it was not asked for
+ * @param heldBy    for an offset in the dump file, what holds it - a field, a
+ *                  static, an array, or "unreferenced" ({@link Attribution});
+ *                  empty when that was not worked out
  */
 record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
-                   List<SecretResult> secrets, Discovery.Result discovery) {
+                   List<SecretResult> secrets, Discovery.Result discovery,
+                   Map<Long, String> heldBy) {
 
     AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                 List<SecretResult> secrets) {
-        this(checkedAt, host, target, dump, secrets, null);
+        this(checkedAt, host, target, dump, secrets, null, Map.of());
+    }
+
+    AuditReport(Instant checkedAt, String host, Target target, Dump dump,
+                List<SecretResult> secrets, Discovery.Result discovery) {
+        this(checkedAt, host, target, dump, secrets, discovery, Map.of());
+    }
+
+    /** What holds the raw finding at {@code position}, or {@code null}. */
+    String holderAt(long position) {
+        return heldBy.get(position);
+    }
+
+    /** The distinct holders of a secret's raw findings, in the order met. */
+    List<String> holders(SecretResult secret) {
+        return secret.findings().stream()
+                .filter(finding -> "raw file".equals(finding.source()))
+                .map(finding -> holderAt(finding.position()))
+                .filter(java.util.Objects::nonNull).distinct().toList();
+    }
+
+    /** The distinct holders of one discovered value, in the order met. */
+    List<String> holders(Discovery.Found found) {
+        return found.occurrences().stream().map(at -> holderAt(at.position()))
+                .filter(java.util.Objects::nonNull).distinct().toList();
+    }
+
+    private static String heldText(List<String> holders) {
+        return holders.isEmpty() ? "" : " Held by: " + String.join("; ", holders) + ".";
     }
 
     /** The version of this tool, as the jar says, or "development". */
@@ -110,7 +143,8 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
             first = false;
             out.append("      {\"ruleId\": \"SECLUME-HEAP-001\", \"level\": \"error\",")
                     .append("\"message\": {\"text\": ")
-                    .append(quote("Credential from " + secret.source() + " was found in the heap dump."))
+                    .append(quote("Credential from " + secret.source() + " was found in the heap dump."
+                            + heldText(holders(secret))))
                     .append("}, \"locations\": [{\"logicalLocations\": [{\"fullyQualifiedName\": ")
                     .append(quote(secret.source())).append("}]}]}");
         }
@@ -122,7 +156,8 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
             out.append("      {\"ruleId\": ").append(quote(ruleId(found.detector())))
                     .append(", \"level\": \"error\", \"message\": {\"text\": ")
                     .append(quote("A " + found.detector().name() + " (value #" + found.value()
-                            + ") was found " + found.count() + " time(s) in the heap dump."))
+                            + ") was found " + found.count() + " time(s) in the heap dump."
+                            + heldText(holders(found))))
                     .append("}, \"locations\": [{\"logicalLocations\": [{\"fullyQualifiedName\": ")
                     .append(quote("heap dump/" + found.detector().id() + "/#" + found.value()))
                     .append("}]}]}");
@@ -175,7 +210,13 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                 indent(out, 4).append("{\"where\": ").append(quote(finding.source()))
                         .append(", \"encoding\": ").append(quote(finding.encoding()))
                         .append(", \"position\": ").append(finding.position())
-                        .append(", \"length\": ").append(finding.length()).append('}');
+                        .append(", \"length\": ").append(finding.length());
+                String holder = "raw file".equals(finding.source())
+                        ? holderAt(finding.position()) : null;
+                if (holder != null) {
+                    out.append(", \"heldBy\": ").append(quote(holder));
+                }
+                out.append('}');
             }
             out.append(secret.findings().isEmpty() ? "]\n" : "\n" + "      ]\n");
             indent(out, 2).append('}');
@@ -218,8 +259,11 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                 out.append(j == 0 ? "\n" : ",\n");
                 indent(out, 5).append("{\"where\": \"raw file\", \"encoding\": ")
                         .append(quote(at.encoding())).append(", \"position\": ")
-                        .append(at.position()).append(", \"length\": ").append(at.length())
-                        .append('}');
+                        .append(at.position()).append(", \"length\": ").append(at.length());
+                if (holderAt(at.position()) != null) {
+                    out.append(", \"heldBy\": ").append(quote(holderAt(at.position())));
+                }
+                out.append('}');
             }
             out.append(entry.occurrences().isEmpty() ? "]\n" : "\n");
             if (!entry.occurrences().isEmpty()) {
@@ -336,11 +380,15 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                 continue;
             }
             out.append("### `").append(cell(secret.source())).append("`\n\n");
-            out.append("| Where | Encoding | Position | Length |\n|---|---|---|---|\n");
+            out.append("| Where | Encoding | Position | Length | Held by |\n"
+                    + "|---|---|---|---|---|\n");
             for (HeapDumpScanner.Finding finding : secret.findings()) {
+                String holder = "raw file".equals(finding.source())
+                        ? holderAt(finding.position()) : null;
                 out.append("| ").append(cell(finding.source())).append(" | ")
                         .append(finding.encoding()).append(" | ").append(finding.position())
-                        .append(" | ").append(finding.length()).append(" |\n");
+                        .append(" | ").append(finding.length()).append(" | ")
+                        .append(holder == null ? "-" : "`" + cell(holder) + "`").append(" |\n");
             }
             out.append('\n');
         }
@@ -351,14 +399,18 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
         if (discovery.clean()) {
             out.append("No credential of a known shape is in the dump.\n\n");
         } else {
-            out.append("| Detector | Value | Occurrences | First at |\n|---|---|---|---|\n");
+            out.append("| Detector | Value | Occurrences | First at | Held by |\n"
+                    + "|---|---|---|---|---|\n");
             for (Discovery.Found found : discovery.found()) {
                 Discovery.Occurrence at = found.occurrences().isEmpty() ? null
                         : found.occurrences().get(0);
+                List<String> holders = holders(found);
                 out.append("| ").append(cell(found.detector().name())).append(" (`")
                         .append(found.detector().id()).append("`) | #").append(found.value())
                         .append(" | ").append(found.count()).append(" | ")
                         .append(at == null ? "-" : at.encoding() + " at " + at.position())
+                        .append(" | ").append(holders.isEmpty() ? "-"
+                                : "`" + cell(String.join("`, `", holders)) + "`")
                         .append(" |\n");
             }
             out.append('\n');
