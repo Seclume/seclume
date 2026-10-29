@@ -1,11 +1,15 @@
-package space.seclume.keys;
+package space.seclume.crypto;
 
 import java.io.ByteArrayOutputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64; // seclume-allow: a public request in PEM
 
 /**
- * A PKCS#10 certification request for a key in OpenSSL, signed by it there.
+ * A PKCS#10 certification request for a {@link PrivateSigningKey}, signed by
+ * it where it lives.
  *
  * <p>Everything in a request is public - the subject, the public key, the
  * signature - so it is built here, in Java, as DER; only the signature is made
@@ -13,7 +17,7 @@ import java.util.Base64; // seclume-allow: a public request in PEM
  * and the lifetime go to the CA beside it (Vault's {@code alt_names},
  * {@code ttl}), where the CA's role decides what it grants.
  */
-final class CertificationRequest {
+public final class CertificationRequest {
 
     /** ecdsa-with-SHA256, 1.2.840.10045.4.3.2. */
     private static final byte[] ECDSA_SHA256 = {0x06, 0x08, 0x2a, (byte) 0x86, 0x48,
@@ -25,8 +29,8 @@ final class CertificationRequest {
     }
 
     /** The request in DER, for {@code commonName}, signed by {@code key} (EC) with SHA-256. */
-    static byte[] der(NativeKey key, String commonName) {
-        if (!"EC".equals(key.type)) {
+    public static byte[] der(PrivateSigningKey key, String commonName) {
+        if (!key.is("EC")) {
             throw new IllegalArgumentException("a request is signed here with an EC key only");
         }
         if (commonName == null || commonName.isBlank()) {
@@ -35,16 +39,22 @@ final class CertificationRequest {
         // seclume-allow: a common name, which the certificate publishes
         byte[] name = commonName.getBytes(StandardCharsets.UTF_8);
         byte[] subject = sequence(set(sequence(COMMON_NAME, tlv(0x0c, name))));
-        byte[] info = sequence(tlv(0x02, new byte[] {0}), subject,
-                key.publicKey.getEncoded(), tlv(0xa0, new byte[0]));
-        byte[] signature = key.sign("SHA256", false, info, info.length);
-        byte[] bits = new byte[signature.length + 1];
-        System.arraycopy(signature, 0, bits, 1, signature.length);
+        byte[] info = sequence(tlv(0x02, new byte[] {0}), subject, key.publicKey(),
+                tlv(0xa0, new byte[0]));
+        byte[] bits;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment message = arena.allocate(info.length);
+            MemorySegment.copy(info, 0, message, ValueLayout.JAVA_BYTE, 0, info.length);
+            MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
+            int written = key.sign("SHA256", false, message, info.length, out);
+            bits = new byte[written + 1];
+            MemorySegment.copy(out, ValueLayout.JAVA_BYTE, 0, bits, 1, written);
+        }
         return sequence(info, sequence(ECDSA_SHA256), tlv(0x03, bits));
     }
 
     /** The same as PEM, as Vault's {@code csr} parameter takes it. */
-    static String pem(NativeKey key, String commonName) {
+    public static String pem(PrivateSigningKey key, String commonName) {
         return "-----BEGIN CERTIFICATE REQUEST-----\n"
                 + Base64.getMimeEncoder(64, new byte[] {'\n'}) // seclume-allow: a public request
                         .encodeToString(der(key, commonName))

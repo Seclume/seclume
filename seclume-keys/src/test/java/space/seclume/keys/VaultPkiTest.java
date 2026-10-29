@@ -194,7 +194,7 @@ class VaultPkiTest {
                 X509Certificate before = manager.getCertificateChain(first)[0];
                 Instant end = before.getNotAfter().toInstant();
                 Instant start = before.getNotBefore().toInstant();
-                assertEquals(VaultPkiKeyManager.renewalTime(start, end, 0.67),
+                assertEquals(space.seclume.secret.VaultPkiIssuer.renewalTime(start, end, 0.67),
                         manager.nextRenewal());
                 assertEquals(end, manager.notAfter());
 
@@ -323,14 +323,14 @@ class VaultPkiTest {
     void whenToRenewAndWhenToTryAgain() {
         Instant start = Instant.parse("2026-01-01T00:00:00Z");
         assertEquals(start.plus(Duration.ofHours(16)),
-                VaultPkiKeyManager.renewalTime(start, start.plus(Duration.ofHours(24)), 2.0 / 3));
+                space.seclume.secret.VaultPkiIssuer.renewalTime(start, start.plus(Duration.ofHours(24)), 2.0 / 3));
         // a tenth of what is left, between ten seconds and five minutes
         assertEquals(Duration.ofMinutes(5),
-                VaultPkiKeyManager.retryAfter(start, start.plus(Duration.ofHours(8))));
+                space.seclume.secret.VaultPkiIssuer.retryAfter(start, start.plus(Duration.ofHours(8))));
         assertEquals(Duration.ofSeconds(60),
-                VaultPkiKeyManager.retryAfter(start, start.plus(Duration.ofMinutes(10))));
+                space.seclume.secret.VaultPkiIssuer.retryAfter(start, start.plus(Duration.ofMinutes(10))));
         assertEquals(Duration.ofSeconds(10),
-                VaultPkiKeyManager.retryAfter(start, start.minus(Duration.ofMinutes(1))));
+                space.seclume.secret.VaultPkiIssuer.retryAfter(start, start.minus(Duration.ofMinutes(1))));
     }
 
     @Test
@@ -339,7 +339,7 @@ class VaultPkiTest {
         fields.put("csr", "-----BEGIN-----\nAB\"C\\\n");
         fields.put("x", "\u0001");
         assertEquals("{\"csr\":\"-----BEGIN-----\\nAB\\\"C\\\\\\n\",\"x\":\"\\u0001\"}",
-                VaultPkiKeyManager.json(fields));
+                space.seclume.secret.VaultPkiIssuer.json(fields));
     }
 
     /** A TLS 1.3 handshake with a server that asks for a client certificate; what it saw. */
