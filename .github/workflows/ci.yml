@@ -122,6 +122,35 @@ jobs:
           discover: 'true'
           ignore: vault-token
           artifact-name: heapcheck-discover-ignored
+      # Redaction of both leaking dumps: the copies must pass the same checks
+      # their originals failed above.
+      - name: Redact the leaking dumps
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixtures="$RUNNER_TEMP/heapcheck-fixtures"
+          for mode in leak token; do
+            java --enable-native-access=ALL-UNNAMED -jar "$HEAPCHECK_JAR" \
+              --dump "$fixtures/$mode.hprof" --secret-dir "$fixtures/secrets" --discover \
+              --no-attribution --redact "$fixtures/$mode-redacted.hprof"
+            test "$(stat -c %a "$fixtures/$mode-redacted.hprof")" = 600
+            test "$(stat -c %s "$fixtures/$mode-redacted.hprof")" = "$(stat -c %s "$fixtures/$mode.hprof")"
+          done
+      - name: The redacted leak must pass
+        uses: ./.github/actions/heapcheck
+        with:
+          jar: ${{ env.HEAPCHECK_JAR }}
+          dump: ${{ runner.temp }}/heapcheck-fixtures/leak-redacted.hprof
+          secret-directory: ${{ runner.temp }}/heapcheck-fixtures/secrets
+          discover: 'true'
+          artifact-name: heapcheck-redacted-leak
+      - name: The redacted token must pass discovery
+        uses: ./.github/actions/heapcheck
+        with:
+          jar: ${{ env.HEAPCHECK_JAR }}
+          dump: ${{ runner.temp }}/heapcheck-fixtures/token-redacted.hprof
+          discover: 'true'
+          artifact-name: heapcheck-redacted-token
       - name: Remove test dumps and credential
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/heapcheck-fixtures"
@@ -166,7 +195,7 @@ jobs:
           echo "SOFTHSM2_CONF=$RUNNER_TEMP/softhsm/softhsm2.conf" >> "$GITHUB_ENV"
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapcheck,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-heapcheck,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # A red run names its failing tests as annotations, so that they can be

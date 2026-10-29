@@ -1,5 +1,7 @@
 package space.seclume.heapcheck;
 
+import space.seclume.heapdump.Discovery;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -118,5 +120,24 @@ class CommandLineTest {
         ChildJvm.Result withoutDiscover = ChildJvm.run(HeapCheck.class,
                 List.of("--dump", dump.toString(), "--ignore", "jwt"), 60);
         assertEquals(2, withoutDiscover.exitCode(), withoutDiscover.output());
+    }
+
+    /** --redact never overwrites a file: the one there may be the only copy of something. */
+    @Test
+    void aRedactionDoesNotOverwriteAFile(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path dump = dir.resolve("app.hprof");
+        java.nio.file.Files.writeString(dump, "\u0001\u0002 nothing \u0003");
+        java.nio.file.Path there = java.nio.file.Files.writeString(dir.resolve("copy.hprof"),
+                "keep me");
+        ChildJvm.Result result = ChildJvm.run(HeapCheck.class, List.of("--dump",
+                dump.toString(), "--discover", "--redact", there.toString()), 60);
+        assertEquals(2, result.exitCode(), result.output());
+        assertTrue(result.output().contains("does not overwrite"), result.output());
+        assertEquals("keep me", java.nio.file.Files.readString(there));
+
+        ChildJvm.Result missing = ChildJvm.run(HeapCheck.class, List.of("--dump",
+                dump.toString(), "--discover", "--redact"), 60);
+        assertEquals(2, missing.exitCode(), missing.output());
     }
 }

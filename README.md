@@ -66,7 +66,9 @@ could be in, and deletes the dump again. The secret comes from a file, never fro
 line. For audits it also checks existing dumps and several secrets at once, and writes a
 Markdown or JSON report: `--dump`, `--secret-dir`, `--report`. And `--discover` finds what
 nobody named - private keys, JWTs, cloud and platform tokens, passwords in URLs - by their
-shape, reporting which kind, how often and where, never the value.
+shape, reporting which kind, how often and where, never the value. `--redact copy.hprof`
+writes a copy of the dump with all of that overwritten and checked again, for a dump that has
+to leave the house.
 
 For CI, `--report heapcheck.sarif` adds SARIF output. A ready-to-use GitHub Action
 and a comparison of successive JSON reports are in [DIAGNOSTICS.md](DIAGNOSTICS.md).

@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **`seclume-heapcheck --redact <copy.hprof>`**: a copy of a heap dump that can be handed on.
+  Every occurrence of the named secrets (UTF-8, UTF-16 both ways, Base64; binary ones as
+  bytes) and, with `--discover`, the value of every credential of a known shape is
+  overwritten with `*` in its own encoding or with zeros - and then its echoes: the same
+  value, a JWT's segments, a key's lines, a token's body without its prefix, wherever else
+  they lie without a shape to be found by. Nothing moves, so the copy opens in any analyser;
+  the `hash` of every `String` whose text went is cleared. The copy is owner-only, renamed
+  into place, never over an existing file, and searched again before that: anything left
+  and it is deleted, exit 2. Discovery, attribution and redaction move to the new
+  dependency-free module **`seclume-heapdump`** (`space.seclume.heapdump`), which
+  `seclume-heapcheck` uses; tested byte for byte on hand-written dumps, across read-window
+  edges, and on real dumps of a process with named and unnamed credentials.
 - **The Vault provider logs in with the cloud's identity**: `auth-method=aws` (iam type),
   `gcp` (gce type) and `azure`. AWS signs an `sts:GetCallerIdentity` request with the workload's
   role (`aws-credentials=instance|container|web-identity`) or a key pair, and the secret access

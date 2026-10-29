@@ -1,4 +1,4 @@
-package space.seclume.heapcheck;
+package space.seclume.heapdump;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -137,7 +137,8 @@ class DiscoveryTest {
         System.arraycopy(text, 0, data, 3001, text.length);
         Discovery.Result result = Discovery.scan(data, Set.of(), Discovery.CHUNK);
         Discovery.Occurrence at = result.found().get(0).occurrences().get(0);
-        assertEquals(new Discovery.Occurrence("UTF-16BE", 3001, text.length), at);
+        assertEquals(new Discovery.Occurrence("UTF-16BE", 3001, text.length, 3001,
+                text.length), at, "a token is all value");
     }
 
     /**
@@ -227,73 +228,4 @@ class DiscoveryTest {
         }
     }
 
-    /** The reports: which kind, which number, how often, where - and nothing of the value. */
-    @Test
-    void noReportHoldsAValue() {
-        String[] all = SAMPLES.values().toArray(String[]::new);
-        Discovery.Result result = Discovery.scan(dump("ASCII", all), Set.of("npm-token"),
-                Discovery.CHUNK);
-        assertEquals(SAMPLES.size() - 1, result.found().size());
-        AuditReport report = new AuditReport(Instant.parse("2026-10-28T12:00:00Z"), "host",
-                new AuditReport.Target(null, null, "app.hprof"),
-                new AuditReport.Dump(1, "00", true), List.of(), result);
-        String json = report.json();
-        String markdown = report.markdown();
-        String sarif = report.sarif();
-        for (String text : List.of(json, markdown, sarif)) {
-            for (String sample : all) {
-                String secret = secretPart(sample);
-                assertFalse(text.contains(secret), "a report holds a value: " + secret);
-            }
-        }
-        assertFalse(report.clean());
-        assertTrue(report.secretsClean());
-        assertTrue(json.contains("\"verdict\": \"NOT_FOUND\""), "verdict is the named secrets'");
-        assertTrue(json.contains("\"discovery\": {\n    \"verdict\": \"FOUND\""), json);
-        assertTrue(json.contains("\"ignored\": [\"npm-token\"]"), json);
-        assertTrue(markdown.contains("## Found without being named")
-                && markdown.contains("Left out on request: npm-token."), markdown);
-        assertTrue(sarif.contains("\"id\": \"SECLUME-HEAP-DISCOVER-JWT\""), sarif);
-        assertTrue(sarif.contains("\"fullyQualifiedName\": \"heap dump/jwt/#1\""), sarif);
-        assertFalse(sarif.contains("\"position\""), "SARIF carries no heap offsets");
-    }
-
-    /**
-     * The part of a sample that is the secret - what a report must never
-     * contain. Twelve characters of it: enough to be unmistakable, short
-     * enough to be in every encoding of it.
-     */
-    private static String secretPart(String sample) {
-        String secret;
-        if (sample.startsWith("-----BEGIN")) {
-            secret = sample.split("\n")[1];
-        } else if (sample.contains("AccountKey=")) {
-            int from = sample.indexOf("AccountKey=") + "AccountKey=".length();
-            secret = sample.substring(from, sample.indexOf(';', from));
-        } else if (sample.contains("://") && sample.indexOf('@') > 0) {
-            secret = sample.substring(sample.indexOf(':', sample.indexOf("://") + 3) + 1,
-                    sample.indexOf('@'));
-        } else if (sample.contains("password=") || sample.contains("sig=")) {
-            secret = sample.substring(sample.lastIndexOf('=') + 1);
-        } else if (sample.contains(" ")) {
-            secret = sample.substring(sample.lastIndexOf(' ') + 1);
-        } else {
-            secret = sample;
-        }
-        String middle = secret.length() > 20 ? secret.substring(8) : secret;
-        return middle.length() > 12 ? middle.substring(0, 12) : middle;
-    }
-
-    @Test
-    void aCleanDiscoveryIsReportedAsSuch() {
-        Discovery.Result result = Discovery.scan(dump("ASCII", "nothing to see here at all"),
-                Set.of(), Discovery.CHUNK);
-        AuditReport report = new AuditReport(Instant.now(), "host",
-                new AuditReport.Target(null, null, "app.hprof"),
-                new AuditReport.Dump(1, "00", true), List.of(), result);
-        assertTrue(report.clean());
-        assertTrue(report.json().contains("\"discovery\": {\n    \"verdict\": \"NOT_FOUND\""));
-        assertTrue(report.markdown().contains("No credential of a known shape is in the dump."));
-        assertTrue(report.sarif().contains("\"results\": [\n\n    ]"));
-    }
 }

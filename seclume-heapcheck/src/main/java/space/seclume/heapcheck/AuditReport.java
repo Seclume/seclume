@@ -1,5 +1,7 @@
 package space.seclume.heapcheck;
 
+import space.seclume.heapdump.Discovery;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
