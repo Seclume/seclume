@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Client certificates from Vault's PKI with the key never off OpenSSL**
+  (`SeclumeKeys.vaultPkiKeyManager`, `vaultPkiKeyManagerFactory`, `vaultPkiSslContext`; Spring:
+  `seclume.ssl.bundles.<name>.vault-pki`). A P-256 key is generated in OpenSSL or CNG
+  (`PrivateSigningKey.generateP256`, the scalar copied only within native memory), a PKCS#10
+  request is signed with it there, and `pki/sign/<role>` returns the certificate - Vault never
+  has the key, and no JSON answer carries it. Renewed with a new key at two thirds of the
+  lifetime, retried while the old certificate holds; generations keep their aliases
+  (`RotatingKeyManager`, now shared with the file-reloading key manager). The Vault token from
+  the same logins as `provider=vault` (`SecretProviders.vaultToken`, now public). Tested with a
+  stand-in that verifies the request and signs with `openssl`, an mTLS handshake, and in CI
+  against Vault's and OpenBao's PKI engines.
 - **`seclume-heapcheck --redact <copy.hprof>`**: a copy of a heap dump that can be handed on.
   Every occurrence of the named secrets (UTF-8, UTF-16 both ways, Base64; binary ones as
   bytes) and, with `--discover`, the value of every credential of a known shape is

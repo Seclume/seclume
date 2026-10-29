@@ -132,4 +132,30 @@ class SslAutoConfigurationTest {
         }
         assertThrows(Exception.class, () -> context("seclume.server.ssl.bundle=missing").close());
     }
+
+    /**
+     * {@code vault-pki=} instead of the files: wired to Vault - here one that is
+     * not there, so the start fails saying so - and never beside them.
+     */
+    @Test
+    void aBundleFromVaultsPki() throws Exception {
+        Path token = java.nio.file.Files.writeString(directory.resolve("vault-token"), "t");
+        String vault = "seclume.ssl.bundles.client.vault-pki=address=https://127.0.0.1:1"
+                + "&pki-role=client&common-name=orders.svc&timeout-millis=2000"
+                + "&token-provider=file&token-path=" + token;
+        Exception unreachable = assertThrows(Exception.class, () -> context(vault).close());
+        assertTrue(rootMessage(unreachable).contains("no certificate from Vault"),
+                rootMessage(unreachable));
+        Exception both = assertThrows(Exception.class, () -> context(vault,
+                "seclume.ssl.bundles.client.certificate=" + certificate).close());
+        assertTrue(rootMessage(both).contains("vault-pki= and certificate="), rootMessage(both));
+    }
+
+    private static String rootMessage(Throwable thrown) {
+        StringBuilder messages = new StringBuilder();
+        for (Throwable t = thrown; t != null; t = t.getCause()) {
+            messages.append(t.getMessage()).append(" | ");
+        }
+        return messages.toString();
+    }
 }

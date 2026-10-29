@@ -1190,6 +1190,39 @@ The heap proof searches for the key's DER encoding and for its prime (RSA) or sc
 form a `BigInteger` would hold. The control loads the same key the usual way, and the proof
 finds it.
 
+**A certificate from Vault's PKI, for a key that was never anywhere else.** The usual way,
+`pki/issue`, has Vault make the key and send it back in JSON - where every client turns it
+into a `String`, and Vault had it too. Here the key is generated in OpenSSL (or CNG), a
+certification request is signed with it there, and `pki/sign/<role>` returns only the
+certificate. Once two thirds of the certificate's lifetime have passed, a new key gets a new
+certificate, used from the next handshake on; a handshake that already chose the old one keeps
+it, and the old key is freed a minute later. A renewal that fails is tried again - a tenth of
+the time left, between ten seconds and five minutes - while the certificate in hand still works.
+
+```java
+X509ExtendedKeyManager me = SeclumeKeys.vaultPkiKeyManager(
+        "address=https://vault:8200&pki-role=client&common-name=orders.svc&ttl=24h"
+        + "&auth-method=kubernetes&auth-role=orders");
+SSLContext client = SeclumeKeys.vaultPkiSslContext("...");     // the same, as a context
+```
+
+```properties
+seclume.ssl.bundles.client.vault-pki=address=https://vault:8200&pki-role=client&common-name=orders.svc&auth-method=kubernetes&auth-role=orders
+```
+
+- **Settings:** `pki-mount` (`pki`), `pki-role`, `common-name`, and optionally `alt-names`,
+  `ip-sans`, `ttl`, `renew-at` (0.67). The Vault token comes exactly as for `provider=vault`:
+  a login (`auth-method=kubernetes|jwt|approle|aws|gcp|azure`) or the `token-` settings.
+- **Keys:** P-256. The chain is the certificate and its issuing CA - what a peer that trusts
+  the root needs from a two-level PKI.
+- **Where it goes:** anything that takes a JSSE key manager or a Spring SSL bundle - HTTP and
+  gRPC clients, Kafka, Reactor Netty. Tomcat (`seclume.server.ssl.bundle`) and seclume's own
+  JDBC client certificates take files so far.
+- **Tests:** against a stand-in for Vault that checks the request's signature and signs with
+  `openssl`, through a TLS 1.3 handshake whose server demands the certificate; and in CI against
+  real Vault and OpenBao PKI engines, with the root token and with an AppRole whose policy
+  may sign and nothing else.
+
 **SSH and SFTP.** `seclume-ssh` gives Apache MINA SSHD, and Spring Integration's SFTP on top
 of it, such a key for public-key logins:
 
