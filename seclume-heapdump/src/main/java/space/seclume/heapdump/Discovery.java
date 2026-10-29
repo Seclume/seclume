@@ -314,7 +314,7 @@ public final class Discovery {
      */
     @FunctionalInterface
     public interface Sink {
-        void found(Detector detector, Occurrence occurrence);
+        void found(Occurrence occurrence);
     }
 
     private Sink sink;
@@ -562,7 +562,7 @@ public final class Discovery {
                 offset + (long) valueStart * width, (valueEnd - valueStart) * width);
         record(detector, value, occurrence);
         if (sink != null) {
-            sink.found(detector, occurrence);
+            sink.found(occurrence);
         }
     }
 

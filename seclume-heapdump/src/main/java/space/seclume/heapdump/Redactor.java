@@ -214,7 +214,7 @@ public final class Redactor {
         long echoed = 0;
         if (discover) {
             List<Region> found = new ArrayList<>();
-            discovered = Discovery.scan(dump, ignore, (detector, at) -> add(found,
+            discovered = Discovery.scan(dump, ignore, at -> add(found,
                     new Region(at.valuePosition(), at.valueLength(), Fill.of(at.encoding()))));
             regions.addAll(found);
             echoes = Echoes.of(dump, found);

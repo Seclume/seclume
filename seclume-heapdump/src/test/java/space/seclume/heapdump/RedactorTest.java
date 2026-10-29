@@ -267,7 +267,7 @@ class RedactorTest {
         }
         Path file = Files.write(directory.resolve("raw.bin"), data.toByteArray());
         List<Redactor.Region> found = new ArrayList<>();
-        Discovery.scan(file, Set.of(), (d, o) -> found.add(new Redactor.Region(
+        Discovery.scan(file, Set.of(), o -> found.add(new Redactor.Region(
                 o.valuePosition(), o.valueLength(), Redactor.Fill.of(o.encoding()))));
         Redactor.Echoes echoes = Redactor.Echoes.of(file, found);
         for (int window : new int[] {64, 100, 1000, 4096, 1 << 20}) {
