@@ -1620,7 +1620,9 @@ What uses it:
     on: every named secret in every encoding, with `--discover` every credential of a known
     shape and its copies and parts where they have no shape, overwritten in place - the dump
     stays a dump - and the `String` hashes of what went cleared. The copy is searched again
-    and deleted if anything is left. In `seclume-heapdump`, a library without dependencies.
+    and deleted if anything is left. In `seclume-heapdump`, a library without dependencies -
+    which the Spring Boot starter uses to make `/actuator/heapdump` serve such a copy instead
+    of the heap itself (see [OBSERVABILITY.md](OBSERVABILITY.md#actuatorheapdump-a-redacted-copy-never-the-heap-itself)).
 - **`seclume-tck`'s `NoSecretInHeap`** runs the same proof in **your own test suite**:
   - `@ExtendWith(NoSecretInHeap.class)` checks after every test.
   - `NoSecretInHeap.assertAbsent(secretFile)` checks at a moment you choose, say right after

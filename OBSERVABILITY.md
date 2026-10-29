@@ -234,6 +234,40 @@ certificate expiring next week taking every instance out of service at once woul
 warning into the outage it warns of. Whether the database can be reached stays the health
 check's question alone; alert on the grade instead.
 
+## `/actuator/heapdump`: a redacted copy, never the heap itself
+
+Spring Boot's heap dump endpoint hands out everything the application holds - every password,
+token and key on its heap - to whoever may call it, as a file that then lives on in a ticket or
+on a laptop. With the actuator on the class path, the starter puts its own endpoint in that
+place. It takes the dump the same way and serves a **redacted copy**:
+
+- every credential of a known shape is overwritten - private keys, JWTs, cloud and platform
+  tokens, passwords in URLs and URL parameters, `Authorization` values; the 17 detectors of
+  [`seclume-heapcheck --discover`](DIAGNOSTICS.md#credentials-nobody-named---discover) - and so
+  are their copies and parts where they have no shape: a URL's password in a field of its
+  own, a JWT's payload, a token's body without its prefix;
+- in place, with `*` or zeros, so the copy opens in any analyser, and the `hash` of every
+  `String` whose text went is cleared;
+- the copy is searched again before it is served, and the dump itself is deleted before the
+  response starts.
+
+It fails closed: if the copy cannot be made clean, or the dump cannot be read as HPROF
+(OpenJ9 writes another format), the response is 500 and nothing is served. Exposing the
+endpoint is still a decision of its own, and Boot leaves it off:
+
+```properties
+management.endpoint.heapdump.access=read-only
+management.endpoints.web.exposure.include=heapdump
+seclume.heapdump.ignore=jwt           # optional: detectors to leave out; a typo stops the start
+seclume.heapdump.redact=false         # optional: Boot's endpoint, unredacted
+```
+
+What it cannot reach: a credential of no known shape. The application's own secrets are not
+known to the endpoint, and are not put on its heap to look for them; a password that is only a
+password, held in a `String`, stays. Find those with `seclume-heapcheck --secret-file` or
+`NoSecretInHeap`, and keep them off the heap. Redaction reads the dump a few times, at about
+40 MB a second for discovery, so a large heap takes a while to come back.
+
 ## Diagnostics for specific defects
 
 - **`Flight`**: the last messages a connection sent and received, in order, attached to the
