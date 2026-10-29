@@ -45,6 +45,44 @@ These produced no error at all, which is worse than any of the above.
 | `Connection is not available, request timed out after 30000ms` | Still a timeout, but the message names the three connections out the longest, and with leak detection on it says where they were borrowed | `PoolTest` |
 | Running transactions cut off by SIGTERM | Closing the pool lets borrowed connections finish for up to `shutdown-timeout` (10 s) | `ShutdownDrainTest` |
 
+## Coming from Spring Boot 3.x
+
+`seclume-spring-boot-starter` is built for Spring Boot 4.x and Spring Framework 7. There is
+no starter for Boot 3, and none is planned: Spring Boot 3.5.16 (25.06.2026) was the last open
+source release of the 3.x line, and a starter built on it would carry every later
+vulnerability in its dependencies with no open source fix to move to
+([Spring Boot 3.5.16 available now](https://spring.io/blog/2026/06/25/spring-boot-3-5-16-available-now/)).
+
+**The way that is meant: Boot 4.** Upgrade with Spring's
+[migration guide](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-4.0-Migration-Guide),
+then add the starter as in the [quick start](README.md#quick-start). Your
+`spring.datasource.*` translates with `seclume-verify --migrate`.
+
+**Until then, without the starter.** The drivers and the pool do not depend on Spring, and
+seclume needs Java 25, which Boot 3.5.16 supports
+([system requirements](https://docs.spring.io/spring-boot/3.5/system-requirements.html)).
+Declare the `DataSource` yourself; Spring Data, Hibernate and Flyway use it as any other:
+
+```java
+@Bean(destroyMethod = "close")
+SeclumePool dataSource() throws SQLException {
+    SeclumeDataSource driver = new SeclumeDataSource();      // space.seclume.postgresql.jdbc
+    driver.setUrl("jdbc:seclume:postgresql://db:5432/app?user=app&tls=verify-full"
+            + "&provider=file&path=/run/secrets/db-password");
+    PoolSettings settings = new PoolSettings();
+    settings.setMaximumPoolSize(20);
+    return new SeclumePool(driver, settings);
+}
+```
+
+The secret stays off the heap and the pool resets sessions as with the starter. What is
+missing without it: the `seclume.*` properties, the refusal of passwords in the Spring
+configuration and the report of plaintext ones, `/actuator/seclume`, the pool's metrics and
+health, Testcontainers `@ServiceConnection`, and the beans for mail, Redis, MongoDB,
+RabbitMQ, LDAP and the other clients - those modules are usable directly, each with its own
+entry point in [FEATURES.md](FEATURES.md). Do not leave `spring.datasource.password` set
+next to it: without the starter nothing refuses it.
+
 ## Not yet
 
 These still fail with seclume, and it says so rather than pretending otherwise:
