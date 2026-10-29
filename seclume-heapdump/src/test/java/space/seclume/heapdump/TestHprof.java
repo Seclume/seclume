@@ -153,4 +153,9 @@ final class TestHprof {
         record(0x1c, heap.toByteArray());
         return bodyStart;
     }
+
+    /** The {@code HEAP DUMP END} record HotSpot writes last. */
+    void end() {
+        record(0x2c, new byte[0]);
+    }
 }

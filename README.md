@@ -69,7 +69,9 @@ nobody named - private keys, JWTs, cloud and platform tokens, passwords in URLs 
 shape, reporting which kind, how often and where, never the value. `--redact copy.hprof`
 writes a copy of the dump with all of that overwritten and checked again, for a dump that has
 to leave the house. `kubectl seclume heapcheck <pod>` runs the check inside a pod, beside the
-JVM, and brings back only the report.
+JVM, and brings back only the report. `--watch <dir>` redacts the dumps
+`-XX:+HeapDumpOnOutOfMemoryError` leaves, as they are written; the Spring Boot starter does it in
+the application itself.
 
 For CI, `--report heapcheck.sarif` adds SARIF output. A ready-to-use GitHub Action
 and a comparison of successive JSON reports are in [DIAGNOSTICS.md](DIAGNOSTICS.md).

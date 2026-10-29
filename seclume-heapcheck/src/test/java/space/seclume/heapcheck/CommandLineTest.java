@@ -139,6 +139,78 @@ class CommandLineTest {
         }
     }
 
+    /** What the dump that --watch finds holds - kept in a field so the dump has it. */
+    static String token;
+
+    /**
+     * {@code --watch}, as a sidecar runs it: a dump moved into the folder is
+     * redacted next to itself and gone, while the watcher keeps running.
+     */
+    @Test
+    void aWatchedFolderIsRedactedAsDumpsArrive(@org.junit.jupiter.api.io.TempDir
+            java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path folder = java.nio.file.Files.createDirectory(dir.resolve("dumps"));
+        byte[] random = new byte[24];
+        RANDOM.nextBytes(random);
+        String body = java.util.HexFormat.of().formatHex(random);
+        token = "ghp_" + body.substring(0, 36);
+        java.nio.file.Path made = dir.resolve("made.hprof");
+        java.lang.management.ManagementFactory.getPlatformMXBean(
+                com.sun.management.HotSpotDiagnosticMXBean.class).dumpHeap(made.toString(), true);
+
+        Process watcher = new ProcessBuilder(java.nio.file.Path.of(System.getProperty(
+                "java.home"), "bin", "java").toString(), "--enable-native-access=ALL-UNNAMED",
+                "-cp", System.getProperty("java.class.path"), HeapCheck.class.getName(),
+                "--watch", folder.toString(), "--interval", "1s", "--discover")
+                .redirectErrorStream(true).redirectOutput(dir.resolve("watch.log").toFile())
+                .start();
+        try {
+            java.nio.file.Files.move(made, folder.resolve("java_pid1.hprof"),
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            long deadline = System.nanoTime() + 60_000_000_000L;
+            List<String> names = List.of();
+            while (System.nanoTime() < deadline) {
+                try (java.util.stream.Stream<java.nio.file.Path> files =
+                             java.nio.file.Files.list(folder)) {
+                    names = files.map(f -> f.getFileName().toString()).toList();
+                }
+                if (names.size() == 1 && names.get(0).endsWith(".redacted.hprof")) {
+                    break;
+                }
+                Thread.sleep(200);
+            }
+            String log = java.nio.file.Files.readString(dir.resolve("watch.log"));
+            assertTrue(names.size() == 1 && names.get(0).endsWith(".redacted.hprof"),
+                    names + "\n" + log);
+            assertTrue(watcher.isAlive(), "the watcher stopped: " + log);
+            assertTrue(log.contains("redacted to") && !log.contains(body.substring(0, 36)), log);
+            assertTrue(token.endsWith(body.substring(0, 36)));
+        } finally {
+            watcher.destroy();
+            watcher.waitFor(30, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
+    /** A folder is redacted alone: not with a process, a dump, a report, or without anything to look for. */
+    @Test
+    void aFolderGoesAlone(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        for (List<String> misuse : List.of(
+                List.of("--watch", dir.toString(), "--pid", "1", "--discover"),
+                List.of("--redact-dir", dir.toString(), "--report", "r.json", "--discover"),
+                List.of("--redact-dir", dir.toString(), "--watch", dir.toString(), "--discover"),
+                List.of("--redact-dir", dir.toString()),
+                List.of("--watch", dir.toString(), "--interval", "soon", "--discover"),
+                List.of("--dump", "x.hprof", "--discover", "--delete-unredactable"))) {
+            ChildJvm.Result result = ChildJvm.run(HeapCheck.class, misuse, 60);
+            assertEquals(2, result.exitCode(), misuse + ": " + result.output());
+        }
+        ChildJvm.Result empty = ChildJvm.run(HeapCheck.class,
+                List.of("--redact-dir", dir.toString(), "--discover"), 60);
+        assertEquals(0, empty.exitCode(), empty.output());
+        assertTrue(empty.output().contains("no finished heap dump"), empty.output());
+    }
+
     /** --redact never overwrites a file: the one there may be the only copy of something. */
     @Test
     void aRedactionDoesNotOverwriteAFile(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)

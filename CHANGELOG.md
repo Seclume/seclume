@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Heap dumps from an `OutOfMemoryError` are redacted where they land.**
+  `seclume-heapcheck --redact-dir <dir>` (once) and `--watch <dir>` (a sidecar) redact each
+  finished dump - it ends with HotSpot's `HEAP DUMP END` record and has stopped growing - into
+  `<name>-<time>.redacted.hprof` beside it and delete the original; one that cannot be made
+  clean is kept and reported once, or deleted with `--delete-unredactable`. The Spring Boot
+  starter watches the JVM's own `HeapDumpPath` (`seclume.heapdump.oom.*`), so a dump from
+  before a restart is redacted once the application is up. In `seclume-heapdump` as
+  `DumpFolder`; tested on hand-written and real HotSpot dumps, with a watcher process fed a
+  dump while it runs.
 - **Certificates that renew themselves are visible before they end.**
   `SeclumeKeys.managedCertificates()` lists every open Vault-PKI or file-reloading key manager
   with subject, validity, next renewal, generations and the last failure; `/actuator/seclume`
