@@ -145,9 +145,10 @@ public class SeclumeSslAutoConfiguration {
         return bundle;
     }
 
-    private static javax.net.ssl.KeyManagerFactory keys(BundleProperties properties) {
+    private static javax.net.ssl.KeyManagerFactory keys(String name,
+            BundleProperties properties) {
         if (properties.getVaultPki() != null) {
-            return SeclumeKeys.vaultPkiKeyManagerFactory(properties.getVaultPki());
+            return SeclumeKeys.vaultPkiKeyManagerFactory(vaultPkiSpec(name, properties));
         }
         return properties.reloads()
                 ? SeclumeKeys.keyManagerFactory(Path.of(properties.getCertificate()),
@@ -161,9 +162,51 @@ public class SeclumeSslAutoConfiguration {
         return registry -> bundles(environment).forEach((name, properties) -> {
             bundle(environment, name);                     // the parts fit together
             registry.registerBundle(name, SslBundle.of(SslStoreBundle.NONE, null, null,
-                    SslBundle.DEFAULT_PROTOCOL, SslManagerBundle.of(keys(properties),
+                    SslBundle.DEFAULT_PROTOCOL, SslManagerBundle.of(keys(name, properties),
                             jvmTrust())));
         });
+    }
+
+    private static final java.util.regex.Pattern NAME =
+            java.util.regex.Pattern.compile("(?:^|&)name=([^&]*)");
+
+    /** The bundle's settings, named after the bundle unless they name themselves. */
+    static String vaultPkiSpec(String bundle, BundleProperties properties) {
+        String spec = properties.getVaultPki();
+        return NAME.matcher(spec).find() ? spec
+                : spec + "&name=" + java.net.URLEncoder.encode(bundle,
+                        java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * What {@code SeclumeKeys.managedCertificates()} calls each bundle that
+     * keeps its certificate current: the bundle - or its own name - for
+     * Vault's PKI, the chain file for one reloaded from disk.
+     */
+    static Map<String, String> managedNames(Environment environment) {
+        Map<String, String> names = new java.util.TreeMap<>();
+        bundles(environment).forEach((bundle, properties) -> {
+            if (properties.getVaultPki() != null) {
+                java.util.regex.Matcher named = NAME.matcher(vaultPkiSpec(bundle, properties));
+                named.find();
+                names.put(bundle, java.net.URLDecoder.decode(named.group(1),
+                        java.nio.charset.StandardCharsets.UTF_8));
+            } else if (properties.reloads() && properties.getCertificate() != null) {
+                names.put(bundle, Path.of(properties.getCertificate()).toString());
+            }
+        });
+        return names;
+    }
+
+    /** {@code seclume.certificate.*} meters for those bundles, where Micrometer is. */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    static class CertificateMetrics {
+
+        @Bean
+        SeclumeCertificateMetrics seclumeCertificateMetrics(Environment environment) {
+            return new SeclumeCertificateMetrics(managedNames(environment));
+        }
     }
 
     private static TrustManagerFactory jvmTrust() {

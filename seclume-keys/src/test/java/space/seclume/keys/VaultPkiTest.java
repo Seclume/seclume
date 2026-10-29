@@ -213,6 +213,67 @@ class VaultPkiTest {
         }
     }
 
+    /**
+     * What an endpoint and a recording see: the certificate listed under its
+     * name with its validity and next renewal, a failed renewal with its
+     * reason - and gone from the list once closed.
+     */
+    @Test
+    void aRenewalThatFailsIsListedAndRecorded(@org.junit.jupiter.api.io.TempDir Path recordings)
+            throws Exception {
+        java.util.concurrent.atomic.AtomicBoolean refuse =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        Path recording = recordings.resolve("events.jfr");
+        try (FakeVault vault = new FakeVault(request -> refuse.get()
+                ? new Answer(503, "{\"errors\":[\"sealed\"]}")
+                : new Answer(200, signed(sign(field(request.body(), "csr"), "1", null))));
+             jdk.jfr.Recording jfr = new jdk.jfr.Recording()) {
+            jfr.enable("space.seclume.CertificateRenewal");
+            jfr.start();
+            VaultPkiKeyManager manager = (VaultPkiKeyManager)
+                    SeclumeKeys.vaultPkiKeyManager(spec(vault, "&name=orders-client"));
+            try {
+                ManagedCertificate listed = SeclumeKeys.managedCertificates().stream()
+                        .filter(c -> c.name().equals("orders-client")).findFirst().orElseThrow();
+                assertEquals("vault-pki", listed.kind());
+                assertTrue(listed.subject().contains("CN=orders.seclume.test"));
+                assertEquals(manager.notAfter(), listed.notAfter());
+                assertEquals(manager.nextRenewal(), listed.nextRenewal());
+                assertEquals(null, listed.lastFailure());
+
+                refuse.set(true);
+                assertThrows(IOException.class, manager::renewNow);
+                ManagedCertificate failing = SeclumeKeys.managedCertificates().stream()
+                        .filter(c -> c.name().equals("orders-client")).findFirst().orElseThrow();
+                assertTrue(failing.lastFailure().contains("503"), failing.lastFailure());
+                assertEquals(listed.notAfter(), failing.notAfter(), "the one in hand stays");
+
+                refuse.set(false);
+                manager.renewNow();
+                assertEquals(null, SeclumeKeys.managedCertificates().stream()
+                        .filter(c -> c.name().equals("orders-client")).findFirst()
+                        .orElseThrow().lastFailure(), "a success clears the failure");
+            } finally {
+                manager.close();
+            }
+            assertTrue(SeclumeKeys.managedCertificates().stream()
+                    .noneMatch(c -> c.name().equals("orders-client")), "listed after close");
+            jfr.stop();
+            jfr.dump(recording);
+        }
+        List<jdk.jfr.consumer.RecordedEvent> events = jdk.jfr.consumer.RecordingFile
+                .readAllEvents(recording).stream()
+                .filter(e -> e.getEventType().getName().equals("space.seclume.CertificateRenewal"))
+                .toList();
+        assertEquals(List.of(true, false, true),
+                events.stream().map(e -> e.getBoolean("succeeded")).toList());
+        assertEquals("orders-client", events.get(0).getString("certificate"));
+        assertEquals("/v1/pki/sign/client", events.get(0).getString("source"));
+        assertTrue(events.get(1).getString("reason").contains("503"));
+        assertTrue(events.get(0).getLong("notAfter") > System.currentTimeMillis());
+        assertFalse(events.toString().contains(Files.readString(token)), "the token is recorded");
+    }
+
     @Test
     void aCertificateForAnotherKeyIsRefused() throws Exception {
         // A request made by the command line, signed - the certificate is for its key.

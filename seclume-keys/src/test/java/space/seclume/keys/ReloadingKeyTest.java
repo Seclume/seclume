@@ -60,6 +60,12 @@ class ReloadingKeyTest {
             manager.checkNow();
             assertEquals(1, manager.generations(), "a key without its certificate was taken");
             assertEquals("hello", ServerKeyTest.roundTrip(server, first, "TLSv1.3", null));
+            ManagedCertificate refused = SeclumeKeys.managedCertificates().stream()
+                    .filter(c -> c.name().equals(chain.toString())).findFirst().orElseThrow();
+            assertEquals("file", refused.kind());
+            assertTrue(refused.lastFailure() != null && refused.failedAt() != null,
+                    "a refused renewal is not listed as one");
+            assertEquals(null, refused.nextRenewal(), "a file is renewed by whoever writes it");
 
             // the other half: now the new pair is served
             put(second.certificate(), chain);
@@ -69,7 +75,12 @@ class ReloadingKeyTest {
             assertThrows(SSLException.class,
                     () -> ServerKeyTest.roundTrip(server, first, "TLSv1.3", null),
                     "the old certificate is still served");
+            assertEquals(null, SeclumeKeys.managedCertificates().stream()
+                    .filter(c -> c.name().equals(chain.toString())).findFirst().orElseThrow()
+                    .lastFailure(), "the renewal that worked did not clear the failure");
         }
+        assertTrue(SeclumeKeys.managedCertificates().stream()
+                .noneMatch(c -> c.name().equals(chain.toString())), "listed after close");
     }
 
     @Test

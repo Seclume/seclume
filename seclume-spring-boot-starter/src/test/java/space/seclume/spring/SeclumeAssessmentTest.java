@@ -75,4 +75,49 @@ class SeclumeAssessmentTest {
         Map<String, Object> shown = assessment.asMap();
         assertEquals("critical", shown.get("grade"));
     }
+
+    /** A certificate that renews itself is judged by its own lifetime, not in days. */
+    @Test
+    void aSelfRenewingCertificateIsJudgedByItsOwnLife() {
+        Instant start = NOW.minus(Duration.ofHours(10));
+        Instant end = start.plus(Duration.ofHours(24));
+        Instant renewal = start.plus(Duration.ofHours(16));
+        assertEquals(SeclumeAssessment.Level.OK,
+                SeclumeAssessment.ofCertificate(start, end, renewal, null, null, NOW).grade(),
+                "a 24-hour certificate is not critical for expiring within a week");
+        SeclumeAssessment overdue = SeclumeAssessment.ofCertificate(start, end, renewal, null,
+                null, start.plus(Duration.ofHours(18)));
+        assertEquals(SeclumeAssessment.Level.WARNING, overdue.grade());
+        assertTrue(overdue.findings().get(0).detail().contains("was due"),
+                overdue.findings().toString());
+        SeclumeAssessment failing = SeclumeAssessment.ofCertificate(start, end, renewal,
+                "Vault answered 503", start.plus(Duration.ofHours(16)),
+                start.plus(Duration.ofHours(17)));
+        assertEquals(SeclumeAssessment.Level.WARNING, failing.grade());
+        assertTrue(failing.findings().get(0).detail().contains("503")
+                && failing.findings().get(0).detail().contains("7 hours"),
+                failing.findings().toString());
+        assertEquals(SeclumeAssessment.Level.CRITICAL, SeclumeAssessment.ofCertificate(start,
+                end, renewal, "Vault answered 503", start.plus(Duration.ofHours(16)),
+                start.plus(Duration.ofHours(22))).grade(), "a tenth of its life left, failing");
+        assertEquals(SeclumeAssessment.Level.CRITICAL, SeclumeAssessment.ofCertificate(start,
+                end, renewal, null, null, end.plusSeconds(60)).grade());
+    }
+
+    /** One renewed on disk by somebody else is judged in days, like a server's. */
+    @Test
+    void aCertificateOnDiskIsJudgedInDays() {
+        Instant start = NOW.minus(Duration.ofDays(300));
+        assertEquals(SeclumeAssessment.Level.CRITICAL, SeclumeAssessment.ofCertificate(start,
+                NOW.plus(Duration.ofDays(5)), null, null, null, NOW).grade());
+        assertEquals(SeclumeAssessment.Level.WARNING, SeclumeAssessment.ofCertificate(start,
+                NOW.plus(Duration.ofDays(20)), null, null, null, NOW).grade());
+        assertEquals(SeclumeAssessment.Level.OK, SeclumeAssessment.ofCertificate(start,
+                NOW.plus(Duration.ofDays(100)), null, null, null, NOW).grade());
+        SeclumeAssessment refused = SeclumeAssessment.ofCertificate(start,
+                NOW.plus(Duration.ofDays(100)), null, "the certificate is not the key's",
+                NOW.minus(Duration.ofMinutes(5)), NOW);
+        assertEquals(SeclumeAssessment.Level.WARNING, refused.grade());
+        assertTrue(refused.findings().get(0).detail().contains("refused"));
+    }
 }

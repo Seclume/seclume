@@ -278,6 +278,37 @@ class RedactorTest {
         }
     }
 
+    /** Each redaction is in the Flight Recorder: the file, the counts - and never a value. */
+    @Test
+    void aRedactionIsRecorded(@TempDir Path directory) throws Exception {
+        String password = "Rec0rded-" + alnum(12);
+        Fixture f = fixture(directory, password, "x");
+        Path out = directory.resolve("redacted.hprof");
+        Path recording = directory.resolve("events.jfr");
+        try (jdk.jfr.Recording jfr = new jdk.jfr.Recording()) {
+            jfr.enable("space.seclume.HeapDumpRedaction");
+            jfr.start();
+            Redactor.redact(f.dump(), out, List.of(Redactor.Needle.text("p", password)), false,
+                    Set.of());
+            assertThrows(IOException.class, () -> Redactor.redact(f.dump(), out,
+                    List.of(Redactor.Needle.text("p", password)), false, Set.of()));
+            jfr.stop();
+            jfr.dump(recording);
+        }
+        List<jdk.jfr.consumer.RecordedEvent> events = jdk.jfr.consumer.RecordingFile
+                .readAllEvents(recording).stream()
+                .filter(e -> e.getEventType().getName().equals("space.seclume.HeapDumpRedaction"))
+                .toList();
+        assertEquals(2, events.size(), events.toString());
+        assertTrue(events.get(0).getBoolean("succeeded"));
+        assertEquals("app.hprof", events.get(0).getString("dump"));
+        assertEquals(1, events.get(0).getLong("places"));
+        assertEquals(1, events.get(0).getLong("stringHashes"));
+        assertFalse(events.get(1).getBoolean("succeeded"));
+        assertTrue(events.get(1).getString("reason").contains("exists already"));
+        assertFalse(events.toString().contains(password), "a recording holds the secret");
+    }
+
     @Test
     void aBinarySecretIsZeroed(@TempDir Path directory) throws IOException {
         byte[] key = new byte[32];

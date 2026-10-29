@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -157,5 +158,49 @@ class SslAutoConfigurationTest {
             messages.append(t.getMessage()).append(" | ");
         }
         return messages.toString();
+    }
+
+    /**
+     * A bundle that keeps its certificate current is in {@code /actuator/seclume}
+     * with its validity and a grade - the test certificate lives two days, so
+     * critical - and in the meters, which read it each time.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void aReloadingBundleIsInTheEndpointAndTheMeters() throws Exception {
+        try (AnnotationConfigApplicationContext context =
+                     context("seclume.ssl.bundles.web.reload-interval=1m")) {
+            context.getBean(SslBundles.class).getBundle("web");
+            List<Map<String, Object>> certificates = (List<Map<String, Object>>)
+                    new SeclumeEndpoint(List.of()).report().get("certificates");
+            Map<String, Object> shown = certificates.stream()
+                    .filter(c -> c.get("name").equals(certificate.toString()))
+                    .findFirst().orElseThrow(() -> new AssertionError(certificates.toString()));
+            assertEquals("file", shown.get("kind"));
+            assertTrue(String.valueOf(shown.get("subject")).contains("CN=localhost"));
+            assertEquals("critical", ((Map<String, Object>) shown.get("assessment")).get("grade"),
+                    shown.toString());
+
+            io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+            context.getBean(SeclumeCertificateMetrics.class).bindTo(registry);
+            double expiry = registry.get("seclume.certificate.expiry").tag("bundle", "web")
+                    .gauge().value();
+            assertTrue(expiry > 0 && expiry <= 2 * 86400, "expiry " + expiry);
+            assertEquals(0.0, registry.get("seclume.certificate.renewal.failing")
+                    .tag("bundle", "web").gauge().value());
+        }
+    }
+
+    @Test
+    void aVaultBundleIsNamedAfterItselfUnlessItNamesItself() {
+        SeclumeSslAutoConfiguration.BundleProperties properties =
+                new SeclumeSslAutoConfiguration.BundleProperties();
+        properties.setVaultPki("address=https://v:8200&pki-role=r&common-name=a");
+        assertTrue(SeclumeSslAutoConfiguration.vaultPkiSpec("client", properties)
+                .endsWith("&name=client"));
+        properties.setVaultPki("address=https://v:8200&name=mine&pki-role=r&common-name=a");
+        assertEquals(properties.getVaultPki(),
+                SeclumeSslAutoConfiguration.vaultPkiSpec("client", properties));
     }
 }

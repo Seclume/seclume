@@ -73,6 +73,7 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
     private final String ipSans;
     private final String ttl;
     private final double renewAt;
+    private final String name;
     private final SecretProvider token;
     private final Clock clock;
     private final ScheduledExecutorService scheduler;
@@ -104,6 +105,8 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
         this.altNames = settings.get("alt-names");
         this.ipSans = settings.get("ip-sans");
         this.ttl = settings.get("ttl");
+        String given = settings.get("name");
+        this.name = given == null || given.isBlank() ? commonName : given.trim();
         this.renewAt = Double.parseDouble(settings.getOrDefault("renew-at", "0.67"));
         if (!(renewAt > 0.1 && renewAt < 0.95)) {
             throw new IllegalArgumentException("renew-at is a fraction of the certificate's "
@@ -117,6 +120,7 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
             throw new IllegalStateException("no certificate from Vault at " + address
                     + signPath + ": " + e.getMessage(), e);
         }
+        register();
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "seclume-vault-pki " + commonName);
             thread.setDaemon(true);
@@ -150,13 +154,30 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
     }
 
     /** When it is to be replaced. */
+    @Override
     Instant nextRenewal() {
         return nextRenewal;
     }
 
+    @Override
+    String name() {
+        return name;
+    }
+
+    @Override
+    String kind() {
+        return "vault-pki";
+    }
+
     /** Replaces the certificate now - a new key, a new request. */
     synchronized void renewNow() throws IOException {
-        install(issue());
+        try {
+            install(issue());
+        } catch (IOException | RuntimeException e) {
+            failed(e.getMessage());
+            throw e;
+        }
+        succeeded();
         LOG.log(System.Logger.Level.INFO, "a new certificate for " + commonName + " from "
                 + signPath + ", valid until " + notAfter + "; used from the next handshake on");
     }
@@ -204,8 +225,23 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
         return from.plusMillis((long) (whole * fraction));
     }
 
-    /** A new key, a request signed by it, the certificate Vault signs for it. */
+    /** A new key, a request signed by it, the certificate Vault signs for it - recorded either way. */
     private SeclumeKeyManager issue() throws IOException {
+        space.seclume.jfr.SeclumeEvents.CertificateRenewal event =
+                space.seclume.jfr.Observed.beginCertificateRenewal();
+        try {
+            SeclumeKeyManager issued = issueOnly();
+            space.seclume.jfr.Observed.endCertificateRenewal(event, name, signPath, true,
+                    notAfter.toEpochMilli(), null);
+            return issued;
+        } catch (IOException | RuntimeException e) {
+            space.seclume.jfr.Observed.endCertificateRenewal(event, name, signPath, false,
+                    notAfter == null ? 0 : notAfter.toEpochMilli(), e.getMessage());
+            throw e;
+        }
+    }
+
+    private SeclumeKeyManager issueOnly() throws IOException {
         NativeKey key = NativeKey.generateP256();
         try {
             X509Certificate[] chain = sign(CertificationRequest.pem(key, commonName));
@@ -339,6 +375,7 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
             }
             closed = true;
         }
+        unregister();
         scheduler.shutdownNow();
         token.close();
     }

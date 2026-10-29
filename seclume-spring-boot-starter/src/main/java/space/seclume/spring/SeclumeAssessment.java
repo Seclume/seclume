@@ -83,6 +83,71 @@ public final class SeclumeAssessment {
         return assessment;
     }
 
+    /**
+     * Grades a certificate of the application's own that a key manager keeps
+     * current - see {@code SeclumeKeys.managedCertificates()}.
+     *
+     * <p>One that renews itself is judged by its own lifetime, not in days: a
+     * Vault certificate of 24 hours always expires "within a week". What is
+     * wrong with it is a renewal that fails, or one that is overdue; critical
+     * when a tenth of its life is left and it still has not been replaced. One
+     * renewed on disk by somebody else is judged like a server's certificate,
+     * in days.
+     *
+     * @param nextRenewal when it renews itself, or {@code null} for one on disk
+     * @param lastFailure why the last renewal failed, or {@code null}
+     */
+    public static SeclumeAssessment ofCertificate(Instant notBefore, Instant notAfter,
+            Instant nextRenewal, String lastFailure, Instant failedAt, Instant now) {
+        SeclumeAssessment assessment = new SeclumeAssessment();
+        Duration left = Duration.between(now, notAfter);
+        if (left.isNegative()) {
+            assessment.add(Level.CRITICAL, "certificate", "the certificate expired " + notAfter);
+            return assessment;
+        }
+        if (nextRenewal == null) {
+            if (left.compareTo(CRITICAL_EXPIRY) <= 0) {
+                assessment.add(Level.CRITICAL, "certificate", "the certificate expires in "
+                        + span(left) + " - " + notAfter);
+            } else if (left.compareTo(WARNING_EXPIRY) <= 0) {
+                assessment.add(Level.WARNING, "certificate", "the certificate expires in "
+                        + span(left) + " - " + notAfter);
+            }
+            if (lastFailure != null) {
+                assessment.add(Level.WARNING, "renewal", "a renewed pair on disk was refused "
+                        + "at " + failedAt + ": " + lastFailure);
+            }
+            return assessment;
+        }
+        Duration life = Duration.between(notBefore, notAfter);
+        boolean late = now.isAfter(nextRenewal.plus(max(Duration.ofMinutes(1),
+                life.dividedBy(20))));
+        if (lastFailure != null || late) {
+            Level level = left.compareTo(life.dividedBy(10)) <= 0 ? Level.CRITICAL
+                    : Level.WARNING;
+            assessment.add(level, "renewal", (lastFailure != null
+                    ? "renewing it fails since " + failedAt + ": " + lastFailure
+                    : "its renewal was due " + nextRenewal + " and has not happened")
+                    + " - it expires in " + span(left));
+        }
+        return assessment;
+    }
+
+    private static Duration max(Duration a, Duration b) {
+        return a.compareTo(b) >= 0 ? a : b;
+    }
+
+    /** Days for long spans, hours or minutes for a certificate that lives a day. */
+    private static String span(Duration left) {
+        if (left.toDays() >= 2) {
+            return days(left);
+        }
+        if (left.toHours() >= 2) {
+            return left.toHours() + " hours";
+        }
+        return Math.max(0, left.toMinutes()) + " minutes";
+    }
+
     private void transport(String tls) {
         if (tls == null) {
             add(Level.CRITICAL, "tls", "the connection is in the clear");

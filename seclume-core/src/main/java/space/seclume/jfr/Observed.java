@@ -240,6 +240,37 @@ public final class Observed {
         event.commit();
     }
 
+    public static SeclumeEvents.CertificateRenewal beginCertificateRenewal() {
+        SeclumeEvents.CertificateRenewal event = new SeclumeEvents.CertificateRenewal();
+        if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    /**
+     * @param notAfter when the certificate in use ends, in milliseconds since
+     *                 the epoch - the new one, or the old one after a failure
+     */
+    public static void endCertificateRenewal(SeclumeEvents.CertificateRenewal event,
+            String certificate, String source, boolean succeeded, long notAfter,
+            String reason) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.certificate = certificate;
+        event.source = source;
+        event.succeeded = succeeded;
+        event.notAfter = notAfter;
+        event.reason = reason == null ? "" : reason;
+        event.commit();
+    }
+
     public static SeclumeEvents.SecretRotation beginSecretRotation() {
         SeclumeEvents.SecretRotation event = new SeclumeEvents.SecretRotation();
         if (!event.isEnabled()) {

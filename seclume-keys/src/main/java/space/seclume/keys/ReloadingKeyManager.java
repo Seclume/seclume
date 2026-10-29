@@ -41,6 +41,22 @@ final class ReloadingKeyManager extends RotatingKeyManager {
                 "path", chain.toString(), "max-length", String.valueOf(1 << 20)));
         this.chainWatch = SecretWatch.start("TLS certificate " + chain, chainFile, interval,
                 this::reload);
+        register();
+    }
+
+    @Override
+    String name() {
+        return chain.toString();
+    }
+
+    @Override
+    String kind() {
+        return "file";
+    }
+
+    @Override
+    java.time.Instant nextRenewal() {
+        return null;                              // whoever writes the files decides
     }
 
     private SeclumeKeyManager load() {
@@ -49,7 +65,13 @@ final class ReloadingKeyManager extends RotatingKeyManager {
 
     /** Loads the pair again; throws - and keeps the old pair - if they do not belong together. */
     private synchronized void reload() {
-        install(load());
+        try {
+            install(load());
+        } catch (RuntimeException e) {
+            failed(e.getMessage());
+            throw e;
+        }
+        succeeded();
         LOG.log(System.Logger.Level.INFO, "the TLS key and certificate " + chain
                 + " were renewed and are used from the next handshake on");
     }
@@ -64,6 +86,7 @@ final class ReloadingKeyManager extends RotatingKeyManager {
     /** Stops watching; the keys in use stay until the manager is gone. */
     @Override
     public void close() {
+        unregister();
         keyWatch.close();
         chainWatch.close();
         key.close();

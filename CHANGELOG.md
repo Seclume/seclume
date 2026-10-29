@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Certificates that renew themselves are visible before they end.**
+  `SeclumeKeys.managedCertificates()` lists every open Vault-PKI or file-reloading key manager
+  with subject, validity, next renewal, generations and the last failure; `/actuator/seclume`
+  shows them under `certificates` with a grade (`SeclumeAssessment.ofCertificate`: a
+  self-renewing certificate judged by its own lifetime - warning when a renewal fails or is
+  overdue, critical with a tenth of its life left - one on disk in days); the meters
+  `seclume.certificate.expiry` and `seclume.certificate.renewal.failing` per bundle; and the
+  Flight Recorder events `space.seclume.CertificateRenewal` (each issue and renewal) and
+  `space.seclume.HeapDumpRedaction` (each redaction, with its counts or why it failed). A
+  Vault-PKI bundle is named after itself (`name=`).
 - **`kubectl seclume heapcheck <pod>`** (`seclume-heapcheck/kubectl/kubectl-seclume`): the
   check runs in an ephemeral container beside the application's JVM, the dump stays in the
   pod and is deleted there, and only the report comes out - Markdown, JSON or SARIF on stdout,

@@ -187,6 +187,47 @@ public final class SeclumeEvents {
     }
 
     /**
+     * A certificate a key manager obtained for a key of its own - from Vault's
+     * PKI, say - or failed to: each issue and renewal.
+     *
+     * <p>A failed renewal is harmless until the certificate in hand expires,
+     * and then every handshake fails at once; a recording with a string of
+     * failures is the warning. The certificate is named as the configuration
+     * names it, and by its end; nothing about the key is here.
+     */
+    @Name("space.seclume.CertificateRenewal")
+    @Label("Certificate Renewal")
+    @Category({CATEGORY, "Connection"})
+    @Description("A certificate obtained for a key generated off the heap, or a failed attempt")
+    @StackTrace(false)
+    public static final class CertificateRenewal extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public CertificateRenewal() {
+        }
+
+        @Label("Certificate")
+        @Description("The name it is configured under")
+        public String certificate;
+
+        @Label("Source")
+        @Description("Where it comes from - the Vault path it is signed at")
+        public String source;
+
+        @Label("Succeeded")
+        public boolean succeeded;
+
+        @Label("Valid Until")
+        @Description("When the certificate now in use ends")
+        @jdk.jfr.Timestamp(jdk.jfr.Timestamp.MILLISECONDS_SINCE_EPOCH)
+        public long notAfter;
+
+        @Label("Reason")
+        @Description("Why it failed; empty when it did not")
+        public String reason;
+    }
+
+    /**
      * A secret that changed at its source and was taken up without a restart
      * - see {@code SecretWatch}.
      *

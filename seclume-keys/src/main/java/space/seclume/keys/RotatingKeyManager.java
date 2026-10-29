@@ -24,6 +24,13 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
 
     private static final long GRACE_SECONDS = 60;
 
+    /** Every manager that is open, for {@link SeclumeKeys#managedCertificates()}. */
+    private static final java.util.Set<RotatingKeyManager> OPEN =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private volatile String lastFailure;
+    private volatile java.time.Instant failedAt;
+
     private record Generation(String alias, SeclumeKeyManager manager) {
     }
 
@@ -47,6 +54,51 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
                 .execute(() -> ((OpenSslPrivateKey) generation.manager()
                         .getPrivateKey(SeclumeKeyManager.ALIAS)).destroy());
     }
+
+    /** Listed from now on by {@link SeclumeKeys#managedCertificates()}; a subclass calls it once it has a pair. */
+    protected final void register() {
+        OPEN.add(this);
+    }
+
+    /** Listed no more - on close. */
+    protected final void unregister() {
+        OPEN.remove(this);
+    }
+
+    /** That replacing the pair failed, and why; cleared by the next success. */
+    protected final void failed(String why) {
+        lastFailure = why;
+        failedAt = java.time.Instant.now();
+    }
+
+    /** That replacing it worked. */
+    protected final void succeeded() {
+        lastFailure = null;
+        failedAt = null;
+    }
+
+    /** Every open manager's certificate, as it stands. */
+    static java.util.List<ManagedCertificate> all() {
+        return OPEN.stream().map(RotatingKeyManager::status)
+                .sorted(java.util.Comparator.comparing(ManagedCertificate::name)).toList();
+    }
+
+    /** This one's certificate as it stands. */
+    final ManagedCertificate status() {
+        X509Certificate leaf = currentChain()[0];
+        return new ManagedCertificate(name(), kind(), leaf.getSubjectX500Principal().getName(),
+                leaf.getNotBefore().toInstant(), leaf.getNotAfter().toInstant(), nextRenewal(),
+                generations(), lastFailure, failedAt);
+    }
+
+    /** What it is configured under. */
+    abstract String name();
+
+    /** {@code vault-pki} or {@code file}. */
+    abstract String kind();
+
+    /** When it replaces the pair itself, or {@code null}. */
+    abstract java.time.Instant nextRenewal();
 
     /** How many times a pair was installed, the first time included - for tests and metrics. */
     synchronized int generations() {

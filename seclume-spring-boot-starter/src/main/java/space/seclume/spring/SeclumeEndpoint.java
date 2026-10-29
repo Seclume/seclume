@@ -27,6 +27,10 @@ import space.seclume.pool.SeclumePool;
  * appears by subject, issuer and expiry - public facts, and the expiry is the
  * one that ends in an outage when nobody looks.
  *
+ * <p>And the application's own certificates that seclume-keys keeps current -
+ * from Vault's PKI, or reloaded from disk - with their validity, next renewal,
+ * last failure and a grade of their own.
+ *
  * <p>Exposed like every endpoint: {@code management.endpoints.web.exposure.include=seclume}.
  */
 @Endpoint(id = "seclume")
@@ -48,6 +52,9 @@ public final class SeclumeEndpoint {
             sources.put(statistics.name(), describe(pool, statistics));
         }
         report.put("dataSources", sources);
+        if (KeyCertificates.PRESENT) {
+            report.put("certificates", KeyCertificates.describe(java.time.Instant.now()));
+        }
         return report;
     }
 

@@ -1215,6 +1215,10 @@ seclume.ssl.bundles.client.vault-pki=address=https://vault:8200&pki-role=client&
   a login (`auth-method=kubernetes|jwt|approle|aws|gcp|azure`) or the `token-` settings.
 - **Keys:** P-256. The chain is the certificate and its issuing CA - what a peer that trusts
   the root needs from a two-level PKI.
+- **Seen:** `SeclumeKeys.managedCertificates()` lists it with its validity, next renewal and
+  last failure, as `/actuator/seclume` shows it with a grade, the meters
+  `seclume.certificate.expiry` and `seclume.certificate.renewal.failing` count down to its end,
+  and every renewal is a `space.seclume.CertificateRenewal` event.
 - **Where it goes:** anything that takes a JSSE key manager or a Spring SSL bundle - HTTP and
   gRPC clients, Kafka, Reactor Netty. Tomcat (`seclume.server.ssl.bundle`) and seclume's own
   JDBC client certificates take files so far.
