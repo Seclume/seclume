@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A database login by a Vault certificate alone** (`clientCertVaultPki-` settings, every
+  driver on seclume's TLS stack). The client identity generates a P-256 key in OpenSSL or CNG,
+  has Vault's `pki/sign/<role>` sign a request for it, presents the certificate - PostgreSQL's
+  `cert` method, MySQL's `REQUIRE SUBJECT` - and renews it with a new key before it ends; a
+  handshake under way keeps the key it began with. `VaultPkiIssuer` (core) now issues for both
+  this and seclume-keys' key manager, and `CertificationRequest` moved to core. Tested with
+  real TLS 1.3 handshakes against a stand-in Vault and in CI by logging into PostgreSQL with a
+  certificate from Vault's and OpenBao's PKI.
 - **Heap dumps from an `OutOfMemoryError` are redacted where they land.**
   `seclume-heapcheck --redact-dir <dir>` (once) and `--watch <dir>` (a sidecar) redact each
   finished dump - it ends with HotSpot's `HEAP DUMP END` record and has stopped growing - into

@@ -69,7 +69,8 @@ final class NativeKey {
         }
     }
 
-    private static NativeKey of(PrivateSigningKey decoded) {
+    /** A key some other part of seclume made or decoded - now this module's. */
+    static NativeKey of(PrivateSigningKey decoded) {
         try {
             String type;
             if (decoded.is("RSA")) {

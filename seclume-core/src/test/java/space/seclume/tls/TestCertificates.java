@@ -167,6 +167,33 @@ public final class TestCertificates implements AutoCloseable {
         return new Issued(read(signed), store);
     }
 
+    /**
+     * Signs a PKCS#10 request as a CA does - keytool checks the request's own
+     * signature first - and returns the certificate as PEM.
+     */
+    public String signRequest(String requestPem, String... extensions) throws Exception {
+        Path request = Files.createTempFile(directory, "request", ".csr");
+        Path signed = Files.createTempFile(directory, "signed", ".cer");
+        Files.writeString(request, requestPem);
+        List<String> gencert = new ArrayList<>(List.of(keytool, "-gencert", "-alias", "ca",
+                "-keystore", caStore.toString(), "-storepass", PASSWORD,
+                "-sigalg", "SHA256withRSA", "-validity", "2",
+                "-infile", request.toString(), "-outfile", signed.toString(), "-rfc"));
+        for (String extension : extensions) {
+            gencert.add("-ext");
+            gencert.add(extension);
+        }
+        run(gencert);
+        return Files.readString(signed);
+    }
+
+    /** The CA's own certificate, as PEM. */
+    public String caPem() throws Exception {
+        X509Certificate ca = read(directory.resolve("ca.cer"));
+        return "-----BEGIN CERTIFICATE-----\n" + java.util.Base64.getMimeEncoder(64,
+                new byte[] {'\n'}).encodeToString(ca.getEncoded()) + "\n-----END CERTIFICATE-----\n";
+    }
+
     private static X509Certificate read(Path file) throws Exception {
         try (InputStream in = Files.newInputStream(file)) {
             return (X509Certificate) CertificateFactory.getInstance("X.509").generateCertificate(in);

@@ -13,7 +13,8 @@
 # this throwaway server), .local-vault-role-id and .local-vault-secret-id (the
 # AppRole login), .local-vault-jwt (a JWT the JWT mount accepts),
 # .local-vault-pki-ca.pem (the root of the PKI engine at pki/, whose role
-# "client" signs client certificates under seclume.test). The
+# "client" signs client certificates under seclume.test - and which
+# PostgreSQL trusts for orders.seclume.test's certificate login). The
 # PostgreSQL password stays in the work directory, read by Vault from its file
 # and by nobody else.
 #
@@ -132,6 +133,16 @@ vault write -field=certificate pki/root/generate/internal common_name="seclume C
   ttl=24h > .local-vault-pki-ca.pem
 vault write pki/roles/client allowed_domains=seclume.test allow_subdomains=true \
   max_ttl=1h client_flag=true server_flag=false key_type=any >/dev/null
+# And PostgreSQL trusts that root for client certificates: orders.seclume.test
+# logs in by its certificate alone (cert), before every other hba line.
+install -m 444 .local-vault-pki-ca.pem "$work/pki-ca.pem"
+pg() { docker exec -u postgres slm-vault-pg psql -v ON_ERROR_STOP=1 -tAq "$@"; }
+pg -c "ALTER SYSTEM SET ssl_ca_file = '/certs/pki-ca.pem'" \
+  -c 'CREATE ROLE "orders.seclume.test" LOGIN'
+hba=$(pg -c 'SHOW hba_file')
+docker exec -u postgres slm-vault-pg sed -i \
+  '1i hostssl all "orders.seclume.test" all cert' "$hba"
+pg -c 'SELECT pg_reload_conf()' >/dev/null
 
 sudo cat "$work/token" > .local-vault-token
 sudo cat "$work/jwt" > .local-vault-jwt

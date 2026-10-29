@@ -86,6 +86,16 @@ public final class ClientIdentities {
     /** The prefix under which the token PIN's provider is configured. */
     public static final String PIN_PREFIX = "clientCertPin-";
 
+    /**
+     * Settings of a client certificate from Vault's PKI for a key generated in
+     * native memory - {@code clientCertVaultPki-address},
+     * {@code clientCertVaultPki-pki-role}, {@code clientCertVaultPki-common-name},
+     * the Vault login as for {@code provider=vault}, and the rest of
+     * {@link space.seclume.secret.VaultPkiIssuer}'s settings - renewed by
+     * itself before it ends.
+     */
+    public static final String VAULT_PKI_PREFIX = "clientCertVaultPki-";
+
     /** How long a client key file may be unless {@code clientKey-max-length} says otherwise. */
     static final int KEY_MAX_LENGTH = 4096;
 
@@ -105,6 +115,19 @@ public final class ClientIdentities {
      *         configuration says it does
      */
     public static ClientIdentity of(Map<String, String> settings) {
+        Map<String, String> vault = nested(settings, VAULT_PKI_PREFIX);
+        if (!vault.isEmpty()) {
+            for (String other : new String[] {CERTIFICATE, THUMBPRINT, SUBJECT, PKCS11}) {
+                String value = settings.get(other);
+                if (value != null && !value.isBlank()) {
+                    throw new IllegalArgumentException(VAULT_PKI_PREFIX + " settings get a "
+                            + "client certificate from Vault, and so does " + other
+                            + " name one - one connection presents one");
+                }
+            }
+            return IDENTITIES.computeIfAbsent("vault-pki " + new TreeMap<>(vault),
+                    ignored -> new VaultPkiClientIdentity(vault, java.time.Clock.systemUTC()));
+        }
         String module = settings.get(PKCS11);
         if (module != null && !module.isBlank()) {
             if (settings.get(THUMBPRINT) != null || settings.get(SUBJECT) != null) {

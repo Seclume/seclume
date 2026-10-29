@@ -1220,8 +1220,10 @@ seclume.ssl.bundles.client.vault-pki=address=https://vault:8200&pki-role=client&
   `seclume.certificate.expiry` and `seclume.certificate.renewal.failing` count down to its end,
   and every renewal is a `space.seclume.CertificateRenewal` event.
 - **Where it goes:** anything that takes a JSSE key manager or a Spring SSL bundle - HTTP and
-  gRPC clients, Kafka, Reactor Netty. Tomcat (`seclume.server.ssl.bundle`) and seclume's own
-  JDBC client certificates take files so far.
+  gRPC clients, Kafka, Reactor Netty. seclume's own JDBC connections take it as
+  `clientCertVaultPki-` settings, for a database login by certificate alone - see
+  [TLS.md](TLS.md#mutual-tls-with-the-client-key-off-the-heap-too). Tomcat
+  (`seclume.server.ssl.bundle`) takes files so far.
 - **Tests:** against a stand-in for Vault that checks the request's signature and signs with
   `openssl`, through a TLS 1.3 handshake whose server demands the certificate; and in CI against
   real Vault and OpenBao PKI engines, with the root token and with an AppRole whose policy
