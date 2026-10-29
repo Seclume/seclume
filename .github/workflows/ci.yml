@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/heapcheck-fixtures/secrets"
           openssl rand -hex 32 > "$RUNNER_TEMP/heapcheck-fixtures/secrets/credential"
-          for mode in clean leak; do
+          for mode in clean leak token; do
             java seclume-heapcheck/ci/Probe.java "$mode" "$RUNNER_TEMP/heapcheck-fixtures/secrets/credential" > "$RUNNER_TEMP/heapcheck-fixtures/$mode.log" &
             pid=$!
             trap 'kill "$pid" 2>/dev/null || true' EXIT
@@ -91,6 +91,37 @@ jobs:
           NEGATIVE_OUTCOME: ${{ steps.negative.outcome }}
           NEGATIVE_STATUS: ${{ steps.negative.outputs.status }}
         run: test "$NEGATIVE_OUTCOME" = failure && test "$NEGATIVE_STATUS" = 1
+      # Discovery: nothing named, the token found by its shape - and the clean
+      # heap still clean with discovery on, so a false alarm fails this job.
+      - name: Clean heap must pass discovery
+        uses: ./.github/actions/heapcheck
+        with:
+          jar: ${{ env.HEAPCHECK_JAR }}
+          dump: ${{ runner.temp }}/heapcheck-fixtures/clean.hprof
+          discover: 'true'
+          artifact-name: heapcheck-discover-clean
+      - name: Unnamed token must be discovered
+        id: discovered
+        continue-on-error: true
+        uses: ./.github/actions/heapcheck
+        with:
+          jar: ${{ env.HEAPCHECK_JAR }}
+          dump: ${{ runner.temp }}/heapcheck-fixtures/token.hprof
+          discover: 'true'
+          artifact-name: heapcheck-discover-negative-control
+      - name: Require the discovery control
+        env:
+          DISCOVERED_OUTCOME: ${{ steps.discovered.outcome }}
+          DISCOVERED_STATUS: ${{ steps.discovered.outputs.status }}
+        run: test "$DISCOVERED_OUTCOME" = failure && test "$DISCOVERED_STATUS" = 1
+      - name: An ignored detector is left out
+        uses: ./.github/actions/heapcheck
+        with:
+          jar: ${{ env.HEAPCHECK_JAR }}
+          dump: ${{ runner.temp }}/heapcheck-fixtures/token.hprof
+          discover: 'true'
+          ignore: vault-token
+          artifact-name: heapcheck-discover-ignored
       - name: Remove test dumps and credential
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/heapcheck-fixtures"

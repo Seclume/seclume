@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.HexFormat; // seclume-allow: the checksum of a dump, as hex - no secret
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
 
@@ -65,13 +66,20 @@ public final class HeapCheck {
      * @param discover whether to look for credentials of known shapes as well
      *                 as - or instead of - the named ones
      * @param ignore   detectors to leave out of the discovery
+     * @param attribute whether to work out what holds each raw finding -
+     *                 three more passes over the dump, on by default
      */
     record Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
-                   Path keep, boolean discover, Set<String> ignore) {
+                   Path keep, boolean discover, Set<String> ignore, boolean attribute) {
 
         Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
                 Path keep) {
-            this(pid, dumpFile, secretFiles, reports, keep, false, Set.of());
+            this(pid, dumpFile, secretFiles, reports, keep, false, Set.of(), true);
+        }
+
+        Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
+                Path keep, boolean discover, Set<String> ignore) {
+            this(pid, dumpFile, secretFiles, reports, keep, discover, ignore, true);
         }
     }
 
@@ -82,10 +90,12 @@ public final class HeapCheck {
         List<Path> secretFiles = new ArrayList<>();
         List<Path> reports = new ArrayList<>();
         boolean discover = false;
+        boolean attribute = true;
         Set<String> ignore = new LinkedHashSet<>();
         for (int i = 0; i < arguments.length; i++) {
             switch (arguments[i]) {
                 case "--discover" -> discover = true;
+                case "--no-attribution" -> attribute = false;
                 case "--ignore" -> ignore.add(next(arguments, ++i, "--ignore"));
                 case "--list-detectors" -> {
                     System.out.print(Discovery.describe());
@@ -145,7 +155,7 @@ public final class HeapCheck {
             return;
         }
         System.exit(run(new Options(pid, dumpFile, secretFiles, reports, keep, discover,
-                Set.copyOf(ignore))));
+                Set.copyOf(ignore), attribute)));
     }
 
     /** The one-process, one-secret check, as it always was. */
@@ -196,9 +206,11 @@ public final class HeapCheck {
             }
             Discovery.Result discovery = options.discover()
                     ? Discovery.scan(dump, options.ignore()) : null;
+            Map<Long, String> heldBy = options.attribute()
+                    ? attribute(dump, results, discovery) : Map.of();
             AuditReport report = new AuditReport(Instant.now(), host(),
                     target, new AuditReport.Dump(size, sha256(dump), !takesDump
-                            || options.keep() != null), results, discovery);
+                            || options.keep() != null), results, discovery, heldBy);
             print(report);
             for (Path file : options.reports()) {
                 String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
@@ -224,6 +236,43 @@ public final class HeapCheck {
         }
     }
 
+    /**
+     * What holds each raw finding. Not worth failing the check over: a dump
+     * whose structure cannot be read still answered the question of whether
+     * the secret is in it, so a failure here is said and the report goes on
+     * without holders.
+     */
+    private static Map<Long, String> attribute(Path dump,
+            List<AuditReport.SecretResult> results, Discovery.Result discovery) {
+        List<Long> offsets = new ArrayList<>();
+        for (AuditReport.SecretResult result : results) {
+            for (var finding : result.findings()) {
+                if ("raw file".equals(finding.source())) {
+                    offsets.add(finding.position());
+                }
+            }
+        }
+        if (discovery != null) {
+            for (Discovery.Found found : discovery.found()) {
+                for (Discovery.Occurrence at : found.occurrences()) {
+                    offsets.add(at.position());
+                }
+            }
+        }
+        if (offsets.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            System.out.println("working out what holds " + offsets.size() + " finding(s) ...");
+            return Attribution.of(dump,
+                    offsets.stream().mapToLong(Long::longValue).toArray());
+        } catch (IOException | RuntimeException e) {
+            System.err.println("could not work out what holds the findings - "
+                    + e.getMessage() + "; the report goes on without it");
+            return Map.of();
+        }
+    }
+
     private static void print(AuditReport report) {
         String where = report.target().pid() != null
                 ? "the heap of process " + report.target().pid() : "the heap dump";
@@ -237,7 +286,9 @@ public final class HeapCheck {
             System.out.println("FOUND - the secret from " + secret.source() + " is in "
                     + where + ", " + secret.findings().size() + " time(s):");
             for (var finding : secret.findings()) {
-                System.out.println("  " + finding);
+                String holder = "raw file".equals(finding.source())
+                        ? report.holderAt(finding.position()) : null;
+                System.out.println("  " + finding + (holder == null ? "" : " - held by " + holder));
             }
         }
         if (report.discovery() != null) {
@@ -251,7 +302,8 @@ public final class HeapCheck {
                         + found.detector().id() + "`, value #" + found.value() + ") is in "
                         + where + ", " + found.count() + " time(s):");
                 for (Discovery.Occurrence at : found.occurrences()) {
-                    System.out.println("  " + at);
+                    String holder = report.holderAt(at.position());
+                    System.out.println("  " + at + (holder == null ? "" : " - held by " + holder));
                 }
             }
         }
@@ -391,6 +443,9 @@ public final class HeapCheck {
                                  --secret-dir and --discover is needed
                   --ignore       leave one detector out of --discover; may be given again
                   --list-detectors  the detectors --discover uses, and their ids
+                  --no-attribution  do not work out what holds each finding (a field, a
+                                 static, an array, unreferenced) - three more passes
+                                 over the dump, which a very large one may not want
                   --report       SARIF for .sarif or .sarif.json, JSON for .json,
                                  Markdown otherwise; may be given again. It names
                                  secrets by their files and holds none of them
