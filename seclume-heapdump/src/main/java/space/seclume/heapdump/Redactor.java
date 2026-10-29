@@ -198,6 +198,36 @@ public final class Redactor {
      */
     public static Report redact(Path dump, Path out, List<Needle> needles, boolean discover,
             Set<String> ignore) throws IOException {
+        RedactionEvent event = new RedactionEvent();
+        event.begin();
+        try {
+            Report report = redactOnly(dump, out, needles, discover, ignore);
+            event.end();
+            if (event.shouldCommit()) {
+                event.dump = String.valueOf(dump.getFileName());
+                event.succeeded = true;
+                event.places = report.regions();
+                event.echoes = report.echoes();
+                event.stringHashes = report.stringHashes();
+                event.reason = "";
+                event.commit();
+            }
+            return report;
+        } catch (IOException | RuntimeException e) {
+            event.end();
+            if (event.shouldCommit()) {
+                event.dump = String.valueOf(dump.getFileName());
+                event.succeeded = false;
+                event.reason = e.getMessage() == null ? e.getClass().getSimpleName()
+                        : e.getMessage();
+                event.commit();
+            }
+            throw e;
+        }
+    }
+
+    private static Report redactOnly(Path dump, Path out, List<Needle> needles,
+            boolean discover, Set<String> ignore) throws IOException {
         if (needles.isEmpty() && !discover) {
             throw new IllegalArgumentException("nothing to redact: name a secret or discover");
         }

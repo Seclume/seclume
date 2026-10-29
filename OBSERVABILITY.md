@@ -28,6 +28,8 @@ java -XX:StartFlightRecording=filename=app.jfr,settings=profile ...
 | `space.seclume.SecretUse` | which credential seclume wrote into which request: HTTP (bearer, basic, API key, OAuth2, JWT), any client on `SeclumeSslSocketFactory` - Kubernetes, JGit, gRPC over HTTP/2 - AWS (SigV4, presign, session token), Azure Storage (Shared Key), LDAP bind, RabbitMQ login, Redis `AUTH` through Lettuce, Kafka's SASL PLAIN and OAUTHBEARER, the Elasticsearch and OpenSearch clients |
 | `space.seclume.Signature` | a signature made or checked with a key held off the heap: TLS server keys, SSH, Google service accounts, JWTs, webhook HMACs — and whether a check matched |
 | `space.seclume.SecretRotation` | a secret that changed at its source and was taken up without a restart, or refused |
+| `space.seclume.CertificateRenewal` | a certificate from Vault's PKI for a key made off the heap - issued, renewed, or a renewal that failed, and until when the one in use holds |
+| `space.seclume.HeapDumpRedaction` | a heap dump redacted - by `--redact`, `/actuator/heapdump` or a watched dump folder - with what was overwritten, or why it could not be made clean |
 
 **An open is three phases, and one number hides which of them is slow.** The connect is the
 network. The handshake is certificates and whatever the JVM looks up to trust one. The login
@@ -228,6 +230,26 @@ endpoint and the health details also grade each data source: `ok`, `note`, `warn
 | critical | no TLS; the server's certificate has expired or expires within 7 days |
 | warning | the certificate expires within 30 days; a login that sends the password or a hash standing for it (`trust`, `password`, `md5`, `mysql_native_password`, `mysql_clear_password`); borrows that timed out; all connections in use with threads waiting; leaks; refused resets |
 | note | TLS 1.2 where the server offers no 1.3; a SQL Server login with a password |
+
+**The application's own certificates.** Certificates that seclume-keys keeps current appear
+under `certificates`: one from Vault's PKI (`vault-pki`), or a pair reloaded from disk
+(`reload-interval`). Each entry shows its subject, validity, next renewal, how many pairs it
+has had, the last failure to replace it with its reason, and a grade of its own.
+
+- **A certificate that renews itself** is judged by its own lifetime. A 24-hour Vault
+  certificate is not critical just for expiring within a week. It gets a warning when a
+  renewal fails or is overdue, and becomes critical when a tenth of its life is left and it
+  still has not been replaced.
+- **A certificate renewed on disk** by somebody else is judged in days, like a server's.
+
+Two meters per such bundle, tagged `bundle`, make the same alert possible without polling the
+endpoint:
+
+- `seclume.certificate.expiry`: seconds until the certificate in use ends;
+- `seclume.certificate.renewal.failing`: 1 while its last renewal failed.
+
+Each renewal, and each failed one, is a `space.seclume.CertificateRenewal` event in the Flight
+Recorder.
 
 The grade never takes the health status down. Health is what a load balancer acts on, and a
 certificate expiring next week taking every instance out of service at once would turn a

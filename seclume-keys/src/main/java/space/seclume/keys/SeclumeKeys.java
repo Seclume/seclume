@@ -143,7 +143,8 @@ public final class SeclumeKeys {
      *
      * <p>{@code pki-mount} ({@code pki}), {@code pki-role}, {@code common-name},
      * and optionally {@code alt-names}, {@code ip-sans}, {@code ttl},
-     * {@code renew-at} (0.67); the Vault token as {@code provider=vault} takes
+     * {@code renew-at} (0.67), {@code name} (what {@link #managedCertificates()}
+     * calls it; the common name by default); the Vault token as {@code provider=vault} takes
      * it - {@code auth-method=kubernetes|jwt|approle|aws|gcp|azure} or the
      * {@code token-} settings - and {@code namespace}, {@code verify},
      * {@code timeout-millis}.
@@ -151,6 +152,16 @@ public final class SeclumeKeys {
     public static X509ExtendedKeyManager vaultPkiKeyManager(String spec) {
         SeclumeKeyProvider.install();
         return new VaultPkiKeyManager(options(spec), java.time.Clock.systemUTC());
+    }
+
+    /**
+     * The certificates kept current by key managers that are open - from
+     * Vault's PKI, or reloaded from disk - with their validity, when each is
+     * to be replaced, and the last failure to replace it: what an endpoint, a
+     * health check or a metric shows. Public facts only.
+     */
+    public static java.util.List<ManagedCertificate> managedCertificates() {
+        return RotatingKeyManager.all();
     }
 
     /** {@link #vaultPkiKeyManager} as a factory. */
