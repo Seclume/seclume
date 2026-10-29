@@ -311,6 +311,25 @@ message names the oldest holders. Beyond that, what matters is what a connection
   receive this isolation guarantee. Migration with `detach()` / `adopt()` preserves the live
   session and its transaction; cleanup occurs only when the adopted borrow is returned.
 
+  **What the Oracle reset costs, and when you see it.** The login starts the moment the
+  connection is returned, on a thread of its own, and the pool lends a connection whose login
+  is done before one whose is not. So it costs nothing a borrower notices as long as returned
+  connections have a few milliseconds before they are wanted again: with requests 10 ms apart
+  the median borrow was 0.26 ms against HikariCP's 0.20 ms. It shows when the pool is
+  saturated - every connection busy, borrowers waiting for the next one back: 6.5 ms with four
+  threads 2 ms apart, 17.4 ms with eight threads and no pause on two cores
+  ([BENCHMARKS.md](BENCHMARKS.md)). Most of a login is the client's PBKDF2-SHA512 over the
+  password, 4096 rounds as the server asks - about 3 ms of CPU, already through OpenSSL and
+  near what the hash allows - and the rest the server making the session. Both are fixed
+  costs of a complete reset on Oracle; the only ways round them keep a password-equivalent key
+  in the process between logins or leave session state behind, and seclume does neither.
+
+  What helps is room: a pool large enough that a returned connection is not wanted again
+  within its login, with `minimum-idle` high enough that the room is there at a burst. Whether
+  a pool has it is in `seclume.pool.acquire` ([OBSERVABILITY.md](OBSERVABILITY.md#the-pools-meters)),
+  which includes any wait for a login: a p99 in milliseconds on an Oracle pool says the pool
+  is too small for its load, not that the database is slow.
+
 - **The tenant on every borrow.** With `PoolSettings.setSessionContext(...)`, or a
   `SeclumeSessionContext` bean in Spring, every borrow gives the connection the context of the
   moment, such as `app.tenant_id` for a row-level security policy, and the reset on return
