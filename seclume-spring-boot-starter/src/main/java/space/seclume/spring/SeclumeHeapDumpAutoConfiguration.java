@@ -20,6 +20,9 @@ import org.springframework.core.env.Environment;
  *
  * <ul>
  *   <li>{@code seclume.heapdump.redact=false} leaves Boot's endpoint as it is;
+ *   <li>the application's own secrets are looked for too, without a copy on
+ *       the heap: every data source's, and {@code seclume.heapdump.secrets.*}
+ *       ({@link RedactionSecrets});
  *   <li>{@code seclume.heapdump.ignore=jwt,url-password} leaves detectors out
  *       of the redaction, as {@code seclume-heapcheck --ignore} does. An
  *       unknown one stops the application from starting: a typo would
@@ -40,10 +43,11 @@ public class SeclumeHeapDumpAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(HeapDumpWebEndpoint.class)
-    SeclumeHeapDumpWebEndpoint seclumeHeapDumpWebEndpoint(Environment environment) {
+    SeclumeHeapDumpWebEndpoint seclumeHeapDumpWebEndpoint(Environment environment,
+            org.springframework.beans.factory.ObjectProvider<RedactionSecrets> secrets) {
         Set<String> ignore = Binder.get(environment)
                 .bind("seclume.heapdump.ignore", Bindable.setOf(String.class))
                 .orElse(Set.of());
-        return new SeclumeHeapDumpWebEndpoint(ignore);
+        return new SeclumeHeapDumpWebEndpoint(ignore, secrets.getIfAvailable());
     }
 }

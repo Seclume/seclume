@@ -31,9 +31,40 @@ import org.springframework.core.env.Environment;
         matchIfMissing = true)
 public class SeclumeOomDumpAutoConfiguration {
 
+    /**
+     * The application's own secrets for every redaction of its heap - here and
+     * at {@code /actuator/heapdump}: each data source's, and
+     * {@code seclume.heapdump.secrets.<label>.*} as a secret provider's settings.
+     */
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
-    OomDumpRedaction seclumeOomDumpRedaction(Environment environment) {
+    RedactionSecrets seclumeRedactionSecrets(Environment environment) {
+        // Flat, as spring.mail.properties is bound: "api.provider" -> "file".
+        java.util.Map<String, String> flat = Binder.get(environment)
+                .bind("seclume.heapdump.secrets", Bindable.mapOf(String.class, String.class))
+                .orElse(java.util.Map.of());
+        java.util.Map<String, java.util.Map<String, String>> byLabel =
+                new java.util.TreeMap<>();
+        flat.forEach((key, value) -> {
+            int dot = key.indexOf('.');
+            if (dot <= 0) {
+                throw new IllegalArgumentException("seclume.heapdump.secrets." + key
+                        + ": a secret is seclume.heapdump.secrets.<label>.<provider setting>");
+            }
+            byLabel.computeIfAbsent(key.substring(0, dot), label ->
+                    new java.util.LinkedHashMap<>()).put(key.substring(dot + 1), value);
+        });
+        java.util.Map<String, space.seclume.secret.SecretProvider> providers =
+                new java.util.LinkedHashMap<>();
+        byLabel.forEach((label, settings) -> providers.put("seclume.heapdump.secrets."
+                + label, space.seclume.secret.SecretProviders.of(settings)));
+        return new RedactionSecrets(providers);
+    }
+
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean
+    OomDumpRedaction seclumeOomDumpRedaction(Environment environment,
+            org.springframework.beans.factory.ObjectProvider<RedactionSecrets> secrets) {
         Binder binder = Binder.get(environment);
         Set<String> ignore = binder.bind("seclume.heapdump.ignore", Bindable.setOf(String.class))
                 .orElse(Set.of());
@@ -48,6 +79,7 @@ public class SeclumeOomDumpAutoConfiguration {
                 .orElse(Duration.ofSeconds(30));
         return OomDumpRedaction.start(OomDumpRedaction.folder(
                 environment.getProperty("seclume.heapdump.oom.folder"),
-                OomDumpRedaction.VmOptions.current()), ignore, interval);
+                OomDumpRedaction.VmOptions.current()), ignore, interval,
+                secrets.getIfAvailable());
     }
 }

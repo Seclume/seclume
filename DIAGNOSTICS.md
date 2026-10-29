@@ -148,8 +148,10 @@ JVM. It watches wherever the JVM writes its dumps, if it writes any:
 - `seclume.heapdump.oom.redact=false` turns it off.
 
 A dump from before a restart is redacted once the application is up again. A JVM that exits on
-the error (`-XX:+ExitOnOutOfMemoryError`) leaves the dump to that next start. The starter knows
-the shapes only; `--watch` beside it can also look for the secrets themselves.
+the error (`-XX:+ExitOnOutOfMemoryError`) leaves the dump to that next start. The starter looks for
+the shapes and for the application's own secrets, each data source's password and
+`seclume.heapdump.secrets.*`, without a copy of them on the heap (see
+[OBSERVABILITY.md](OBSERVABILITY.md#actuatorheapdump-a-redacted-copy-never-the-heap-itself)).
 
 ## Inside a Kubernetes pod: `kubectl seclume heapcheck`
 

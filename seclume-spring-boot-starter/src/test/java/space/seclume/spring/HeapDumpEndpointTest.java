@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -73,6 +74,41 @@ class HeapDumpEndpointTest {
                 "the token's body is in the served dump");
         assertFalse(contains(served, body.getBytes(StandardCharsets.UTF_16BE)));
         assertTrue(token.endsWith(body), "the token was held to the end");
+    }
+
+    /** A secret of no known shape that the application leaked - as it does, into a String. */
+    static String leaked;
+
+    /**
+     * The application's own secret, named by {@code seclume.heapdump.secrets}:
+     * a value of no known shape, which discovery cannot see. The application
+     * leaked it into a String; the served dump must not have it.
+     */
+    @Test
+    void aNamedSecretOfNoShapeIsRedactedFromTheServedDump() throws Exception {
+        Path secretFile = directory.resolve("api-key");
+        Process openssl = new ProcessBuilder("openssl", "rand", "-hex", "-out",
+                secretFile.toString(), "20").redirectErrorStream(true).start();
+        assertTrue(openssl.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
+                && openssl.exitValue() == 0);
+        leaked = Files.readString(secretFile).strip();   // what the application did
+        try (RedactionSecrets secrets = new RedactionSecrets(Map.of("api-key",
+                space.seclume.secret.SecretProviders.of(Map.of("provider", "file",
+                        "path", secretFile.toString()))))) {
+            assertEquals(List.of("api-key"), secrets.labels().stream()
+                    .filter("api-key"::equals).toList());
+            WebEndpointResponse<Resource> response =
+                    new SeclumeHeapDumpWebEndpoint(Set.of(), secrets).heapDump(true);
+            assertEquals(WebEndpointResponse.STATUS_OK, response.getStatus());
+            Path served = directory.resolve("served.hprof");
+            try (InputStream in = response.getBody().getInputStream()) {
+                Files.copy(in, served);
+            }
+            assertFalse(contains(served, leaked.getBytes(StandardCharsets.US_ASCII)),
+                    "the named secret is in the served dump");
+            assertFalse(contains(served, leaked.getBytes(StandardCharsets.UTF_16BE)));
+        }
+        assertTrue(leaked.length() == 40);
     }
 
     @Test

@@ -79,10 +79,16 @@ public final class OomDumpRedaction implements AutoCloseable {
 
     /** Starts watching {@code folder} - or nothing, if it is {@code null}. */
     static OomDumpRedaction start(Path folder, Set<String> ignore, Duration interval) {
+        return start(folder, ignore, interval, null);
+    }
+
+    /** The same, with the application's own secrets looked for too, off the heap. */
+    static OomDumpRedaction start(Path folder, Set<String> ignore, Duration interval,
+            space.seclume.heapdump.OffHeapSecrets secrets) {
         if (folder == null) {
             return new OomDumpRedaction(null, null);
         }
-        DumpFolder.Settings settings = DumpFolder.Settings.discovery(ignore);
+        DumpFolder.Settings settings = DumpFolder.Settings.discovery(ignore).with(secrets);
         DumpFolder.Watch watch = DumpFolder.watch(folder, settings, interval, outcome -> {
             if (outcome.ok()) {
                 LOG.log(System.Logger.Level.INFO, "seclume: " + outcome.describe());

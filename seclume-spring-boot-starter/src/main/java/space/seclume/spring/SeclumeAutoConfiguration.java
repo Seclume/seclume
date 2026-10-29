@@ -13,6 +13,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.util.ClassUtils;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.Environment;
 
@@ -343,6 +344,12 @@ public class SeclumeAutoConfiguration {
                                           BeanFactory beans) {
             SeclumeDataSources.Built built = SeclumeDataSources.built(name, properties, beans);
             DataSource source = built.source();
+            // A redaction of this heap looks for the password too - off the
+            // heap, from the same provider (RedactionSecrets).
+            if (ClassUtils.isPresent("space.seclume.heapdump.OffHeapSecrets",
+                    SeclumeAutoConfiguration.class.getClassLoader())) {
+                RedactionSecrets.register("seclume.datasources." + name, built.secret());
+            }
             PoolSettings settings = poolSettings(name, properties.getPool());
             // The one place that knows both halves. The pool deliberately
             // knows nothing about secret sources - see its module comment -

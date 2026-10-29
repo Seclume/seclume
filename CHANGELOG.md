@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The application's own secrets are redacted from its dumps - searched for off the heap.**
+  `/actuator/heapdump` and the OOM-dump redaction look for every data source's password and
+  `seclume.heapdump.secrets.<label>.*` (a secret provider's settings) as well as the shapes:
+  each provider writes into locked native memory, the patterns (UTF-16 both ways, Base64) are
+  built there (`OffHeapSecrets`, seclume-heapdump), the dump is searched in native windows, and
+  everything is zeroed afterwards - a value of no known shape that leaked into a `String` goes,
+  and no new copy of any secret is made. `NoSecretInHeap` proves the last part in the tests.
 - **A database login by a Vault certificate alone** (`clientCertVaultPki-` settings, every
   driver on seclume's TLS stack). The client identity generates a P-256 key in OpenSSL or CNG,
   has Vault's `pki/sign/<role>` sign a request for it, presents the certificate - PostgreSQL's

@@ -20,6 +20,14 @@
     along.</description>
 
   <dependencies>
+    <!-- Tests only: the heap proof that a redaction searching for the
+         application's own secrets leaves no copy of them behind. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
