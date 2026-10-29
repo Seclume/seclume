@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import space.seclume.crypto.P256Signer;
 
@@ -47,6 +48,7 @@ import space.seclume.crypto.P256Signer;
  * unbounded number.
  */
 @Timeout(120)
+@Isolated("closeAll() empties the JVM-wide identity cache - under tests beside it that use it")
 class ClientIdentitiesTest {
 
     private static TestCertificates certificates;
