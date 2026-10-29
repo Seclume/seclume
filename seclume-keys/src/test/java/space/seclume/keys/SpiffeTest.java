@@ -135,11 +135,11 @@ class SpiffeTest {
     }
 
     private static void openssl(String... arguments) throws IOException, InterruptedException {
-        List<String> command = new ArrayList<>();
-        command.add("openssl");
+        // Through /bin/sh, which finds openssl on the PATH; the arguments stay arguments.
+        List<String> command = new ArrayList<>(List.of("-c", "exec openssl \"$@\"", "openssl"));
         command.addAll(List.of(arguments));
-        Process process = new ProcessBuilder(command).directory(directory.toFile())
-                .redirectErrorStream(true).start();
+        Process process = space.seclume.tck.Shell.builder(command.toArray(String[]::new))
+                .directory(directory.toFile()).redirectErrorStream(true).start();
         String output = new String(process.getInputStream().readAllBytes(),
                 StandardCharsets.UTF_8);
         if (!process.waitFor(60, TimeUnit.SECONDS) || process.exitValue() != 0) {
