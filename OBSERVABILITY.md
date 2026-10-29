@@ -289,10 +289,30 @@ also watches where they land and redacts each one next to itself, deleting the o
 [DIAGNOSTICS.md](DIAGNOSTICS.md#the-dumps-nobody-asked-for---redact-dir---watch)
 (`seclume.heapdump.oom.*`).
 
-What it cannot reach: a credential of no known shape. The application's own secrets are not
-known to the endpoint, and are not put on its heap to look for them; a password that is only a
-password, held in a `String`, stays. Find those with `seclume-heapcheck --secret-file` or
-`NoSecretInHeap`, and keep them off the heap. Redaction reads the dump a few times, at about
+**The application's own secrets, too, without a copy on the heap.** A password of no known
+shape is invisible to discovery. The application knows its own secrets, though, and seclume
+holds them in native memory. So the endpoint, and the redaction of OOM dumps, also look for
+each data source's password and for whatever `seclume.heapdump.secrets.<label>.*` names, in a
+secret provider's settings:
+
+```properties
+seclume.heapdump.secrets.payments-api.provider=file
+seclume.heapdump.secrets.payments-api.path=/run/secrets/payments-api-key
+```
+
+How the search stays off the heap:
+
+- **Reading the secret.** For each redaction every provider writes its secret into locked
+  native memory.
+- **Building the patterns.** The search patterns (UTF-16 both ways, Base64) are built there
+  too, not in Java arrays.
+- **Searching.** The dump is searched in native windows.
+- **Afterwards.** All of it is zeroed when the redaction is over.
+
+A secret that never left native memory is not in the dump at all. What the search finds is a
+copy that did leave, in a log line, a configuration object or an exception message, and that
+copy goes. A credential neither named nor of a known shape stays. Find those with
+`seclume-heapcheck --secret-file` or `NoSecretInHeap`, and keep them off the heap. Redaction reads the dump a few times, at about
 40 MB a second for discovery, so a large heap takes a while to come back.
 
 ## Diagnostics for specific defects

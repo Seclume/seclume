@@ -59,21 +59,33 @@ public final class DumpFolder {
      * @param discover           whether to look for credentials of known shapes
      * @param ignore             detectors left out
      * @param deleteUnredactable delete a dump that cannot be made clean, rather than keep it
+     * @param offHeap            the application's own secrets, searched without a heap
+     *                           copy, or {@code null}
      */
     public record Settings(List<Redactor.Needle> needles, boolean discover, Set<String> ignore,
-            boolean deleteUnredactable) {
+            boolean deleteUnredactable, OffHeapSecrets offHeap) {
 
         public Settings {
             needles = List.copyOf(needles);
             ignore = Set.copyOf(ignore);
-            if (needles.isEmpty() && !discover) {
+            if (needles.isEmpty() && offHeap == null && !discover) {
                 throw new IllegalArgumentException("nothing to redact: name a secret or discover");
             }
+        }
+
+        public Settings(List<Redactor.Needle> needles, boolean discover, Set<String> ignore,
+                boolean deleteUnredactable) {
+            this(needles, discover, ignore, deleteUnredactable, null);
         }
 
         /** Discovery alone - what an application can do with its own dumps. */
         public static Settings discovery(Set<String> ignore) {
             return new Settings(List.of(), true, ignore, false);
+        }
+
+        /** The same, with the application's own secrets, kept off the heap, looked for too. */
+        public Settings with(OffHeapSecrets secrets) {
+            return new Settings(needles, discover, ignore, deleteUnredactable, secrets);
         }
     }
 
@@ -167,7 +179,7 @@ public final class DumpFolder {
             }
             target = target(dump);
             Redactor.Report report = Redactor.redact(dump, target, settings.needles(),
-                    settings.discover(), settings.ignore());
+                    settings.offHeap(), settings.discover(), settings.ignore());
             Files.delete(dump);
             return new Outcome(dump, target, report, null, true);
         } catch (IOException | RuntimeException e) {

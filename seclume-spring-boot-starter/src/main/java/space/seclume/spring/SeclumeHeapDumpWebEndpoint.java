@@ -38,6 +38,7 @@ public class SeclumeHeapDumpWebEndpoint extends HeapDumpWebEndpoint {
 
     private final Set<String> ignore;
     private final Source source;
+    private final space.seclume.heapdump.OffHeapSecrets secrets;
 
     /** Where the dump comes from, if not from the JVM: a test's file, whatever {@code live} asks. */
     @FunctionalInterface
@@ -50,11 +51,25 @@ public class SeclumeHeapDumpWebEndpoint extends HeapDumpWebEndpoint {
      *               --ignore} takes them
      */
     public SeclumeHeapDumpWebEndpoint(Set<String> ignore) {
-        this(ignore, null);
+        this(ignore, null, null);
+    }
+
+    /**
+     * @param secrets the application's own secrets, looked for as well without
+     *                a copy on the heap ({@link RedactionSecrets}), or {@code null}
+     */
+    public SeclumeHeapDumpWebEndpoint(Set<String> ignore,
+            space.seclume.heapdump.OffHeapSecrets secrets) {
+        this(ignore, null, secrets);
     }
 
     /** With the dump taken by {@code source} rather than by the JVM - for tests. */
     SeclumeHeapDumpWebEndpoint(Set<String> ignore, Source source) {
+        this(ignore, source, null);
+    }
+
+    SeclumeHeapDumpWebEndpoint(Set<String> ignore, Source source,
+            space.seclume.heapdump.OffHeapSecrets secrets) {
         for (String id : ignore) {
             if (!Discovery.ids().contains(id)) {
                 throw new IllegalArgumentException("seclume.heapdump.ignore: no detector '" + id
@@ -63,6 +78,7 @@ public class SeclumeHeapDumpWebEndpoint extends HeapDumpWebEndpoint {
         }
         this.ignore = Set.copyOf(ignore);
         this.source = source;
+        this.secrets = secrets;
     }
 
     @Override
@@ -81,7 +97,8 @@ public class SeclumeHeapDumpWebEndpoint extends HeapDumpWebEndpoint {
             Path directory = dump.toAbsolutePath().getParent();
             out = Files.createTempFile(directory, "heap-redacted-", ".hprof");
             Files.delete(out);                    // Redactor makes it, owner-only
-            Redactor.Report report = Redactor.redact(dump, out, List.of(), true, ignore);
+            Redactor.Report report = Redactor.redact(dump, out, List.of(), secrets, true,
+                    ignore);
             LOG.log(System.Logger.Level.INFO, () -> "seclume: heap dump redacted - "
                     + report.regions() + " place(s) overwritten"
                     + (report.discovered() == null || report.discovered().clean() ? ""

@@ -198,10 +198,29 @@ public final class Redactor {
      */
     public static Report redact(Path dump, Path out, List<Needle> needles, boolean discover,
             Set<String> ignore) throws IOException {
+        return redact(dump, out, needles, null, discover, ignore);
+    }
+
+    /**
+     * The same, with named secrets that stay in native memory as well - see
+     * {@link OffHeapSecrets}. They are opened for this redaction and wiped
+     * when it is over, whatever its outcome.
+     *
+     * @param offHeap the application's own secrets, or {@code null}
+     */
+    public static Report redact(Path dump, Path out, List<Needle> needles,
+            OffHeapSecrets offHeap, boolean discover, Set<String> ignore) throws IOException {
         RedactionEvent event = new RedactionEvent();
         event.begin();
         try {
-            Report report = redactOnly(dump, out, needles, discover, ignore);
+            Report report;
+            if (offHeap == null) {
+                report = redactOnly(dump, out, needles, List.of(), discover, ignore);
+            } else {
+                try (OffHeapSecrets.Opened opened = offHeap.open()) {
+                    report = redactOnly(dump, out, needles, opened.needles(), discover, ignore);
+                }
+            }
             event.end();
             if (event.shouldCommit()) {
                 event.dump = String.valueOf(dump.getFileName());
@@ -227,8 +246,9 @@ public final class Redactor {
     }
 
     private static Report redactOnly(Path dump, Path out, List<Needle> needles,
-            boolean discover, Set<String> ignore) throws IOException {
-        if (needles.isEmpty() && !discover) {
+            List<OffHeapSecrets.Needle> offHeap, boolean discover, Set<String> ignore)
+            throws IOException {
+        if (needles.isEmpty() && offHeap.isEmpty() && !discover) {
             throw new IllegalArgumentException("nothing to redact: name a secret or discover");
         }
         if (Files.exists(out)) {
@@ -238,6 +258,9 @@ public final class Redactor {
         Map<String, Long> named = new LinkedHashMap<>();
         for (Needle needle : needles) {
             named.put(needle.label(), find(dump, needle, regions));
+        }
+        for (OffHeapSecrets.Needle needle : offHeap) {
+            named.merge(needle.label(), find(dump, needle, regions, WINDOW), Long::sum);
         }
         Discovery.Result discovered = null;
         Echoes echoes = null;
@@ -291,7 +314,7 @@ public final class Redactor {
                 }
                 channel.force(true);
             }
-            check(partial, needles, discover, ignore, echoes);
+            check(partial, needles, offHeap, discover, ignore, echoes);
             publish(partial, out);
             done = true;
             return new Report(Map.copyOf(named), discovered, regions.size(), echoed,
@@ -350,15 +373,21 @@ public final class Redactor {
     /** The redacted copy, searched as the original was. Anything found is a failure. */
     static void check(Path copy, List<Needle> needles, boolean discover,
             Set<String> ignore) throws IOException {
-        check(copy, needles, discover, ignore, null);
+        check(copy, needles, List.of(), discover, ignore, null);
     }
 
-    private static void check(Path copy, List<Needle> needles, boolean discover,
-            Set<String> ignore, Echoes echoes) throws IOException {
+    private static void check(Path copy, List<Needle> needles,
+            List<OffHeapSecrets.Needle> offHeap, boolean discover, Set<String> ignore,
+            Echoes echoes) throws IOException {
         List<Region> left = new ArrayList<>();
         List<String> where = new ArrayList<>();
         for (Needle needle : needles) {
             if (find(copy, needle, left) > 0) {
+                where.add(needle.label());
+            }
+        }
+        for (OffHeapSecrets.Needle needle : offHeap) {
+            if (find(copy, needle, left, WINDOW) > 0) {
                 where.add(needle.label());
             }
         }
@@ -403,6 +432,57 @@ public final class Redactor {
             }
         });
         return count[0];
+    }
+
+    /**
+     * Every occurrence of a secret held in native memory - searched in native
+     * windows of the file, so that neither the pattern nor what matches it is
+     * copied to the heap. The windows are zeroed before they are let go.
+     */
+    static long find(Path dump, OffHeapSecrets.Needle needle, List<Region> regions,
+            int windowSize) throws IOException {
+        int longest = needle.longest();
+        long count = 0;
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined();
+             FileChannel channel = FileChannel.open(dump, StandardOpenOption.READ)) {
+            long size = channel.size();
+            java.lang.foreign.MemorySegment window = arena.allocate(
+                    Math.min((long) windowSize + longest, Math.max(size, 1)));
+            try {
+                long start = 0;
+                while (start < size) {
+                    int length = (int) Math.min(window.byteSize(), size - start);
+                    ByteBuffer into = window.asSlice(0, length).asByteBuffer();
+                    int read;
+                    do {
+                        read = channel.read(into, start + into.position());
+                    } while (read >= 0 && into.hasRemaining());
+                    length = into.position();
+                    boolean last = start + length >= size;
+                    int acceptBelow = last ? length : length - longest + 1;
+                    for (OffHeapSecrets.Pattern pattern : needle.patterns()) {
+                        java.lang.foreign.MemorySegment p = pattern.bytes();
+                        int n = (int) p.byteSize();
+                        byte first = p.get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0);
+                        for (int i = 0; i < acceptBelow && i + n <= length; i++) {
+                            if (window.get(java.lang.foreign.ValueLayout.JAVA_BYTE, i) == first
+                                    && java.lang.foreign.MemorySegment.mismatch(window, i,
+                                            i + n, p, 0, n) == -1) {
+                                add(regions, new Region(start + i, n, pattern.fill()));
+                                count++;
+                            }
+                        }
+                    }
+                    if (last) {
+                        break;
+                    }
+                    start += acceptBelow;
+                }
+            } finally {
+                window.fill((byte) 0);
+            }
+        }
+        return count;
     }
 
     /** What is done with one window of the file. */
