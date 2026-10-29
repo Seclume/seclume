@@ -176,6 +176,21 @@ application container's process namespace, and seclume-heapcheck runs in it with
 - **Same reports as before.** Secrets are named by their paths as given, so reports compare
   across runs with `compare.py` as before.
 
+**A dump that has to leave the pod.** For a memory leak or a vendor's support case, `redact`
+makes the dump the same way and redacts it inside the pod with `--redact`. Only the redacted
+copy comes out:
+
+```sh
+kubectl seclume redact orders-7d9f -n shop -o orders.hprof --secret-dir /run/secrets/db --discover
+```
+
+- **What goes.** The named secrets and the shapes discovery knows, with their echoes, are
+  overwritten. The copy is searched again inside the pod.
+- **When it comes out.** Only when that search comes back clean. Otherwise the command exits
+  2 and nothing is copied.
+- **On your side.** The copy is owner-only, and an existing file is never overwritten.
+- **The original.** The dump itself is deleted where the JVM wrote it.
+
 Requirements:
 
 - **Kubernetes.** Ephemeral containers (1.25+) and `kubectl debug --profile=general`, which
@@ -194,8 +209,9 @@ not remove them. A namespace whose policy forbids ephemeral containers or `SYS_P
 The CI job `kubectl-heapcheck` runs this against a kind cluster with three pods: a JVM as an
 unprivileged user with the credential from a mounted secret, one without it, and one with a
 token for `--discover`. The leak must be found, the clean pod must pass, the token must be
-discovered, and afterwards no `.hprof` file may be left in any pod and no report may hold the
-credential.
+discovered. `redact` copies of the leaking and the token pod must pass a check with the
+credential itself, and a second `redact` to the same file must be refused. Afterwards no
+`.hprof` file may be left in any pod and no report may hold the credential.
 
 ## A dump to hand on: `--redact`
 

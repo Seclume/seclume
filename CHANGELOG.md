@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **`kubectl seclume redact <pod> -o <file>`**: a heap dump of the pod's JVM for a memory leak or
+  a support case, redacted inside the pod - named secrets, the shapes and their echoes, checked
+  again there - and only the copy copied out, owner-only, never over a file; a copy that does
+  not come out clean stays in the pod and the command exits 2. The kind CI job checks the
+  copies with the credential itself.
 - **SPIFFE X.509-SVIDs with the key off the heap.** `SpiffeWorkloadApi` (core) calls the
   Workload API's `FetchX509SVID` over the agent's Unix socket with a small HTTP/2 client of its
   own - no gRPC or Netty needed - reads the answer into locked native memory and parses it

@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # kubectl seclume heapcheck <pod> - seclume-heapcheck inside the pod, the
 # report out of it, the heap dump never.
+# kubectl seclume redact <pod> -o <file> - a heap dump of the pod's JVM,
+# redacted inside the pod; only the redacted copy comes out.
 #
 # A heap dump holds every secret the process had; copying it to a laptop to
-# check it would be the leak it looks for. So the check goes to the dump: an
+# check it would be the leak it looks for. So the work goes to the dump: an
 # ephemeral container (kubectl debug --target) shares the process namespace of
 # the application's container, the JVM writes its dump into its own file
 # system, seclume-heapcheck reads it there through /proc/<pid>/root and deletes
-# it, and what comes back is the report: Markdown, JSON or SARIF on stdout, the
-# check's own lines on stderr, its exit code as this command's.
+# it. What comes back is the report - Markdown, JSON or SARIF on stdout, the
+# check's own lines on stderr, its exit code as this command's - or, for
+# redact, a copy of the dump with every secret it found overwritten and checked
+# again inside the pod.
 #
 # Install: put this file and seclume-heapcheck.jar in a directory on PATH (or
 # set SECLUME_HEAPCHECK_JAR); kubectl finds the plugin by its name.
@@ -16,11 +20,8 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'USAGE'
-usage: kubectl seclume heapcheck <pod> [-n <namespace>] [-c <container>]
-                                 [--secret-dir <dir>]... [--secret-file <file>]...
-                                 [--discover [--ignore <detector>]...]
-                                 [--format md|json|sarif] [--pid <pid>]
-                                 [--dump-dir <dir>] [--image <image>] [--jar <jar>]
+usage: kubectl seclume heapcheck <pod> [options] [--format md|json|sarif]
+       kubectl seclume redact <pod> -o <file.hprof> [options]
 
   -n, --namespace  the pod's namespace (default: the context's)
   -c, --container  the application's container (default: the pod's first)
@@ -30,7 +31,8 @@ usage: kubectl seclume heapcheck <pod> [-n <namespace>] [-c <container>]
                    the check, inside the pod
   --discover       also look for credentials nobody named, by their shape
   --ignore         leave a detector out of --discover
-  --format         the report on stdout: md (default), json or sarif
+  --format         heapcheck: the report on stdout, md (default), json or sarif
+  -o, --output     redact: where the redacted copy goes here; never over a file
   --pid            the JVM, as the debug container sees it, if there is more
                    than one in the application's container
   --dump-dir       where the JVM writes its dump, in its own container: a
@@ -40,14 +42,18 @@ usage: kubectl seclume heapcheck <pod> [-n <namespace>] [-c <container>]
   --jar            seclume-heapcheck.jar (default: $SECLUME_HEAPCHECK_JAR, or next
                    to this script)
 
-exit code: 0 nothing found, 1 a secret is in the heap, 2 the check could not run.
-Each run leaves an exited ephemeral container in the pod's status - Kubernetes
-does not remove them.
+heapcheck exits 0 when nothing was found, 1 when a secret is in the heap, 2
+when the check could not run. redact exits 0 when the copy is written and was
+found clean inside the pod, 2 otherwise - and then nothing is copied out. A
+redaction reaches what is named and the shapes discovery knows, nothing else.
+Each run leaves an exited ephemeral container in the pod's status -
+Kubernetes does not remove them.
 USAGE
   exit 2
 }
 
-[ "${1:-}" = heapcheck ] || usage
+command=${1:-}
+case "$command" in heapcheck|redact) ;; *) usage ;; esac
 shift
 [ $# -gt 0 ] && [ "${1#-}" = "$1" ] || usage
 pod=$1
@@ -59,6 +65,7 @@ image=${SECLUME_HEAPCHECK_IMAGE:-eclipse-temurin:25-jdk}
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 jar=${SECLUME_HEAPCHECK_JAR:-$here/seclume-heapcheck.jar}
 format=md
+output=""
 pid=auto
 check=()
 need() { [ $# -ge 2 ] || { echo "$1 needs a value" >&2; usage; }; }
@@ -69,6 +76,7 @@ while [ $# -gt 0 ]; do
     --image) need "$@"; image=$2; shift 2 ;;
     --jar) need "$@"; jar=$2; shift 2 ;;
     --format) need "$@"; format=$2; shift 2 ;;
+    -o|--output) need "$@"; output=$2; shift 2 ;;
     --pid) need "$@"; pid=$2; shift 2 ;;
     --secret-dir|--secret-file|--ignore|--dump-dir) need "$@"; check+=("$1" "$2"); shift 2 ;;
     --discover|--no-attribution) check+=("$1"); shift ;;
@@ -81,13 +89,24 @@ while [ $# -gt 0 ]; do
 done
 case "$format" in md|json|sarif) ;; *) echo "--format is md, json or sarif" >&2; exit 2 ;; esac
 case "$pid" in auto|[0-9]*) ;; *) echo "--pid is a number" >&2; exit 2 ;; esac
+if [ "$command" = redact ]; then
+  [ -n "$output" ] || { echo "redact needs -o <file.hprof>: where the redacted copy goes" >&2; exit 2; }
+  [ ! -e "$output" ] || { echo "$output exists, and a redaction does not overwrite a file" >&2; exit 2; }
+  case " ${check[*]} " in
+    *" --discover "*|*" --secret-dir "*|*" --secret-file "*) ;;
+    *) echo "nothing to redact: --discover, --secret-dir or --secret-file" >&2; exit 2 ;;
+  esac
+elif [ -n "$output" ]; then
+  echo "-o is for redact; heapcheck writes its report to stdout" >&2
+  exit 2
+fi
 [ -r "$jar" ] || { echo "no seclume-heapcheck.jar at $jar - set SECLUME_HEAPCHECK_JAR or --jar" >&2; exit 2; }
 if [ -z "$container" ]; then
   container=$(kubectl get pod "$pod" "${namespace[@]}" -o jsonpath='{.spec.containers[0].name}')
 fi
 
 name="seclume-heapcheck-$(date +%s)-$RANDOM"
-# The debug container waits for the check and for nothing else: until it is
+# The debug container waits for the work and for nothing else: until it is
 # told to stop, ten minutes at most - never by killing a pid, which in a shared
 # process namespace may be the application.
 kubectl debug "$pod" "${namespace[@]}" --target="$container" --container="$name" \
@@ -97,6 +116,7 @@ kubectl debug "$pod" "${namespace[@]}" --target="$container" --container="$name"
 in_pod() { kubectl exec "$pod" "${namespace[@]}" -c "$name" -- "$@"; }
 stop() { in_pod sh -c 'rm -rf /tmp/seclume; touch /tmp/seclume-stop' >/dev/null 2>&1 || true; }
 trap stop EXIT
+running=""
 for _ in $(seq 1 120); do
   running=$(kubectl get pod "$pod" "${namespace[@]}" -o \
     jsonpath="{.status.ephemeralContainerStatuses[?(@.name==\"$name\")].state.running}")
@@ -105,15 +125,16 @@ for _ in $(seq 1 120); do
 done
 [ -n "$running" ] || { echo "the debug container $name did not start" >&2; exit 2; }
 
-in_pod mkdir -p /tmp/seclume
+in_pod sh -c 'mkdir -p /tmp/seclume && chmod 700 /tmp/seclume'
 kubectl cp "$jar" "${namespace[@]}" "$pod:/tmp/seclume/heapcheck.jar" -c "$name" >/dev/null
 
 # Inside the pod: find the JVM - a java process in another mount namespace than
-# this container's, which is the application's - run the check beside it, and
-# send the check's lines to stderr and the report to stdout.
+# this container's, which is the application's - and run the check beside it.
+# heapcheck: the check's lines to stderr, the report to stdout. redact: the
+# copy is written to /tmp/seclume and checked there; the dump itself is gone.
 script='
 set -u
-pid=$1; format=$2; shift 2
+command=$1; pid=$2; format=$3; shift 3
 if [ "$pid" = auto ]; then
   self=$(readlink /proc/self/ns/mnt)
   found=""
@@ -132,6 +153,11 @@ if [ "$pid" = auto ]; then
   fi
   pid=$1; shift
 fi
+if [ "$command" = redact ]; then
+  java --enable-native-access=ALL-UNNAMED -jar /tmp/seclume/heapcheck.jar \
+    --pid "$pid" --in-target --no-attribution --redact /tmp/seclume/redacted.hprof "$@" >&2
+  exit $?
+fi
 report=/tmp/seclume/report.$format
 java --enable-native-access=ALL-UNNAMED -jar /tmp/seclume/heapcheck.jar \
   --pid "$pid" --in-target --report "$report" "$@" >&2
@@ -140,7 +166,18 @@ code=$?
 exit $code
 '
 set +e
-in_pod sh -c "$script" sh "$pid" "$format" "${check[@]}"
+in_pod sh -c "$script" sh "$command" "$pid" "$format" "${check[@]}"
 code=$?
 set -e
+if [ "$command" = redact ]; then
+  if [ "$code" -ne 0 ]; then
+    echo "no redacted copy: the redaction did not come out clean inside the pod" >&2
+    exit 2
+  fi
+  # Owner-only from the first byte, as it was written inside the pod.
+  (umask 077 && kubectl cp "${namespace[@]}" "$pod:/tmp/seclume/redacted.hprof" "$output" \
+    -c "$name" >/dev/null)
+  chmod 600 "$output"
+  echo "the redacted copy is at $output" >&2
+fi
 exit $code
