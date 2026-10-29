@@ -281,15 +281,15 @@ public final class HeapCheck {
         }
         try {
             long amount = Long.parseLong(value);
-            if (amount <= 0) {
-                throw new NumberFormatException("not positive");
+            if (amount > 0) {
+                return java.time.Duration.ofSeconds(Math.multiplyExact(amount, unit));
             }
-            return java.time.Duration.ofSeconds(Math.multiplyExact(amount, unit));
-        } catch (NumberFormatException | ArithmeticException e) {
-            System.err.println("--interval " + text + ": a duration such as 10s, 5m or 1h");
-            System.exit(2);
-            return java.time.Duration.ZERO;
+        } catch (NumberFormatException | ArithmeticException notADuration) {
+            // said below, with what was given
         }
+        System.err.println("--interval " + text + ": a duration such as 10s, 5m or 1h");
+        System.exit(2);
+        return java.time.Duration.ZERO;
     }
 
     /**
