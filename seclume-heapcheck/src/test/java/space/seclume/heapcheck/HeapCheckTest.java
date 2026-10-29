@@ -154,7 +154,7 @@ class HeapCheckTest {
             String entry = report.substring(stripe, report.indexOf("]", stripe));
             assertTrue(entry.contains("unreferenced"), "garbage named as held: " + entry);
         }
-        // The probe writes parts of what it made up next to the file it was given.
+        // The probe writes what it made up next to the file it was given.
         for (String value : Files.readAllLines(directory.resolve("unused.values"))) {
             assertTrue(!report.contains(value) && !md.contains(value), "a report holds a value");
         }
@@ -343,7 +343,7 @@ class HeapCheckTest {
     /**
      * A process that keeps credentials of four known shapes, made up at
      * random when it starts - none of them in a file the check is given - and
-     * writes parts of them to {@code <file>.values} so the test can make sure
+     * writes them to {@code <file>.values} so the test can make sure
      * no report repeats them.
      */
     public static final class Unnamed {
@@ -401,10 +401,11 @@ class HeapCheckTest {
             if (("sk_live_" + stripe).hashCode() == 42) {
                 System.out.println("unlikely");
             }
+            // Whole values, not slices: a slice would be a String of its own,
+            // a part of a secret at no boundary the secret has - which nothing
+            // could find, and which no application makes.
             java.nio.file.Files.write(Path.of(arguments[0] + ".values"), List.of( // seclume-allow: this probe leaks on purpose - see the class comment
-                    payload.substring(0, 24), key.substring(0, 24), password,
-                    token.substring(4, 28), github.substring(0, 20), slack.substring(0, 20),
-                    stripe.substring(0, 16)));
+                    payload, key, password, token, github, slack, stripe));
             System.out.println("ready");
             System.out.flush();
             System.in.read();
