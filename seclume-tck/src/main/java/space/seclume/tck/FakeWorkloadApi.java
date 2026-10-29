@@ -208,12 +208,13 @@ public final class FakeWorkloadApi implements AutoCloseable {
                 break;
             }
             // kind, name length, name, value length, value - each there before it is read
-            int nameAt = at + 2;
-            if (nameAt > block.length) {
+            int nameLengthAt = at + 1;
+            if (nameLengthAt >= block.length) {
                 out.append("(cut short)\n");
                 break;
             }
-            int nameLength = block[at + 1] & 0x7f;
+            int nameLength = block[nameLengthAt] & 0x7f;
+            int nameAt = nameLengthAt + 1;
             int valueLengthAt = nameAt + nameLength;
             if (valueLengthAt >= block.length) {
                 out.append("(cut short)\n");
