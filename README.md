@@ -224,6 +224,7 @@ Everything below works on all four databases unless the row says otherwise.
 | | Testcontainers `@ServiceConnection` and Docker Compose: the pool comes from the container | [FEATURES.md](FEATURES.md#spring-data-and-jpa) |
 | **Observability** | JFR events, Micrometer meters, OpenTelemetry spans and metrics (`seclume-opentelemetry`, no Micrometer needed), all without values - for the databases and every module: logins, secrets written into requests, signatures, rotations | [OBSERVABILITY.md](OBSERVABILITY.md) |
 | | `/actuator/seclume`: login method, TLS, certificate expiry and server capacity per data source | [OBSERVABILITY.md](OBSERVABILITY.md#actuatorseclume-how-every-data-source-is-secured) |
+| | `/actuator/heapdump`: a redacted copy of the heap - the credentials it finds overwritten - never the heap itself | [OBSERVABILITY.md](OBSERVABILITY.md#actuatorheapdump-a-redacted-copy-never-the-heap-itself) |
 | | N+1 detection (`QueryStorms`), the last messages before a break (`Flight`) | [OBSERVABILITY.md](OBSERVABILITY.md#diagnostics-for-specific-defects) |
 | **Tools** | `seclume-verify`: a one-shot connection report, for a ticket or a readiness probe | [OBSERVABILITY.md](OBSERVABILITY.md#seclume-verify) |
 | | `seclume-verify --migrate`: your Hikari/pgjdbc/mssql-jdbc configuration translated, unsafe settings named | [OBSERVABILITY.md](OBSERVABILITY.md#seclume-verify) |

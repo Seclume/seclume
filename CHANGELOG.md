@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **`/actuator/heapdump` serves a redacted copy** (`SeclumeHeapDumpWebEndpoint`). The starter
+  puts it in the place of Boot's endpoint: the dump is taken as before, every credential of a
+  known shape and its copies and parts are overwritten by `seclume-heapdump`, String hashes
+  cleared, the copy checked again, and only the copy served; the dump itself is deleted first.
+  A dump that cannot be made clean is a 500, never the original. `seclume.heapdump.ignore`
+  leaves detectors out (an unknown one stops the start), `seclume.heapdump.redact=false`
+  restores Boot's endpoint. Tested on a dump of the test JVM itself with a token planted in it.
 - **Client certificates from Vault's PKI with the key never off OpenSSL**
   (`SeclumeKeys.vaultPkiKeyManager`, `vaultPkiKeyManagerFactory`, `vaultPkiSslContext`; Spring:
   `seclume.ssl.bundles.<name>.vault-pki`). A P-256 key is generated in OpenSSL or CNG
