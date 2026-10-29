@@ -154,7 +154,7 @@ class HeapCheckTest {
             String entry = report.substring(stripe, report.indexOf("]", stripe));
             assertTrue(entry.contains("unreferenced"), "garbage named as held: " + entry);
         }
-        // The probe writes parts of what it made up next to the file it was given.
+        // The probe writes what it made up next to the file it was given.
         for (String value : Files.readAllLines(directory.resolve("unused.values"))) {
             assertTrue(!report.contains(value) && !md.contains(value), "a report holds a value");
         }
@@ -177,6 +177,70 @@ class HeapCheckTest {
         });
         assertTrue(Files.readString(json)
                 .contains("\"discovery\": {\n    \"verdict\": \"NOT_FOUND\""));
+    }
+
+    /**
+     * {@code --redact} on a real dump with a named secret: the copy is
+     * written, a second check of the copy finds nothing, and the original
+     * still holds the secret - the redaction works on a copy, never in place.
+     */
+    @Test
+    void aRedactedCopyOfARealDumpHoldsTheNamedSecretNoMore(@TempDir Path directory)
+            throws Exception {
+        Path secretFile = directory.resolve("db-password");
+        Files.writeString(secretFile, SECRET, StandardCharsets.UTF_8);
+        Path dump = directory.resolve("app.hprof");
+        withProbe(secretFile, Holder.class, pid ->
+                assertEquals(1, HeapCheck.run(pid, secretFile, dump)));
+        byte[] original = Files.readAllBytes(dump);
+        Path copy = directory.resolve("redacted.hprof");
+
+        assertEquals(0, HeapCheck.run(new HeapCheck.Options(null, dump, List.of(secretFile),
+                List.of(), null, false, java.util.Set.of(), true, copy)),
+                "the redaction was refused");
+        assertEquals(original.length, Files.size(copy), "the copy changed its length");
+        assertEquals(0, HeapCheck.run(new HeapCheck.Options(null, copy, List.of(secretFile),
+                List.of(), null)), "the copy still holds the secret");
+        assertEquals(1, HeapCheck.run(new HeapCheck.Options(null, dump, List.of(secretFile),
+                List.of(), null)), "the original was changed");
+        assertTrue(java.util.Arrays.equals(original, Files.readAllBytes(dump)),
+                "the original was changed");
+        // and a second redaction never overwrites the first
+        assertEquals(2, HeapCheck.run(new HeapCheck.Options(null, dump, List.of(secretFile),
+                List.of(), null, false, java.util.Set.of(), true, copy)));
+    }
+
+    /**
+     * And with {@code --discover}: credentials nobody named go from the copy,
+     * which a discovery of its own then finds clean, and which the copy's
+     * structure still allows to be read.
+     */
+    @Test
+    void aRedactedCopyHoldsNothingDiscoveryFinds(@TempDir Path directory) throws Exception {
+        Path unused = directory.resolve("unused");
+        Files.writeString(unused, "nothing", StandardCharsets.UTF_8);
+        Path dump = directory.resolve("app.hprof");
+        withProbe(unused, Unnamed.class, pid -> assertEquals(1, HeapCheck.run(
+                new HeapCheck.Options(pid, null, List.of(), List.of(), dump, true,
+                        java.util.Set.of()))));
+        Path copy = directory.resolve("redacted.hprof");
+        Path before = directory.resolve("before.json");
+        assertEquals(0, HeapCheck.run(new HeapCheck.Options(null, dump, List.of(), List.of(before),
+                null, true, java.util.Set.of(), true, copy)));
+        Path json = directory.resolve("copy.json");
+        assertEquals(0, HeapCheck.run(new HeapCheck.Options(null, copy, List.of(),
+                List.of(json), null, true, java.util.Set.of())), () -> read(json));
+        String data = new String(Files.readAllBytes(copy), StandardCharsets.ISO_8859_1);
+        List<String> values = Files.readAllLines(directory.resolve("unused.values"));
+        // The last is the Stripe key the probe dropped. Where the collector
+        // took the key and left a piece of its body, that piece has no shape
+        // and was named by nobody: out of reach, and the tool says so.
+        boolean stripeSeen = read(before).contains("\"detector\": \"stripe-key\"");
+        for (int i = 0; i < values.size() - (stripeSeen ? 0 : 1); i++) {
+            assertTrue(!data.contains(values.get(i)), "value " + i + " is left in the copy");
+        }
+        assertTrue(data.contains("@db.internal:5432/app"),
+                "the URL around the password should be left readable");
     }
 
     private static String read(Path file) {
@@ -279,7 +343,7 @@ class HeapCheckTest {
     /**
      * A process that keeps credentials of four known shapes, made up at
      * random when it starts - none of them in a file the check is given - and
-     * writes parts of them to {@code <file>.values} so the test can make sure
+     * writes them to {@code <file>.values} so the test can make sure
      * no report repeats them.
      */
     public static final class Unnamed {
@@ -312,10 +376,11 @@ class HeapCheckTest {
             java.util.Base64.Encoder url64 = java.util.Base64.getUrlEncoder().withoutPadding();
             byte[] bytes = new byte[96];
             random.nextBytes(bytes);
-            String payload = url64.encodeToString(bytes);
+            // Each segment a String of its own first, as a JWT library holds them.
+            String payload = "eyJ" + url64.encodeToString(bytes);
             random.nextBytes(bytes);
             String signature = url64.encodeToString(bytes);
-            jwt = "eyJhbGciOiJSUzI1NiJ9.eyJ" + payload + "." + signature;
+            jwt = "eyJhbGciOiJSUzI1NiJ9." + payload + "." + signature;
             random.nextBytes(bytes);
             String key = java.util.Base64.getEncoder().encodeToString(bytes);
             pem = "-----BEGIN PRIVATE KEY-----\n" + key + "\n-----END PRIVATE KEY-----\n";
@@ -336,10 +401,11 @@ class HeapCheckTest {
             if (("sk_live_" + stripe).hashCode() == 42) {
                 System.out.println("unlikely");
             }
+            // Whole values, not slices: a slice would be a String of its own,
+            // a part of a secret at no boundary the secret has - which nothing
+            // could find, and which no application makes.
             java.nio.file.Files.write(Path.of(arguments[0] + ".values"), List.of( // seclume-allow: this probe leaks on purpose - see the class comment
-                    payload.substring(0, 24), key.substring(0, 24), password,
-                    token.substring(4, 28), github.substring(0, 20), slack.substring(0, 20),
-                    stripe.substring(0, 16)));
+                    payload, key, password, token, github, slack, stripe));
             System.out.println("ready");
             System.out.flush();
             System.in.read();

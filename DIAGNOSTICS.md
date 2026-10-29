@@ -99,6 +99,41 @@ SARIF message; only class and field names, never a value. It takes three more pa
 dump, reading it in windows, so dumps over 2 GB work too; `--no-attribution` leaves it out.
 A dump whose structure cannot be read still gets its report, without holders.
 
+## A dump to hand on: `--redact`
+
+```sh
+java --enable-native-access=ALL-UNNAMED -jar seclume-heapcheck.jar \
+  --dump app.hprof --secret-dir /run/secrets/app --discover --redact app-redacted.hprof
+```
+
+A heap dump is needed - for a memory leak, for a vendor's support ticket - and it carries
+every credential the process held. `--redact` writes a copy with each of them overwritten:
+
+- **What goes:** every occurrence of each named secret, in every encoding it can lie in
+  (UTF-8, UTF-16 in both byte orders, Base64; a binary secret as its bytes and as Base64),
+  and with `--discover` the value of every credential of a known shape - the password of a
+  URL rather than the URL, all of a PEM block.
+- **Echoes too:** what discovery found is then looked for where it has no shape - the URL's
+  password in a configuration field of its own, a JWT's payload a library split off, a key's
+  line, a token's body without `ghp_` or `xoxb-`. A whole value of at least 8 characters,
+  a part of at least 16: anything shorter would match by chance in the dump's own records.
+- **How:** with `*` in the occurrence's own encoding (`00 2A` in a `char[]`), or zero bytes
+  for a binary secret. Nothing moves: a `String` keeps its length, the dump stays a dump that
+  analysers open. The `hash` field of every `String` whose text went is cleared as well - a
+  32-bit hash of a password confirms a guess.
+- **Checked:** the copy is searched again the same way before it gets its name. If anything is
+  still found, it is deleted and the run fails with exit 2 - a half-redacted dump is worse than
+  none, because it is trusted. The copy is readable by its owner only, written next to its
+  destination and renamed into place; an existing file is never overwritten.
+
+Exit 0 means the copy is written and checked, whatever the original held - the reports, if
+asked for, still describe the original. What it does not reach: a credential named by nobody
+and of no known shape, one split across objects, compressed or encrypted. The check proves
+that what was looked for is gone, not that nothing else is there; name what you know.
+
+The redaction itself is in `seclume-heapdump`, a library without dependencies
+(`space.seclume.heapdump.Redactor`), together with the discovery and the object attribution.
+
 ## Reports and baselines
 
 `.sarif` and `.sarif.json` select SARIF 2.1.0. Each leaked credential has one

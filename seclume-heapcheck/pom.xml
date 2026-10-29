@@ -19,6 +19,11 @@
   <dependencies>
     <dependency>
       <groupId>space.seclume</groupId>
+      <artifactId>seclume-heapdump</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
       <artifactId>seclume-tck</artifactId>
       <version>${project.version}</version>
     </dependency>

@@ -1,4 +1,4 @@
-package space.seclume.heapcheck;
+package space.seclume.heapdump;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -48,7 +48,7 @@ import java.util.regex.Pattern;
  * token, an example from a library's documentation all match. And a value
  * that is split across objects, or compressed, or encrypted, is not found.
  */
-final class Discovery {
+public final class Discovery {
 
     /** Bytes read per window. */
     static final int CHUNK = 8 * 1024 * 1024;
@@ -75,15 +75,21 @@ final class Discovery {
      *                marks the secret part of the match - the password of a
      *                URL, say - which is what tells two values apart
      */
-    record Detector(String id, String name, String advice, String regex) {
+    public record Detector(String id, String name, String advice, String regex) {
 
         Pattern pattern() {
             return Pattern.compile(regex);
         }
     }
 
-    /** Where one occurrence lies in the dump file. Length in bytes. */
-    record Occurrence(String encoding, long position, int length) {
+    /**
+     * Where one occurrence lies in the dump file, lengths in bytes: the whole
+     * match, and within it the value - the password of a URL, the token after
+     * {@code Bearer}, the whole of a PEM block - which is what has to go when
+     * a dump is redacted.
+     */
+    public record Occurrence(String encoding, long position, int length, long valuePosition,
+            int valueLength) {
 
         @Override
         public String toString() {
@@ -96,18 +102,19 @@ final class Discovery {
      * (1, 2, ... in the order they were met - stable within one report and
      * meaningless outside it), how often, and the first positions.
      */
-    record Found(Detector detector, int value, long count, List<Occurrence> occurrences) {
+    public record Found(Detector detector, int value, long count,
+            List<Occurrence> occurrences) {
     }
 
     /** What the search found, grouped by detector, and what it was told to leave out. */
-    record Result(List<Found> found, Set<String> ignored, Map<String, Long> uncounted) {
+    public record Result(List<Found> found, Set<String> ignored, Map<String, Long> uncounted) {
 
-        boolean clean() {
+        public boolean clean() {
             return found.isEmpty();
         }
 
         /** Distinct values per detector id, in detector order. */
-        Map<String, Long> valuesByDetector() {
+        public Map<String, Long> valuesByDetector() {
             Map<String, Long> values = new LinkedHashMap<>();
             for (Found found : found) {
                 values.merge(found.detector().id(), 1L, Long::sum);
@@ -300,18 +307,41 @@ final class Discovery {
         this.own = patterns;
     }
 
+    /**
+     * Told of every occurrence as it is found - every one, where a
+     * {@link Result} keeps the first {@value #POSITIONS_KEPT} per value. For
+     * redacting, which has to reach all of them.
+     */
+    @FunctionalInterface
+    public interface Sink {
+        void found(Occurrence occurrence);
+    }
+
+    private Sink sink;
+
     /** The detector ids, in order. */
-    static List<String> ids() {
+    public static List<String> ids() {
         return DETECTORS.stream().map(Detector::id).toList();
     }
 
     /** Searches a dump file. */
-    static Result scan(Path dump, Set<String> ignore) throws IOException {
+    public static Result scan(Path dump, Set<String> ignore) throws IOException {
+        return scan(dump, ignore, null);
+    }
+
+    /** The same, telling {@code sink} of every occurrence. */
+    public static Result scan(Path dump, Set<String> ignore, Sink sink) throws IOException {
         Discovery discovery = new Discovery(ignore);
+        discovery.sink = sink;
         try (FileChannel channel = FileChannel.open(dump, StandardOpenOption.READ)) {
             discovery.scan(channel, CHUNK);
         }
         return discovery.result();
+    }
+
+    /** Searches bytes in memory - for the tests of what builds on this. */
+    public static Result scan(byte[] data, Set<String> ignore) {
+        return scan(data, ignore, CHUNK);
     }
 
     /** Searches bytes in memory, in windows of {@code chunk} - for the tests. */
@@ -472,6 +502,7 @@ final class Discovery {
     private void match(CharSequence text, String encoding, long offset, int width,
             long acceptFrom, long acceptTo) {
         int length = text.length();
+        current = text;
         // A match is taken once, however many of its anchors lead to it.
         Set<Long> taken = null;
         for (int i = 0; i < length; i++) {
@@ -515,14 +546,55 @@ final class Discovery {
         if (position < acceptFrom || position >= acceptTo) {
             return;                                 // the window next door takes it
         }
-        String value = matcher.groupCount() >= 1 && matcher.group(1) != null
-                ? matcher.group(1) : matcher.group();
+        boolean group = matcher.groupCount() >= 1 && matcher.group(1) != null;
+        String value = group ? matcher.group(1) : matcher.group();
         Detector detector = detectors.get(d);
         if (CHOSEN.contains(detector.id()) && PLACEHOLDER.matcher(value).matches()) {
             return;
         }
-        record(detector, value, new Occurrence(encoding, position,
-                (matcher.end() - matcher.start()) * width));
+        int valueStart = group ? matcher.start(1) : matcher.start();
+        int valueEnd = group ? matcher.end(1) : matcher.end();
+        if (detector.id().equals("private-key")) {
+            valueEnd = pemEnd(current, matcher.end());
+        }
+        Occurrence occurrence = new Occurrence(encoding, position,
+                (matcher.end() - matcher.start()) * width,
+                offset + (long) valueStart * width, (valueEnd - valueStart) * width);
+        record(detector, value, occurrence);
+        if (sink != null) {
+            sink.found(occurrence);
+        }
+    }
+
+    /** The run of text being matched - a Matcher does not hand its input out. */
+    private CharSequence current;
+
+    /**
+     * Where a PEM block that starts in a match ends: after its
+     * {@code -----END ...-----} line, or with the run of text if that is not
+     * in it. The detector matches the header and the first line of the key;
+     * the key is all of it.
+     */
+    private static int pemEnd(CharSequence text, int from) {
+        int end = indexOf(text, "-----END ", from);
+        if (end < 0) {
+            return text.length();
+        }
+        int close = indexOf(text, "-----", end + "-----END ".length());
+        return close < 0 ? text.length() : close + "-----".length();
+    }
+
+    private static int indexOf(CharSequence text, String needle, int from) {
+        outer:
+        for (int i = Math.max(0, from); i + needle.length() <= text.length(); i++) {
+            for (int j = 0; j < needle.length(); j++) {
+                if (text.charAt(i + j) != needle.charAt(j)) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
     }
 
     private static boolean startsWith(CharSequence text, int at, String literal,
@@ -632,7 +704,7 @@ final class Discovery {
     }
 
     /** One line per detector, for {@code --list-detectors}. */
-    static String describe() {
+    public static String describe() {
         StringBuilder out = new StringBuilder();
         for (Detector detector : DETECTORS) {
             out.append(String.format(Locale.ROOT, "%-24s %s%n", detector.id(), detector.name()));

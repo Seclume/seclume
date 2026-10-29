@@ -1,5 +1,9 @@
 package space.seclume.heapcheck;
 
+import space.seclume.heapdump.Attribution;
+import space.seclume.heapdump.Discovery;
+import space.seclume.heapdump.Redactor;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
@@ -68,18 +72,26 @@ public final class HeapCheck {
      * @param ignore   detectors to leave out of the discovery
      * @param attribute whether to work out what holds each raw finding -
      *                 three more passes over the dump, on by default
+     * @param redact   where to write a copy of the dump with every secret found
+     *                 overwritten, or {@code null}
      */
     record Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
-                   Path keep, boolean discover, Set<String> ignore, boolean attribute) {
+                   Path keep, boolean discover, Set<String> ignore, boolean attribute,
+                   Path redact) {
 
         Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
                 Path keep) {
-            this(pid, dumpFile, secretFiles, reports, keep, false, Set.of(), true);
+            this(pid, dumpFile, secretFiles, reports, keep, false, Set.of(), true, null);
         }
 
         Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
                 Path keep, boolean discover, Set<String> ignore) {
-            this(pid, dumpFile, secretFiles, reports, keep, discover, ignore, true);
+            this(pid, dumpFile, secretFiles, reports, keep, discover, ignore, true, null);
+        }
+
+        Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
+                Path keep, boolean discover, Set<String> ignore, boolean attribute) {
+            this(pid, dumpFile, secretFiles, reports, keep, discover, ignore, attribute, null);
         }
     }
 
@@ -91,11 +103,13 @@ public final class HeapCheck {
         List<Path> reports = new ArrayList<>();
         boolean discover = false;
         boolean attribute = true;
+        Path redact = null;
         Set<String> ignore = new LinkedHashSet<>();
         for (int i = 0; i < arguments.length; i++) {
             switch (arguments[i]) {
                 case "--discover" -> discover = true;
                 case "--no-attribution" -> attribute = false;
+                case "--redact" -> redact = Path.of(next(arguments, ++i, "--redact"));
                 case "--ignore" -> ignore.add(next(arguments, ++i, "--ignore"));
                 case "--list-detectors" -> {
                     System.out.print(Discovery.describe());
@@ -154,8 +168,14 @@ public final class HeapCheck {
             System.exit(2);
             return;
         }
+        if (redact != null && Files.exists(redact)) {
+            System.err.println("--redact " + redact + ": the file exists, and a redaction "
+                    + "does not overwrite one");
+            System.exit(2);
+            return;
+        }
         System.exit(run(new Options(pid, dumpFile, secretFiles, reports, keep, discover,
-                Set.copyOf(ignore), attribute)));
+                Set.copyOf(ignore), attribute, redact)));
     }
 
     /** The one-process, one-secret check, as it always was. */
@@ -219,6 +239,9 @@ public final class HeapCheck {
                         StandardCharsets.UTF_8);
                 System.out.println("report written to " + file);
             }
+            if (options.redact() != null) {
+                return redact(dump, options, secrets);
+            }
             return report.clean() ? 0 : 1;
         } catch (IOException | RuntimeException e) {
             System.err.println("could not check " + (takesDump ? "process " + options.pid()
@@ -233,6 +256,39 @@ public final class HeapCheck {
                         + " - it contains everything the process had in memory, "
                         + "including these secrets. Delete it when you are done.");
             }
+        }
+    }
+
+    /**
+     * Writes the redacted copy and says what went. 0 when it is written and
+     * checked - the copy is then safe to hand on as far as anything looked for
+     * goes, whatever the original held; 2 when it could not be made clean.
+     */
+    private static int redact(Path dump, Options options, List<Secret> secrets)
+            throws IOException {
+        List<Redactor.Needle> needles = new ArrayList<>();
+        for (Secret secret : secrets) {
+            needles.add(secret.binary()
+                    ? Redactor.Needle.bytes(secret.source().toString(), secret.bytes())
+                    : Redactor.Needle.text(secret.source().toString(), secret.text()));
+        }
+        System.out.println();
+        System.out.println("writing a redacted copy to " + options.redact() + " ...");
+        try {
+            Redactor.Report redacted = Redactor.redact(dump, options.redact(), needles,
+                    options.discover(), options.ignore());
+            System.out.println("REDACTED - " + redacted.regions() + " place(s) overwritten"
+                    + (redacted.echoes() > 0 ? " (" + redacted.echoes() + " of them copies or "
+                            + "parts of a discovered credential, found where it has no shape)"
+                            : "")
+                    + ", " + redacted.stringHashes() + " String hash(es) cleared; the copy was "
+                    + "searched again and holds none of what was looked for.");
+            System.out.println("That covers the secrets named and the shapes discovery "
+                    + "knows; a secret of no known shape that was not named is not touched.");
+            return 0;
+        } catch (Redactor.Incomplete incomplete) {
+            System.err.println("NOT REDACTED - " + incomplete.getMessage());
+            return 2;
         }
     }
 
@@ -425,6 +481,7 @@ public final class HeapCheck {
                                                        [--secret-file <path> | --secret-dir <dir>]...
                                                        [--discover [--ignore <detector>]...]
                                                        [--report <file>]... [--keep-dump <path>]
+                                                       [--redact <copy.hprof>]
                        java -jar seclume-heapcheck.jar --list-detectors
 
                   --pid          the Java process to examine; its heap is dumped, searched
@@ -443,6 +500,10 @@ public final class HeapCheck {
                                  --secret-dir and --discover is needed
                   --ignore       leave one detector out of --discover; may be given again
                   --list-detectors  the detectors --discover uses, and their ids
+                  --redact       write a copy of the dump here with every secret found -
+                                 named, and with --discover the shapes - overwritten and
+                                 the copy checked again; exit 0 when it is clean, 2 when
+                                 it could not be made so (the copy is then deleted)
                   --no-attribution  do not work out what holds each finding (a field, a
                                  static, an array, unreferenced) - three more passes
                                  over the dump, which a very large one may not want
@@ -452,6 +513,7 @@ public final class HeapCheck {
                   --keep-dump    with --pid: write the dump here and keep it
 
                 exit code: 0 nothing found, 1 a secret is in the heap - named or
-                discovered -, 2 the check could not run.""");
+                discovered -, 2 the check could not run. With --redact: 0 the copy
+                is written and clean, 2 it could not be made so.""");
     }
 }

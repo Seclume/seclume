@@ -1583,6 +1583,11 @@ What uses it:
   ```
 
   Exit code 0: nothing found; 1: a secret is in the heap; 2: the check could not run.
+  - writes a **redacted copy** (`--redact app-redacted.hprof`) for a dump that has to be handed
+    on: every named secret in every encoding, with `--discover` every credential of a known
+    shape and its copies and parts where they have no shape, overwritten in place - the dump
+    stays a dump - and the `String` hashes of what went cleared. The copy is searched again
+    and deleted if anything is left. In `seclume-heapdump`, a library without dependencies.
 - **`seclume-tck`'s `NoSecretInHeap`** runs the same proof in **your own test suite**:
   - `@ExtendWith(NoSecretInHeap.class)` checks after every test.
   - `NoSecretInHeap.assertAbsent(secretFile)` checks at a moment you choose, say right after

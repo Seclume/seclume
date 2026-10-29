@@ -66,7 +66,9 @@ could be in, and deletes the dump again. The secret comes from a file, never fro
 line. For audits it also checks existing dumps and several secrets at once, and writes a
 Markdown or JSON report: `--dump`, `--secret-dir`, `--report`. And `--discover` finds what
 nobody named - private keys, JWTs, cloud and platform tokens, passwords in URLs - by their
-shape, reporting which kind, how often and where, never the value.
+shape, reporting which kind, how often and where, never the value. `--redact copy.hprof`
+writes a copy of the dump with all of that overwritten and checked again, for a dump that has
+to leave the house.
 
 For CI, `--report heapcheck.sarif` adds SARIF output. A ready-to-use GitHub Action
 and a comparison of successive JSON reports are in [DIAGNOSTICS.md](DIAGNOSTICS.md).
@@ -226,6 +228,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **Tools** | `seclume-verify`: a one-shot connection report, for a ticket or a readiness probe | [OBSERVABILITY.md](OBSERVABILITY.md#seclume-verify) |
 | | `seclume-verify --migrate`: your Hikari/pgjdbc/mssql-jdbc configuration translated, unsafe settings named | [OBSERVABILITY.md](OBSERVABILITY.md#seclume-verify) |
 | | `NoSecretInHeap`: the heap-dump proof in your own tests; `seclume-heapcheck` for any process |
+| | `seclume-heapcheck --redact`: a copy of a heap dump with every credential it finds overwritten, to hand on; the library behind it is `seclume-heapdump` | [DIAGNOSTICS.md](DIAGNOSTICS.md#a-dump-to-hand-on---redact) |
 | **Your own library** | `seclume-core`'s secret classes for any client that holds a secret: mail, API keys, signing keys | [SECRETS-API.md](SECRETS-API.md) | [FEATURES.md](FEATURES.md#proving-there-is-no-secret-on-the-heap-for-any-application) |
 | **Kafka** | SASL/SCRAM, PLAIN and OAUTHBEARER with the password or token off the heap, PLAIN and OAUTHBEARER over seclume's own TLS 1.3: `seclume-kafka` | [FEATURES.md](FEATURES.md#kafka) |
 | **Redis** | Jedis and Lettuce logged in from native memory, over TLS 1.3 with keys off the heap, Cluster and Sentinel included: `seclume-redis` | [FEATURES.md](FEATURES.md#redis) |

@@ -1,4 +1,4 @@
-package space.seclume.heapcheck;
+package space.seclume.heapdump;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -44,7 +44,7 @@ import java.util.Set;
  * the dump was taken - and {@code outside any object} - a match in the dump's
  * own bookkeeping, or in memory no object owns.
  */
-final class Attribution {
+public final class Attribution {
 
     /** Holders named per finding; more are counted, not listed. */
     static final int HOLDERS_NAMED = 3;
@@ -92,12 +92,30 @@ final class Attribution {
     }
 
     /**
+     * What the structure says about a set of offsets.
+     *
+     * @param holders      per offset, what holds it - see {@link #of}
+     * @param stringHashes where in the file the {@code hash} field of each
+     *                     {@code String} lies whose value holds one of the
+     *                     offsets: four bytes each, a hash of the very text
+     *                     that was found, and as good as a dictionary
+     *                     needs to confirm a guess
+     */
+    public record Result(Map<Long, String> holders, List<Long> stringHashes) {
+    }
+
+    /**
      * Names the holder of each offset - one line each, in the order given;
      * an offset without one is left out of the map.
      */
-    static Map<Long, String> of(Path dump, long[] offsets) throws IOException {
+    public static Map<Long, String> of(Path dump, long[] offsets) throws IOException {
+        return analyse(dump, offsets).holders();
+    }
+
+    /** The holders, and the {@code String} hash fields that go with them. */
+    public static Result analyse(Path dump, long[] offsets) throws IOException {
         if (offsets.length == 0) {
-            return Map.of();
+            return new Result(Map.of(), List.of());
         }
         long[] sorted = offsets.clone();
         Arrays.sort(sorted);
@@ -113,7 +131,43 @@ final class Attribution {
         for (long offset : offsets) {
             named.put(offset, attribution.describe(offset));
         }
-        return named;
+        List<Long> hashes = new ArrayList<>(attribution.hashFields.values());
+        hashes.sort(null);
+        return new Result(named, List.copyOf(hashes));
+    }
+
+    /** String id to the file position of its {@code hash} field. */
+    private final Map<Long, Long> hashFields = new HashMap<>();
+    /** Per class: where its {@code hash} int lies in an instance, or -1. */
+    private final Map<Long, Integer> hashOffsets = new HashMap<>();
+
+    /** The offset of an {@code int hash} field in an instance of the class, or -1. */
+    private int hashOffset(long classId) throws IOException {
+        Integer known = hashOffsets.get(classId);
+        if (known != null) {
+            return known;
+        }
+        int found = -1;
+        int offset = 0;
+        Set<Long> seen = new HashSet<>();
+        long current = classId;
+        outer:
+        while (current != 0 && seen.add(current)) {
+            ClassInfo info = classes.get(current);
+            if (info == null) {
+                break;
+            }
+            for (Field field : info.instanceFields()) {
+                if (field.type() == 10 && "hash".equals(symbol(field.name()))) {
+                    found = offset;
+                    break outer;
+                }
+                offset += size(field.type());
+            }
+            current = info.superClass();
+        }
+        hashOffsets.put(classId, found);
+        return found;
     }
 
     // ------------------------------------------------------------ pass one --
@@ -241,6 +295,7 @@ final class Attribution {
                         in.skip(bytes);
                         break;
                     }
+                    long dataStart = in.position();
                     ByteBuffer data = in.bytes((int) bytes);
                     for (Reference reference : layout) {
                         if (reference.offset() + idSize > bytes) {
@@ -252,6 +307,10 @@ final class Attribution {
                             boolean isString = "java.lang.String".equals(className(classId));
                             if (arrays && isString) {
                                 stringOfArray.put(id, value);
+                                int hash = hashOffset(classId);
+                                if (hash >= 0 && hash + 4 <= bytes) {
+                                    hashFields.put(id, dataStart + hash);
+                                }
                             } else {
                                 hold(value, (arrays ? targetArrays.get(value) + " in " : "String in ")
                                         + className(classId) + "." + reference.name());
