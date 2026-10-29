@@ -1,7 +1,6 @@
 package space.seclume.heapcheck;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
@@ -26,7 +25,8 @@ import com.sun.tools.attach.VirtualMachine;
  * built with this in mind.
  *
  * <p>The dump is written by the <b>target</b> process, so the path is one it
- * can write and the file belongs to its user.
+ * can write, as it sees the file system - which is not this one when the
+ * check runs in a container beside it - and the file belongs to its user.
  */
 final class ProcessHeap {
 
@@ -42,7 +42,8 @@ final class ProcessHeap {
     }
 
     /**
-     * Asks the process to write its heap to {@code target}.
+     * Asks the process to write its heap to {@code target}, a path in the
+     * process's file system that holds no file yet.
      *
      * @return what the process is
      * @throws IOException if the process cannot be attached to or refuses
@@ -72,7 +73,6 @@ final class ProcessHeap {
                         .newPlatformMXBeanProxy(beans,
                                 "com.sun.management:type=HotSpotDiagnostic",
                                 HotSpotDiagnosticMXBean.class);
-                Files.deleteIfExists(target);
                 // live = false: whatever is merely waiting to be collected is in
                 // the file too. That is the least forgiving setting and the only
                 // honest one - an attacker gets exactly this file, and whether an

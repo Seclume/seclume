@@ -1,0 +1,87 @@
+# Three throwaway applications for the kubectl-heapcheck CI job: a JDK image
+# running seclume-heapcheck/ci/Probe.java from source (the ConfigMap "probe"),
+# as an unprivileged user, with the credential mounted as the Kubernetes
+# secret "app". "leak" holds it in a String, "clean" does not, "token" holds a
+# Vault-shaped token made from it. The command line starts with "java", as
+# most images' does.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: leak
+spec:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: app
+      image: docker.io/library/eclipse-temurin:25-jdk
+      command: ["java", "/probe/Probe.java", "leak", "/run/secrets/app/credential", "3600000"]
+      volumeMounts:
+        - name: probe
+          mountPath: /probe
+          readOnly: true
+        - name: secret
+          mountPath: /run/secrets/app
+          readOnly: true
+  volumes:
+    - name: probe
+      configMap:
+        name: probe
+    - name: secret
+      secret:
+        secretName: app
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: clean
+spec:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: app
+      image: docker.io/library/eclipse-temurin:25-jdk
+      command: ["java", "/probe/Probe.java", "clean", "/run/secrets/app/credential", "3600000"]
+      volumeMounts:
+        - name: probe
+          mountPath: /probe
+          readOnly: true
+        - name: secret
+          mountPath: /run/secrets/app
+          readOnly: true
+  volumes:
+    - name: probe
+      configMap:
+        name: probe
+    - name: secret
+      secret:
+        secretName: app
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: token
+spec:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+  containers:
+    - name: app
+      image: docker.io/library/eclipse-temurin:25-jdk
+      command: ["java", "/probe/Probe.java", "token", "/run/secrets/app/credential", "3600000"]
+      volumeMounts:
+        - name: probe
+          mountPath: /probe
+          readOnly: true
+        - name: secret
+          mountPath: /run/secrets/app
+          readOnly: true
+  volumes:
+    - name: probe
+      configMap:
+        name: probe
+    - name: secret
+      secret:
+        secretName: app

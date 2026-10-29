@@ -243,6 +243,36 @@ class HeapCheckTest {
                 "the URL around the password should be left readable");
     }
 
+    /**
+     * {@code --in-target}, as {@code kubectl seclume heapcheck} runs it beside a
+     * process in another container: the secret and the dump are reached through
+     * {@code /proc/<pid>/root}. Here the process is in this container, where
+     * that is the same file system - so every path goes the long way round and
+     * still has to arrive. The report names the secret as it was given, and the
+     * dump is gone from where the process wrote it.
+     */
+    @Test
+    void besideTheProcessThroughItsRoot(@TempDir Path directory) throws Exception {
+        Path secretFile = directory.resolve("db-password");
+        Files.writeString(secretFile, SECRET, StandardCharsets.UTF_8);
+        Path dumps = Files.createDirectory(directory.resolve("dumps"));
+        Path json = directory.resolve("beside.json");
+        withProbe(secretFile, Holder.class, pid -> {
+            HeapCheck.Options options = new HeapCheck.Options(pid, null, List.of(secretFile),
+                    List.of(json), null, false, java.util.Set.of(), true, null, dumps, true);
+            assertEquals(Path.of("/proc", pid, "root", secretFile.toString().substring(1)),
+                    options.local(secretFile));
+            assertEquals(1, HeapCheck.run(options));
+        });
+        String report = Files.readString(json);
+        assertTrue(report.contains("\"source\": " + AuditReport.quote(secretFile.toString())),
+                "the secret is not named as it was given: " + report);
+        assertTrue(!report.contains("/proc/"), report);
+        try (java.util.stream.Stream<Path> left = Files.list(dumps)) {
+            assertEquals(0, left.count(), "the dump was left where the process wrote it");
+        }
+    }
+
     private static String read(Path file) {
         try {
             return Files.readString(file);

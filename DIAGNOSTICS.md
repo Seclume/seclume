@@ -99,6 +99,50 @@ SARIF message; only class and field names, never a value. It takes three more pa
 dump, reading it in windows, so dumps over 2 GB work too; `--no-attribution` leaves it out.
 A dump whose structure cannot be read still gets its report, without holders.
 
+## Inside a Kubernetes pod: `kubectl seclume heapcheck`
+
+```sh
+cp seclume-heapcheck/kubectl/kubectl-seclume seclume-heapcheck.jar ~/bin/   # any directory on PATH
+kubectl seclume heapcheck orders-7d9f -n shop --secret-dir /run/secrets/db --format json > report.json
+kubectl seclume heapcheck orders-7d9f -n shop --discover
+```
+
+Copying a heap dump out of a pod to check it would be the leak the check looks for. So the
+check goes to the dump instead. An ephemeral container (`kubectl debug --target`) joins the
+application container's process namespace, and seclume-heapcheck runs in it with `--in-target`:
+
+- **Finding the JVM.** It is the `java` process of the application's container. Pass
+  `--pid` if there is more than one.
+- **The dump.** The JVM writes it into its own file system (`--dump-dir`, default `/tmp`).
+  The check reads it through `/proc/<pid>/root` and deletes it there.
+- **Secrets.** `--secret-dir` and `--secret-file` are paths in the application's container.
+  They are read there, inside the pod.
+- **What comes out.** The report goes to stdout (Markdown, JSON or SARIF), the check's own
+  lines go to stderr, and the exit code is the check's.
+- **Same reports as before.** Secrets are named by their paths as given, so reports compare
+  across runs with `compare.py` as before.
+
+Requirements:
+
+- **Kubernetes.** Ephemeral containers (1.25+) and `kubectl debug --profile=general`, which
+  gives the debug container `SYS_PTRACE`. Reading another user's `/proc/<pid>/root` needs it.
+- **The debug image.** A JDK 25 with `jdk.attach` and `tar`. The default is
+  `eclipse-temurin:25-jdk`; choose another with `--image` or `SECLUME_HEAPCHECK_IMAGE`.
+  `kubectl cp` puts the JAR into the debug container, so no image of seclume's own is needed.
+- **The application's JVM.** Any HotSpot JVM. The attach mechanism accepts a root caller from
+  another container.
+
+Each run leaves an exited ephemeral container in the pod's status, because Kubernetes does
+not remove them. A namespace whose policy forbids ephemeral containers or `SYS_PTRACE`
+(Pod Security `restricted`) forbids this too. Use `--dump` on a dump the JVM writes itself
+(`-XX:+HeapDumpOnOutOfMemoryError`), or `--redact` before it leaves the pod.
+
+The CI job `kubectl-heapcheck` runs this against a kind cluster with three pods: a JVM as an
+unprivileged user with the credential from a mounted secret, one without it, and one with a
+token for `--discover`. The leak must be found, the clean pod must pass, the token must be
+discovered, and afterwards no `.hprof` file may be left in any pod and no report may hold the
+credential.
+
 ## A dump to hand on: `--redact`
 
 ```sh

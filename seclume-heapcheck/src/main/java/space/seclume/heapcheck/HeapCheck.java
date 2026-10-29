@@ -61,6 +61,9 @@ import space.seclume.tck.HeapDumpScanner;
  */
 public final class HeapCheck {
 
+    /** For the names of dumps a process writes where others may look. */
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+
     private HeapCheck() {
     }
 
@@ -74,10 +77,33 @@ public final class HeapCheck {
      *                 three more passes over the dump, on by default
      * @param redact   where to write a copy of the dump with every secret found
      *                 overwritten, or {@code null}
+     * @param dumpDir  where the process writes its dump, as the process sees the
+     *                 file system; {@code null} for the temporary directory
+     * @param inTarget whether the paths given are in the <b>process's</b> file
+     *                 system - this check runs beside it, in a container of its
+     *                 own ({@code kubectl debug --target}) - and are reached
+     *                 through {@code /proc/<pid>/root}
      */
     record Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
                    Path keep, boolean discover, Set<String> ignore, boolean attribute,
-                   Path redact) {
+                   Path redact, Path dumpDir, boolean inTarget) {
+
+        Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
+                Path keep, boolean discover, Set<String> ignore, boolean attribute,
+                Path redact) {
+            this(pid, dumpFile, secretFiles, reports, keep, discover, ignore, attribute, redact,
+                    null, false);
+        }
+
+        /** Where a path of the process's file system is from here. */
+        Path local(Path path) {
+            if (!inTarget) {
+                return path;
+            }
+            Path absolute = path.isAbsolute() ? path : Path.of("/").resolve(path);
+            return Path.of("/proc", pid, "root").resolve(
+                    absolute.getRoot().relativize(absolute).toString());
+        }
 
         Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
                 Path keep) {
@@ -104,6 +130,9 @@ public final class HeapCheck {
         boolean discover = false;
         boolean attribute = true;
         Path redact = null;
+        Path dumpDir = null;
+        boolean inTarget = false;
+        List<Path> secretDirs = new ArrayList<>();
         Set<String> ignore = new LinkedHashSet<>();
         for (int i = 0; i < arguments.length; i++) {
             switch (arguments[i]) {
@@ -119,8 +148,10 @@ public final class HeapCheck {
                 case "--dump" -> dumpFile = Path.of(next(arguments, ++i, "--dump"));
                 case "--secret-file" -> secretFiles.add(Path.of(next(arguments, ++i,
                         "--secret-file")));
-                case "--secret-dir" -> secretFiles.addAll(directory(Path.of(next(arguments,
-                        ++i, "--secret-dir"))));
+                case "--secret-dir" -> secretDirs.add(Path.of(next(arguments, ++i,
+                        "--secret-dir")));
+                case "--dump-dir" -> dumpDir = Path.of(next(arguments, ++i, "--dump-dir"));
+                case "--in-target" -> inTarget = true;
                 case "--report" -> reports.add(Path.of(next(arguments, ++i, "--report")));
                 case "--keep-dump" -> keep = Path.of(next(arguments, ++i, "--keep-dump"));
                 // Somebody typing this is one keystroke from putting a password
@@ -153,6 +184,27 @@ public final class HeapCheck {
                 return;
             }
         }
+        if (inTarget && (pid == null || keep != null)) {
+            System.err.println("--in-target is for a process this check runs beside, given "
+                    + "by --pid; its dump stays where the process is and is deleted there, "
+                    + "so --keep-dump does not go with it");
+            System.exit(2);
+            return;
+        }
+        if (dumpDir != null && (pid == null || !dumpDir.isAbsolute())) {
+            System.err.println("--dump-dir is where a process given by --pid writes its dump, "
+                    + "an absolute path: the process resolves a relative one against its own "
+                    + "working directory");
+            System.exit(2);
+            return;
+        }
+        Options mapping = new Options(pid, null, List.of(), List.of(), null, false, Set.of(),
+                true, null, null, inTarget);
+        for (Path dir : secretDirs) {
+            for (Path file : directory(mapping.local(dir))) {
+                secretFiles.add(dir.resolve(file.getFileName().toString()));
+            }
+        }
         if ((pid == null) == (dumpFile == null) || (secretFiles.isEmpty() && !discover)) {
             if (pid != null && dumpFile != null) {
                 System.err.println("--pid and --dump both given - one of them, please: a "
@@ -175,7 +227,7 @@ public final class HeapCheck {
             return;
         }
         System.exit(run(new Options(pid, dumpFile, secretFiles, reports, keep, discover,
-                Set.copyOf(ignore), attribute, redact)));
+                Set.copyOf(ignore), attribute, redact, dumpDir, inTarget)));
     }
 
     /** The one-process, one-secret check, as it always was. */
@@ -186,7 +238,7 @@ public final class HeapCheck {
     static int run(Options options) {
         List<Secret> secrets = new ArrayList<>();
         for (Path file : options.secretFiles()) {
-            Secret secret = Secret.read(file);
+            Secret secret = Secret.read(file, options.local(file));
             if (secret == null) {
                 return 2;
             }
@@ -198,14 +250,27 @@ public final class HeapCheck {
         try {
             AuditReport.Target target;
             if (takesDump) {
+                // The name as the process writes it, and the file as it is
+                // read here - the same file, unless the process is in another
+                // container.
+                Path writtenAs;
                 if (options.keep() != null) {
-                    dump = options.keep();
+                    writtenAs = options.keep();
+                } else if (options.dumpDir() != null || options.inTarget()) {
+                    Path directory = options.dumpDir() != null ? options.dumpDir()
+                            : Path.of("/tmp");
+                    byte[] random = new byte[8];
+                    RANDOM.nextBytes(random);
+                    // seclume-allow: a random file name - no secret
+                    writtenAs = directory.resolve("seclume-heapcheck-" + HexFormat.of()
+                            .formatHex(random) + ".hprof");
                 } else {
-                    dump = Files.createTempFile("seclume-heapcheck-", ".hprof");
-                    Files.delete(dump);           // the JVM insists on writing it itself
+                    writtenAs = Files.createTempFile("seclume-heapcheck-", ".hprof");
                 }
+                dump = options.local(writtenAs);
+                Files.deleteIfExists(dump);       // the JVM insists on writing it itself
                 System.out.println("asking process " + options.pid() + " for a heap dump ...");
-                ProcessHeap.Jvm jvm = ProcessHeap.dump(options.pid(), dump);
+                ProcessHeap.Jvm jvm = ProcessHeap.dump(options.pid(), writtenAs);
                 target = new AuditReport.Target(options.pid(), jvm, null);
             } else {
                 dump = options.dumpFile();
@@ -386,14 +451,18 @@ public final class HeapCheck {
                     : space.seclume.tck.HeapDumpScanner.scan(dump, text);
         }
 
-        /** The secret in {@code file}, or null after saying why not. */
-        static Secret read(Path file) {
+        /**
+         * The secret in {@code file}, read at {@code from} - the same file, or
+         * that file in another container's file system - or null after saying
+         * why not.
+         */
+        static Secret read(Path file, Path from) {
             byte[] content;
             try {
                 // The one place in this repository where a secret goes to the
                 // heap on purpose: it is the pattern being searched for, and this
                 // process is the searcher, not the one under examination.
-                content = Files.readAllBytes(file); // seclume-allow: the searcher needs the pattern it hunts for
+                content = Files.readAllBytes(from); // seclume-allow: the searcher needs the pattern it hunts for
             } catch (IOException e) {
                 System.err.println("cannot read " + file + " - " + e.getMessage());
                 return null;
@@ -482,6 +551,7 @@ public final class HeapCheck {
                                                        [--discover [--ignore <detector>]...]
                                                        [--report <file>]... [--keep-dump <path>]
                                                        [--redact <copy.hprof>]
+                                                       [--dump-dir <dir>] [--in-target]
                        java -jar seclume-heapcheck.jar --list-detectors
 
                   --pid          the Java process to examine; its heap is dumped, searched
@@ -511,6 +581,14 @@ public final class HeapCheck {
                                  Markdown otherwise; may be given again. It names
                                  secrets by their files and holds none of them
                   --keep-dump    with --pid: write the dump here and keep it
+                  --dump-dir     with --pid: the directory the process writes its dump
+                                 to (absolute, as the process sees it); the temporary
+                                 directory by default
+                  --in-target    with --pid: this check runs beside the process, in a
+                                 container of its own (kubectl debug --target): the
+                                 secret files and --dump-dir are in the process's file
+                                 system and are read through /proc/<pid>/root; reports
+                                 name them as given. The dump is deleted in place
 
                 exit code: 0 nothing found, 1 a secret is in the heap - named or
                 discovered -, 2 the check could not run. With --redact: 0 the copy

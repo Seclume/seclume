@@ -154,6 +154,70 @@ jobs:
       - name: Remove test dumps and credential
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/heapcheck-fixtures"
+  # kubectl seclume heapcheck against a real cluster: kind, three pods whose
+  # JVMs run as an unprivileged user with the credential mounted as a secret.
+  # The check runs in an ephemeral container beside each JVM, and only the
+  # report comes out - the dump must be gone from the pod afterwards.
+  kubectl-heapcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - run: ./mvnw -B -pl seclume-heapcheck -am package -DskipTests
+      - name: A cluster with a leaking, a clean and a token-holding application
+        run: |
+          set -euo pipefail
+          command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          kind create cluster --name seclume --wait 180s
+          for image in docker.io/library/eclipse-temurin:25-jdk; do
+            docker pull -q "$image" && kind load docker-image "$image" --name seclume
+          done
+          kubectl create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
+          kubectl create configmap probe --from-file=seclume-heapcheck/ci/Probe.java
+          kubectl apply -f seclume-heapcheck/kubectl/ci/pods.yaml
+          kubectl wait --for=condition=Ready pod/leak pod/clean pod/token --timeout=180s
+          for pod in leak clean token; do
+            for _ in $(seq 1 60); do
+              kubectl logs "$pod" | grep -q ready && break
+              sleep 1
+            done
+            kubectl logs "$pod" | grep -q ready
+          done
+          jar=$(find seclume-heapcheck/target -maxdepth 1 -name 'seclume-heapcheck-*.jar' | head -1)
+          echo "SECLUME_HEAPCHECK_JAR=$PWD/$jar" >> "$GITHUB_ENV"
+          echo "SECLUME_HEAPCHECK_IMAGE=docker.io/library/eclipse-temurin:25-jdk" >> "$GITHUB_ENV"
+      - name: The leak is found inside the pod, and only the report comes out
+        run: |
+          set -euo pipefail
+          plugin=seclume-heapcheck/kubectl/kubectl-seclume
+          expect() { # expect <exit code> <report> -- <plugin arguments>
+            local want=$1 out=$2 code=0; shift 3
+            "$plugin" heapcheck "$@" > "$out" || code=$?
+            test "$code" = "$want" || { echo "$* exited $code, not $want"; cat "$out"; exit 1; }
+          }
+          expect 1 leak.json -- leak --secret-dir /run/secrets/app --format json
+          grep -q '"verdict": "FOUND"' leak.json
+          grep -q '"source": "/run/secrets/app/credential"' leak.json
+          expect 0 clean.sarif -- clean --secret-dir /run/secrets/app --format sarif
+          grep -q '"version": "2.1.0"' clean.sarif
+          expect 1 token.md -- token --discover --format md
+          grep -q 'vault-token' token.md
+          for pod in leak clean token; do
+            left=$(kubectl exec "$pod" -c app -- sh -c 'ls /tmp | grep -c "[.]hprof$" || true')
+            test "$left" = 0 || { echo "a heap dump was left in $pod"; exit 1; }
+          done
+          credential=$(kubectl get secret app -o jsonpath='{.data.credential}' | base64 -d)
+          if grep -qF "$credential" leak.json clean.sarif token.md; then
+            echo "a report holds the credential"; exit 1
+          fi
+      - name: Remove the cluster
+        if: always()
+        run: kind delete cluster --name seclume || true
   # Everything provable without a database: the cryptography against the
   # published vectors, the heap-dump proof with its negative control, the pool
   # mechanics, and the rule that no forbidden API call slips in.

@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# kubectl seclume heapcheck <pod> - seclume-heapcheck inside the pod, the
+# report out of it, the heap dump never.
+#
+# A heap dump holds every secret the process had; copying it to a laptop to
+# check it would be the leak it looks for. So the check goes to the dump: an
+# ephemeral container (kubectl debug --target) shares the process namespace of
+# the application's container, the JVM writes its dump into its own file
+# system, seclume-heapcheck reads it there through /proc/<pid>/root and deletes
+# it, and what comes back is the report: Markdown, JSON or SARIF on stdout, the
+# check's own lines on stderr, its exit code as this command's.
+#
+# Install: put this file and seclume-heapcheck.jar in a directory on PATH (or
+# set SECLUME_HEAPCHECK_JAR); kubectl finds the plugin by its name.
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'USAGE'
+usage: kubectl seclume heapcheck <pod> [-n <namespace>] [-c <container>]
+                                 [--secret-dir <dir>]... [--secret-file <file>]...
+                                 [--discover [--ignore <detector>]...]
+                                 [--format md|json|sarif] [--pid <pid>]
+                                 [--dump-dir <dir>] [--image <image>] [--jar <jar>]
+
+  -n, --namespace  the pod's namespace (default: the context's)
+  -c, --container  the application's container (default: the pod's first)
+  --secret-dir, --secret-file
+                   secrets to look for, as paths in the application's
+                   container - a mounted Kubernetes secret, say. Read there, by
+                   the check, inside the pod
+  --discover       also look for credentials nobody named, by their shape
+  --ignore         leave a detector out of --discover
+  --format         the report on stdout: md (default), json or sarif
+  --pid            the JVM, as the debug container sees it, if there is more
+                   than one in the application's container
+  --dump-dir       where the JVM writes its dump, in its own container: a
+                   writable directory (default /tmp); the dump is deleted there
+  --image          the debug container's image: a JDK 25 with jdk.attach and tar
+                   (default eclipse-temurin:25-jdk, or $SECLUME_HEAPCHECK_IMAGE)
+  --jar            seclume-heapcheck.jar (default: $SECLUME_HEAPCHECK_JAR, or next
+                   to this script)
+
+exit code: 0 nothing found, 1 a secret is in the heap, 2 the check could not run.
+Each run leaves an exited ephemeral container in the pod's status - Kubernetes
+does not remove them.
+USAGE
+  exit 2
+}
+
+[ "${1:-}" = heapcheck ] || usage
+shift
+[ $# -gt 0 ] && [ "${1#-}" = "$1" ] || usage
+pod=$1
+shift
+
+namespace=()
+container=""
+image=${SECLUME_HEAPCHECK_IMAGE:-eclipse-temurin:25-jdk}
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+jar=${SECLUME_HEAPCHECK_JAR:-$here/seclume-heapcheck.jar}
+format=md
+pid=auto
+check=()
+need() { [ $# -ge 2 ] || { echo "$1 needs a value" >&2; usage; }; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n|--namespace) need "$@"; namespace=(-n "$2"); shift 2 ;;
+    -c|--container) need "$@"; container=$2; shift 2 ;;
+    --image) need "$@"; image=$2; shift 2 ;;
+    --jar) need "$@"; jar=$2; shift 2 ;;
+    --format) need "$@"; format=$2; shift 2 ;;
+    --pid) need "$@"; pid=$2; shift 2 ;;
+    --secret-dir|--secret-file|--ignore|--dump-dir) need "$@"; check+=("$1" "$2"); shift 2 ;;
+    --discover|--no-attribution) check+=("$1"); shift ;;
+    --secret|--password)
+      echo "$1 does not exist, and on purpose: give the path of the secret in the" \
+        "container, --secret-file <path>" >&2
+      exit 2 ;;
+    *) echo "unknown option $1" >&2; usage ;;
+  esac
+done
+case "$format" in md|json|sarif) ;; *) echo "--format is md, json or sarif" >&2; exit 2 ;; esac
+case "$pid" in auto|[0-9]*) ;; *) echo "--pid is a number" >&2; exit 2 ;; esac
+[ -r "$jar" ] || { echo "no seclume-heapcheck.jar at $jar - set SECLUME_HEAPCHECK_JAR or --jar" >&2; exit 2; }
+if [ -z "$container" ]; then
+  container=$(kubectl get pod "$pod" "${namespace[@]}" -o jsonpath='{.spec.containers[0].name}')
+fi
+
+name="seclume-heapcheck-$(date +%s)-$RANDOM"
+# The debug container waits for the check and for nothing else: until it is
+# told to stop, ten minutes at most - never by killing a pid, which in a shared
+# process namespace may be the application.
+kubectl debug "$pod" "${namespace[@]}" --target="$container" --container="$name" \
+  --image="$image" --profile=general --quiet -- \
+  sh -c 'i=0; while [ ! -e /tmp/seclume-stop ] && [ $i -lt 600 ]; do sleep 1; i=$((i+1)); done' \
+  >/dev/null
+in_pod() { kubectl exec "$pod" "${namespace[@]}" -c "$name" -- "$@"; }
+stop() { in_pod sh -c 'rm -rf /tmp/seclume; touch /tmp/seclume-stop' >/dev/null 2>&1 || true; }
+trap stop EXIT
+for _ in $(seq 1 120); do
+  running=$(kubectl get pod "$pod" "${namespace[@]}" -o \
+    jsonpath="{.status.ephemeralContainerStatuses[?(@.name==\"$name\")].state.running}")
+  [ -n "$running" ] && break
+  sleep 1
+done
+[ -n "$running" ] || { echo "the debug container $name did not start" >&2; exit 2; }
+
+in_pod mkdir -p /tmp/seclume
+kubectl cp "$jar" "${namespace[@]}" "$pod:/tmp/seclume/heapcheck.jar" -c "$name" >/dev/null
+
+# Inside the pod: find the JVM - a java process in another mount namespace than
+# this container's, which is the application's - run the check beside it, and
+# send the check's lines to stderr and the report to stdout.
+script='
+set -u
+pid=$1; format=$2; shift 2
+if [ "$pid" = auto ]; then
+  self=$(readlink /proc/self/ns/mnt)
+  found=""
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    ns=$(readlink "$d/ns/mnt" 2>/dev/null) || continue
+    [ "$ns" = "$self" ] && continue
+    first=$(tr "\000" "\n" < "$d/cmdline" 2>/dev/null | head -n 1)
+    case "$first" in java|*/java) found="$found $p" ;; esac
+  done
+  set -- $found "$@"
+  count=$(echo $found | wc -w)
+  if [ "$count" -ne 1 ]; then
+    echo "found $count JVMs in the application container ($found ) - choose one with --pid" >&2
+    exit 2
+  fi
+  pid=$1; shift
+fi
+report=/tmp/seclume/report.$format
+java --enable-native-access=ALL-UNNAMED -jar /tmp/seclume/heapcheck.jar \
+  --pid "$pid" --in-target --report "$report" "$@" >&2
+code=$?
+[ -f "$report" ] && cat "$report"
+exit $code
+'
+set +e
+in_pod sh -c "$script" sh "$pid" "$format" "${check[@]}"
+code=$?
+set -e
+exit $code
