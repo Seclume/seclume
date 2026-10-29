@@ -61,6 +61,9 @@ import space.seclume.tck.HeapDumpScanner;
  */
 public final class HeapCheck {
 
+    /** For the names of dumps a process writes where others may look. */
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+
     private HeapCheck() {
     }
 
@@ -257,7 +260,7 @@ public final class HeapCheck {
                     Path directory = options.dumpDir() != null ? options.dumpDir()
                             : Path.of("/tmp");
                     byte[] random = new byte[8];
-                    new java.security.SecureRandom().nextBytes(random);
+                    RANDOM.nextBytes(random);
                     // seclume-allow: a random file name - no secret
                     writtenAs = directory.resolve("seclume-heapcheck-" + HexFormat.of()
                             .formatHex(random) + ".hprof");
