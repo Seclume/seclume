@@ -39,10 +39,10 @@ public class SeclumeHeapDumpWebEndpoint extends HeapDumpWebEndpoint {
     private final Set<String> ignore;
     private final Source source;
 
-    /** Where the dump comes from, if not from the JVM: a test's file. */
+    /** Where the dump comes from, if not from the JVM: a test's file, whatever {@code live} asks. */
     @FunctionalInterface
     interface Source {
-        File dumpHeap(Boolean live) throws IOException, InterruptedException;
+        File dump() throws IOException, InterruptedException;
     }
 
     /**
@@ -68,7 +68,7 @@ public class SeclumeHeapDumpWebEndpoint extends HeapDumpWebEndpoint {
     @Override
     protected HeapDumper createHeapDumper() throws HeapDumperUnavailableException {
         if (source != null) {
-            return live -> redacted(source.dumpHeap(live).toPath());
+            return live -> redacted(source.dump().toPath());
         }
         HeapDumper dumper = super.createHeapDumper();
         return live -> redacted(dumper.dumpHeap(live).toPath());

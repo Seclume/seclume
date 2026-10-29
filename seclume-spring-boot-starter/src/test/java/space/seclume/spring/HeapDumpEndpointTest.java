@@ -86,7 +86,7 @@ class HeapDumpEndpointTest {
         Path raw = Files.writeString(directory.resolve("heap-raw.hprof"),
                 "\u0001 " + vault + " \u0002");
         WebEndpointResponse<Resource> response = new SeclumeHeapDumpWebEndpoint(Set.of(),
-                live -> raw.toFile()).heapDump(true);
+                () -> raw.toFile()).heapDump(true);
         assertEquals(WebEndpointResponse.STATUS_INTERNAL_SERVER_ERROR, response.getStatus());
         assertFalse(Files.exists(raw), "the dump itself was left behind");
         try (Stream<Path> left = Files.list(directory)) {
@@ -99,7 +99,7 @@ class HeapDumpEndpointTest {
         Path raw = Files.writeString(directory.resolve("heap-raw.hprof"),
                 "\u0001 nothing like a credential \u0002");
         WebEndpointResponse<Resource> response = new SeclumeHeapDumpWebEndpoint(Set.of(),
-                live -> raw.toFile()).heapDump(null);
+                () -> raw.toFile()).heapDump(null);
         assertEquals(WebEndpointResponse.STATUS_OK, response.getStatus());
         assertFalse(Files.exists(raw), "the dump itself was left behind");
         try (InputStream in = response.getBody().getInputStream()) {
