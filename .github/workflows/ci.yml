@@ -418,12 +418,14 @@ jobs:
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'Vault'
       # The same against OpenBao, the open-source fork: the same API, so the
-      # same fixture and the same tests.
+      # same fixture and the same tests. A fixed release, so that a run is
+      # reproducible; Dependabot does not see an image named in a script, so
+      # it is raised here by hand (tags: openbao scripts/release/container-tags.sh).
       - name: OpenBao with dynamic PostgreSQL credentials
         run: |
           rm -f .local-vault-*
           docker rm -f slm-vault slm-vault-pg || true
-          VAULT_IMAGE=quay.io/openbao/openbao:2 VAULT_CLI=bao \
+          VAULT_IMAGE=quay.io/openbao/openbao:2.7.2 VAULT_CLI=bao \
             bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/openbao"
           ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest' \

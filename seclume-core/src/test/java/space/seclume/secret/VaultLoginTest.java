@@ -627,7 +627,7 @@ class VaultLoginTest {
 
         IllegalArgumentException unknown = assertThrows(IllegalArgumentException.class,
                 () -> SecretProviders.of(vaultSettings("auth-method", "userpass")));
-        assertTrue(unknown.getMessage().contains("kubernetes, jwt and approle"),
+        assertTrue(unknown.getMessage().contains("kubernetes, jwt, approle, aws, gcp and azure"),
                 unknown.getMessage());
 
         IllegalArgumentException plain = assertThrows(IllegalArgumentException.class,

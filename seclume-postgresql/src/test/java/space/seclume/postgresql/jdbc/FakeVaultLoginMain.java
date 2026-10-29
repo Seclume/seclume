@@ -26,12 +26,15 @@ import javax.net.ssl.SSLSocket;
 /**
  * Vault for {@link VaultLoginHeapTest}, in a JVM of its own.
  *
- * <p>It makes up a JWT, a client token and a database password, writes each
- * into a file in the directory it is given - the test searches its own heap
- * for them - and answers like Vault over TLS 1.3: a JWT login only with
- * exactly that JWT and the role {@code app}, everything else only with
- * exactly that token. A wrong byte anywhere is a 403, so a test that gets
- * through has sent what it should.
+ * <p>It makes up a JWT, an AWS secret key and session token, a client token
+ * and a database password, writes each into a file in the directory it is
+ * given - the test searches its own heap for them - and answers like Vault
+ * over TLS 1.3: a JWT login only with exactly that JWT and the role
+ * {@code app}; an AWS login only with a {@code GetCallerIdentity} request
+ * whose SigV4 signature checks out against that key and that carries that
+ * session token, as AWS would check it when Vault replays it; everything
+ * else only with exactly the client token. A wrong byte anywhere is a 403,
+ * so a test that gets through has sent what it should.
  *
  * <p>Prints {@code READY <port>}; when its standard input closes, prints what
  * it served and ends.
@@ -61,6 +64,10 @@ public final class FakeVaultLoginMain {
         Files.writeString(directory.resolve("jwt.txt"), jwt + "\n");
         Files.writeString(directory.resolve("client-token.txt"), clientToken);
         Files.writeString(directory.resolve("password.txt"), password);
+        String awsKey = base64url(random, 30).substring(0, 40);
+        String awsSession = "IQoJb3JpZ2luX2Vj" + base64url(random, 600);
+        Files.writeString(directory.resolve("aws-key.txt"), awsKey + "\n");
+        Files.writeString(directory.resolve("aws-session.txt"), awsSession + "\n");
 
         AtomicInteger logins = new AtomicInteger();
         AtomicInteger renewals = new AtomicInteger();
@@ -82,7 +89,14 @@ public final class FakeVaultLoginMain {
                         Request request = read(accepted.getInputStream());
                         int status;
                         String body;
-                        if (request.is("POST", "/v1/auth/jwt/login")) {
+                        if (request.is("POST", "/v1/auth/aws/login")) {
+                            boolean right = AwsCheck.accepts(request.body(), awsKey, awsSession);
+                            if (right) {
+                                logins.incrementAndGet();
+                            }
+                            status = right ? 200 : 403;
+                            body = right ? tokenAnswer : "{\"errors\":[\"denied\"]}";
+                        } else if (request.is("POST", "/v1/auth/jwt/login")) {
                             boolean right = request.body().equals(
                                     "{\"role\":\"app\",\"jwt\":\"" + jwt + "\"}");
                             if (right) {
@@ -140,6 +154,76 @@ public final class FakeVaultLoginMain {
             System.out.println("DONE logins=" + logins + " renewals=" + renewals
                     + " fetches=" + fetches + " lease-revocations=" + leaseRevocations
                     + " token-revocations=" + tokenRevocations);
+        }
+    }
+
+    /** What AWS does with the request Vault replays: recompute SigV4 and compare. */
+    private static final class AwsCheck {
+
+        static boolean accepts(String body, String secretKey, String sessionToken) {
+            try {
+                Map<String, String> login = fields(body);
+                if (!"app".equals(login.get("role"))
+                        || !"POST".equals(login.get("iam_http_request_method"))
+                        || !"https://sts.amazonaws.com/".equals(b64(login.get("iam_request_url")))) {
+                    return false;
+                }
+                String stsBody = b64(login.get("iam_request_body"));
+                Map<String, String> headers = fields(b64(login.get("iam_request_headers")));
+                if (!sessionToken.equals(headers.get("X-Amz-Security-Token"))) {
+                    return false;
+                }
+                java.util.TreeMap<String, String> canonical = new java.util.TreeMap<>();
+                headers.forEach((name, value) -> {
+                    if (!name.equalsIgnoreCase("Authorization")) {
+                        canonical.put(name.toLowerCase(Locale.ROOT), value.trim());
+                    }
+                });
+                StringBuilder request = new StringBuilder("POST\n/\n\n");
+                canonical.forEach((name, value) -> request.append(name).append(':')
+                        .append(value).append('\n'));
+                String signed = String.join(";", canonical.keySet());
+                request.append('\n').append(signed).append('\n').append(sha256(stsBody));
+                String date = headers.get("X-Amz-Date");
+                String day = date.substring(0, 8);
+                String scope = day + "/us-east-1/sts/aws4_request";
+                String toSign = "AWS4-HMAC-SHA256\n" + date + "\n" + scope + "\n"
+                        + sha256(request.toString());
+                byte[] key = hmac(("AWS4" + secretKey).getBytes(StandardCharsets.UTF_8), day);
+                key = hmac(hmac(hmac(key, "us-east-1"), "sts"), "aws4_request");
+                String expected = "AWS4-HMAC-SHA256 Credential=AKIASECLUMEHEAPTEST1/" + scope
+                        + ", SignedHeaders=" + signed + ", Signature="
+                        + java.util.HexFormat.of().formatHex(hmac(key, toSign));
+                return expected.equals(headers.get("Authorization"));
+            } catch (Exception malformed) {
+                return false;
+            }
+        }
+
+        private static Map<String, String> fields(String json) {
+            Map<String, String> fields = new LinkedHashMap<>();
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\"([^\"]+)\":\"((?:[^\"\\\\]++|\\\\.)*+)\"").matcher(json);
+            while (m.find()) {
+                fields.put(m.group(1), m.group(2).replace("\\\"", "\"")
+                        .replace("\\\\", "\\"));
+            }
+            return fields;
+        }
+
+        private static String b64(String text) {
+            return new String(Base64.getDecoder().decode(text), StandardCharsets.UTF_8);
+        }
+
+        private static byte[] hmac(byte[] key, String data) throws Exception {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"));
+            return mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+        }
+
+        private static String sha256(String text) throws Exception {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest
+                    .getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
         }
     }
 

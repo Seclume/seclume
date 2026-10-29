@@ -240,7 +240,9 @@ public final class SecretProviders {
      * ({@code auth-role-id} for AppRole). The JWT comes from the
      * {@code jwt-} settings - for Kubernetes the pod's service-account token
      * when they are left out - and AppRole's secret id from the
-     * {@code secret-id-} settings.
+     * {@code secret-id-} settings. {@code aws} signs with the {@code aws-}
+     * settings' credentials; {@code gcp} and {@code azure} ask the machine's
+     * metadata service.
      */
     private static SecretProvider vaultToken(Map<String, String> settings) {
         String method = value(settings, "auth-method");
@@ -253,6 +255,55 @@ public final class SecretProviders {
             throw new IllegalArgumentException("the Vault provider has auth-method=" + method
                     + " and token- settings: the token comes from the login, so the token- "
                     + "settings would be ignored. Remove one of the two");
+        }
+        String address = required(settings, "address", "vault");
+        String mount = value(settings, "auth-mount");
+        String namespace = value(settings, "namespace");
+        boolean verify = !"false".equalsIgnoreCase(settings.getOrDefault("verify", "true"));
+        int timeout = Integer.parseInt(settings.getOrDefault("timeout-millis", "10000"));
+        switch (login) {
+            case AWS -> {
+                // Prefixed, so that the Vault's own settings - verify=false for
+                // a development server, say - do not reach the AWS side.
+                Map<String, String> aws = nested(settings, "aws-");
+                AwsInstanceRole workload = AwsInstanceRole.of(aws);
+                if (workload != null) {
+                    return VaultLogin.aws(address, mount, value(settings, "auth-role"), workload,
+                            value(aws, "sts-endpoint"), value(aws, "sts-region"),
+                            value(aws, "iam-server-id"), namespace, verify, timeout);
+                }
+                if (nested(aws, "key-").isEmpty()) {
+                    throw new IllegalArgumentException("an AWS login needs credentials: "
+                            + "aws-credentials=instance, container or web-identity, or "
+                            + "aws-access-key-id with aws-key-provider and its settings");
+                }
+                return VaultLogin.aws(address, mount, value(settings, "auth-role"),
+                        required(aws, "access-key-id", "vault with auth-method=aws"),
+                        of(nested(aws, "key-")),
+                        // An STS session token runs to well over a kilobyte.
+                        nested(aws, "session-token-").isEmpty() ? null
+                                : of(sized(nested(aws, "session-token-"))),
+                        value(aws, "sts-endpoint"), value(aws, "sts-region"),
+                        value(aws, "iam-server-id"), namespace, verify, timeout);
+            }
+            case GCP -> {
+                return VaultLogin.gcp(address, mount,
+                        required(settings, "auth-role", "vault with auth-method=gcp"),
+                        value(settings, "gcp-account"), value(settings, "gcp-audience"),
+                        namespace, verify, timeout);
+            }
+            case AZURE -> {
+                return VaultLogin.azure(address, mount,
+                        required(settings, "auth-role", "vault with auth-method=azure"),
+                        value(settings, "azure-resource"), value(settings, "azure-client-id"),
+                        value(settings, "azure-subscription-id"),
+                        value(settings, "azure-resource-group"),
+                        value(settings, "azure-vm-name"), value(settings, "azure-vmss-name"),
+                        namespace, verify, timeout);
+            }
+            default -> {
+                // kubernetes, jwt, approle: below
+            }
         }
         Map<String, String> credentialSettings;
         String role;
@@ -282,20 +333,17 @@ public final class SecretProviders {
                 role = value(settings, "auth-role");
             }
         }
-        // A JWT is far longer than a password; the password bound would refuse it.
-        Map<String, String> sized = new java.util.LinkedHashMap<>(credentialSettings);
+        return new VaultLogin(address, login, mount, role, of(sized(credentialSettings)),
+                namespace, verify, timeout);
+    }
+
+    /** A token's source: far longer than a password, which the default bound would refuse. */
+    private static Map<String, String> sized(Map<String, String> settings) {
+        Map<String, String> sized = new java.util.LinkedHashMap<>(settings);
         if (value(sized, "max-length") == null) {
             sized.put("max-length", "16384");
         }
-        return new VaultLogin(
-                required(settings, "address", "vault"),
-                login,
-                value(settings, "auth-mount"),
-                role,
-                of(sized),
-                value(settings, "namespace"),
-                !"false".equalsIgnoreCase(settings.getOrDefault("verify", "true")),
-                Integer.parseInt(settings.getOrDefault("timeout-millis", "10000")));
+        return sized;
     }
 
     /**

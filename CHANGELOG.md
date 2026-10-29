@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The Vault provider logs in with the cloud's identity**: `auth-method=aws` (iam type),
+  `gcp` (gce type) and `azure`. AWS signs an `sts:GetCallerIdentity` request with the workload's
+  role (`aws-credentials=instance|container|web-identity`) or a key pair, and the secret access
+  key, the session token, the signature and the base64 header document Vault replays are all
+  built in native memory - the signed request is a fifteen-minute credential of its own;
+  `aws-iam-server-id` ties it to one Vault. GCP sends the VM's identity token in full format
+  for audience `http://vault/<role>` (`GcpMetadataSecretProvider.fullIdentity`); Azure the
+  managed identity's token with subscription, resource group and VM or scale set name, from
+  IMDS once or configured. `VaultLoginBody` assembles every login's JSON off the heap. Tested
+  against stand-ins for Vault and the metadata services, the AWS signature against an
+  independent SigV4 implementation, and the AWS login in `VaultLoginHeapTest`, whose fake
+  Vault checks the signature as AWS would: key, session token, Vault token and password
+  absent from the heap.
+- **OpenBao in CI pinned to 2.7.2** instead of the moving `2` tag.
 - **`seclume-heapcheck` says what holds a finding** (`Attribution`). Every match in the dump
   file, named or discovered, is followed to the `byte[]` or `char[]` it lies in, through a
   `String` where there is one, to the instance field, static field or object array that keeps

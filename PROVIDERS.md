@@ -34,7 +34,7 @@ nested provider rather than a value.
 | `keychain` | the macOS Keychain, a generic password | no | — | one lookup |
 | `encrypted` | an AES-GCM ciphertext | no | **two**: `cipher-`, `key-` | one decrypt |
 | `rds-iam` | built, not stored — a signed RDS token | 15 min (AWS fixes it) | `key-` | four HMACs |
-| `vault` | HashiCorp Vault or OpenBao over HTTPS | **yes**, with its lease | `token-`, or a login: `jwt-` / `secret-id-` | one HTTPS request |
+| `vault` | HashiCorp Vault or OpenBao over HTTPS | **yes**, with its lease | `token-`, or a login: `jwt-` / `secret-id-` / `aws-` / the cloud's metadata | one HTTPS request |
 | `aws-secrets-manager` | AWS Secrets Manager | no | `key-`, optional `session-token-` | one HTTPS request |
 | `azure-key-vault` | Azure Key Vault | **yes**, when the secret has `exp` | `token-` | one HTTPS request |
 | `gcp-secret-manager` | Google Secret Manager | no | `token-` | one HTTPS request |
@@ -218,9 +218,57 @@ replaced is fetched again under the new one rather than renewed. Give the login 
 TTL at least as long as the database role's, and a `token_max_ttl` well above it; otherwise
 every new login also means a new database user.
 
-The heap half is proven by `VaultLoginHeapTest`: Vault in another JVM, a JWT login, a
-credential read, lease and token revoked - and neither the JWT, nor the token, nor the
-password in this JVM's heap, with a control that puts the token there on purpose and is found.
+#### Logging in with the cloud's identity
+
+On a cloud machine the workload already has an identity, and Vault can take it as it is:
+
+```properties
+# AWS, iam type: an sts:GetCallerIdentity request signed with the workload's
+# credentials, which Vault replays to AWS to learn who is asking
+auth-method=aws
+auth-role=app                                  # optional: the role named after the IAM principal
+aws-credentials=instance                       # or container, web-identity - as for rds-iam
+# or a key pair:  aws-access-key-id=AKIA...  aws-key-provider=file  aws-key-path=...
+#                 aws-session-token-provider=file  aws-session-token-path=...
+aws-iam-server-id=vault.example.com            # optional: Vault's iam_server_id_header_value
+aws-sts-endpoint=sts.amazonaws.com             # the default; must match Vault's sts_endpoint
+aws-sts-region=us-east-1                       # the default; must match Vault's sts_region
+
+# GCP, gce type: the VM's identity token from the metadata server
+auth-method=gcp
+auth-role=app
+gcp-account=default                            # the default
+gcp-audience=http://vault/app                  # the default: http://vault/<auth-role>
+
+# Azure: the managed identity's token from IMDS, and where the machine lives
+auth-method=azure
+auth-role=app
+azure-resource=https://management.azure.com/   # the default; Vault's azure auth resource
+azure-client-id=...                            # optional, for a user-assigned identity
+# subscription, resource group and VM (or scale set) name come from IMDS, or all of:
+# azure-subscription-id=...  azure-resource-group=...  azure-vm-name=... | azure-vmss-name=...
+```
+
+The AWS settings carry their own `aws-` prefix, so that the Vault's settings - `verify=false`
+for a development server, say - never reach the AWS side. **The signed request is itself a
+credential**: anyone holding it can log in to a Vault that accepts it for fifteen minutes. So
+not only the secret access key but the session token, the signature and the base64 header
+document Vault receives are all assembled in native memory; a new login signs anew. Set
+`aws-iam-server-id` and Vault's `iam_server_id_header_value` to tie a request to one Vault.
+GCP's `gce` login and Azure's take the token the platform hands out; what the Azure login
+also needs - subscription, resource group, VM or scale set name - is no secret and is read
+from IMDS once and kept.
+
+The `iam` type of GCP (a JWT signed through the IAM API) is not supported; on GCE the `gce`
+type needs nothing but the VM.
+
+The heap half is proven by `VaultLoginHeapTest`: Vault in another JVM, a JWT login and an AWS
+login, a credential read, lease and token revoked - and neither the JWT, nor the AWS secret
+key or session token, nor the token Vault handed out, nor the password in this JVM's heap,
+with a control that puts the token there on purpose and is found. The fake Vault checks the
+AWS signature as AWS would. The AWS, GCP and Azure logins are tested against stand-ins for
+Vault and the metadata services, and the AWS signature additionally against an independent
+SigV4 implementation; a live run needs the cloud and is not part of CI.
 
 ### The three cloud vaults
 
