@@ -252,7 +252,7 @@ All notable changes to seclume are recorded here. Versions follow
   and fails at 1,000. Internal modules (benchmarks, proofs, test harnesses) stay out of the
   deployment as before; `seclume-tck` stays in, because it is for users' own tests.
 
-- **A release gate for the security tests.** `.github/security-gate.json` names the 32
+- **A release gate for the security tests.** `.github/security-gate.json` names the 33
   tests that carry seclume's security claims, by CI job. `security_gate.py` gives each of them
   PASS, FAIL, SKIPPED, INCONCLUSIVE or NOT APPLICABLE from the job's reports. Only PASS and NOT
   APPLICABLE let the build through, so a skipped or missing security test fails it. The gate

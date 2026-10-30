@@ -22,6 +22,8 @@
        "property": "a scope wiped from another thread is wiped completely"},
       {"test": "space.seclume.secret.SecretLifecycleRegressionTest", "module": "seclume-core",
        "property": "errors, stack overflows and concurrent closes leave no scope open"},
+      {"test": "space.seclume.secret.NativeAllocationFailureTest", "module": "seclume-core",
+       "property": "native memory refused at allocation leaves nothing open, and what was made stays whole and is wiped"},
       {"test": "space.seclume.secret.WipeOnFailureTest", "module": "seclume-core",
        "property": "a failing provider or reader leaves its buffer wiped"},
       {"test": "space.seclume.internal.MemoryLockPagesTest", "module": "seclume-core",

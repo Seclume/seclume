@@ -60,7 +60,8 @@ The test suite was already unusually strong where seclume's claim lives:
 
 | Area | Added | Where |
 |---|---|---|
-| Release gate | `security_gate.py` with PASS, FAIL, SKIPPED, INCONCLUSIVE and NOT APPLICABLE over 32 tests in 5 groups; in the core job and the four database jobs; tested itself (`test_security_gate.py`) | this PR |
+| Native memory | `NativeAllocationFailureTest`: an allocation refused first and after five scopes, and a provider running out halfway. Checks that nothing is left open, earlier scopes stay whole and are wiped (read back), and memory is used again afterwards | this PR |
+| Release gate | `security_gate.py` with PASS, FAIL, SKIPPED, INCONCLUSIVE and NOT APPLICABLE over 33 tests in 5 groups; in the core job and the four database jobs; tested itself (`test_security_gate.py`) | this PR |
 | Platforms | `security-platforms`: the gate's core group on Linux ARM64 and Windows x64 | this PR |
 | Verification matrix | SECURITY-VERIFICATION.md: property, attacker, test, method, result, limits, platform; what each platform protects | this PR |
 | Audit material | THREAT-MODEL.md, AUDIT.md (crypto inventory, fuzzing map, open questions) | #169 |
@@ -73,9 +74,9 @@ The test suite was already unusually strong where seclume's claim lives:
 
 | | before | added | after |
 |---|---|---|---|
-| Test classes | 632 | 9 (`WorkloadApiAnswerFuzzTest`, `KmsAnswerFuzzTest`, `BrokenDumpTest`, `RecordingRedactionTest`, `JsonTest`, `InjectionTest`, `AdmissionServerTest` and the Python `test_central_bundle`, `test_security_gate`) | 641 |
+| Test classes | 632 | 10 (`NativeAllocationFailureTest`, `WorkloadApiAnswerFuzzTest`, `KmsAnswerFuzzTest`, `BrokenDumpTest`, `RecordingRedactionTest`, `JsonTest`, `InjectionTest`, `AdmissionServerTest` and the Python `test_central_bundle`, `test_security_gate`) | 642 |
 | Jazzer targets | 14 | 4 | 18 |
-| Tests under the release gate | 0 (only pool and framework "must have run" checks) | 32 | 32 |
+| Tests under the release gate | 0 (only pool and framework "must have run" checks) | 33 | 33 |
 | CI platforms | linux-x64 | linux-arm64, windows-x64 | 3 |
 
 ## 5. What ran, and its result
@@ -110,8 +111,11 @@ The test suite was already unusually strong where seclume's claim lives:
   Linux x86_64 only.
 - **No 72-hour endurance run.** The nightly benchmarks include a chaos benchmark and the pool
   state machine (20,000 sequences), but no long soak with native-memory accounting.
-- **Native allocation failure** (`Arena.allocate` out of memory) is not provoked by any test.
-  The code paths that catch it are covered only where a provider throws.
+- **Native memory exhaustion for real** ends the JVM rather than seclume's code. A child JVM
+  that allocated 16 KB secret scopes until the machine refused memory ended in HotSpot's
+  `os::commit_memory failed` error report, not an `OutOfMemoryError` (2026-10-30). The secrets
+  end with the process, and the kernel zeroes the pages before reuse. What returns as an
+  `OutOfMemoryError` is tested (`NativeAllocationFailureTest`).
 
 ## 8. Recommendations
 
@@ -121,9 +125,7 @@ The test suite was already unusually strong where seclume's claim lives:
    `-XX:NativeMemoryTracking=summary` sampled and compared across the run, failing on growth.
 3. Run the database jobs on ARM64 as well. GitHub's ARM runners are free for public
    repositories.
-4. Provoke `OutOfMemoryError` from native allocation in a child JVM with a small
-   `-XX:MaxDirectMemorySize` / arena limit, and check that what was allocated is wiped.
-5. Grow the gate: every new security claim gets its manifest entry in the same pull request.
+4. Grow the gate: every new security claim gets its manifest entry in the same pull request.
 
 ## 9. Rating
 
