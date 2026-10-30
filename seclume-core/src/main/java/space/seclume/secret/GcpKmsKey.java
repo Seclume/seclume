@@ -34,6 +34,10 @@ final class GcpKmsKey implements KmsSigningKey.Service {
     private static final String NAME =
             "projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/[^/]+/cryptoKeyVersions/[0-9]+";
 
+    /** What the principal needs on the key version. */
+    private static final String PERMISSIONS =
+            "cloudkms.cryptoKeyVersions.viewPublicKey and cloudkms.cryptoKeyVersions.useToSign";
+
     private final String key;
     private final String host;
     private final int port;
@@ -120,8 +124,8 @@ final class GcpKmsKey implements KmsSigningKey.Service {
             if (!response.ok()) {
                 throw new IOException("Cloud KMS answered " + response.status() + " to "
                         + method + " " + path + ": " + AzureKeyVaultKey.message(text)
-                        + (response.status() == 403 ? " - the principal needs cloudkms."
-                                + "cryptoKeyVersions.viewPublicKey and .useToSign" : ""));
+                        + (response.status() == 403 ? " - the principal needs "
+                                + PERMISSIONS : ""));
             }
             return text;
         }

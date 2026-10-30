@@ -258,7 +258,7 @@ public final class FakeKms implements AutoCloseable {
                 if (!body.contains("\"prehashed\":true")) {
                     return new String[] {"400", "{\"errors\":[\"this fake signs hashes\"]}"};
                 }
-                int version = Integer.parseInt(field(body, "key_version", "1"));
+                int version = number(field(body, "key_version", "1"));
                 if (version < 1 || version > versions.size()) {
                     return new String[] {"400", "{\"errors\":[\"no such key version\"]}"};
                 }
@@ -339,7 +339,7 @@ public final class FakeKms implements AutoCloseable {
             return new String[] {"401", "{\"error\":{\"code\":401,\"message\":"
                     + "\"Request is missing required authentication credential.\"}}"};
         }
-        int version = Integer.parseInt(name.group(2));
+        int version = number(name.group(2));
         if (!name.group(1).equals(keyName) || version < 1 || version > versions.size()) {
             return new String[] {"404", "{\"error\":{\"code\":404,\"message\":"
                     + "\"CryptoKeyVersion not found.\"}}"};
@@ -374,7 +374,7 @@ public final class FakeKms implements AutoCloseable {
         }
         String version = key.group(2);
         int index = version == null ? versions.size() : version.startsWith("ver")
-                ? Integer.parseInt(version.substring(3)) : 0;
+                ? number(version.substring(3)) : 0;
         if (!key.group(1).equals(keyName) || index < 1 || index > versions.size()) {
             return new String[] {"404", "{\"error\":{\"code\":\"KeyNotFound\","
                     + "\"message\":\"A key with (name/id) " + key.group(1) + " was not found "
@@ -428,6 +428,15 @@ public final class FakeKms implements AutoCloseable {
         }
         return new String[] {"200", "{\"kid\":\"" + address() + "/keys/" + keyName + "/ver"
                 + index + "\",\"value\":\"" + url(signature) + "\"}"};
+    }
+
+    /** A version number from a path, 0 for one that is none - a version that does not exist. */
+    private static int number(String text) {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException notANumber) {
+            return 0;
+        }
     }
 
     private static String url(byte[] bytes) {
