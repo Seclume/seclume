@@ -711,7 +711,9 @@ jobs:
             'ssl_options.keyfile = /tls/key.pem' \
             'ssl_options.versions.1 = tlsv1.3' > 20-tls.conf
           chmod 644 key.pem cert.pem 20-tls.conf
-          docker run -d --name rabbit -p 5671:5671 \
+          # A hostname of its own: the node is rabbit@rabbit, and Erlang's
+          # distribution does not start on a name it cannot resolve.
+          docker run -d --name rabbit --hostname rabbit -p 5671:5671 \
             -v "$PWD/cert.pem:/tls/cert.pem:ro" -v "$PWD/key.pem:/tls/key.pem:ro" \
             -v "$PWD/20-tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro" \
             docker.io/library/rabbitmq:4.4
@@ -733,7 +735,8 @@ jobs:
       # Why, on the pull request: the broker's last words and the failed tests.
       - if: failure()
         run: |
-          echo "::error title=rabbitmq::$(docker logs rabbit 2>&1 | tail -25 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)"
+          echo "::error title=rabbitmq start::$(docker logs rabbit 2>&1 | grep -iE "error|reason|failed|cannot|eaddr|nxdomain" | head -15 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)"
+          echo "::error title=rabbitmq end::$(docker logs rabbit 2>&1 | tail -12 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-2000)"
           python3 - <<'PY'
           import glob, xml.etree.ElementTree as ET
           for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
