@@ -20,7 +20,9 @@ usage: central_bundle.py [root] [--limit N]   exit 1 when the bundle reaches N (
 import os
 import re
 import sys
-import xml.etree.ElementTree as ET
+# The repository's own poms, not input from outside; Python's expat resolves no
+# external entities and limits entity expansion.
+import xml.etree.ElementTree as ET  # nosemgrep
 
 NS = {'m': 'http://maven.apache.org/POM/4.0.0'}
 CHECKSUMS = {'all': 4, 'required': 2, 'none': 0}
@@ -53,6 +55,7 @@ def modules(root):
     found = []
 
     def walk(directory):
+        # nosemgrep - the repository's own pom, see the import
         project = ET.parse(os.path.join(directory, 'pom.xml')).getroot()
         artifact = _text(project, 'm:artifactId')
         packaging = _text(project, 'm:packaging') or 'jar'
@@ -68,6 +71,7 @@ def modules(root):
 
 def settings(root):
     """The central plugin's checksum count and exclusions, and whether SBOMs are made."""
+    # nosemgrep - the repository's own pom, see the import
     project = ET.parse(os.path.join(root, 'pom.xml')).getroot()
     central = _plugin(_profile(project, 'central'), 'central-publishing-maven-plugin')
     if central is None:
