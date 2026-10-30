@@ -383,11 +383,19 @@ jobs:
             --set image.repository=seclume-admission --set image.tag=ci --wait --timeout 180s
           kubectl create namespace shop
           kubectl label namespace shop seclume.space/inject=enabled
+          # The webhook may still be taking up a new certificate, and its
+          # failurePolicy lets a pod through unchanged meanwhile: ask until it
+          # answers, for a minute, then fail.
           check() {
-            kubectl -n shop create --dry-run=server -o json \
-              -f seclume-admission/ci/spiffe-pod.yaml > pod.json
-            python3 -c "import json; p = json.load(open('pod.json')); \
-              assert p['metadata']['annotations']['seclume.space/injected'] == 'spiffe', p"
+            for _ in $(seq 1 30); do
+              kubectl -n shop create --dry-run=server -o json \
+                -f seclume-admission/ci/spiffe-pod.yaml > pod.json
+              python3 -c "import json, sys; p = json.load(open('pod.json')); \
+                sys.exit(0 if p['metadata'].get('annotations', {}).get('seclume.space/injected') == 'spiffe' else 1)" \
+                && return 0
+              sleep 2
+            done
+            echo "::error title=admission-helm::the webhook never mutated the pod"; return 1
           }
           check
           # An upgrade keeps the CA: the webhook still answers.
@@ -397,6 +405,20 @@ jobs:
       - name: Switched to cert-manager
         run: |
           set -euo pipefail
+          # The webhook may still be taking up a new certificate, and its
+          # failurePolicy lets a pod through unchanged meanwhile: ask until it
+          # answers, for a minute, then fail.
+          check() {
+            for _ in $(seq 1 30); do
+              kubectl -n shop create --dry-run=server -o json \
+                -f seclume-admission/ci/spiffe-pod.yaml > pod.json
+              python3 -c "import json, sys; p = json.load(open('pod.json')); \
+                sys.exit(0 if p['metadata'].get('annotations', {}).get('seclume.space/injected') == 'spiffe' else 1)" \
+                && return 0
+              sleep 2
+            done
+            echo "::error title=admission-helm::the webhook never mutated the pod"; return 1
+          }
           kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.18.2/cert-manager.yaml
           kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
           helm upgrade seclume seclume-admission/helm/seclume-admission \
@@ -412,10 +434,7 @@ jobs:
             test -n "$bundle" && break
             sleep 2
           done
-          kubectl -n shop create --dry-run=server -o json \
-            -f seclume-admission/ci/spiffe-pod.yaml > pod.json
-          python3 -c "import json; p = json.load(open('pod.json')); \
-            assert p['metadata']['annotations']['seclume.space/injected'] == 'spiffe', p"
+          check
       # Why, on the pull request: the webhook's and the pods' last words.
       - if: failure()
         run: |
