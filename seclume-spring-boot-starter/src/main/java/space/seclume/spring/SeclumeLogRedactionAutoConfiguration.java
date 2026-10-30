@@ -12,6 +12,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
 
@@ -40,8 +41,10 @@ public class SeclumeLogRedactionAutoConfiguration {
     @ConditionalOnMissingBean
     LogRedaction seclumeLogRedaction(ObjectProvider<RedactionSecrets> secrets,
             Environment environment) {
-        Duration interval = environment.getProperty("seclume.logging.refresh-interval",
-                Duration.class, Duration.ofMinutes(5));
+        // Bound, not read: the Environment converts no "5m" to a Duration.
+        Duration interval = Binder.get(environment)
+                .bind("seclume.logging.refresh-interval", Duration.class)
+                .orElse(Duration.ofMinutes(5));
         if (interval.isNegative() || interval.isZero()) {
             throw new IllegalStateException("seclume.logging.refresh-interval is how often the "
                     + "secrets are read again - a positive duration, not " + interval);
