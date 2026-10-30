@@ -1,0 +1,15 @@
+seclume-admission is running in {{ .Release.Namespace }}.
+
+Pods are sent to it only from namespaces that opt in:
+
+  kubectl label namespace <namespace> {{ range $k, $v := .Values.webhook.namespaceSelector.matchLabels }}{{ $k }}={{ $v }} {{ end }}
+
+and are changed only when they ask, by annotation:
+
+  seclume.space/redact-dumps: "true"     dumps and recordings redacted where they lie
+  seclume.space/secret-volumes: app      volumes whose files the sidecar looks for too
+  seclume.space/spiffe: "true"           the SPIFFE Workload API socket
+  seclume.space/containers: app          only these containers
+
+What was injected is in the pod's annotation seclume.space/injected; what could
+not be is a warning kubectl prints when the pod is created.

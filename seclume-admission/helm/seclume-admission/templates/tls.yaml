@@ -1,0 +1,42 @@
+{{- $mode := .Values.tls.mode -}}
+{{- if not (has $mode (list "selfSigned" "certManager" "existingSecret")) -}}
+{{- fail (printf "tls.mode is selfSigned, certManager or existingSecret, not %s" $mode) -}}
+{{- end -}}
+{{- if and (eq $mode "certManager") (empty .Values.tls.certManager.issuerRef) }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- end }}
+{{- if eq $mode "certManager" }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "seclume-admission.tlsSecret" . }}
+  duration: {{ .Values.tls.certManager.duration }}
+  renewBefore: {{ .Values.tls.certManager.renewBefore }}
+  dnsNames:
+    - {{ include "seclume-admission.service" . }}
+    - {{ include "seclume-admission.service" . }}.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    {{- if .Values.tls.certManager.issuerRef }}
+    {{- toYaml .Values.tls.certManager.issuerRef | nindent 4 }}
+    {{- else }}
+    name: {{ include "seclume-admission.fullname" . }}-selfsigned
+    kind: Issuer
+    {{- end }}
+{{- end }}

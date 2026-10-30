@@ -177,6 +177,15 @@ SECLUME_IMAGE=registry.example/seclume-admission:0.14.0 seclume-admission/deploy
 kubectl label namespace shop seclume.space/inject=enabled
 ```
 
+Or with Helm, with cert-manager or a CA the chart makes and keeps
+([the chart](seclume-admission/helm/seclume-admission)):
+
+```sh
+helm install seclume-admission seclume-admission/helm/seclume-admission \
+  --namespace seclume-system --create-namespace \
+  --set image.repository=registry.example/seclume-admission --set tls.mode=certManager
+```
+
 What a pod gets with `redact-dumps`:
 
 - **A folder for dumps.** An `emptyDir` named `seclume-dumps` at `/seclume/dumps` in each

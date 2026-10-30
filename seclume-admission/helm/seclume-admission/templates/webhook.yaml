@@ -1,0 +1,69 @@
+{{- $mode := .Values.tls.mode -}}
+{{- $ca := "" -}}
+{{- if eq $mode "selfSigned" }}
+{{- /* Made once and kept: an upgrade that made a new CA would break the
+       webhook between the secret and the configuration being updated. */ -}}
+{{- $secretName := include "seclume-admission.tlsSecret" . -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $cert := "" -}}{{- $key := "" -}}
+{{- if and $existing (index $existing.data "ca.crt") -}}
+{{- $cert = index $existing.data "tls.crt" -}}
+{{- $key = index $existing.data "tls.key" -}}
+{{- $ca = index $existing.data "ca.crt" -}}
+{{- else -}}
+{{- $service := include "seclume-admission.service" . -}}
+{{- $authority := genCA (printf "%s CA" (include "seclume-admission.fullname" .)) 3650 -}}
+{{- $serving := genSignedCert $service nil (list $service (printf "%s.cluster.local" $service)) 3650 $authority -}}
+{{- $cert = $serving.Cert | b64enc -}}
+{{- $key = $serving.Key | b64enc -}}
+{{- $ca = $authority.Cert | b64enc -}}
+{{- end }}
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+data:
+  tls.crt: {{ $cert }}
+  tls.key: {{ $key }}
+  ca.crt: {{ $ca }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+  {{- if eq $mode "certManager" }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s" .Release.Namespace (include "seclume-admission.fullname" .) }}
+  {{- end }}
+webhooks:
+  - name: pods.admission.seclume.space
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    reinvocationPolicy: IfNeeded
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    namespaceSelector: {{- toYaml .Values.webhook.namespaceSelector | nindent 6 }}
+    {{- with .Values.webhook.objectSelector }}
+    objectSelector: {{- toYaml . | nindent 6 }}
+    {{- end }}
+    rules:
+      - operations: [CREATE]
+        apiGroups: [""]
+        apiVersions: [v1]
+        resources: [pods]
+    clientConfig:
+      service:
+        name: {{ include "seclume-admission.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+      {{- if eq $mode "selfSigned" }}
+      caBundle: {{ $ca }}
+      {{- else if eq $mode "existingSecret" }}
+      caBundle: {{ required "tls.caBundle is the base64 CA of tls.existingSecret" .Values.tls.caBundle }}
+      {{- end }}

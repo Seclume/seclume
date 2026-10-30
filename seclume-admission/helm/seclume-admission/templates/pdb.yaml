@@ -1,0 +1,12 @@
+{{- if and .Values.podDisruptionBudget.enabled (gt (int .Values.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "seclume-admission.selector" . | nindent 6 }}
+{{- end }}

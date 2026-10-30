@@ -70,6 +70,16 @@ All notable changes to seclume are recorded here. Versions follow
   repeats a value of the pod's in its patch, and changes nothing on a second pass. Its TLS key
   stays in native memory and is taken up again when renewed. Image, manifests and an install
   script in `seclume-admission/deploy`; tested on kind with an application that runs out of memory.
+- **A Helm chart for the admission webhook** (`seclume-admission/helm/seclume-admission`). It
+  supports three TLS modes:
+  - a CA the chart makes on install and keeps across upgrades;
+  - cert-manager, with its CA injector setting `caBundle`;
+  - an existing secret.
+
+  The defaults are two replicas with a PodDisruptionBudget, `failurePolicy: Ignore`, opt-in
+  namespaces, and a non-root pod with a read-only root file system. CI lints the chart,
+  renders it in each mode and installs it on kind. There it switches from the chart's CA to
+  cert-manager and checks after each step that pods are still mutated.
 - **Certificate gauges through OpenTelemetry.** `seclume.certificate.expiry` (seconds) and
   `seclume.certificate.renewal.failing`, attributed `bundle`, as OpenTelemetry gauges -
   `SeclumeCertificateInstruments` in seclume-opentelemetry, and in the starter with
