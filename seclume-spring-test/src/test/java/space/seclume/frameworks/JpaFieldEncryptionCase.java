@@ -27,7 +27,6 @@ import org.junit.jupiter.api.parallel.Isolated;
 
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
-import jakarta.persistence.PersistenceConfiguration;
 import jakarta.persistence.PersistenceException;
 
 import space.seclume.field.EncryptedColumn;
@@ -49,7 +48,7 @@ import space.seclume.tck.HeapDumpScanner;
  * kept from the database, not from the heap).
  *
  * <p>Hibernate is started through Jakarta Persistence 3.2's
- * {@link PersistenceConfiguration}, as any application without Spring would.
+ * {@code PersistenceConfiguration} ({@link JpaBootstrap}), as any application without Spring would.
  * Isolated: the installed key ring is global.
  */
 @Isolated
@@ -73,15 +72,7 @@ abstract class JpaFieldEncryptionCase {
     abstract String url();
 
     static EntityManagerFactory factory(Object connection, String action) {
-        PersistenceConfiguration configuration = new PersistenceConfiguration("zl-field")
-                .managedClass(EncryptedPatient.class)
-                .property(PersistenceConfiguration.SCHEMAGEN_DATABASE_ACTION, action);
-        if (connection instanceof DataSource source) {
-            configuration.property("hibernate.connection.datasource", source);
-        } else {
-            configuration.property(PersistenceConfiguration.JDBC_URL, connection);
-        }
-        return configuration.createEntityManagerFactory();
+        return JpaBootstrap.factory(connection, action);
     }
 
     @BeforeEach

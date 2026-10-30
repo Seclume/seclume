@@ -19,6 +19,10 @@ import space.seclume.tck.Heap;
  * attribute it is, its token opened into native memory - and the heap dumped.
  *
  * <p>Arguments: the JDBC URL, the key file, the dump.
+ *
+ * <p>It must not touch {@link JpaFieldEncryptionCase}: loading that class puts
+ * its constants - the token and the name - on this heap, which is exactly what
+ * the first version did, and the search found the token there.
  */
 public final class JpaSealedProbe {
 
@@ -29,7 +33,7 @@ public final class JpaSealedProbe {
         try (FieldKeys keys = FieldKeys.builder()
                 .key(1, new FileSecretProvider(Path.of(args[1]), 128)).build()) {
             FieldKeys.install(keys);
-            EntityManagerFactory factory = JpaFieldEncryptionCase.factory(args[0], "none");
+            EntityManagerFactory factory = JpaBootstrap.factory(args[0], "none");
             EntityManager em = factory.createEntityManager();
             EncryptedPatient patient = em.find(EncryptedPatient.class, 1L);
             Sealed token = patient.apiToken();
