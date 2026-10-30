@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,6 +31,16 @@ public final class ChildJvm {
 
     public static Result run(Class<?> mainClass, List<String> jvmArguments, List<String> arguments,
                              long timeoutSeconds) throws IOException, InterruptedException {
+        return run(mainClass, jvmArguments, arguments, Map.of(), timeoutSeconds);
+    }
+
+    /**
+     * The same, with environment variables added to the ones this process
+     * has - what a Flight Recorder recording of the child records, say.
+     */
+    public static Result run(Class<?> mainClass, List<String> jvmArguments, List<String> arguments,
+                             Map<String, String> environment, long timeoutSeconds)
+            throws IOException, InterruptedException {
         List<String> command = new ArrayList<>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         command.add("--enable-native-access=ALL-UNNAMED");
@@ -51,10 +62,11 @@ public final class ChildJvm {
 
         Path log = Files.createTempFile("seclume-probe-", ".log");
         try {
-            Process process = new ProcessBuilder(command)
+            ProcessBuilder builder = new ProcessBuilder(command)
                     .redirectErrorStream(true)
-                    .redirectOutput(log.toFile())
-                    .start();
+                    .redirectOutput(log.toFile());
+            builder.environment().putAll(environment);
+            Process process = builder.start();
             if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
                 throw new IllegalStateException("the probe did not finish within "

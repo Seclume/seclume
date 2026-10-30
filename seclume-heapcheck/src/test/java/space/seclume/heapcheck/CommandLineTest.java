@@ -232,4 +232,56 @@ class CommandLineTest {
                 dump.toString(), "--discover", "--redact"), 60);
         assertEquals(2, missing.exitCode(), missing.output());
     }
+
+    /** The process a recording is made of: nothing to do, the recording is written at exit. */
+    public static final class Recorded {
+        public static void main(String[] arguments) {
+            System.out.println("recorded");
+        }
+    }
+
+    /**
+     * A Flight Recorder recording is checked and redacted like a heap dump,
+     * and needs no secret named: it names its own - here a password in the
+     * environment. The output names where it was, never what.
+     */
+    @Test
+    void aRecordingNamesItsOwnSecretsAndIsRedactedWithoutNamingAny(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        String password = "env-" + Long.toHexString(RANDOM.nextLong())
+                + Long.toHexString(RANDOM.nextLong());
+        java.nio.file.Path recording = dir.resolve("app.jfr");
+        ChildJvm.Result recorded = ChildJvm.run(Recorded.class,
+                List.of("-XX:StartFlightRecording:dumponexit=true,filename=" + recording),
+                List.of(), java.util.Map.of("DB_PASSWORD", password), 120);
+        assertEquals(0, recorded.exitCode(), recorded.output());
+
+        ChildJvm.Result check = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", recording.toString()), 120);
+        assertEquals(1, check.exitCode(), check.output());
+        assertTrue(check.output().contains("environment variable DB_PASSWORD (in the recording)"),
+                check.output());
+        assertTrue(check.output().contains("recording is"), check.output());
+        assertTrue(!check.output().contains(password), "the output holds the password");
+
+        java.nio.file.Path copy = dir.resolve("app.redacted.jfr");
+        ChildJvm.Result redact = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", recording.toString(), "--discover", "--redact",
+                        copy.toString()), 120);
+        assertEquals(0, redact.exitCode(), redact.output());
+        assertTrue(redact.output().contains("REDACTED"), redact.output());
+
+        ChildJvm.Result again = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", copy.toString(), "--discover"), 120);
+        assertEquals(0, again.exitCode(), again.output());
+        byte[] raw = java.nio.file.Files.readAllBytes(copy);
+        assertTrue(!new String(raw, java.nio.charset.StandardCharsets.ISO_8859_1)
+                .contains(password), "the password is still in the copy");
+        jdk.jfr.consumer.RecordingFile.readAllEvents(copy);   // still a recording
+
+        // A file that is no recording still needs a secret named, as ever.
+        java.nio.file.Path dump = java.nio.file.Files.writeString(dir.resolve("x.hprof"), "x");
+        assertEquals(2, ChildJvm.run(HeapCheck.class, List.of("--dump", dump.toString()), 60)
+                .exitCode());
+    }
 }

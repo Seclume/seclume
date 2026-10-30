@@ -110,8 +110,10 @@ java -jar seclume-heapcheck.jar --redact-dir /dumps --discover --secret-dir /run
 java -jar seclume-heapcheck.jar --watch /dumps --discover --secret-dir /run/secrets/app
 ```
 
-`--redact-dir` handles every finished dump in the folder once. `--watch` keeps watching until
-it is stopped, for example as a sidecar sharing the folder with the application:
+`--redact-dir` handles every finished dump in the folder once - and every finished Flight
+Recorder recording (`.jfr`, see [below](#a-flight-recorder-recording---dump-appjfr)), which
+becomes `<name>-<time>.redacted.jfr`. `--watch` keeps watching until it is stopped, for example
+as a sidecar sharing the folder with the application:
 
 ```yaml
 containers:
@@ -132,8 +134,9 @@ How it works:
   `java_pid1-20261030T001500Z.redacted.hprof`, stamped with the dump's time, so the next dump
   of a process with the same pid finds its name free. Then the original is deleted.
 - **Only finished dumps.** A dump counts as finished when it ends with the `HEAP DUMP END`
-  record HotSpot writes last. `--watch` also waits until the size has not changed between two
-  looks (`--interval`, 10s).
+  record HotSpot writes last, a recording when every chunk in it is marked finished and the
+  last one ends where the file does. `--watch` also waits until the size has not changed
+  between two looks (`--interval`, 10s).
 - **Partial copies.** Copies left by a redaction that died are removed after an hour.
 - **When a dump cannot be made clean.** It stays, and the failure is reported once, not on
   every look. `--delete-unredactable` deletes it instead, which loses the dump but not the
@@ -288,6 +291,45 @@ its tag.
   `seclume.logging.refresh-interval`.
 - **Other loggers:** `SecretMasker.maskInstalled(text)` is the whole of it - a Log4j2 rewrite
   policy or a JUL formatter can call it; `new SecretMasker(providers)` works without Spring.
+
+## A Flight Recorder recording: `--dump app.jfr`
+
+```sh
+java -jar seclume-heapcheck.jar --dump app.jfr                       # what it holds
+java -jar seclume-heapcheck.jar --dump app.jfr --discover --redact app-redacted.jfr
+```
+
+A recording goes to a vendor's support as readily as a heap dump, is opened in more tools,
+and is just as full of credentials. Every recording starts with the process's environment
+(`jdk.InitialEnvironmentVariable`), its system properties (`jdk.InitialSystemProperty`) and
+its command line (`jdk.JVMInformation`), so `DB_PASSWORD=...` and
+`-Dspring.datasource.password=...` are in each one, and any event may have recorded a string
+holding a token.
+
+`--dump` and `--redact` take a `.jfr` as they take an `.hprof` - the file's first bytes decide,
+not its name - and a recording needs no secret named:
+
+- **The recording names its own.** A value whose name says secret - `password`, `passwd`,
+  `pwd`, `passphrase`, `secret`, `token`, `credential`, `authorization`, `bearer`, an API,
+  access, private, client, signing, encryption or master key - is looked for as a named
+  secret. That covers the environment, the system properties and `-Dname=value`/`--name=value`
+  arguments; the check reports it as `environment variable DB_PASSWORD (in the recording)`,
+  never with its value. A name that says where a secret is (`..._FILE`, `..._PATH`, `..._DIR`,
+  `..._URL`, `..._NAME`, ...) is not one, nor are `PWD` and `OLDPWD`; a value that is
+  shorter than 4 characters, a number, `true`, `false`, `none` or masked already is not taken.
+- **Everything else as in a dump.** Named secrets and `--discover` find what an event recorded
+  - a token in an exception's message, a password in a JDBC URL - anywhere in the file.
+- **In place.** Each occurrence becomes `*` of the same length, so every chunk keeps its size
+  and every offset stays right. There are no `String` hashes and no holders in a recording;
+  attribution is skipped.
+- **Read back.** Before the copy gets its name it is searched again, its chunks are walked to
+  the end and every event is parsed by the JDK's own `jdk.jfr.consumer.RecordingFile`. A copy
+  that does not read is deleted and the run exits 2.
+
+The masked settings are still there, by name: `jfr print --events jdk.InitialEnvironmentVariable
+app-redacted.jfr` shows the event with `key = "DB_PASSWORD"` and `value = "************"`. `--redact-dir` and `--watch` take the
+recordings in their folder the same way, so the sidecar above also covers
+`-XX:StartFlightRecording:dumponexit=true,filename=/dumps/`.
 
 ## Reports and baselines
 
