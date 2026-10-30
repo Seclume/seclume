@@ -25,7 +25,7 @@ kubectl label namespace shop seclume.space/inject=enabled
 | `tls.mode` | Where the certificate comes from |
 |---|---|
 | `selfSigned` (default) | Helm makes a CA and a certificate on install and keeps both across upgrades, so the secret and `caBundle` always agree |
-| `certManager` | cert-manager issues it (`tls.certManager.issuerRef`, or a self-signed `Issuer` the chart makes) and its CA injector sets `caBundle`; renewals are picked up without a restart |
+| `certManager` | cert-manager issues it (`tls.certManager.issuerRef`, or a CA the chart makes with cert-manager: a self-signed root that issues the serving certificate) and its CA injector sets `caBundle`; renewals are picked up without a restart |
 | `existingSecret` | a `kubernetes.io/tls` secret of yours (`tls.existingSecret`), with its CA in `tls.caBundle` |
 
 The webhook reads its key with seclume-keys into native memory and checks the files every

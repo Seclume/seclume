@@ -16,7 +16,8 @@ replicaCount: 2
 tls:
   mode: selfSigned
   certManager:
-    # An issuer of your own; empty makes a self-signed Issuer for the webhook.
+    # An issuer of your own; empty makes a CA for the webhook (a self-signed
+    # root that issues the serving certificate).
     issuerRef: {}
     #   name: my-issuer
     #   kind: ClusterIssuer
