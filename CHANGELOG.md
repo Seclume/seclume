@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Keys in AWS KMS, Google Cloud KMS and Azure Key Vault** (`kms=aws-kms`, `gcp-kms`,
+  `azure-key-vault`), next to Vault transit and everywhere it goes: JDBC client certificates,
+  key managers, Spring SSL bundles, Tomcat. The hash is made here and signed there - AWS with
+  SigV4 and `MessageType DIGEST` (the secret key in native memory, workload roles taken), Cloud
+  KMS by the key's one algorithm, Key Vault's r and s turned into DER, its version pinned when
+  opened. The AWS request signing is now shared with Secrets Manager (`AwsJsonCall`).
+  `FakeKms` answers as all four services.
 - **Tomcat serves `vault-pki=` and `spiffe=` bundles.** `seclume.server.ssl.bundle` names any
   bundle now; for the two that renew their certificate themselves Tomcat shares the bundle's key
   manager, so a renewed certificate is served from the next handshake on.

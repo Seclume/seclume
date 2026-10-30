@@ -340,6 +340,20 @@ public final class SecretProviders {
                 namespace, verify, timeout);
     }
 
+    /**
+     * The bearer token under {@code token-} - a cloud's access token for its
+     * key service, say - sized for a token, which is far longer than a password.
+     */
+    static SecretProvider bearerToken(Map<String, String> settings, String needs) {
+        Map<String, String> token = nested(settings, "token-");
+        if (token.isEmpty()) {
+            throw new IllegalArgumentException(needs + " needs a bearer token: token-provider "
+                    + "and its settings, for example token-provider=gcp-metadata or "
+                    + "token-provider=azure-managed-identity&token-resource=...");
+        }
+        return of(sized(token));
+    }
+
     /** A token's source: far longer than a password, which the default bound would refuse. */
     private static Map<String, String> sized(Map<String, String> settings) {
         Map<String, String> sized = new java.util.LinkedHashMap<>(settings);
@@ -356,7 +370,7 @@ public final class SecretProviders {
      * AWS secret key comes from, without a second configuration block and
      * without the two sets of settings getting in each other's way.
      */
-    private static Map<String, String> nested(Map<String, String> settings, String prefix) {
+    static Map<String, String> nested(Map<String, String> settings, String prefix) {
         Map<String, String> inner = new java.util.LinkedHashMap<>();
         for (Map.Entry<String, String> entry : settings.entrySet()) {
             if (entry.getKey().startsWith(prefix)) {

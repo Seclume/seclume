@@ -4,14 +4,7 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
-import space.seclume.internal.AwsSigV4;
 import space.seclume.internal.JsonOff;
 import space.seclume.internal.SecretFetch;
 
@@ -24,7 +17,7 @@ import space.seclume.internal.SecretFetch;
  * before an application has seen it, and none of them wipeable. The SDK is
  * also forty megabytes of dependency for one HTTPS request.
  *
- * <p>So the request is signed here with {@link AwsSigV4} - the same four HMACs
+ * <p>So the request is signed here with {@code AwsSigV4} - the same four HMACs
  * {@link RdsIamSecretProvider} uses, and the same property that the AWS secret
  * key never leaves native memory - and the answer is read by {@link JsonOff}
  * straight out of the buffer it landed in.
@@ -62,16 +55,6 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
 
     private static final String SERVICE = "secretsmanager";
     private static final String TARGET = "secretsmanager.GetSecretValue";
-    private static final String CONTENT_TYPE = "application/x-amz-json-1.1";
-    private static final String SIGNED_HEADERS = "content-type;host;x-amz-date;x-amz-target";
-    /** Alphabetical, so the token sits between the date and the target. */
-    private static final String SIGNED_HEADERS_WITH_TOKEN =
-            "content-type;host;x-amz-date;x-amz-security-token;x-amz-target";
-
-    private static final DateTimeFormatter STAMP =
-            DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
-    private static final DateTimeFormatter DAY =
-            DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
 
     private final SecretProvider awsSecretKey;
     /**
@@ -84,15 +67,11 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
      */
     private final SecretProvider sessionToken;
     private final String accessKeyId;
-    private final String region;
     private final String secretId;
     private final String field;
     private final String host;
-    private final int port;
-    private final boolean verify;
-    private final int timeoutMillis;
     private final int maxLength;
-    private final Clock clock;
+    private final AwsJsonCall call;
 
     /**
      * @param awsSecretKey where the AWS secret access key comes from
@@ -139,15 +118,11 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
         this.awsSecretKey = awsSecretKey;
         this.sessionToken = sessionToken;
         this.accessKeyId = accessKeyId;
-        this.region = region;
         this.secretId = secretId;
         this.field = field;
         this.host = host;
-        this.port = port;
-        this.verify = verify;
-        this.timeoutMillis = timeoutMillis;
         this.maxLength = maxLength;
-        this.clock = clock;
+        this.call = new AwsJsonCall(host, port, verify, timeoutMillis, region, SERVICE, clock);
     }
 
     @Override
@@ -179,31 +154,17 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
     private int fetch(MemorySegment target, String keyId, SecretProvider key,
                       SecretProvider session) {
         String body = "{\"SecretId\":\"" + escape(secretId) + "\"}";
-        Instant now = clock.instant();
-        String stamp = STAMP.format(now);
-        String day = DAY.format(now);
-
         try (Arena arena = Arena.ofConfined();
-             SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE);
-             // Temporary credentials only. Read afresh per request, because a
-             // session token expires and the provider behind it is where a
-             // newer one appears.
-             SecretScope token = session == null ? null
-                     : SecretScope.fromProvider(session)) {
-
-            SecretFetch.Response response = SecretFetch.send(host, port, verify, timeoutMillis,
-                    "POST", "/", headers(stamp,
-                            authorization(arena, body, stamp, day, token, keyId, key)),
-                    token == null ? List.of() : List.of(new SecretFetch.SecretHeader(
-                            "X-Amz-Security-Token", token.secret(), token.length())),
-                    body, answer.segment());
+             SecretScope answer = SecretScope.in(arena, SecretFetch.MAX_RESPONSE)) {
+            SecretFetch.Response response = call.send(TARGET, body, keyId, key, session,
+                    answer.segment());
             if (!response.ok()) {
                 // An error answer carries no secret, only AWS's reason - and
                 // "400" alone hid which one: a signature, a missing secret and
                 // a missing right all come back as 400 from this API.
                 throw new SecretUnavailableException("AWS Secrets Manager answered "
                         + response.status() + " for " + secretId + ": "
-                        + reason(answer.segment(), response.bodyLength()));
+                        + AwsJsonCall.reason(answer.segment(), response.bodyLength()));
             }
             answer.length(response.bodyLength());
 
@@ -230,25 +191,6 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
         }
     }
 
-    /** {@code __type} and {@code message} of an error answer - public text, never a secret. */
-    private static String reason(MemorySegment body, int length) {
-        StringBuilder said = new StringBuilder(); // seclume-allow: an error answer, which holds no secret
-        for (String key : new String[] {"__type", "message", "Message"}) {
-            try (Arena scratch = Arena.ofConfined()) {
-                MemorySegment out = scratch.allocate(300);
-                int n = JsonOff.string(body, length, out, key);
-                for (int i = 0; i < n; i++) {
-                    char c = (char) (out.get(java.lang.foreign.ValueLayout.JAVA_BYTE, i) & 0xff);
-                    said.append(c >= 0x20 && c < 0x7f ? c : '?');
-                }
-                said.append(' ');
-            } catch (RuntimeException absent) {
-                // not in this answer
-            }
-        }
-        return said.length() == 0 ? "no reason given" : said.toString().trim();
-    }
-
     private static int copy(SecretScope from, MemorySegment target) {
         if (from.length() > target.byteSize()) {
             throw new SecretUnavailableException("the secret is " + from.length()
@@ -256,79 +198,6 @@ public final class AwsSecretsManagerSecretProvider implements SecretProvider {
         }
         MemorySegment.copy(from.segment(), 0, target, 0, from.length());
         return from.length();
-    }
-
-    private Map<String, String> headers(String stamp, String authorization) {
-        Map<String, String> headers = new LinkedHashMap<>();
-        headers.put("Content-Type", CONTENT_TYPE);
-        headers.put("X-Amz-Date", stamp);
-        headers.put("X-Amz-Target", TARGET);
-        headers.put("Authorization", authorization);
-        return headers;
-    }
-
-    /**
-     * The {@code Authorization} header, built the way SigV4 prescribes.
-     *
-     * <p>Nothing in the canonical request is secret: it is the request that
-     * goes over the wire in the clear. The only secret involved is the signing
-     * key, and it stays inside {@link AwsSigV4#sign}.
-     */
-    private String authorization(Arena arena, String body, String stamp, String day,
-            SecretScope token, String keyId, SecretProvider key) {
-        String scope = AwsSigV4.scope(day, region, SERVICE);
-        String signedHeaders = token == null ? SIGNED_HEADERS : SIGNED_HEADERS_WITH_TOKEN;
-
-        // Assembled in native memory rather than concatenated, because with
-        // temporary credentials one of these lines is the session token -
-        // and a token that is signed as well as sent would otherwise spend
-        // the request on the heap. Everything after the hash is public
-        // again, so only this part has to be careful.
-        String canonicalHash;
-        try (space.seclume.internal.CanonicalRequest canonical =
-                new space.seclume.internal.CanonicalRequest(arena, canonicalCapacity(token))) {
-            canonical.text("POST\n/\n\n")
-                    .text("content-type:" + CONTENT_TYPE + "\n")
-                    .text("host:" + host + "\n")
-                    .text("x-amz-date:" + stamp + "\n");
-            if (token != null) {
-                // Alphabetical, which puts it before x-amz-target. Headers
-                // out of order sign perfectly cleanly and are rejected by
-                // AWS with nothing in the answer that says why.
-                canonical.text("x-amz-security-token:");
-                canonical.secret(token.secret(), token.length());
-                canonical.text("\n");
-            }
-            canonical.text("x-amz-target:" + TARGET + "\n\n")
-                    .text(signedHeaders + "\n")
-                    .text(AwsSigV4.sha256Hex(body));
-            canonicalHash = canonical.sha256Hex();
-        }
-
-        String toSign = AwsSigV4.ALGORITHM + "\n" + stamp + "\n" + scope + "\n" + canonicalHash;
-
-        MemorySegment signature;
-        try {
-            signature = AwsSigV4.sign(arena, key::writeSecret, toSign, day, region, SERVICE);
-        } catch (IllegalStateException empty) {
-            throw new SecretUnavailableException("the AWS secret key source gave nothing - "
-                    + "the request to Secrets Manager cannot be signed without it", empty);
-        }
-        return AwsSigV4.ALGORITHM + " Credential=" + keyId + "/" + scope
-                + ", SignedHeaders=" + signedHeaders
-                + ", Signature=" + AwsSigV4.hex(signature);
-    }
-
-    /**
-     * Room for the canonical request, with the token if there is one.
-     *
-     * <p>Generous on purpose: running out would mean an exception in the
-     * middle of assembling something that has a credential in it, and the
-     * memory is freed a few microseconds later either way.
-     */
-    private int canonicalCapacity(SecretScope token) {
-        return 512 + host.length() + TARGET.length()
-                + (token == null ? 0 : token.length() + 32);
     }
 
     /** A secret's name may contain a slash or a colon, never a quote - but check. */

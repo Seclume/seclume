@@ -19,7 +19,9 @@ import space.seclume.crypto.PrivateSigningKey;
 
 /**
  * A private key that lives in a key management service and signs there -
- * Vault's transit engine ({@code kms=vault-transit}). What the process holds is
+ * Vault's transit engine ({@code kms=vault-transit}), AWS KMS ({@code aws-kms}),
+ * Google Cloud KMS ({@code gcp-kms}), Azure Key Vault or Managed HSM
+ * ({@code azure-key-vault}). What the process holds is
  * the public half and a credential to ask with; the key itself is never in it,
  * not in native memory either, and a dump of the whole process finds nothing
  * to steal but a token that expires.
@@ -59,6 +61,11 @@ public final class KmsSigningKey implements PrivateSigningKey {
          * hash.
          */
         byte[] sign(HashAlgorithm digest, boolean pss, byte[] hash) throws IOException;
+
+        /** Whether an RSA key signs with PSS - one bound to PKCS#1 v1.5 does not. */
+        default boolean signsPss() {
+            return true;
+        }
 
         @Override
         void close();
@@ -111,13 +118,17 @@ public final class KmsSigningKey implements PrivateSigningKey {
         String kms = settings.get(KMS);
         if (kms == null || kms.isBlank()) {
             throw new IllegalArgumentException("no key management service named: kms="
-                    + "vault-transit, with the key's settings beside it");
+                    + "vault-transit, aws-kms, gcp-kms or azure-key-vault, with the key's "
+                    + "settings beside it");
         }
         Service service = switch (kms.trim().toLowerCase(Locale.ROOT)) {
             case "vault-transit", "vaulttransit", "transit", "vault", "openbao" ->
                     new VaultTransitKey(settings);
-            default -> throw new IllegalArgumentException("kms is vault-transit, not '"
-                    + kms + "'");
+            case "aws-kms", "awskms", "aws" -> new AwsKmsKey(settings);
+            case "gcp-kms", "gcpkms", "gcp", "google" -> new GcpKmsKey(settings);
+            case "azure-key-vault", "azurekeyvault", "azure" -> new AzureKeyVaultKey(settings);
+            default -> throw new IllegalArgumentException("kms is vault-transit, aws-kms, "
+                    + "gcp-kms or azure-key-vault, not '" + kms + "'");
         };
         return open(service);
     }
@@ -147,13 +158,14 @@ public final class KmsSigningKey implements PrivateSigningKey {
         byte[] message = "seclume: does this key sign as its public half says?"
                 .getBytes(StandardCharsets.US_ASCII); // seclume-allow: a constant text, no secret
         HashAlgorithm digest = bits == 384 ? HashAlgorithm.SHA_384 : HashAlgorithm.SHA_256;
-        boolean pss = type.equals("RSA");
+        boolean pss = type.equals("RSA") && service.signsPss();
         byte[] signature = service.sign(digest, pss, hash(digest, message));
         // The verification TLS itself uses, on public data.
         int scheme = type.equals("EC")
                 ? (bits == 384 ? space.seclume.tls.HandshakeSignature.ECDSA_SECP384R1_SHA384
                         : space.seclume.tls.HandshakeSignature.ECDSA_SECP256R1_SHA256)
-                : space.seclume.tls.HandshakeSignature.RSA_PSS_RSAE_SHA256;
+                : pss ? space.seclume.tls.HandshakeSignature.RSA_PSS_RSAE_SHA256
+                        : space.seclume.tls.HandshakeSignature.RSA_PKCS1_SHA256;
         if (!space.seclume.tls.HandshakeSignature.verifyTls12(parse(publicKey), scheme, message,
                 signature)) {
             throw new IOException("its signature does not verify with the public key it "
@@ -182,6 +194,91 @@ public final class KmsSigningKey implements PrivateSigningKey {
             digest.hash(in, 0, message.length, out, 0);
             return out.toArray(ValueLayout.JAVA_BYTE);
         }
+    }
+
+    /**
+     * An ECDSA signature as IEEE P1363 - r and s, each as long as the curve -
+     * in DER, which TLS and the JDK take: what Azure Key Vault answers.
+     */
+    static byte[] derFromRaw(byte[] raw) throws IOException {
+        if (raw.length == 0 || raw.length % 2 != 0 || raw.length > 132) {
+            throw new IOException("an ECDSA signature of " + raw.length + " bytes is not r "
+                    + "and s of one length");
+        }
+        int half = raw.length / 2;
+        byte[] r = integer(raw, 0, half);
+        byte[] s = integer(raw, half, half);
+        java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+        body.write(r, 0, r.length);
+        body.write(s, 0, s.length);
+        return tlv(0x30, body.toByteArray());
+    }
+
+    private static byte[] integer(byte[] raw, int from, int length) {
+        int start = from;
+        while (start < from + length - 1 && raw[start] == 0) {
+            start++;
+        }
+        boolean pad = (raw[start] & 0x80) != 0;
+        byte[] value = new byte[from + length - start + (pad ? 1 : 0)];
+        System.arraycopy(raw, start, value, pad ? 1 : 0, from + length - start);
+        return tlv(0x02, value);
+    }
+
+    private static byte[] tlv(int tag, byte[] value) {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(tag);
+        if (value.length < 0x80) {
+            out.write(value.length);
+        } else {
+            out.write(0x81);
+            out.write(value.length);
+        }
+        out.write(value, 0, value.length);
+        return out.toByteArray();
+    }
+
+    /** {@code host} or {@code host:port} of an https endpoint setting - 443 by default. */
+    static String[] endpoint(String value, String fallbackHost) {
+        String endpoint = value == null || value.isBlank() ? fallbackHost : value.trim();
+        if (endpoint.startsWith("https://")) {
+            endpoint = endpoint.substring("https://".length());
+        } else if (endpoint.contains("://")) {
+            throw new IllegalArgumentException("a key service is reached over https, not "
+                    + endpoint);
+        }
+        while (endpoint.endsWith("/")) {
+            endpoint = endpoint.substring(0, endpoint.length() - 1);
+        }
+        int colon = endpoint.lastIndexOf(':');
+        return colon > 0 ? new String[] {endpoint.substring(0, colon),
+            endpoint.substring(colon + 1)} : new String[] {endpoint, "443"};
+    }
+
+    /** A positive whole-number setting, {@code fallback} when it is left out. */
+    static int positive(Map<String, String> settings, String name, int fallback) {
+        String value = settings.get(name);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            if (parsed > 0) {
+                return parsed;
+            }
+        } catch (NumberFormatException e) {
+            // said below
+        }
+        throw new IllegalArgumentException(name + " is a positive whole number, not " + value);
+    }
+
+    /** A setting the key cannot do without. */
+    static String required(Map<String, String> settings, String name, String service) {
+        String value = settings.get(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("a key in " + service + " needs " + name);
+        }
+        return value.trim();
     }
 
     /** The key as configured: service, name, version. */

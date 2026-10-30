@@ -29,9 +29,24 @@ import javax.net.ssl.SSLSocket;
  * A stand-in for a key management service, for tests: an HTTPS server on
  * 127.0.0.1 whose keys - made by {@code openssl}, one file per version in a
  * directory of its own - sign the hashes they are sent, with {@code openssl
- * pkeyutl}. It answers as Vault's transit engine does ({@code GET
- * /v1/<mount>/keys/<name>}, {@code POST /v1/<mount>/sign/<name>/<hash>} with a
- * {@code prehashed} input), and keeps every request it got.
+ * pkeyutl}. It answers as four services do, each with its own paths and
+ * credentials, and keeps every request it got:
+ *
+ * <ul>
+ *   <li>Vault's transit engine - {@code GET /v1/<mount>/keys/<name>},
+ *       {@code POST /v1/<mount>/sign/<name>/<hash>} with a {@code prehashed}
+ *       input, an {@code X-Vault-Token};
+ *   <li>AWS KMS - {@code POST /} with {@code X-Amz-Target}
+ *       {@code TrentService.GetPublicKey} or {@code .Sign} ({@code MessageType
+ *       DIGEST}), a SigV4 {@code Authorization} for {@code kms} (its form is
+ *       checked, not its signature);
+ *   <li>Google Cloud KMS - {@code GET /v1/<version>/publicKey},
+ *       {@code POST /v1/<version>:asymmetricSign}, a bearer token
+ *       ({@link #gcpKeyName});
+ *   <li>Azure Key Vault - {@code GET /keys/<name>[/<version>]},
+ *       {@code POST /keys/<name>/<version>/sign} answering ECDSA as r and s, a
+ *       bearer token.
+ * </ul>
  *
  * <p>Its certificate is its own, so a client talks to it with
  * {@code verify=false}. What it cannot show is a real service's behaviour - its
@@ -61,6 +76,16 @@ public final class FakeKms implements AutoCloseable {
 
     private static final Pattern KEYS = Pattern.compile("/v1/(.+)/keys/([^/?]+)");
     private static final Pattern SIGN = Pattern.compile("/v1/(.+)/sign/([^/?]+)/(sha2-[0-9]+)");
+    private static final Pattern GCP_PUBLIC = Pattern.compile(
+            "/v1/projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/([^/]+)"
+                    + "/cryptoKeyVersions/([0-9]+)/publicKey");
+    private static final Pattern GCP_SIGN = Pattern.compile(
+            "/v1/projects/[^/]+/locations/[^/]+/keyRings/[^/]+/cryptoKeys/([^/]+)"
+                    + "/cryptoKeyVersions/([0-9]+):asymmetricSign");
+    private static final Pattern AZURE_KEY =
+            Pattern.compile("/keys/([^/?]+)(?:/([^/?]+))?\\?api-version=[0-9.]+");
+    private static final Pattern AZURE_SIGN =
+            Pattern.compile("/keys/([^/?]+)/([^/?]+)/sign\\?api-version=[0-9.]+");
 
     private final Path directory;
     private final KeyType type;
@@ -127,6 +152,12 @@ public final class FakeKms implements AutoCloseable {
         versions.add(directory.resolve(file));
     }
 
+    /** The resource name Cloud KMS knows {@code version} of the key by. */
+    public String gcpKeyName(int version) {
+        return "projects/seclume-test/locations/global/keyRings/test/cryptoKeys/" + keyName
+                + "/cryptoKeyVersions/" + version;
+    }
+
     /** Every request so far, as {@code METHOD path} and the body on the next line. */
     public List<String> requests() {
         return requests;
@@ -180,10 +211,26 @@ public final class FakeKms implements AutoCloseable {
             return new String[] {String.valueOf(refusal),
                 "{\"errors\":[\"permission denied\"]}"};
         }
-        if (headers.get("x-vault-token") == null || headers.get("x-vault-token").isBlank()) {
-            return new String[] {"403", "{\"errors\":[\"missing client token\"]}"};
-        }
         try {
+            String target = headers.get("x-amz-target");
+            if (method.equals("POST") && path.equals("/") && target != null) {
+                return aws(target, headers.get("authorization"), body);
+            }
+            Matcher gcpPublic = GCP_PUBLIC.matcher(path);
+            Matcher gcpSign = GCP_SIGN.matcher(path);
+            if (gcpPublic.matches() || gcpSign.matches()) {
+                return gcp(method, gcpPublic.matches() ? gcpPublic : gcpSign,
+                        gcpSign.matches(), headers.get("authorization"), body);
+            }
+            Matcher azureKey = AZURE_KEY.matcher(path);
+            Matcher azureSign = AZURE_SIGN.matcher(path);
+            if (azureSign.matches() || azureKey.matches()) {
+                return azure(method, azureSign.matches() ? azureSign : azureKey,
+                        azureSign.matches(), headers.get("authorization"), body);
+            }
+            if (headers.get("x-vault-token") == null || headers.get("x-vault-token").isBlank()) {
+                return new String[] {"403", "{\"errors\":[\"missing client token\"]}"};
+            }
             Matcher keys = KEYS.matcher(path);
             if (method.equals("GET") && keys.matches()) {
                 if (!keys.group(2).equals(keyName)) {
@@ -211,7 +258,7 @@ public final class FakeKms implements AutoCloseable {
                 if (!body.contains("\"prehashed\":true")) {
                     return new String[] {"400", "{\"errors\":[\"this fake signs hashes\"]}"};
                 }
-                int version = Integer.parseInt(field(body, "key_version", "1"));
+                int version = number(field(body, "key_version", "1"));
                 if (version < 1 || version > versions.size()) {
                     return new String[] {"400", "{\"errors\":[\"no such key version\"]}"};
                 }
@@ -229,6 +276,204 @@ public final class FakeKms implements AutoCloseable {
             return new String[] {"500", "{\"errors\":[\"" + json(String.valueOf(e.getMessage()))
                     + "\"]}"};
         }
+    }
+
+    private String[] aws(String target, String authorization, String body) throws IOException {
+        if (authorization == null || !authorization.startsWith("AWS4-HMAC-SHA256 Credential=")
+                || !authorization.contains("/kms/aws4_request")) {
+            return new String[] {"400", "{\"__type\":\"MissingAuthenticationTokenException\","
+                    + "\"message\":\"no SigV4 signature for kms\"}"};
+        }
+        if (!field(body, "KeyId", "").equals(keyName)) {
+            return new String[] {"400", "{\"__type\":\"NotFoundException\",\"message\":"
+                    + "\"Key '" + json(field(body, "KeyId", "")) + "' does not exist\"}"};
+        }
+        Path key = keyFile();
+        String spec = switch (type) {
+            case P256 -> "ECC_NIST_P256";
+            case P384 -> "ECC_NIST_P384";
+            case RSA2048 -> "RSA_2048";
+        };
+        if (target.equals("TrentService.GetPublicKey")) {
+            return new String[] {"200", "{\"KeyId\":\"" + keyName + "\",\"KeySpec\":\""
+                    + spec + "\",\"KeyUsage\":\"SIGN_VERIFY\",\"PublicKey\":\""
+                    + Base64.getEncoder().encodeToString(publicDer(key)) // seclume-allow: a public key
+                    + "\"}"};
+        }
+        if (!target.equals("TrentService.Sign")) {
+            return new String[] {"400", "{\"__type\":\"UnknownOperationException\"}"};
+        }
+        if (!field(body, "MessageType", "RAW").equals("DIGEST")) {
+            return new String[] {"400", "{\"__type\":\"ValidationException\",\"message\":"
+                    + "\"this fake signs digests\"}"};
+        }
+        String algorithm = field(body, "SigningAlgorithm", "");
+        String digest = "sha" + algorithm.substring(algorithm.lastIndexOf('_') + 1);
+        boolean allowed = switch (type) {
+            case P256 -> algorithm.equals("ECDSA_SHA_256");
+            case P384 -> algorithm.equals("ECDSA_SHA_384");
+            case RSA2048 -> algorithm.startsWith("RSASSA_");
+        };
+        if (!allowed) {
+            return new String[] {"400", "{\"__type\":\"InvalidKeyUsageException\","
+                    + "\"message\":\"" + algorithm + " is not valid for " + spec + "\"}"};
+        }
+        byte[] hash = Base64.getDecoder().decode(field(body, "Message", "")); // seclume-allow: a public hash
+        byte[] signature = sign(key, digest, hash, algorithm.startsWith("RSASSA_PSS"));
+        return new String[] {"200", "{\"KeyId\":\"" + keyName + "\",\"Signature\":\""
+                + Base64.getEncoder().encodeToString(signature) // seclume-allow: a fake signature
+                + "\",\"SigningAlgorithm\":\"" + algorithm + "\"}"};
+    }
+
+    private String gcpAlgorithm() {
+        return switch (type) {
+            case P256 -> "EC_SIGN_P256_SHA256";
+            case P384 -> "EC_SIGN_P384_SHA384";
+            case RSA2048 -> "RSA_SIGN_PSS_2048_SHA256";
+        };
+    }
+
+    private String[] gcp(String method, Matcher name, boolean signing, String authorization,
+            String body) throws IOException {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return new String[] {"401", "{\"error\":{\"code\":401,\"message\":"
+                    + "\"Request is missing required authentication credential.\"}}"};
+        }
+        int version = number(name.group(2));
+        if (!name.group(1).equals(keyName) || version < 1 || version > versions.size()) {
+            return new String[] {"404", "{\"error\":{\"code\":404,\"message\":"
+                    + "\"CryptoKeyVersion not found.\"}}"};
+        }
+        Path key = versions.get(version - 1);
+        if (!signing && method.equals("GET")) {
+            return new String[] {"200", "{\"pem\":\"" + json(publicPem(key))
+                    + "\",\"algorithm\":\"" + gcpAlgorithm() + "\",\"name\":\""
+                    + gcpKeyName(version) + "\"}"};
+        }
+        String algorithm = gcpAlgorithm();
+        String digest = algorithm.substring(algorithm.lastIndexOf('_') + 1)
+                .toLowerCase(Locale.ROOT);
+        Matcher hash = Pattern.compile("\"" + digest + "\"\\s*:\\s*\"([^\"]*)\"")
+                .matcher(body);
+        if (!method.equals("POST") || !hash.find()) {
+            return new String[] {"400", "{\"error\":{\"code\":400,\"message\":"
+                    + "\"Digest type must match the key's algorithm " + algorithm + ".\"}}"};
+        }
+        byte[] signature = sign(key, digest, Base64.getDecoder().decode(hash.group(1)), // seclume-allow: a public hash
+                type.rsa());
+        return new String[] {"200", "{\"signature\":\""
+                + Base64.getEncoder().encodeToString(signature) // seclume-allow: a fake signature
+                + "\",\"name\":\"" + gcpKeyName(version) + "\"}"};
+    }
+
+    private String[] azure(String method, Matcher key, boolean signing, String authorization,
+            String body) throws IOException {
+        if (authorization == null || !authorization.startsWith("Bearer ")) {
+            return new String[] {"401", "{\"error\":{\"code\":\"Unauthorized\","
+                    + "\"message\":\"AKV10000: Request is missing a Bearer token.\"}}"};
+        }
+        String version = key.group(2);
+        int index = version == null ? versions.size() : version.startsWith("ver")
+                ? number(version.substring(3)) : 0;
+        if (!key.group(1).equals(keyName) || index < 1 || index > versions.size()) {
+            return new String[] {"404", "{\"error\":{\"code\":\"KeyNotFound\","
+                    + "\"message\":\"A key with (name/id) " + key.group(1) + " was not found "
+                    + "in this key vault.\"}}"};
+        }
+        Path file = versions.get(index - 1);
+        if (!signing && method.equals("GET")) {
+            java.security.PublicKey publicKey;
+            try {
+                publicKey = java.security.KeyFactory.getInstance(type.rsa() ? "RSA" : "EC")
+                        .generatePublic(new java.security.spec.X509EncodedKeySpec(
+                                publicDer(file)));
+            } catch (java.security.GeneralSecurityException e) {
+                throw new IOException("the fake's own public key could not be read", e);
+            }
+            StringBuilder jwk = new StringBuilder("{\"kid\":\"" + address() + "/keys/"
+                    + keyName + "/ver" + index + "\"");
+            if (publicKey instanceof java.security.interfaces.ECPublicKey ec) {
+                int size = type == KeyType.P384 ? 48 : 32;
+                jwk.append(",\"kty\":\"EC\",\"crv\":\"").append(type == KeyType.P384
+                        ? "P-384" : "P-256").append("\",\"x\":\"")
+                        .append(url(fixed(ec.getW().getAffineX().toByteArray(), size))) // seclume-allow: a public point
+                        .append("\",\"y\":\"")
+                        .append(url(fixed(ec.getW().getAffineY().toByteArray(), size))) // seclume-allow: a public point
+                        .append('"');
+            } else if (publicKey instanceof java.security.interfaces.RSAPublicKey rsa) {
+                jwk.append(",\"kty\":\"RSA\",\"n\":\"")
+                        .append(url(rsa.getModulus().toByteArray())) // seclume-allow: a public modulus
+                        .append("\",\"e\":\"")
+                        .append(url(rsa.getPublicExponent().toByteArray())) // seclume-allow: a public exponent
+                        .append('"');
+            }
+            return new String[] {"200", "{\"key\":" + jwk + "}}"};
+        }
+        String algorithm = field(body, "alg", "");
+        String digest = "sha" + algorithm.substring(2);
+        boolean allowed = switch (type) {
+            case P256 -> algorithm.equals("ES256");
+            case P384 -> algorithm.equals("ES384");
+            case RSA2048 -> algorithm.startsWith("PS") || algorithm.startsWith("RS");
+        };
+        if (!allowed) {
+            return new String[] {"400", "{\"error\":{\"code\":\"BadParameter\","
+                    + "\"message\":\"" + algorithm + " does not fit the key\"}}"};
+        }
+        byte[] signature = sign(file, digest,
+                Base64.getUrlDecoder().decode(field(body, "value", "")), // seclume-allow: a public hash
+                algorithm.startsWith("PS"));
+        if (!type.rsa()) {
+            signature = raw(signature, type == KeyType.P384 ? 48 : 32);
+        }
+        return new String[] {"200", "{\"kid\":\"" + address() + "/keys/" + keyName + "/ver"
+                + index + "\",\"value\":\"" + url(signature) + "\"}"};
+    }
+
+    /** A version number from a path, 0 for one that is none - a version that does not exist. */
+    private static int number(String text) {
+        try {
+            return Integer.parseInt(text);
+        } catch (NumberFormatException notANumber) {
+            return 0;
+        }
+    }
+
+    private static String url(byte[] bytes) {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes); // seclume-allow: public data
+    }
+
+    /** A big-endian number in exactly {@code size} bytes. */
+    private static byte[] fixed(byte[] number, int size) {
+        byte[] out = new byte[size];
+        int from = Math.max(0, number.length - size);
+        System.arraycopy(number, from, out, size - (number.length - from), number.length - from);
+        return out;
+    }
+
+    /** A DER ECDSA signature as r and s of {@code size} bytes each, as Key Vault answers. */
+    private static byte[] raw(byte[] der, int size) throws IOException {
+        int at = 2 + ((der[1] & 0x80) != 0 ? (der[1] & 0x7f) : 0);
+        byte[] out = new byte[2 * size];
+        for (int part = 0; part < 2; part++) {
+            if (der[at] != 0x02) {
+                throw new IOException("not a DER ECDSA signature");
+            }
+            int length = der[at + 1] & 0xff;
+            byte[] value = java.util.Arrays.copyOfRange(der, at + 2, at + 2 + length);
+            System.arraycopy(fixed(value, size), 0, out, part * size, size);
+            at += 2 + length;
+        }
+        return out;
+    }
+
+    private byte[] publicDer(Path key) throws IOException {
+        Path out = directory.resolve(key.getFileName() + ".pub.der");
+        if (!Files.exists(out)) {
+            openssl("pkey", "-in", key.toString(), "-pubout", "-outform", "DER", "-out",
+                    out.toString());
+        }
+        return Files.readAllBytes(out); // seclume-allow: a public key
     }
 
     /** A JSON field's value, a string or a number, from a flat request body. */
