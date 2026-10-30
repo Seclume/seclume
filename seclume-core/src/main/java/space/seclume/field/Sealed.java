@@ -15,12 +15,13 @@ import java.util.Arrays;
  * <pre>
  * &#64;Entity
  * class Tenant {
- *     &#64;Column(length = 300) Sealed apiToken;     // mapped by seclume-jpa's SealedConverter
+ *     &#64;Convert(converter = SealedConverter.class)   // seclume-jpa
+ *     &#64;Column(length = 300) Sealed apiToken;
  * }
  *
  * tenant.apiToken = token.seal(issued.secret());
  * ...
- * try (SecretScope value = SecretScope.allocate(token.plaintextLength(tenant.apiToken))) {
+ * try (SecretScope value = SecretScope.allocate(tenant.apiToken.plaintextLength())) {
  *     value.length(token.open(tenant.apiToken, value.segment()));
  * }
  * </pre>

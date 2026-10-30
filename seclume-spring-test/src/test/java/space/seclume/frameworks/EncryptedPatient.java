@@ -11,6 +11,7 @@ import space.seclume.field.EncryptedColumn.Mode;
 import space.seclume.field.Sealed;
 import space.seclume.jpa.EncryptedBytesConverter;
 import space.seclume.jpa.EncryptedStringConverter;
+import space.seclume.jpa.SealedConverter;
 
 /**
  * An entity with every kind of encrypted attribute: a randomized name, a
@@ -53,6 +54,7 @@ public class EncryptedPatient {
     @Column(length = 100, unique = true)
     private String ssn;
 
+    @Convert(converter = SealedConverter.class)
     @Column(name = "api_token", length = 300)
     private Sealed apiToken;
 

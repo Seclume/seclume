@@ -182,6 +182,7 @@ class Patient {
     @Column(length = 100, unique = true)
     String ssn;                      // encrypted in the database, a String in the entity
 
+    @Convert(converter = SealedConverter.class)
     @Column(length = 300)
     Sealed apiToken;                 // ciphertext in the entity too; opened into native memory
 }
@@ -196,8 +197,9 @@ em.createQuery("from Patient where ssn = :ssn", Patient.class)
   value, or one handed in by a container that injects converters. The attribute is a `String`
   or `byte[]` in the entity, so it is on the heap like any other: this keeps it from the
   database, not from a heap dump.
-- **`Sealed`** with **`SealedConverter`** (applied by itself; Hibernate registers it through
-  seclume-jpa's `TypeContributor`, other providers need it listed): for secrets the application
+- **`Sealed`** with **`SealedConverter`** (named with `@Convert`, or listed with the entities -
+  `@EntityScan(basePackageClasses = {App.class, SealedConverter.class})` - and then applied by
+  itself): for secrets the application
   only passes on - a token, a TOTP seed. The entity holds the ciphertext; `column.seal(...)`
   makes one from native memory and `column.open(sealed, target)` writes the plaintext into
   native memory. Nothing on the heap is ever the plaintext.

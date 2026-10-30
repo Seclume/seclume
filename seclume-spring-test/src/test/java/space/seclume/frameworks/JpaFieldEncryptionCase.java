@@ -55,6 +55,7 @@ import space.seclume.tck.HeapDumpScanner;
 @Isolated
 abstract class JpaFieldEncryptionCase {
 
+    private static final Random RANDOM = new Random();
     private static final String TOKEN = "ghp_zlFieldToken0123456789abcdefABCDEF";
     private static final String NAME = "Zl-Patient-Name-7e41c9a2";
 
@@ -73,8 +74,6 @@ abstract class JpaFieldEncryptionCase {
 
     static EntityManagerFactory factory(Object connection, String action) {
         PersistenceConfiguration configuration = new PersistenceConfiguration("zl-field")
-                // SealedConverter is not listed: seclume-jpa's SealedTypeContributor
-                // registers it with Hibernate, which this run proves.
                 .managedClass(EncryptedPatient.class)
                 .property(PersistenceConfiguration.SCHEMAGEN_DATABASE_ACTION, action);
         if (connection instanceof DataSource source) {
@@ -88,7 +87,7 @@ abstract class JpaFieldEncryptionCase {
     @BeforeEach
     void keysAndASchema() throws Exception {
         byte[] key = new byte[32];
-        new Random().nextBytes(key);
+        RANDOM.nextBytes(key);
         keyFile = Files.writeString(directory.resolve("field-key"),
                 Base64.getEncoder().encodeToString(key));
         keys = FieldKeys.builder().key(1, new FileSecretProvider(keyFile, 128)).build();

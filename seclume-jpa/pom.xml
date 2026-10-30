@@ -21,7 +21,6 @@
 
   <properties>
     <jakarta.persistence.version>3.2.0</jakarta.persistence.version>
-    <hibernate.version>7.4.5.Final</hibernate.version>
   </properties>
 
   <dependencies>
@@ -35,13 +34,6 @@
       <groupId>jakarta.persistence</groupId>
       <artifactId>jakarta.persistence-api</artifactId>
       <version>${jakarta.persistence.version}</version>
-      <scope>provided</scope>
-    </dependency>
-    <!-- Only SealedTypeContributor, which Hibernate alone loads. -->
-    <dependency>
-      <groupId>org.hibernate.orm</groupId>
-      <artifactId>hibernate-core</artifactId>
-      <version>${hibernate.version}</version>
       <scope>provided</scope>
     </dependency>
     <dependency>

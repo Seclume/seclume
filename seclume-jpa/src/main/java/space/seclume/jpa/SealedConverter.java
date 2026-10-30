@@ -6,13 +6,13 @@ import jakarta.persistence.Converter;
 import space.seclume.field.Sealed;
 
 /**
- * Every {@link Sealed} attribute, as the binary value it is: applied by
- * itself ({@code autoApply}), and needing no key - a sealed value is
- * ciphertext in the entity, the column only stores it.
+ * A {@link Sealed} attribute, as the binary value it is, needing no key - a
+ * sealed value is ciphertext in the entity, the column only stores it.
  *
  * <pre>
  * &#64;Entity
  * class Tenant {
+ *     &#64;Convert(converter = SealedConverter.class)
  *     &#64;Column(length = 300)
  *     Sealed apiToken;
  * }
@@ -24,9 +24,12 @@ import space.seclume.field.Sealed;
  * the entity, never on the heap. A deterministic column's sealed values are
  * searched with {@code where t.apiToken = :sealed}.
  *
- * <p>Persistence providers find it by scanning the archive it is in; where they
- * do not, list it with the entities ({@code managedClass}, or
- * {@code <class>} in {@code persistence.xml}).
+ * <p>Name it on the attribute, as above. It is also {@code autoApply}, for an
+ * application that lists it with its entities ({@code managedClass},
+ * {@code <class>} in {@code persistence.xml}, or Spring Boot's
+ * {@code @EntityScan(basePackageClasses = {App.class, SealedConverter.class})});
+ * then a {@code Sealed} attribute needs no {@code @Convert}. A persistence
+ * provider does not look into this jar by itself.
  */
 @Converter(autoApply = true)
 public class SealedConverter implements AttributeConverter<Sealed, byte[]> {

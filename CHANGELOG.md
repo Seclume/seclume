@@ -11,7 +11,7 @@ All notable changes to seclume are recorded here. Versions follow
   deterministic attribute work, because the parameter is converted like the attribute.
   `Sealed` (seclume-core) is an attribute type that stays ciphertext in the entity:
   `column.seal(...)` from native memory, `column.open(sealed, target)` into it, and
-  `SealedConverter` maps it, registered with Hibernate by a `TypeContributor`. Converters take
+  `SealedConverter` maps it (`@Convert`, or `autoApply` when listed with the entities). Converters take
   the ring `FieldKeys.install` made available, at their first value.
 - **The key ring from `application.properties`**: `seclume.field-encryption.keys.<n>.*` - a
   provider's settings under each key's number, or one `uri` - and
@@ -25,8 +25,8 @@ All notable changes to seclume are recorded here. Versions follow
   schema, ciphertext-only storage, a JPQL query and unique constraint on a deterministic
   attribute, `in`, NULLs, an update, a `Sealed` token as a query parameter and a heap dump in
   which the sealed token and the key are not and the `String` attribute is
-  (`JpaFieldEncryptionCase`, required by the framework gate); the converters and the
-  contributor alone (`ConvertersTest`, `SealedTypeContributorTest`); the starter's ring, its
+  (`JpaFieldEncryptionCase`, required by the framework gate); the converters alone
+  (`ConvertersTest`); the starter's ring, its
   installation, wiping and every misconfiguration (`FieldEncryptionAutoConfigurationTest`);
   the three services against stand-ins (`KmsDecryptSecretProviderTest`).
 
