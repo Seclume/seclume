@@ -19,7 +19,7 @@
     simple bind from native memory - JNDI only ever holds a placeholder.</description>
 
   <properties>
-    <spring.boot.version>4.1.1</spring.boot.version>
+    <spring.boot.version>4.1.2</spring.boot.version>
   </properties>
 
   <dependencyManagement>

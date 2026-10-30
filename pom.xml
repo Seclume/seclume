@@ -127,7 +127,7 @@
       <dependency>
         <groupId>at.yawk.lz4</groupId>
         <artifactId>lz4-java</artifactId>
-        <version>1.12.0</version>
+        <version>1.12.1</version>
       </dependency>
       <!-- Pinned for CVE-2026-93451 (buffer overflow on malformed input) and
            CVE-2026-108106 (unbounded allocation while decompressing), fixed
@@ -202,7 +202,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>3.5.6</version>
+          <version>3.6.1</version>
           <configuration>
             <!-- Tests run on the class path; the modules are still real
                  JPMS modules for whoever depends on them. -->

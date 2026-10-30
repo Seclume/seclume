@@ -20,7 +20,7 @@
     RestClient and RestTemplate.</description>
 
   <properties>
-    <spring.version>7.0.9</spring.version>
+    <spring.version>7.0.10</spring.version>
   </properties>
 
   <dependencies>
@@ -54,7 +54,7 @@
     <dependency>
       <groupId>com.squareup.okhttp3</groupId>
       <artifactId>okhttp-jvm</artifactId>
-      <version>5.5.0</version>
+      <version>5.5.1</version>
       <scope>test</scope>
     </dependency>
     <dependency>
