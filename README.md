@@ -205,10 +205,10 @@ Everything below works on all four databases unless the row says otherwise.
 
 | Area | What | More |
 |---|---|---|
-| **Secrets** | 18 providers plus `none` and `callback`: files, Windows DPAPI/Credential Manager, the Linux and macOS keyrings, Vault, AWS/Azure/GCP vaults, RDS IAM, workload identity (VMs, App Service, Arc, Kubernetes, GCP, SPIFFE JWT-SVIDs) | [PROVIDERS.md](PROVIDERS.md) |
+| **Secrets** | 19 providers plus `none` and `callback`: files, Windows DPAPI/Credential Manager, the Linux and macOS keyrings, Vault, AWS/Azure/GCP vaults, RDS IAM, workload identity (VMs, App Service, Arc, Kubernetes, GCP, SPIFFE JWT-SVIDs) | [PROVIDERS.md](PROVIDERS.md) |
 | | Dynamic credentials: the driver logs in as the user Vault created, the lease is renewed and revoked at the end; the pool rotates connections before it runs out, without emptying | [PROVIDERS.md](PROVIDERS.md#what-expires-buys) |
 | | Secret columns read and bound off the heap (`Sensitive`, `SensitiveParameters`) | [FEATURES.md](FEATURES.md#secrets-in-columns-not-only-in-the-login) |
-| | Field encryption: columns encrypted in the application with AES-256-GCM-SIV, randomized or searchable, keys off the heap and best opened by Vault transit; the same format on every JDBC driver | [ENCRYPTION.md](ENCRYPTION.md) |
+| | Field encryption: columns encrypted in the application with AES-256-GCM-SIV, randomized or searchable, keys off the heap and best opened by Vault transit or a cloud KMS; the same format on every JDBC driver; JPA converters and a `Sealed` type (`seclume-jpa`), the key ring from `application.properties` | [ENCRYPTION.md](ENCRYPTION.md) |
 | **TLS** | `verify-full`, a per-connection CA file (`tlsRootCert`) or a key pin (`tlsPin`) | [TLS.md](TLS.md) |
 | | Own TLS 1.3 stack: traffic secrets never become Java objects; post-quantum X25519MLKEM768 with OpenSSL 3.5 or Windows CNG | [TLS.md](TLS.md#which-tls-carries-it-a-separate-question) |
 | | Client certificates with the key off the heap, in the Windows store or in a TPM | [TLS.md](TLS.md#mutual-tls-with-the-client-key-off-the-heap-too) |

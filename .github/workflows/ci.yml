@@ -490,7 +490,7 @@ jobs:
           echo "SOFTHSM2_CONF=$RUNNER_TEMP/softhsm/softhsm2.conf" >> "$GITHUB_ENV"
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-jpa,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # Every test that carries a security claim ran and passed - none
@@ -541,7 +541,7 @@ jobs:
       - name: The security tests
         run: |
           tests=$("$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --tests)
-          ./mvnw -B -pl seclume-core,seclume-tck,seclume-heapdump,seclume-heapcheck -am test \
+          ./mvnw -B -pl seclume-core,seclume-tck,seclume-heapdump,seclume-heapcheck,seclume-jpa -am test \
             -Dtest="$tests" -Dsurefire.failIfNoSpecifiedTests=false
       - name: Security gate
         if: success() || failure()
@@ -1044,7 +1044,7 @@ jobs:
           rm -f .local-pgtls-password
           docker rm -f pgtls || true
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Postgres
@@ -1205,7 +1205,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py MySql
@@ -1273,7 +1273,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group sqlserver --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py SqlServer
@@ -1343,7 +1343,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Oracle

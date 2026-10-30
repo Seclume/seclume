@@ -101,6 +101,7 @@
     <module>seclume-spring-test</module>
     <module>seclume-heapdump</module>
     <module>seclume-logging</module>
+    <module>seclume-jpa</module>
     <module>seclume-heapcheck</module>
     <module>seclume-admission</module>
     <module>seclume-diff</module>

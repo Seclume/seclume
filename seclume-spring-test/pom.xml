@@ -142,6 +142,13 @@
       <version>2.0.1</version>
       <scope>test</scope>
     </dependency>
+    <!-- Field encryption's JPA converters, in Hibernate on the four databases. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-jpa</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
     <!-- Only for TestHosts: where the test databases are stands in one
          place and not in every test class. -->
     <dependency>

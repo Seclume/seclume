@@ -338,6 +338,73 @@ class FieldEncryptionTest {
         }
     }
 
+    // ----------------------------------------------------------------- sealed
+
+    @Test
+    void aSealedValueOpensIntoNativeMemoryAndSaysNothingAboutItself() {
+        try (FieldKeys keys = ring(3, KEY);
+             SecretScope out = SecretScope.allocate(32)) {
+            EncryptedColumn token = keys.column("t.token", Mode.RANDOMIZED);
+            Sealed sealed = token.seal(text("ghp_secret"), bytes("row-1"));
+            assertEquals(10, sealed.plaintextLength());
+            assertEquals(3, sealed.keyId());
+            assertFalse(sealed.deterministic());
+            assertEquals("Sealed[10 bytes, key 3]", sealed.toString());
+            assertEquals(10, token.open(sealed, bytes("row-1"), out.segment()));
+            assertThrows(FieldEncryptionException.class,
+                    () -> token.open(sealed, out.segment()), "without its context");
+            assertThrows(IllegalArgumentException.class, () -> token.open(null, out.segment()));
+            assertEquals(null, token.seal(null));
+            byte[] copy = sealed.ciphertext();
+            copy[10] ^= 1;
+            assertArrayEquals(sealed.ciphertext(), Sealed.of(sealed.ciphertext()).ciphertext(),
+                    "a sealed value changed with the copy handed out");
+            assertNotEquals(sealed, Sealed.of(copy));
+        }
+    }
+
+    @Test
+    void deterministicSealedValuesAreEqualForEqualPlaintexts() {
+        try (FieldKeys keys = FieldKeys.builder().key(1, provider(KEY))
+                .key(2, provider(new byte[32])).primary(2).build()) {
+            EncryptedColumn ssn = keys.column("t.ssn", Mode.DETERMINISTIC);
+            assertEquals(ssn.seal(text("1")), ssn.seal(text("1")));
+            assertEquals(ssn.seal(text("1")).hashCode(), ssn.seal(text("1")).hashCode());
+            assertNotEquals(ssn.seal(text("1")), ssn.seal(text("2")));
+            assertTrue(ssn.seal(text("1")).deterministic());
+            List<Sealed> terms = ssn.searchSealed(text("1"));
+            assertEquals(List.of(2, 1), terms.stream().map(Sealed::keyId).toList());
+        }
+    }
+
+    @Test
+    void whatIsNotASealedValueIsRefused() {
+        assertEquals(null, Sealed.of(null));
+        assertThrows(FieldEncryptionException.class, () -> Sealed.of(new byte[0]));
+        assertThrows(FieldEncryptionException.class, () -> Sealed.of(new byte[33]));
+        byte[] wrongVersion = new byte[40];
+        wrongVersion[0] = 2;
+        assertThrows(FieldEncryptionException.class, () -> Sealed.of(wrongVersion));
+    }
+
+    @Test
+    void theInstalledRingIsTheOneInstalledUntilItCloses() {
+        assertThrows(IllegalStateException.class, FieldKeys::installed);
+        FieldKeys keys = ring(1, KEY);
+        try {
+            FieldKeys.install(keys);
+            assertSame(keys, FieldKeys.installed());
+            FieldKeys.install(null);
+            assertThrows(IllegalStateException.class, FieldKeys::installed);
+            FieldKeys.install(keys);
+        } finally {
+            keys.close();
+        }
+        assertThrows(IllegalStateException.class, FieldKeys::installed,
+                "a closed ring stayed installed");
+        assertThrows(IllegalStateException.class, () -> FieldKeys.install(keys));
+    }
+
     // ---------------------------------------------------------------- helpers
 
     static FieldKeys ring(int id, byte[] key) {

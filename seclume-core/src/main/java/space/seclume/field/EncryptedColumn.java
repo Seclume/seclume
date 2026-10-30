@@ -293,6 +293,48 @@ public final class EncryptedColumn {
         }
     }
 
+    // ----------------------------------------------------------------- sealed
+
+    /** {@link #encrypt(MemorySegment)} as a {@link Sealed} value; {@code null} for {@code null}. */
+    public Sealed seal(MemorySegment plaintext) {
+        return plaintext == null ? null : Sealed.of(encrypt(plaintext));
+    }
+
+    /** {@link #encrypt(MemorySegment, byte[])} as a {@link Sealed} value. */
+    public Sealed seal(MemorySegment plaintext, byte[] context) {
+        return plaintext == null ? null : Sealed.of(encrypt(plaintext, context));
+    }
+
+    /**
+     * Opens a sealed value into native memory the caller owns.
+     *
+     * @return the length of the plaintext
+     * @throws FieldEncryptionException if it is not this column's, or does not authenticate
+     */
+    public int open(Sealed sealed, MemorySegment target) {
+        return open(sealed, NO_CONTEXT, target);
+    }
+
+    /** As {@link #open(Sealed, MemorySegment)}, bound to {@code context}. */
+    public int open(Sealed sealed, byte[] context, MemorySegment target) {
+        if (sealed == null) {
+            throw new IllegalArgumentException("nothing to open: a NULL is not sealed");
+        }
+        return decrypt(sealed.bytes(), context, target);
+    }
+
+    /**
+     * {@link #searchTerms} as sealed values: the parameter of
+     * {@code where e.ssn in :terms} while a rotation is under way.
+     */
+    public List<Sealed> searchSealed(MemorySegment plaintext) {
+        List<Sealed> sealed = new ArrayList<>();
+        for (byte[] term : searchTerms(plaintext)) {
+            sealed.add(Sealed.of(term));
+        }
+        return sealed;
+    }
+
     // ------------------------------------------------------------------- JDBC
 
     /** Binds the encrypted value of native memory; {@code null} binds SQL NULL. */
