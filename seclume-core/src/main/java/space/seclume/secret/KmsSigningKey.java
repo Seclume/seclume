@@ -8,11 +8,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.PublicKey;
-import java.security.Signature;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
-import java.security.spec.MGF1ParameterSpec;
-import java.security.spec.PSSParameterSpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Locale;
 import java.util.Map;
@@ -152,24 +149,15 @@ public final class KmsSigningKey implements PrivateSigningKey {
         HashAlgorithm digest = bits == 384 ? HashAlgorithm.SHA_384 : HashAlgorithm.SHA_256;
         boolean pss = type.equals("RSA");
         byte[] signature = service.sign(digest, pss, hash(digest, message));
-        try {
-            Signature verify;
-            if (type.equals("EC")) {
-                verify = Signature.getInstance(bits == 384 ? "SHA384withECDSA"
-                        : "SHA256withECDSA");
-            } else {
-                verify = Signature.getInstance("RSASSA-PSS");
-                verify.setParameter(new PSSParameterSpec("SHA-256", "MGF1",
-                        MGF1ParameterSpec.SHA256, 32, 1));
-            }
-            verify.initVerify(parse(publicKey));
-            verify.update(message);
-            if (!verify.verify(signature)) {
-                throw new IOException("its signature does not verify with the public key it "
-                        + "gave - a different key or version answered");
-            }
-        } catch (GeneralSecurityException e) {
-            throw new IOException("its signature could not be checked: " + e.getMessage(), e);
+        // The verification TLS itself uses, on public data.
+        int scheme = type.equals("EC")
+                ? (bits == 384 ? space.seclume.tls.HandshakeSignature.ECDSA_SECP384R1_SHA384
+                        : space.seclume.tls.HandshakeSignature.ECDSA_SECP256R1_SHA256)
+                : space.seclume.tls.HandshakeSignature.RSA_PSS_RSAE_SHA256;
+        if (!space.seclume.tls.HandshakeSignature.verifyTls12(parse(publicKey), scheme, message,
+                signature)) {
+            throw new IOException("its signature does not verify with the public key it "
+                    + "gave - a different key or version answered");
         }
     }
 
