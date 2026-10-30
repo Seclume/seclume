@@ -280,6 +280,46 @@ class SslAutoConfigurationTest {
         }
     }
 
+    /**
+     * The same two numbers through OpenTelemetry, with
+     * {@code seclume.metrics.opentelemetry=true} and the application's
+     * {@code OpenTelemetry} bean - read at each collection, attributed by bundle.
+     */
+    @Test
+    void aReloadingBundleIsInTheOpenTelemetryGauges() throws Exception {
+        io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader reader =
+                io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader.create();
+        try (io.opentelemetry.sdk.OpenTelemetrySdk sdk = io.opentelemetry.sdk.OpenTelemetrySdk
+                .builder().setMeterProvider(io.opentelemetry.sdk.metrics.SdkMeterProvider.builder()
+                        .registerMetricReader(reader).build()).build()) {
+            Map<String, Object> properties = new HashMap<>();
+            properties.put("seclume.ssl.bundles.web.certificate", certificate.toString());
+            properties.put("seclume.ssl.bundles.web.key", "provider=file&path=" + key);
+            properties.put("seclume.ssl.bundles.web.reload-interval", "1m");
+            properties.put("seclume.metrics.opentelemetry", "true");
+            try (AnnotationConfigApplicationContext context =
+                         new AnnotationConfigApplicationContext()) {
+                context.getEnvironment().getPropertySources()
+                        .addFirst(new MapPropertySource("test", properties));
+                context.registerBean(io.opentelemetry.api.OpenTelemetry.class, () -> sdk);
+                context.register(SslAutoConfiguration.class, SeclumeSslAutoConfiguration.class);
+                context.refresh();
+                context.getBean(SslBundles.class).getBundle("web");
+                assertTrue(context.getBeansOfType(SeclumeCertificateOpenTelemetry.class)
+                        .size() == 1);
+                io.opentelemetry.sdk.metrics.data.MetricData expiry = reader.collectAllMetrics()
+                        .stream().filter(m -> m.getName().equals("seclume.certificate.expiry"))
+                        .findFirst().orElseThrow(() -> new AssertionError("no expiry gauge"));
+                io.opentelemetry.sdk.metrics.data.DoublePointData point = expiry
+                        .getDoubleGaugeData().getPoints().iterator().next();
+                assertEquals("web", point.getAttributes().get(
+                        io.opentelemetry.api.common.AttributeKey.stringKey("bundle")));
+                assertTrue(point.getValue() > 0 && point.getValue() <= 2 * 86400,
+                        "expiry " + point.getValue());
+            }
+        }
+    }
+
     @Test
     void aVaultBundleIsNamedAfterItselfUnlessItNamesItself() {
         SeclumeSslAutoConfiguration.BundleProperties properties =
