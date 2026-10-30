@@ -190,6 +190,22 @@ class WorkloadApiAnswerFuzzTest {
         jwt(nested.toByteArray());
     }
 
+    /**
+     * Found by the coverage-guided search in CI: a federated bundle whose
+     * trust domain is empty surfaced as an IllegalArgumentException.
+     */
+    @Test
+    void aFederatedBundleForNoTrustDomainIsABrokenAnswer() {
+        x509(java.util.Base64.getDecoder().decode(
+                "GhAYXQAaAAAKAAoAAAASAhoQGFkAABoAGgABAAASAAAACgAK"));
+        ByteArrayOutputStream entry = new ByteArrayOutputStream();
+        field(entry, 1, "spiffe://".getBytes(StandardCharsets.US_ASCII));
+        field(entry, 2, new byte[] {0x30, 0x00});
+        ByteArrayOutputStream response = new ByteArrayOutputStream();
+        field(response, 3, entry.toByteArray());
+        x509(response.toByteArray());
+    }
+
     @Test
     void mutatedAnswersEndInAnSvidOrAnIoException() {
         assumeTrue(PrivateSigningKey.available(), "OpenSSL 3 on 64-bit Linux or CNG on Windows");

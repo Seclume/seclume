@@ -768,8 +768,16 @@ public final class SpiffeWorkloadApi {
                     }
                 }
                 if (domain != null && certificates != null && certificates.length > 0) {
-                    federated.put(trustDomain(domain.startsWith("spiffe://") ? domain
-                            : "spiffe://" + domain), certificates(certificates));
+                    String trustDomain;
+                    try {
+                        trustDomain = trustDomain(domain.startsWith("spiffe://") ? domain
+                                : "spiffe://" + domain);
+                    } catch (IllegalArgumentException noDomain) {
+                        // The agent's answer, not the caller's setting: a broken answer.
+                        throw new IOException("the Workload API's answer has a federated "
+                                + "bundle for no trust domain", noDomain);
+                    }
+                    federated.put(trustDomain, certificates(certificates));
                 }
             } else {
                 response.skip();

@@ -66,7 +66,8 @@ All notable changes to seclume are recorded here. Versions follow
   hostile-input decoder on every pull request. Fixed on the way: a broken heap dump could make
   attribution allocate up to 2 GB from a record length; heapcheck's HPROF scanner ended broken
   dumps in unchecked exceptions; an unreadable SVID key from a SPIFFE agent surfaced as an
-  `IllegalArgumentException`; a protobuf length near 2^63 in its answer wrapped a bounds check. Each now ends in an `IOException`.
+  `IllegalArgumentException`; a protobuf length near 2^63 in its answer wrapped a bounds check, and a
+  federated bundle for no trust domain threw the wrong exception. Each now ends in an `IOException`.
 - **`kubectl seclume redact <pod> -o <file>`**: a heap dump of the pod's JVM for a memory leak or
   a support case, redacted inside the pod - named secrets, the shapes and their echoes, checked
   again there - and only the copy copied out, owner-only, never over a file; a copy that does

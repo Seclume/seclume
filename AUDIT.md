@@ -103,6 +103,12 @@ The fuzz targets use [Jazzer](https://github.com/CodeIntelligenceTesting/jazzer)
   the SPIFFE agent's answer wrapped the bounds check `at + length > end`, and reading it ended
   in an `IndexOutOfBoundsException`. The check is now `length > end - at`. The `parser-fuzz` job
   found this within its first minute.
+- **A federated bundle without a trust domain threw the wrong exception.** In an agent's
+  answer, a bundle whose trust domain was empty surfaced as an `IllegalArgumentException`
+  instead of a broken answer. Found by `parser-fuzz` on its second run.
+
+Both inputs are in the fuzz target's seed corpus (`WorkloadApiAnswerFuzzTestInputs`), so every
+build replays them.
 
 ## Open questions for a reviewer
 
