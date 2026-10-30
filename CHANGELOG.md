@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Keys that never leave a key management service** (`kms=vault-transit`, opt-in). A key in
+  Vault's or OpenBao's transit engine signs there: the message is hashed here, only the hash is
+  sent, and the process holds the public half and a token - nothing a dump could take for the
+  key. `KmsSigningKey` (core) is a `PrivateSigningKey`, so it works wherever one does:
+  `clientKey-kms=` for a database connection's client certificate on seclume's TLS, `kms=` in
+  place of `provider=` for seclume-keys' key managers and Spring SSL bundles,
+  `CertificationRequest` (now also P-384 with SHA-384 and RSA) and `VaultPkiIssuer.certify(key)`
+  for its certificate. Opening it reads the public half and verifies one signature; the key
+  version is pinned. Each signature is a `space.seclume.RemoteSignature` event. Tested against
+  `FakeKms` (seclume-tck) and, in CI, by a PostgreSQL login with a transit key certified by
+  Vault's and OpenBao's PKI.
 - **Certificate gauges through OpenTelemetry.** `seclume.certificate.expiry` (seconds) and
   `seclume.certificate.renewal.failing`, attributed `bundle`, as OpenTelemetry gauges -
   `SeclumeCertificateInstruments` in seclume-opentelemetry, and in the starter with

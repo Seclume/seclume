@@ -201,6 +201,20 @@ public final class VaultPkiIssuer implements AutoCloseable {
         }
     }
 
+    /**
+     * A certificate for a key the caller already has - one in a key management
+     * service ({@link KmsSigningKey}), say, which stays where it is: the
+     * request is signed by it there, and Vault returns the certificate and the
+     * issuing CA. The key stays the caller's; renewing is calling again.
+     */
+    public List<X509Certificate> certify(PrivateSigningKey key) throws IOException {
+        List<X509Certificate> chain = sign(CertificationRequest.pem(key, commonName));
+        if (!Arrays.equals(key.publicKey(), chain.get(0).getPublicKey().getEncoded())) {
+            throw new IOException("Vault signed a certificate for another key");
+        }
+        return chain;
+    }
+
     private List<X509Certificate> sign(String csr) throws IOException {
         Map<String, String> body = new LinkedHashMap<>();
         body.put("csr", csr);

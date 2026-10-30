@@ -65,7 +65,11 @@ public class SeclumeSslAutoConfiguration {
         /** The certificate chain, PEM, the own certificate first. */
         private String certificate;
 
-        /** The private key's secret provider, e.g. provider=file&amp;path=... */
+        /**
+         * The private key's secret provider, e.g. provider=file&amp;path=... - or
+         * a key that stays in a key management service,
+         * kms=vault-transit&amp;address=...&amp;key-name=...
+         */
         private String key;
 
         /**

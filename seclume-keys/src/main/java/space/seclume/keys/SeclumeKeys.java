@@ -26,6 +26,7 @@ import javax.net.ssl.ManagerFactoryParameters;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.X509ExtendedKeyManager;
 
+import space.seclume.secret.KmsSigningKey;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretProviders;
 
@@ -67,6 +68,17 @@ public final class SeclumeKeys {
      */
     public static PrivateKey privateKey(String keySpec) {
         SeclumeKeyProvider.install();
+        Map<String, String> options = options(keySpec);
+        if (options.containsKey(KmsSigningKey.KMS)) {
+            // A key in a key management service: it signs there, and what is
+            // here is its public half and a credential to ask with.
+            if (options.containsKey("provider")) {
+                throw new IllegalArgumentException("kms= and provider= both say where the key "
+                        + "is - in a key management service, or read from a provider; one of "
+                        + "them");
+            }
+            return OpenSslPrivateKey.of(NativeKey.of(KmsSigningKey.of(options)));
+        }
         try (SecretProvider secret = provider(keySpec)) {
             return OpenSslPrivateKey.of(NativeKey.read(secret));
         }
@@ -115,6 +127,11 @@ public final class SeclumeKeys {
      */
     public static X509ExtendedKeyManager keyManager(Path chain, String keySpec,
                                                     Duration interval) {
+        if (options(keySpec).containsKey(KmsSigningKey.KMS)) {
+            throw new IllegalArgumentException("a key in a key management service is not "
+                    + "reloaded from disk - leave out the reload interval; the key stays "
+                    + "where it is and so does its certificate");
+        }
         return new ReloadingKeyManager(chain, keySpec, provider(keySpec), interval);
     }
 

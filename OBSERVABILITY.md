@@ -29,6 +29,7 @@ java -XX:StartFlightRecording=filename=app.jfr,settings=profile ...
 | `space.seclume.Signature` | a signature made or checked with a key held off the heap: TLS server keys, SSH, Google service accounts, JWTs, webhook HMACs — and whether a check matched |
 | `space.seclume.SecretRotation` | a secret that changed at its source and was taken up without a restart, or refused |
 | `space.seclume.CertificateRenewal` | a certificate from Vault's PKI for a key made off the heap - issued, renewed, or a renewal that failed, and until when the one in use holds |
+| `space.seclume.RemoteSignature` | a signature made by a key in a key management service (`kms=`): which key, how long the round trip took - what each handshake now waits for - or why the service did not sign |
 | `space.seclume.HeapDumpRedaction` | a heap dump redacted - by `--redact`, `/actuator/heapdump` or a watched dump folder - with what was overwritten, or why it could not be made clean |
 
 **An open is three phases, and one number hides which of them is slow.** The connect is the

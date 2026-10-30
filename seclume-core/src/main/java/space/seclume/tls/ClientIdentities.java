@@ -205,6 +205,15 @@ public final class ClientIdentities {
             return null;
         }
         Map<String, String> key = nested(settings, KEY_PREFIX);
+        if (key.containsKey(space.seclume.secret.KmsSigningKey.KMS)) {
+            if (key.containsKey("provider")) {
+                throw new IllegalArgumentException(KEY_PREFIX + "kms and " + KEY_PREFIX
+                        + "provider both say where the key is - in a key management service, "
+                        + "or read from a provider; one of them");
+            }
+            return IDENTITIES.computeIfAbsent("kms " + cacheKey(certificate, key),
+                    ignored -> kmsIdentity(Path.of(certificate), key));
+        }
         if (key.isEmpty()) {
             throw new IllegalArgumentException(CERTIFICATE + " names a certificate but nothing "
                     + "says where its private key comes from - add " + KEY_PREFIX + "provider "
@@ -228,6 +237,38 @@ public final class ClientIdentities {
             // is taken up without a restart - see ReloadingClientIdentity.
             return new ReloadingClientIdentity(Path.of(certificate), secret);
         });
+    }
+
+    /**
+     * The certificate in {@code chain} and its key in a key management
+     * service, which signs each handshake there - checked to be the
+     * certificate's key before anything connects.
+     */
+    private static ClientIdentity kmsIdentity(Path chain, Map<String, String> key) {
+        java.util.List<java.security.cert.X509Certificate> certificates =
+                new java.util.ArrayList<>();
+        try {
+            java.security.cert.CertificateFactory factory =
+                    java.security.cert.CertificateFactory.getInstance("X.509");
+            for (byte[] der : EcClientIdentity.parseChain(
+                    java.nio.file.Files.readAllBytes(chain), chain)) { // seclume-allow: a certificate chain, public
+                certificates.add((java.security.cert.X509Certificate) factory.generateCertificate(
+                        new java.io.ByteArrayInputStream(der)));
+            }
+        } catch (java.io.IOException | java.security.GeneralSecurityException e) {
+            throw new IllegalArgumentException("the client certificate " + chain
+                    + " could not be read: " + e.getMessage(), e);
+        }
+        space.seclume.secret.KmsSigningKey remote = space.seclume.secret.KmsSigningKey.of(
+                new LinkedHashMap<>(key));
+        if (!java.util.Arrays.equals(remote.publicKey(),
+                certificates.get(0).getPublicKey().getEncoded())) {
+            String name = remote.name();
+            remote.close();
+            throw new IllegalArgumentException("the first certificate in " + chain + " is not "
+                    + "the key's - " + name + " has another public key");
+        }
+        return new RenewingClientIdentity.Generation(certificates, remote);
     }
 
     /** {@code clientCertStore}: LocalMachine, or CurrentUser - the default. */

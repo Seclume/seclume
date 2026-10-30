@@ -524,7 +524,7 @@ jobs:
         run: |
           bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/vault"
           ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
-            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest' \
+            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'Vault'
           ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
@@ -541,7 +541,7 @@ jobs:
           VAULT_IMAGE=quay.io/openbao/openbao:2.7.2 VAULT_CLI=bao \
             bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/openbao"
           ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
-            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest' \
+            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'OpenBao'
           ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \

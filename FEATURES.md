@@ -1269,6 +1269,45 @@ seclume.ssl.bundles.mesh.spiffe=socket=unix:///run/spire/agent.sock&peer-ids=spi
   rotation taken up, and a TLS 1.3 handshake of seclume's own whose server demands the
   certificate.
 
+**A key in Vault's transit engine, which never leaves it.** Every other key here is in the
+process - off the heap, in OpenSSL or CNG, but in its memory. `kms=` in place of `provider=`
+keeps it out altogether: the key lives in a key management service, and each signature is a
+hash sent there and a signature back. The process holds the public half and a token.
+
+```java
+X509ExtendedKeyManager web = SeclumeKeys.keyManager(Path.of("/etc/tls/web.crt"),
+        "kms=vault-transit&address=https://vault:8200&key-name=web-tls"
+        + "&auth-method=kubernetes&auth-role=web");
+KmsSigningKey key = KmsSigningKey.of(Map.of("kms", "vault-transit", ...));   // a PrivateSigningKey
+```
+
+```properties
+seclume.ssl.bundles.web.certificate=/etc/tls/web.crt
+seclume.ssl.bundles.web.key=kms=vault-transit&address=https://vault:8200&key-name=web-tls&auth-method=kubernetes&auth-role=web
+```
+
+- **Settings:** `address`, `key-name`, and optionally `transit-mount` (`transit`),
+  `key-version` (the latest when opened, then kept), `namespace`, `verify`,
+  `timeout-millis`; the Vault token as for `provider=vault`. The policy needs `read` on
+  `transit/keys/<name>` and `update` on `transit/sign/<name>/*`.
+- **Keys:** `ecdsa-p256`, `ecdsa-p384` and `rsa-2048/3072/4096`, signed as TLS asks -
+  ECDSA in DER, RSA-PSS with a salt as long as the hash, PKCS#1 v1.5.
+- **Checked when opened:** the public half is read and one signature verified with it, and a
+  certificate that is not the key's is refused - a wrong name, version or policy fails in the
+  configuration, not in front of a peer.
+- **Only the hash travels:** the message - a TLS transcript, a request - is hashed here; Vault
+  never sees what it signs.
+- **Cost:** one round trip per signature, one `space.seclume.RemoteSignature` event each. Fine
+  for long connections and pools; a server making many short ones waits for Vault each time.
+- **Where it goes:** JSSE key managers and Spring SSL bundles (Tomcat, Netty, gRPC, Kafka),
+  seclume's own JDBC TLS (`clientKey-kms=`), anything that takes a `PrivateSigningKey` - such as
+  `CertificationRequest`, so that `VaultPkiIssuer.certify(key)` gets the key its certificate
+  from Vault's PKI. Not with `reload-interval`: the key stays where it is.
+- **Tests:** against `FakeKms` (seclume-tck), a stand-in transit engine whose keys `openssl`
+  holds - P-256, P-384 and RSA, a JSSE server and seclume's own TLS client, a rotated key, the
+  failures - and in CI against real Vault and OpenBao: a transit key certified by the PKI
+  engine logs into PostgreSQL.
+
 **SSH and SFTP.** `seclume-ssh` gives Apache MINA SSHD, and Spring Integration's SFTP on top
 of it, such a key for public-key logins:
 
