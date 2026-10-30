@@ -1347,7 +1347,7 @@ jobs:
           set -e
           docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2026.1.2.0-b137 bin/yugabyted start --daemon=false --ysql_enable_auth=true
           pw="${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}"
-          for i in $(seq 1 40); do
+          for i in $(seq 1 60); do
             ip=$(docker exec yb hostname -i | tr -d '\r' | awk '{print $1}')
             if [ -n "$ip" ] && docker exec -e PGPASSWORD=yugabyte yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte -c "select 1" >/dev/null 2>&1; then
               docker exec -e PGPASSWORD=yugabyte yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte -c "create user seclume_test with password '$pw'" -c "create database seclume_test owner seclume_test"
@@ -1359,5 +1359,19 @@ jobs:
           exit 1
       - run: printf '%s' "${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-yb-password
       - run: ./mvnw -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Yugabyte' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.yb.host=127.0.0.1
+      # Why, on the pull request: the server's last words and the failed tests.
+      - if: failure()
+        run: |
+          text=$(docker logs yb 2>&1 | tail -30 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)
+          echo "::error title=yugabyted::$text"
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:600]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+          PY
       - if: always()
         run: rm -f .local-yb-password; docker rm -f yb || true
