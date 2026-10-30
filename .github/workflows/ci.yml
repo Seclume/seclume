@@ -330,6 +330,15 @@ jobs:
           assert 'seclume.space/injected' not in other['metadata'].get('annotations', {})
           print('the socket where asked, nothing elsewhere')
           PY
+      # Why, on the pull request: the webhook's and the pods' last words.
+      - if: failure()
+        run: |
+          say() { echo "::error title=$1::$(printf '%s' "$2" | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)"; }
+          say webhook "$(kubectl logs -n seclume-system -l app.kubernetes.io/name=seclume-admission --tail=30 2>&1; kubectl logs -n seclume-system -l app=seclume-admission --tail=30 2>&1)"
+          say pods "$(kubectl get pods -A -o wide 2>&1 | tail -20)"
+          say events "$(kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -20)"
+          say oom "$(kubectl -n shop logs oom --all-containers --tail=20 2>&1)"
+          say webhook-config "$(kubectl get mutatingwebhookconfiguration -o yaml 2>&1 | grep -v caBundle | tail -40)"
       - name: Remove the cluster
         if: always()
         run: kind delete cluster --name seclume || true
@@ -407,6 +416,15 @@ jobs:
             -f seclume-admission/ci/spiffe-pod.yaml > pod.json
           python3 -c "import json; p = json.load(open('pod.json')); \
             assert p['metadata']['annotations']['seclume.space/injected'] == 'spiffe', p"
+      # Why, on the pull request: the webhook's and the pods' last words.
+      - if: failure()
+        run: |
+          say() { echo "::error title=$1::$(printf '%s' "$2" | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)"; }
+          say webhook "$(kubectl logs -n seclume-system -l app.kubernetes.io/name=seclume-admission --tail=30 2>&1; kubectl logs -n seclume-system -l app=seclume-admission --tail=30 2>&1)"
+          say pods "$(kubectl get pods -A -o wide 2>&1 | tail -20)"
+          say events "$(kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -20)"
+          say oom "$(kubectl -n shop logs oom --all-containers --tail=20 2>&1)"
+          say webhook-config "$(kubectl get mutatingwebhookconfiguration -o yaml 2>&1 | grep -v caBundle | tail -40)"
       - name: Remove the cluster
         if: always()
         run: kind delete cluster --name seclume || true
