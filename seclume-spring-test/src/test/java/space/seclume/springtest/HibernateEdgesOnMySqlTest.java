@@ -17,6 +17,7 @@ class HibernateEdgesOnMySqlTest extends HibernateEdgesTest {
 
     @BeforeAll
     static void findTheServer() {
-        Servers.require(".local-mysql-password", space.seclume.tck.TestHosts.database(), 3307);
+        Servers.require(".local-mysql-password", space.seclume.tck.TestHosts.database(),
+                Integer.getInteger("seclume.mysql.port", 3307));
     }
 }

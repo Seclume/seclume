@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Tests that skipped in CI without anybody noticing now run.** Eighteen of the MySQL driver's
+  tests looked for the server on port 3307, a developer's second server, and skipped in the
+  mysql job, whose server is on 3306; they run there now. The Spring Data, Spring JDBC,
+  entity-shape and Hibernate-edge suites of seclume-spring-test - four databases each - ran in
+  no job at all; they run in the four database jobs. `require_servers.py` fails a database job
+  in which any test skipped because it did not find that job's own server or its password
+  file. The README's version table says what CI runs on every pull request.
+
 - **Field encryption in JPA entities** (`seclume-jpa`, new). `EncryptedStringConverter` and
   `EncryptedBytesConverter` - one small subclass per column, which names it and its mode -
   encrypt a `String` or `byte[]` attribute; JPQL `=`/`in` and derived queries on a
