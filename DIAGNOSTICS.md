@@ -248,6 +248,45 @@ that what was looked for is gone, not that nothing else is there; name what you 
 The redaction itself is in `seclume-heapdump`, a library without dependencies
 (`space.seclume.heapdump.Redactor`), together with the discovery and the object attribution.
 
+## Log lines: the application's secrets masked before they are written
+
+A password that reaches a log line is on the heap already; what is left to stop is the line
+reaching a file, a collector, a support ticket. `seclume-logging` looks for the application's
+own secrets in every message and stack trace and writes `[redacted:<label>]` instead:
+
+```xml
+<!-- logback-spring.xml -->
+<conversionRule conversionWord="msg"
+                converterClass="space.seclume.logging.logback.RedactingMessageConverter"/>
+<conversionRule conversionWord="xEx"
+                converterClass="space.seclume.logging.logback.RedactingThrowableConverter"/>
+```
+
+```properties
+seclume.logging.redact=true                   # with seclume-logging on the class path
+seclume.heapdump.secrets.api.provider=file    # a secret of the application's own, besides
+seclume.heapdump.secrets.api.path=/run/secrets/api-key   # every data source's password
+seclume.logging.refresh-interval=5m           # read again, so a rotated one is looked for
+```
+
+**To look for a secret, the masker does not keep it.** A filter configured with the password
+holds the password - a `String` on the heap for as long as the application runs. Here each
+secret is read once into locked native memory and kept as two numbers: a rolling fingerprint
+of its characters and an HMAC-SHA-256 tag, both keyed with 32 random bytes that never leave
+locked native memory. A heap dump of the process holds neither the secret nor a hash anybody
+could guess against; the tests prove the first with a heap dump. A log line is scanned with the
+fingerprint over every window as long as a secret, and a window that matches is confirmed by
+its tag.
+
+- **What is found:** the secret itself and its Base64, anywhere in the message or in an
+  exception's message and stack trace. Secrets shorter than six characters are not looked for:
+  they would mask ordinary words.
+- **Which secrets:** every data source's password and `seclume.heapdump.secrets.<label>.*` -
+  the same the heap dump redaction looks for. Read again once every bean is made, and then every
+  `seclume.logging.refresh-interval`.
+- **Other loggers:** `SecretMasker.maskInstalled(text)` is the whole of it - a Log4j2 rewrite
+  policy or a JUL formatter can call it; `new SecretMasker(providers)` works without Spring.
+
 ## Reports and baselines
 
 `.sarif` and `.sarif.json` select SARIF 2.1.0. Each leaked credential has one
