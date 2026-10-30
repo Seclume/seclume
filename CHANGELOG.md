@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Certificate gauges through OpenTelemetry.** `seclume.certificate.expiry` (seconds) and
+  `seclume.certificate.renewal.failing`, attributed `bundle`, as OpenTelemetry gauges -
+  `SeclumeCertificateInstruments` in seclume-opentelemetry, and in the starter with
+  `seclume.metrics.opentelemetry=true` for every SSL bundle seclume-keys keeps current (Vault
+  PKI, SPIFFE, reloading files) - the counterpart of the Micrometer meters of the same names.
 - **`kubectl seclume redact <pod> -o <file>`**: a heap dump of the pod's JVM for a memory leak or
   a support case, redacted inside the pod - named secrets, the shapes and their echoes, checked
   again there - and only the copy copied out, owner-only, never over a file; a copy that does

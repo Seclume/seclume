@@ -247,6 +247,29 @@ public class SeclumeSslAutoConfiguration {
         }
     }
 
+    /**
+     * The same two numbers as OpenTelemetry gauges, with
+     * {@code seclume.metrics.opentelemetry=true}, seclume-opentelemetry on the
+     * class path and an {@code OpenTelemetry} bean - looked up when the bean is
+     * made, so that the order of the auto-configurations does not matter.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = {"io.opentelemetry.api.OpenTelemetry",
+        "space.seclume.opentelemetry.SeclumeCertificateInstruments"})
+    @ConditionalOnProperty(name = "seclume.metrics.opentelemetry", havingValue = "true")
+    static class CertificateOpenTelemetry {
+
+        @Bean(destroyMethod = "close")
+        SeclumeCertificateOpenTelemetry seclumeCertificateOpenTelemetry(
+                org.springframework.beans.factory.ObjectProvider<
+                        io.opentelemetry.api.OpenTelemetry> openTelemetry,
+                Environment environment) {
+            io.opentelemetry.api.OpenTelemetry chosen = openTelemetry.getIfAvailable();
+            return new SeclumeCertificateOpenTelemetry(chosen != null ? chosen
+                    : io.opentelemetry.api.OpenTelemetry.noop(), managedNames(environment));
+        }
+    }
+
     private static TrustManagerFactory jvmTrust() {
         try {
             TrustManagerFactory factory = TrustManagerFactory.getInstance(

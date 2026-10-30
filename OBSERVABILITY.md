@@ -162,6 +162,8 @@ semantic conventions for connection pools, so a dashboard built for those reads 
 | `db.client.connection.timeouts` | counter | borrows that gave up waiting |
 | `db.client.connection.wait_time`, `.use_time`, `.create_time` | histogram (s) | getting a connection, holding it, opening one |
 | `seclume.pool.secret.rotations`, `seclume.pool.resets.refused` | counter | the two numbers only this pool has |
+| `seclume.certificate.expiry` | gauge (s) | seconds until a self-renewing certificate ends, attributed `bundle` - see below |
+| `seclume.certificate.renewal.failing` | gauge | 1 while that certificate's last renewal failed |
 
 Every instrument carries `db.client.connection.pool.name`. Like the starter's meters, nothing
 is measured until `start` is called: the stream is the application's decision.
@@ -247,6 +249,13 @@ endpoint:
 
 - `seclume.certificate.expiry`: seconds until the certificate in use ends;
 - `seclume.certificate.renewal.failing`: 1 while its last renewal failed.
+
+With `seclume.metrics.opentelemetry=true` and seclume-opentelemetry on the class path the same
+two are OpenTelemetry gauges, attributed `bundle`, through the application's `OpenTelemetry`
+bean - for an application that exports with OpenTelemetry alone. Without the starter,
+`SeclumeCertificateInstruments.observe(openTelemetry, names, reading)` does it for any
+certificate the application can name. A certificate that is not there yet is left out of a
+collection rather than reported as a number it does not have.
 
 Each renewal, and each failed one, is a `space.seclume.CertificateRenewal` event in the Flight
 Recorder.
