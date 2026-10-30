@@ -111,6 +111,48 @@ class WycheproofTest {
         }
     }
 
+    // ------------------------------------------------------------ AES-GCM-SIV
+
+    /** RFC 8452 has one nonce and one tag size; every vector is used. */
+    static Stream<Vector> aesGcmSivVectors() {
+        return Wycheproof.load("aes_gcm_siv_test.json").stream();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("aesGcmSivVectors")
+    void aesGcmSiv(Vector v) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment key = v.segment(arena, "key");
+            MemorySegment nonce = v.segment(arena, "iv");
+            MemorySegment aad = v.segment(arena, "aad");
+            byte[] msg = v.bytes("msg");
+            byte[] ct = v.bytes("ct");
+            byte[] sealed = concat(ct, v.bytes("tag"));
+            int keyLength = (int) key.byteSize();
+
+            if (v.result() == Result.VALID) {
+                MemorySegment in = segment(arena, msg);
+                MemorySegment out = arena.allocate(msg.length + AesGcmSiv.TAG);
+                AesGcmSiv.encrypt(key, 0, keyLength, nonce, 0, aad, 0, aad.byteSize(),
+                        in, 0, msg.length, out, 0);
+                assertArrayEquals(sealed, bytes(out), v + ": ciphertext and tag");
+            }
+
+            MemorySegment in = segment(arena, sealed);
+            MemorySegment out = arena.allocate(Math.max(ct.length, 1)).asSlice(0, ct.length);
+            boolean opened = AesGcmSiv.decrypt(key, 0, keyLength, nonce, 0, aad, 0,
+                    aad.byteSize(), in, 0, ct.length, out, 0);
+            if (v.result() == Result.INVALID) {
+                assertFalse(opened, v + ": a forged or altered message was accepted");
+                assertArrayEquals(new byte[ct.length], bytes(out),
+                        v + ": plaintext was left behind although the tag did not match");
+            } else {
+                assertTrue(opened, v + ": a genuine message was rejected");
+                assertArrayEquals(msg, bytes(out), v + ": plaintext");
+            }
+        }
+    }
+
     // ------------------------------------------------------------------- HMAC
 
     static Stream<Vector> hmacVectors() {
@@ -281,6 +323,9 @@ class WycheproofTest {
         assertEquals(316, Wycheproof.load("aes_gcm_test.json").size());
         assertEquals(197, aesGcmVectors().count(), "AES-GCM with a 96-bit nonce and 128-bit tag");
         assertEquals(133, aesGcmNativeVectors().count(), "AES-GCM with a 128- or 256-bit key");
+        assertEquals(202, aesGcmSivVectors().count(), "AES-GCM-SIV");
+        assertEquals(66, aesGcmSivVectors().filter(v -> v.result() == Result.INVALID).count(),
+                "AES-GCM-SIV cases that must be refused");
         assertCounts(hmacVectors().toList(), "HMAC");
         assertCounts(hkdfVectors().toList(), "HKDF");
         assertCounts(pbkdf2Vectors().toList(), "PBKDF2");

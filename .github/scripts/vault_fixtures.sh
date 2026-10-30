@@ -15,7 +15,9 @@
 # .local-vault-pki-ca.pem (the root of the PKI engine at pki/, whose role
 # "client" signs client certificates under seclume.test - and which
 # PostgreSQL trusts for orders.seclume.test's certificate login). The transit
-# engine holds pg-client, a P-256 key such a certificate can be made for. The
+# engine holds pg-client, a P-256 key such a certificate can be made for, and
+# field-data, whose wrapped data key is .local-vault-field-key and which
+# .local-vault-field-token may decrypt and nothing else. The
 # PostgreSQL password stays in the work directory, read by Vault from its file
 # and by nobody else.
 #
@@ -141,6 +143,16 @@ vault write pki/roles/client allowed_domains=seclume.test allow_subdomains=true 
 # signed in transit too.
 vault secrets enable transit >/dev/null
 vault write -f transit/keys/pg-client type=ecdsa-p256 >/dev/null
+# Field encryption's data key: made in transit and handed out only wrapped
+# (transit/datakey/wrapped), so that the configuration holds a ciphertext only
+# Vault can open - with a token that may do that and nothing else.
+vault write -f transit/keys/field-data type=aes256-gcm96 >/dev/null
+vault write -f -field=ciphertext transit/datakey/wrapped/field-data bits=256 \
+  > .local-vault-field-key
+vault policy write field-keys - >/dev/null <<'POLICY'
+path "transit/decrypt/field-data" { capabilities = ["update"] }
+POLICY
+vault token create -policy=field-keys -ttl=1h -field=token > .local-vault-field-token
 # And PostgreSQL trusts that root for client certificates: orders.seclume.test
 # logs in by its certificate alone (cert), before every other hba line.
 install -m 444 .local-vault-pki-ca.pem "$work/pki-ca.pem"
@@ -158,4 +170,4 @@ vault read -field=role_id auth/approle/role/app/role-id > .local-vault-role-id
 vault write -f -field=secret_id auth/approle/role/app/secret-id > .local-vault-secret-id
 cp "$work/ca.pem" .local-vault-pg-ca.pem
 echo "$vault_cli on 8210 (dev, TLS), database/creds/app for PostgreSQL 17 on 5440," \
-  "logins: approle, jwt; pki/sign/client; transit/keys/pg-client"
+  "logins: approle, jwt; pki/sign/client; transit/keys/pg-client, field-data"

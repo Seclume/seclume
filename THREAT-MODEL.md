@@ -12,6 +12,7 @@ reader deciding whether to rely on it needs both. The audit guide
 | **Credentials** | database passwords, API keys and tokens, Vault tokens, cloud keys, SASL secrets | locked native memory (`SecretScope`), read there by a secret provider; never a `String`, `char[]` or `byte[]` |
 | **Private keys** | TLS client and server keys, SSH keys, JWT signing keys, SPIFFE SVID keys | OpenSSL 3 or Windows CNG, imported from native memory; a key in a KMS never leaves it |
 | **Derived secrets** | SCRAM salted passwords, TLS traffic keys, session keys of Oracle's O5LOGON | native memory of the operation, zeroed when it ends |
+| **Column values** | national IDs, tokens, notes an application chooses to encrypt | ciphertext in the database ([field encryption](ENCRYPTION.md)); plaintext in native memory when read with `readInto` |
 | **Data in transit** | queries and results, secret manager answers | seclume's own TLS 1.3 (and 1.2 where a server needs it), or the platform's |
 
 ## Who attacks, and what seclume does about it
@@ -115,6 +116,24 @@ Heap dumps from a support case, Flight Recorder recordings, key files, configura
   - Releases and tags are signed (SECURITY.md) and carry a CycloneDX SBOM per module.
   - CI runs CodeQL, Semgrep, Trivy and OpenSSF Scorecard.
   - Actions and the webhook's base image are pinned by digest.
+
+### A8 - Somebody with the database, not the application
+
+A database administrator, a stolen backup, a replica handed to analytics, a log of statements,
+an SQL injection in another application on the same database that can read but not run code
+here.
+
+- **Defence:** columns the application encrypts with [field encryption](ENCRYPTION.md) are
+  AES-256-GCM-SIV ciphertext on the server. The keys are in the application's locked native
+  memory, best opened by Vault transit at start-up. Each column has its own derived key, and a
+  context can bind a value to its row, so a value moved between columns or rows does not
+  decrypt.
+- **Proof:** `LocalEncryptedColumnTest` on all four databases reads the stored bytes back and
+  finds no plaintext, and dumps the heap after a read. `FieldEncryptionPropertyTest` and
+  `EncryptedValueFuzzTest` cover altered and foreign values.
+- **Residual:** lengths, NULLs, and equality in deterministic columns are visible, and with few
+  distinct values equality is the values. An older value of the same row and context can be
+  put back (a replay). Columns the application does not encrypt are plaintext as before.
 
 ## Out of scope
 

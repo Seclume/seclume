@@ -610,6 +610,8 @@ jobs:
           - WorkloadApiAnswerFuzzTest#anX509SvidAnswerEndsInAnSvidOrAnIoException
           - WorkloadApiAnswerFuzzTest#aJwtSvidAnswerEndsInATokenOrAnIoException
           - KmsAnswerFuzzTest#aRawSignatureBecomesDerOrAnIoException
+          - EncryptedValueFuzzTest#anyStoredValueDecryptsOnlyIfItWasWritten
+          - EncryptedValueFuzzTest#aesGcmSivRoundTripsAndRefusesAnyChange
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -920,7 +922,7 @@ jobs:
         run: |
           bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/vault"
           ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
-            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest' \
+            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest,LocalVaultTransitFieldKeyTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'Vault'
           ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
@@ -937,7 +939,7 @@ jobs:
           VAULT_IMAGE=quay.io/openbao/openbao:2.7.2 VAULT_CLI=bao \
             bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/openbao"
           ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
-            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest' \
+            -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest,LocalVaultTransitFieldKeyTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'OpenBao'
           ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
@@ -1192,6 +1194,13 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
       - run: ./mvnw -B -pl seclume-mysql -am test
+      # The module's Local* tests default to port 3307, a developer's second
+      # server; this job's is on 3306. Field encryption's contract is in the
+      # gate, so it runs here against this job's server.
+      - name: Field encryption against this server
+        run: >-
+          ./mvnw -B -pl seclume-mysql -am test -Dtest=LocalEncryptedColumnTest
+          -Dseclume.mysql.port=3306 -Dsurefire.failIfNoSpecifiedTests=false
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64

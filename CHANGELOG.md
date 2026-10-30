@@ -5,6 +5,30 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Field encryption: columns the database cannot read** (`space.seclume.field`, in
+  seclume-core). `FieldKeys` holds a ring of 256-bit data keys in locked native memory, read
+  from any provider; `EncryptedColumn` encrypts a column's values in the application with
+  AES-256-GCM-SIV (RFC 8452) - randomized, or deterministic so that `where ssn = ?`, a unique
+  index and a join still work (`searchTerms`). Each column has its own key (HKDF over its name
+  and mode), a context can bind a value to its row, and rotation runs while the table is in
+  use (`needsReencryption`, `reencrypt`, the plaintext in native memory on the way). Values
+  are bound with `setBytes` and read with `getBytes`, so the format is the same on every JDBC
+  driver; `set`/`readInto` keep the plaintext off the heap, `setString`/`getString` are for
+  data that is a String anyway. `AesGcmSiv` is new in `space.seclume.crypto`, built on
+  seclume's constant-time AES and GHASH. See [ENCRYPTION.md](ENCRYPTION.md).
+- **`provider=vault-transit`**: a secret Vault's (or OpenBao's) transit engine encrypted -
+  field encryption's data key, made by `transit/datakey/wrapped` - decrypted there on every
+  read, with Vault's Base64 answer decoded off the heap. The ciphertext stands in the
+  configuration; the token needs `update` on `transit/decrypt/<key>` and nothing else.
+- **Tests for both**, in the release gate: all 202 Wycheproof AES-GCM-SIV vectors; the format
+  pinned against vectors from an independent Python implementation; thousands of random rings,
+  columns and values (`FieldEncryptionPropertyTest`); coverage-guided fuzzing of stored values
+  and of AES-GCM-SIV (`EncryptedValueFuzzTest`, in `parser-fuzz` and the nightly run); all four
+  databases with ciphertext-only storage, a unique index on a deterministic column, a rotation
+  in use, copied and tampered values refused and a heap dump without the value or the key
+  (`LocalEncryptedColumnTest`, from the TCK's `EncryptedColumnContract`); Vault and OpenBao
+  with a token that may open one key and no other (`LocalVaultTransitFieldKeyTest`).
+
 - **Flight Recorder recordings redacted like heap dumps.** `heapcheck --dump app.jfr` checks a
   recording and `--redact app-redacted.jfr` writes a copy without its credentials; `--redact-dir`,
   `--watch` and the starter's folder watch take `.jfr` files as well (`.redacted.jfr`). A

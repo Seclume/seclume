@@ -48,7 +48,15 @@
       {"test": "space.seclume.tls.Rfc8448VectorsTest", "module": "seclume-core",
        "property": "the TLS 1.3 key schedule matches RFC 8448"},
       {"test": "space.seclume.crypto.WycheproofTest", "module": "seclume-core",
-       "property": "AES-GCM, HMAC, HKDF, PBKDF2 and ECDH pass Wycheproof"},
+       "property": "AES-GCM, AES-GCM-SIV, HMAC, HKDF, PBKDF2 and ECDH pass Wycheproof"},
+      {"test": "space.seclume.crypto.AesGcmSivTest", "module": "seclume-core",
+       "property": "AES-GCM-SIV reveals only equality under a repeated nonce, and an altered value leaves no plaintext"},
+      {"test": "space.seclume.field.FieldEncryptionTest", "module": "seclume-core",
+       "property": "field encryption's format is pinned against an independent implementation; altered, copied and foreign values are refused"},
+      {"test": "space.seclume.field.FieldEncryptionPropertyTest", "module": "seclume-core",
+       "property": "over thousands of random rings, columns and values, what is encrypted decrypts to itself and to nothing else"},
+      {"test": "space.seclume.secret.VaultTransitSecretProviderTest", "module": "seclume-core",
+       "property": "a data key unwrapped by Vault transit reaches native memory only, and every refusal is said"},
       {"test": "space.seclume.internal.ChannelBindingTest", "module": "seclume-core",
        "property": "SCRAM channel binding is computed from the server's certificate"},
       {"test": "space.seclume.internal.JsonOffTest", "module": "seclume-core",
@@ -69,25 +77,33 @@
       {"test": "space.seclume.postgresql.ConnectFailureWipeTest", "module": "seclume-postgresql",
        "property": "a connection that fails leaves no secret in its buffers"},
       {"test": "space.seclume.postgresql.wire.ReceiveBufferWipeTest", "module": "seclume-postgresql",
-       "property": "received bytes are wiped once read"}
+       "property": "received bytes are wiped once read"},
+      {"test": "space.seclume.postgresql.jdbc.LocalEncryptedColumnTest", "module": "seclume-postgresql",
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
     ],
     "mysql": [
       {"test": "space.seclume.mysql.LoginFailureWipeTest", "module": "seclume-mysql",
        "property": "a failed login leaves no secret in its buffers"},
       {"test": "space.seclume.mysql.wire.ReceiveBufferWipeTest", "module": "seclume-mysql",
-       "property": "received bytes are wiped once read"}
+       "property": "received bytes are wiped once read"},
+      {"test": "space.seclume.mysql.jdbc.LocalEncryptedColumnTest", "module": "seclume-mysql",
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
     ],
     "sqlserver": [
       {"test": "space.seclume.sqlserver.LoginFailureWipeTest", "module": "seclume-sqlserver",
        "property": "a failed login leaves no secret in its buffers"},
       {"test": "space.seclume.sqlserver.tds.ReceiveBufferWipeTest", "module": "seclume-sqlserver",
-       "property": "received bytes are wiped once read"}
+       "property": "received bytes are wiped once read"},
+      {"test": "space.seclume.sqlserver.jdbc.LocalEncryptedColumnTest", "module": "seclume-sqlserver",
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
     ],
     "oracle": [
       {"test": "space.seclume.oracle.LoginFailureWipeTest", "module": "seclume-oracle",
        "property": "a failed login leaves no secret in its buffers"},
       {"test": "space.seclume.oracle.net.ReceiveBufferWipeTest", "module": "seclume-oracle",
-       "property": "received bytes are wiped once read"}
+       "property": "received bytes are wiped once read"},
+      {"test": "space.seclume.oracle.jdbc.LocalEncryptedColumnTest", "module": "seclume-oracle",
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
     ]
   }
 }

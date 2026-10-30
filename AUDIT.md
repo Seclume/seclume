@@ -53,6 +53,7 @@ Everything else is the platform's: OpenSSL 3 on Linux, CNG on Windows, or the JD
 | `Rsa`, `RsaPublicKey`, `BigWords`, `Der` | RSA encryption with a *public* key (the password is the plaintext) | MySQL `caching_sha2_password` / `sha256_password` | `RsaTest`, `AuthPluginsTest`; the MySQL CI jobs |
 | `DiffieHellman`, `BigWords.modPowSecret` | finite-field DH over the group the server names, secret exponent in constant time | Oracle Native Network Encryption | `DiffieHellmanTest` |
 | `ConstantTime` | comparisons of server proofs, MACs and Finished | - | `ConstantTimeLeakageTest` (dudect's method, negative control) |
+| `AesGcmSiv`, `space.seclume.field` | AES-GCM-SIV (RFC 8452) on `Aes` and `Ghash`; field encryption's format, HKDF column keys, key ring and rotation | the data key must stay off-heap; the JCA has no GCM-SIV | Wycheproof `aes_gcm_siv_test.json`, `AesGcmSivTest`, `FieldEncryptionTest` (vectors from an independent implementation), `FieldEncryptionPropertyTest`, `LocalEncryptedColumnTest` |
 | `Scram`, `ChannelBinding` | SCRAM-SHA-256/512 client, `tls-server-end-point` | the salted password must stay off-heap | `ScramTest`, `ScramFuzzTest`, `ChannelBindingTest`, live servers |
 | `AwsSigV4`, `AwsSigV4a`, `CanonicalRequest` | AWS request signing with the secret key in native memory | the AWS SDK holds the key as a `String` | `SigV4EquivalenceTest`, `CanonicalRequestTest`, `SigV4aTest` |
 | `KeySchedule`, `Tls12Prf`, `TranscriptHash` | TLS 1.3 key schedule, TLS 1.2 PRF | traffic secrets stay off-heap | `Rfc8448VectorsTest`, interop with five TLS stacks |
@@ -85,6 +86,7 @@ The fuzz targets use [Jazzer](https://github.com/CodeIntelligenceTesting/jazzer)
 | Secret managers | `SecretFetchFuzzTest` (HTTP), `JsonOffFuzzTest` (JSON) |
 | SPIFFE agent | `WorkloadApiAnswerFuzzTest` (X.509-SVID and JWT-SVID answers) |
 | KMS answers | `KmsAnswerFuzzTest` (raw ECDSA signatures to DER, public key PEM) |
+| Stored field values | `EncryptedValueFuzzTest` (any stored value; AES-GCM-SIV round trips and flipped bits) |
 | Key files | `KeyFilesFuzzTest`, `NKeyFilesFuzzTest` |
 | JDBC text values | `TextParsersFuzzTest` |
 | Heap dumps | `BrokenDumpTest` (attribution, redaction, heapcheck's scanner; a seeded sample) |
@@ -123,6 +125,10 @@ build replays them.
   transfer format, who may take it up, and that resets happen at the end of a borrow.
 - **Downgrade and fallback.** TLS 1.2 is spoken where a server needs it. Check the downgrade
   sentinel, the cipher suites offered, and renegotiation being refused.
+- **Field encryption.** Deterministic mode is AES-GCM-SIV with a fixed nonce per column key.
+  Is the derivation of column keys (HKDF over the column's name and mode) adequate, and should
+  the format carry a commitment to the key, so that one ciphertext cannot be made to open under
+  two keys of the ring? The ring holds few keys chosen by the operator, which limits that.
 - **Allowed exceptions.** Each `seclume-allow:` reason should be checked to really be public
   data: certificates, public keys, names, structure.
 - **Native interop.** The Foreign Function & Memory calls into OpenSSL and CNG
