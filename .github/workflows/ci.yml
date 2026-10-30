@@ -244,6 +244,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test required database coverage gate
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: The Maven Central bundle stays under 1,000 files
+        run: python3 .github/scripts/central_bundle.py
       - name: Test heapcheck report comparison
         run: python3 -m unittest discover -s seclume-heapcheck/ci -p 'test_*.py'
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0

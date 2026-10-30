@@ -40,6 +40,10 @@ git verify-tag v0.11.0
 
 Compare the full fingerprint, not just the name or the short key id.
 
+Next to each file and its signature, Central carries an MD5 and a SHA-1 checksum - what it
+requires, and from 0.14.0 on no more: the checksums say a download is complete, the
+signature says who made it. A signature file gets no checksum of its own.
+
 ## What is proven, and how
 
 Claims about secrets in memory are easy to make. These are the ones the test suite proves,
