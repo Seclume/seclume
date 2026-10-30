@@ -1,0 +1,83 @@
+# The webhook, its service and the configuration that sends it pods.
+# deploy/install.sh fills in SECLUME_IMAGE and SECLUME_CA_BUNDLE; with
+# cert-manager, issue the seclume-admission-tls certificate for
+# seclume-admission.seclume-system.svc and let its CA injector set caBundle
+# (annotation cert-manager.io/inject-ca-from on the configuration).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: seclume-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seclume-admission
+  namespace: seclume-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: seclume-admission}
+  template:
+    metadata:
+      labels: {app: seclume-admission}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: webhook
+          image: SECLUME_IMAGE
+          args: [--tls-cert, /tls/tls.crt, --tls-key, /tls/tls.key,
+                 --sidecar-image, SECLUME_IMAGE, --heapcheck-jar, /opt/seclume/seclume-heapcheck.jar]
+          ports:
+            - {name: https, containerPort: 8443}
+          readinessProbe:
+            httpGet: {path: /healthz, port: https, scheme: HTTPS}
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+      volumes:
+        - name: tls
+          secret: {secretName: seclume-admission-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seclume-admission
+  namespace: seclume-system
+spec:
+  selector: {app: seclume-admission}
+  ports:
+    - {name: https, port: 443, targetPort: https}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: seclume-admission
+webhooks:
+  - name: pods.admission.seclume.space
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    # Never in a pod's way: if the webhook cannot be reached, the pod is
+    # created as it is.
+    failurePolicy: Ignore
+    reinvocationPolicy: IfNeeded
+    timeoutSeconds: 5
+    namespaceSelector:
+      matchLabels: {seclume.space/inject: enabled}
+    rules:
+      - operations: [CREATE]
+        apiGroups: [""]
+        apiVersions: [v1]
+        resources: [pods]
+    clientConfig:
+      service: {name: seclume-admission, namespace: seclume-system, path: /mutate, port: 443}
+      caBundle: SECLUME_CA_BUNDLE

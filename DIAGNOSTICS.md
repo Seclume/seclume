@@ -156,6 +156,66 @@ the shapes and for the application's own secrets, each data source's password an
 `seclume.heapdump.secrets.*`, without a copy of them on the heap (see
 [OBSERVABILITY.md](OBSERVABILITY.md#actuatorheapdump-a-redacted-copy-never-the-heap-itself)).
 
+## Injected by annotation: the admission webhook
+
+`seclume-admission` is a Kubernetes mutating admission webhook that sets up the sidecar above,
+and the SPIFFE Workload API socket, for every pod that asks by annotation:
+
+```yaml
+metadata:
+  annotations:
+    seclume.space/redact-dumps: "true"     # dump folder, JVM options, redacting sidecar
+    seclume.space/secret-volumes: app      # volumes whose files the sidecar looks for too
+    seclume.space/spiffe: "true"           # the Workload API socket and SPIFFE_ENDPOINT_SOCKET
+    seclume.space/containers: app          # only these containers (all by default)
+```
+
+```sh
+./mvnw -pl seclume-admission,seclume-heapcheck -am package -DskipTests
+seclume-admission/deploy/build-image.sh registry.example/seclume-admission:0.14.0   # then push it
+SECLUME_IMAGE=registry.example/seclume-admission:0.14.0 seclume-admission/deploy/install.sh
+kubectl label namespace shop seclume.space/inject=enabled
+```
+
+What a pod gets with `redact-dumps`:
+
+- **A folder for dumps.** An `emptyDir` named `seclume-dumps` at `/seclume/dumps` in each
+  container, and `-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/seclume/dumps` as
+  `JAVA_TOOL_OPTIONS`. A container that sets `JAVA_TOOL_OPTIONS` already gets the options as
+  `JDK_JAVA_OPTIONS` instead, read by the `java` launcher. A container that sets both gets a
+  warning and no options. Nothing the pod sets is replaced, and the patch never repeats a value
+  of the pod's. A `-XX:HeapDumpPath` on the command line still wins over the injected one.
+- **A sidecar, `seclume-redact-dumps`.** It runs `seclume-heapcheck --watch /seclume/dumps
+  --discover` with `--secret-dir` for each volume in `secret-volumes`, mounted read-only. Every
+  finished heap dump and Flight Recorder recording is redacted next to itself and the original
+  deleted. To have recordings redacted too, write them there:
+  `-XX:StartFlightRecording:dumponexit=true,filename=/seclume/dumps/`.
+- **The sidecar's own settings.** It runs as the application's user (`runAsUser` and
+  `runAsGroup` are copied from the first container), because HotSpot writes a dump readable by
+  its owner only. Its root file system is read-only, it holds no capabilities, and its memory is
+  limited (`--sidecar-memory`, 256Mi). `--native-sidecar` makes it an init container with
+  `restartPolicy: Always` (Kubernetes 1.29+), so it does not keep a Job's pod from completing.
+
+With `spiffe`, the SPIFFE CSI driver's volume (`--spiffe-csi-driver`, `csi.spiffe.io`) is mounted
+read-only at `/spiffe-workload-api`. `--spiffe-host-path` mounts a host directory instead.
+`SPIFFE_ENDPOINT_SOCKET` names the socket, which `spiffe=` bundles read when they are given no
+`socket=`.
+
+The webhook never stands in a pod's way:
+
+- It answers every review with *allowed*.
+- What it cannot do comes back as a warning that `kubectl` prints.
+- Its configuration has `failurePolicy: Ignore`.
+- A second pass changes nothing: what was injected is recorded in `seclume.space/injected`.
+- Only namespaces labelled `seclume.space/inject=enabled` are sent to it.
+
+Its TLS key is read by seclume-keys into native memory, and a key and certificate renewed by
+cert-manager are taken up within a minute without a restart. `deploy/install.sh` makes a
+certificate authority of its own with openssl; with cert-manager, issue `seclume-admission-tls`
+for `seclume-admission.seclume-system.svc` and let its CA injector set `caBundle`. CI runs the
+whole path on kind: an application that runs out of memory, its dump redacted in the pod, and
+the copy checked clean of the mounted credential.
+
 ## Inside a Kubernetes pod: `kubectl seclume heapcheck`
 
 ```sh

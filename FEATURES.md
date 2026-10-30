@@ -1582,6 +1582,16 @@ ApiClient client = SeclumeKubernetes.client("https://api.cluster:6443"
 into every request. Here the client holds a placeholder. The token is read from its
 projected file for each request, so kubelet's rotations need no restart.
 
+### Admission webhook: `seclume-admission`
+
+A mutating admission webhook wires seclume into pods by annotation.
+`seclume.space/redact-dumps: "true"` gives a pod a dump folder, the JVM options that write there,
+and a sidecar that redacts every heap dump and recording where it lies, as the application's user.
+`seclume.space/spiffe: "true"` mounts the SPIFFE Workload API socket and sets
+`SPIFFE_ENDPOINT_SOCKET`. It never refuses a pod, never repeats a value of the pod's, and serves
+TLS 1.3 with a key held off the heap (see
+[DIAGNOSTICS.md](DIAGNOSTICS.md#injected-by-annotation-the-admission-webhook)).
+
 ### Git: `seclume-jgit`
 
 ```java

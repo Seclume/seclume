@@ -235,6 +235,104 @@ jobs:
       - name: Remove the cluster
         if: always()
         run: kind delete cluster --name seclume || true
+
+  # The admission webhook in a real cluster: kind, the webhook installed with
+  # a CA of its own, and an application that runs out of memory in a namespace
+  # that opted in. The dump it writes must be redacted where it lies by the
+  # injected sidecar - no plain dump left, the copy clean of the credential.
+  admission-webhook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - run: ./mvnw -B -pl seclume-admission,seclume-heapcheck -am package -DskipTests
+      - name: A cluster with the webhook
+        run: |
+          set -euo pipefail
+          command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          kind create cluster --name seclume --wait 180s
+          for image in docker.io/library/eclipse-temurin:25-jdk docker.io/library/eclipse-temurin:25-jre; do
+            docker pull -q "$image" && kind load docker-image "$image" --name seclume
+          done
+          bash seclume-admission/deploy/build-image.sh seclume-admission:ci
+          kind load docker-image seclume-admission:ci --name seclume
+          SECLUME_IMAGE=seclume-admission:ci bash seclume-admission/deploy/install.sh
+          kubectl -n seclume-system rollout status deploy/seclume-admission --timeout=180s
+          jar=$(find seclume-heapcheck/target -maxdepth 1 -name 'seclume-heapcheck-*.jar' | head -1)
+          echo "SECLUME_HEAPCHECK_JAR=$PWD/$jar" >> "$GITHUB_ENV"
+      - name: A dump written on OutOfMemoryError is redacted where it lies
+        run: |
+          set -euo pipefail
+          kubectl create namespace shop
+          kubectl label namespace shop seclume.space/inject=enabled
+          kubectl -n shop create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
+          kubectl -n shop create configmap oom --from-file=seclume-admission/ci/Oom.java
+          kubectl -n shop apply -f seclume-admission/ci/oom-pod.yaml
+          kubectl -n shop get pod oom -o json > oom.json
+          python3 - <<'PY'
+          import json
+          pod = json.load(open('oom.json'))
+          names = [c['name'] for c in pod['spec']['containers']]
+          assert names == ['app', 'seclume-redact-dumps'], names
+          env = {e['name']: e.get('value') for e in pod['spec']['containers'][0]['env']}
+          assert '-XX:HeapDumpPath=/seclume/dumps' in env['JAVA_TOOL_OPTIONS'], env
+          sidecar = pod['spec']['containers'][1]
+          assert sidecar['securityContext']['runAsUser'] == 1000, sidecar
+          assert '/seclume/secrets/app' in sidecar['command'], sidecar['command']
+          assert pod['metadata']['annotations']['seclume.space/injected'] == 'redact-dumps'
+          print('injected as expected')
+          PY
+          redacted=""
+          for _ in $(seq 1 150); do
+            redacted=$(kubectl -n shop exec oom -c seclume-redact-dumps -- ls /seclume/dumps \
+              2>/dev/null | grep '[.]redacted[.]hprof$' || true)
+            test -n "$redacted" && break
+            sleep 2
+          done
+          kubectl -n shop logs oom -c app | tail -5 || true
+          kubectl -n shop logs oom -c seclume-redact-dumps || true
+          test -n "$redacted" || { echo "no redacted dump appeared"; exit 1; }
+          left=$(kubectl -n shop exec oom -c seclume-redact-dumps -- ls -a /seclume/dumps)
+          echo "$left"
+          if echo "$left" | grep -v '[.]redacted[.]hprof$' | grep -q '[.]hprof'; then
+            echo "a plain heap dump was left beside the redacted one"; exit 1
+          fi
+          kubectl -n shop exec oom -c seclume-redact-dumps -- cat "/seclume/dumps/$redacted" \
+            > redacted.hprof
+          credential_file="$RUNNER_TEMP/credential"
+          (umask 077 && kubectl -n shop get secret app -o jsonpath='{.data.credential}' \
+            | base64 -d > "$credential_file")
+          java --enable-native-access=ALL-UNNAMED -jar "$SECLUME_HEAPCHECK_JAR" \
+            --dump redacted.hprof --secret-file "$credential_file" --discover --no-attribution
+          rm -f "$credential_file" redacted.hprof oom.json
+      - name: The SPIFFE socket, and namespaces that did not opt in
+        run: |
+          set -euo pipefail
+          kubectl -n shop create --dry-run=server -o json \
+            -f seclume-admission/ci/spiffe-pod.yaml > spiffe.json
+          kubectl create namespace other
+          kubectl -n other create --dry-run=server -o json \
+            -f seclume-admission/ci/spiffe-pod.yaml > other.json
+          python3 - <<'PY'
+          import json
+          pod = json.load(open('spiffe.json'))
+          volumes = {v['name']: v for v in pod['spec']['volumes']}
+          assert volumes['seclume-spiffe']['csi']['driver'] == 'csi.spiffe.io', volumes
+          env = {e['name']: e['value'] for e in pod['spec']['containers'][0]['env']}
+          assert env['SPIFFE_ENDPOINT_SOCKET'] == 'unix:///spiffe-workload-api/spire-agent.sock'
+          other = json.load(open('other.json'))
+          assert 'seclume-spiffe' not in [v['name'] for v in other['spec'].get('volumes', [])]
+          assert 'seclume.space/injected' not in other['metadata'].get('annotations', {})
+          print('the socket where asked, nothing elsewhere')
+          PY
+      - name: Remove the cluster
+        if: always()
+        run: kind delete cluster --name seclume || true
   # Everything provable without a database: the cryptography against the
   # published vectors, the heap-dump proof with its negative control, the pool
   # mechanics, and the rule that no forbidden API call slips in.
@@ -278,7 +376,7 @@ jobs:
           echo "SOFTHSM2_CONF=$RUNNER_TEMP/softhsm/softhsm2.conf" >> "$GITHUB_ENV"
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-heapcheck,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # A red run names its failing tests as annotations, so that they can be
