@@ -12,11 +12,14 @@ spec:
   containers:
     - name: app
       image: docker.io/library/eclipse-temurin:25-jdk
-      command: [java, -Xmx64m, /probe/Oom.java]
+      command: [java, -Xmx64m, -XX:-UsePerfData, /probe/Oom.java]
       securityContext:
+        runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}
       volumeMounts:
         - {name: probe, mountPath: /probe, readOnly: true}
         - {name: app, mountPath: /run/secrets/app, readOnly: true}

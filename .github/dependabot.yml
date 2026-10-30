@@ -58,3 +58,8 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  # The webhook image's base, pinned by digest: moved to each new 25-jre build.
+  - package-ecosystem: docker
+    directory: /seclume-admission
+    schedule:
+      interval: weekly

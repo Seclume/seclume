@@ -11,3 +11,9 @@ spec:
     - name: app
       image: docker.io/library/eclipse-temurin:25-jre
       command: [sleep, infinity]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: {drop: [ALL]}

@@ -239,7 +239,7 @@ public final class AdmissionServer implements AutoCloseable {
                 "provider=file&path=" + options.get("--tls-key"), Duration.ofMinutes(1));
         SSLContext tls;
         try {
-            tls = SSLContext.getInstance("TLS");
+            tls = SSLContext.getInstance("TLSv1.3");    // the API server speaks it
             tls.init(new KeyManager[] {keys}, null, null);
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("the webhook's TLS context could not be made", e);
