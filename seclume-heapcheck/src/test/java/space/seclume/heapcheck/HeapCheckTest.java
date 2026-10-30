@@ -253,6 +253,9 @@ class HeapCheckTest {
      */
     @Test
     void besideTheProcessThroughItsRoot(@TempDir Path directory) throws Exception {
+        // /proc/<pid>/root is Linux's: the mode is for kubectl debug --target.
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(Path.of("/proc/self/root")),
+                "--in-target reads through /proc/<pid>/root, which only Linux has");
         Path secretFile = directory.resolve("db-password");
         Files.writeString(secretFile, SECRET, StandardCharsets.UTF_8);
         Path dumps = Files.createDirectory(directory.resolve("dumps"));

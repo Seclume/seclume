@@ -474,6 +474,11 @@ jobs:
       - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
+      # Every test that carries a security claim ran and passed - none
+      # skipped, none missing (.github/security-gate.json).
+      - name: Security gate
+        if: success() || failure()
+        run: python3 .github/scripts/security_gate.py --group core --platform linux-x64
       # A red run names its failing tests as annotations, so that they can be
       # read on the pull request without opening the log.
       - if: failure()
@@ -489,6 +494,49 @@ jobs:
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
                       found += 1
           print('failing tests:', found)
+          PY
+
+  # The security gate's core group on the other platforms seclume supports:
+  # Linux on ARM64, and Windows, where the keys live in CNG rather than
+  # OpenSSL and dump exclusion is WerRegisterExcludedMemoryBlock rather than
+  # MADV_DONTDUMP. A test that skips there is not a test that passed there.
+  security-platforms:
+    name: security-platforms (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04-arm, platform: linux-arm64}
+          - {os: windows-latest, platform: windows-x64}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - name: The security tests
+        run: |
+          tests=$("$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --tests)
+          ./mvnw -B -pl seclume-core,seclume-tck,seclume-heapdump,seclume-heapcheck -am test \
+            -Dtest="$tests" -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Security gate
+        if: success() || failure()
+        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --platform ${{ matrix.platform }}'
+      - if: failure()
+        run: |
+          "$(command -v python3 || command -v python)" - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:600]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
 
   # Short coverage-guided JSON searches on every PR; the nightly fuzz
@@ -862,6 +910,9 @@ jobs:
       # The password is nowhere in the process after a TLS login - searched in
       # all of its memory, not only the heap (ProcessMemoryTest). It needs a
       # server with TLS, which the service above is not: a second one, here.
+      - name: Security gate
+        if: success() || failure()
+        run: python3 .github/scripts/security_gate.py --group postgresql --platform linux-x64
       - name: No password anywhere in the process
         env:
           PG_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -1037,6 +1088,9 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
       - run: ./mvnw -B -pl seclume-mysql -am test
+      - name: Security gate
+        if: success() || failure()
+        run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
       - name: Verify framework edge cases
         run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
       - name: Require executed framework tests
@@ -1096,6 +1150,9 @@ jobs:
           exit 1
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
       - run: ./mvnw -B -pl seclume-sqlserver -am test
+      - name: Security gate
+        if: success() || failure()
+        run: python3 .github/scripts/security_gate.py --group sqlserver --platform linux-x64
       - name: Verify framework edge cases
         run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
       - name: Require executed framework tests
@@ -1163,6 +1220,9 @@ jobs:
           exit' | docker exec -i oracle sqlplus -s / as sysdba
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
       - run: ./mvnw -B -pl seclume-oracle -am test
+      - name: Security gate
+        if: success() || failure()
+        run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
       - name: Verify framework edge cases
         run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests

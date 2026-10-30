@@ -194,6 +194,13 @@ public final class HeapCheck {
                 return;
             }
         }
+        if (inTarget && !Files.isDirectory(Path.of("/proc/self/root"))) {
+            System.err.println("--in-target reads the process's files through "
+                    + "/proc/<pid>/root, which this operating system does not have - it is "
+                    + "for a container beside the process on Linux (kubectl debug --target)");
+            System.exit(2);
+            return;
+        }
         if (inTarget && (pid == null || keep != null)) {
             System.err.println("--in-target is for a process this check runs beside, given "
                     + "by --pid; its dump stays where the process is and is deleted there, "
