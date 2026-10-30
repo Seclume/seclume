@@ -1582,6 +1582,16 @@ ApiClient client = SeclumeKubernetes.client("https://api.cluster:6443"
 into every request. Here the client holds a placeholder. The token is read from its
 projected file for each request, so kubelet's rotations need no restart.
 
+### Admission webhook: `seclume-admission`
+
+A mutating admission webhook wires seclume into pods by annotation.
+`seclume.space/redact-dumps: "true"` gives a pod a dump folder, the JVM options that write there,
+and a sidecar that redacts every heap dump and recording where it lies, as the application's user.
+`seclume.space/spiffe: "true"` mounts the SPIFFE Workload API socket and sets
+`SPIFFE_ENDPOINT_SOCKET`. It never refuses a pod, never repeats a value of the pod's, and serves
+TLS 1.3 with a key held off the heap (see
+[DIAGNOSTICS.md](DIAGNOSTICS.md#injected-by-annotation-the-admission-webhook)).
+
 ### Git: `seclume-jgit`
 
 ```java
@@ -1745,11 +1755,6 @@ What uses it:
     secret are looked for without being named, everything is masked in place, and the copy is
     parsed event by event before it is let out (see
     [DIAGNOSTICS.md](DIAGNOSTICS.md#a-flight-recorder-recording---dump-appjfr)).
-  - is injected into Kubernetes pods by **`seclume-admission`**, a mutating admission webhook:
-    `seclume.space/redact-dumps: "true"` gives a pod a dump folder, the JVM options that write
-    there, and a sidecar that redacts every dump where it lies;
-    `seclume.space/spiffe: "true"` mounts the SPIFFE Workload API socket (see
-    [DIAGNOSTICS.md](DIAGNOSTICS.md#injected-by-annotation-the-admission-webhook)).
 - **`seclume-tck`'s `NoSecretInHeap`** runs the same proof in **your own test suite**:
   - `@ExtendWith(NoSecretInHeap.class)` checks after every test.
   - `NoSecretInHeap.assertAbsent(secretFile)` checks at a moment you choose, say right after
