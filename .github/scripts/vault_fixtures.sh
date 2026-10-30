@@ -27,9 +27,9 @@
 set -euo pipefail
 work=$(mkdir -p "${1:?usage: vault_fixtures.sh <work directory> [address]}" && cd "$1" && pwd)
 address=${2:-127.0.0.1}
-vault_image=${VAULT_IMAGE:-docker.io/hashicorp/vault:1.20}
+vault_image=${VAULT_IMAGE:-docker.io/hashicorp/vault:2.0.0}
 vault_cli=${VAULT_CLI:-vault}
-pg_image=docker.io/library/postgres:17
+pg_image=docker.io/library/postgres:18
 net=slm-vault
 
 cd "$work"

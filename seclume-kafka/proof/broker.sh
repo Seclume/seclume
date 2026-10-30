@@ -10,7 +10,7 @@
 set -e
 NAME=seclume-kafka-test
 DIR=/tmp/seclume-kafka
-IMG=docker.io/apache/kafka:4.1.0
+IMG=docker.io/apache/kafka:4.4.0
 # podman here, docker on a CI runner: CONTAINER_ENGINE=docker
 ENGINE=${CONTAINER_ENGINE:-podman}
 case "$1" in

@@ -6,15 +6,19 @@ was started as a container, the driver's whole test suite was run against it, an
 removed. Nothing in the tables is taken from a vendor's documentation.
 
 Run on 2026-10-07 with the code that becomes 0.11.1; Oracle 11g, 18c and 21c again on
-2026-10-09, after the fixes described below. The newest versions (PostgreSQL 15-18,
-SQL Server 2022, Oracle Free 23ai, MySQL 8.4, MariaDB 11.4, CockroachDB 24.1, YugabyteDB
-2024.1) are tested on every push by CI and are not repeated here; see
+2026-10-09, after the fixes described below. The newest versions are tested on every push by
+CI and are not repeated here: PostgreSQL 15 and 18 and the release candidate of 19, SQL Server
+2022 and 2025, Oracle Free 23ai, MySQL 8.4, 9.7 LTS and 26.10, MariaDB 11.4, 12.3 LTS and 13.0,
+CockroachDB 26.2, YugabyteDB 2026.1, MongoDB 8.0 and 9.0, RabbitMQ 4.4, Kafka 4.4 and Vault 2.0
+with OpenBao 2.7 (since 2026-10-30; before, CockroachDB 24.1, YugabyteDB 2024.1, MySQL 8.4 and
+MariaDB 11.4 only). See
 [COMPATIBILITY.md](COMPATIBILITY.md) for what they report.
 
 ## The matrix
 
 | Database | Version | Status | Login | TLS on the own stack |
 |---|---|---|---|---|
+| PostgreSQL | 19 (release candidate) | **tested** (CI) | SCRAM-SHA-256-PLUS | TLS 1.3 |
 | PostgreSQL | 18, 17, 16, 15 | **supported** (CI) | SCRAM-SHA-256-PLUS | TLS 1.3 |
 | PostgreSQL | 14, 13, 12 | **supported** | SCRAM-SHA-256(-PLUS), md5 | TLS 1.3 |
 | PostgreSQL | 11, 10 | **supported** | SCRAM-SHA-256(-PLUS from 11), md5 | TLS 1.2 or 1.3, as the server's OpenSSL allows |

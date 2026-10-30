@@ -70,11 +70,11 @@ class LocalPostgresFamilyTest {
     class Yugabyte extends FamilyTests {
 
         Yugabyte() {
-            // YugabyteDB's password authentication defaults to md5 - the older
-            // of the two, and the one PostgreSQL itself has been moving away
-            // from. Saying so here rather than quietly accepting whatever
-            // arrives is the difference between a test and a formality.
-            super(TestHosts.server("yb", 5433), "off", "md5");
+            // YugabyteDB 2024.1 defaulted to md5; 2025 and later authenticate
+            // with SCRAM-SHA-256, as PostgreSQL does (seen with 2026.1.2 on
+            // 2026-10-30). Saying which here rather than quietly accepting
+            // whatever arrives is the difference between a test and a formality.
+            super(TestHosts.server("yb", 5433), "off", "scram-sha-256");
         }
     }
 
