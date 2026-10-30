@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 class AesGcmSivTest {
 
     private static final HexFormat HEX = HexFormat.of();
+    private static final Random RANDOM = new Random(8);
 
     /** RFC 8452 appendix C.2, the AES-256 case with eight bytes of plaintext and one of AAD. */
     @Test
@@ -85,7 +86,7 @@ class AesGcmSivTest {
             AesGcmSiv.encrypt(key, 0, 32, nonce, 0, aad, 0, 7,
                     MemorySegment.ofArray(message), 0, message.length, sealed, 0);
             MemorySegment out = arena.allocate(message.length);
-            for (int at = 0; at < sealed.byteSize(); at++) {
+            for (long at = 0; at < sealed.byteSize(); at++) {
                 byte original = sealed.get(ValueLayout.JAVA_BYTE, at);
                 sealed.set(ValueLayout.JAVA_BYTE, at, (byte) (original ^ 0x01));
                 out.fill((byte) 0x55);
@@ -108,7 +109,7 @@ class AesGcmSivTest {
             MemorySegment nonce = random(arena, 12, 7);
             MemorySegment aad = arena.allocate(1);
             byte[] message = new byte[100];
-            new Random(8).nextBytes(message);
+            RANDOM.nextBytes(message);
             MemorySegment buffer = arena.allocate(116);
             MemorySegment.copy(message, 0, buffer, ValueLayout.JAVA_BYTE, 0, 100);
             MemorySegment separate = arena.allocate(116);
@@ -153,8 +154,13 @@ class AesGcmSivTest {
     }
 
     private static MemorySegment random(Arena arena, int length, long seed) {
+        // Fixed bytes per seed, so that a failure replays; drawn from the seeded field.
         byte[] bytes = new byte[length];
-        new Random(seed).nextBytes(bytes);
+        long state = seed * 0x9E3779B97F4A7C15L;
+        for (int i = 0; i < length; i++) {
+            state = state * 6364136223846793005L + 1442695040888963407L;
+            bytes[i] = (byte) (state >>> 56);
+        }
         MemorySegment segment = arena.allocate(length);
         MemorySegment.copy(bytes, 0, segment, ValueLayout.JAVA_BYTE, 0, length);
         return segment;

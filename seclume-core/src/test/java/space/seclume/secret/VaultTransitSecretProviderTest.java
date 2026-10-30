@@ -40,6 +40,8 @@ class VaultTransitSecretProviderTest {
 
     private static final String CIPHERTEXT = "vault:v1:8SDd3WHDOjf7mq69CyCqYjBXAiQQAVZRkFM13ok481zoCmHnSeDX9vyf7w==";
 
+    private static final java.util.Random RANDOM = new java.util.Random(20261030L);
+
     private static TestCertificates certificates;
     private static SSLContext context;
 
@@ -90,7 +92,7 @@ class VaultTransitSecretProviderTest {
     @Test
     void theCiphertextGoesToDecryptAndThePlaintextComesBackDecoded() throws Exception {
         byte[] key = new byte[32];
-        new java.util.Random(1).nextBytes(key);
+        RANDOM.nextBytes(key);
         FakeVaultServer.Script script = new FakeVaultServer.Script()
                 .on("POST", "/v1/transit/decrypt/field-data", 200, answer(key));
         try (FakeVaultServer vault = new FakeVaultServer(context, script);
@@ -106,7 +108,7 @@ class VaultTransitSecretProviderTest {
     @Test
     void aDataKeyFromTransitKeysAFieldRing() throws Exception {
         byte[] key = new byte[32];
-        new java.util.Random(2).nextBytes(key);
+        RANDOM.nextBytes(key);
         FakeVaultServer.Script script = new FakeVaultServer.Script()
                 .on("POST", "/v1/transit/decrypt/field-data", 200, answer(key));
         try (FakeVaultServer vault = new FakeVaultServer(context, script)) {

@@ -1194,6 +1194,13 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
       - run: ./mvnw -B -pl seclume-mysql -am test
+      # The module's Local* tests default to port 3307, a developer's second
+      # server; this job's is on 3306. Field encryption's contract is in the
+      # gate, so it runs here against this job's server.
+      - name: Field encryption against this server
+        run: >-
+          ./mvnw -B -pl seclume-mysql -am test -Dtest=LocalEncryptedColumnTest
+          -Dseclume.mysql.port=3306 -Dsurefire.failIfNoSpecifiedTests=false
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
