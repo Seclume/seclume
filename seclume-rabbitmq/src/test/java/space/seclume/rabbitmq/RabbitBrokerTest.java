@@ -113,7 +113,9 @@ class RabbitBrokerTest {
         try {
             RabbitTemplate template = new RabbitTemplate(spring);
             String queue = "seclume-spring-" + UUID.randomUUID();
-            template.execute(channel -> channel.queueDeclare(queue, false, false, true, null));
+            // Durable: RabbitMQ 4 no longer permits a transient queue that is
+            // not exclusive (transient_nonexcl_queues). Deleted below.
+            template.execute(channel -> channel.queueDeclare(queue, true, false, true, null));
             template.convertAndSend(queue, "hello from Spring");
             Object received = null;
             for (int tries = 0; received == null && tries < 50; tries++) {
@@ -141,7 +143,9 @@ class RabbitBrokerTest {
         String queue = "seclume-recovery-" + UUID.randomUUID();
         try (Connection connection = factory.newConnection()) {
             Channel channel = connection.createChannel();
-            channel.queueDeclare(queue, false, false, false, null);
+            // Durable, as RabbitMQ 4 requires of a queue that is not exclusive -
+            // and it has to outlive the connection the broker drops.
+            channel.queueDeclare(queue, true, false, false, null);
             java.util.concurrent.CountDownLatch recovered = new java.util.concurrent.CountDownLatch(1);
             ((com.rabbitmq.client.Recoverable) connection).addRecoveryListener(
                     new com.rabbitmq.client.RecoveryListener() {
