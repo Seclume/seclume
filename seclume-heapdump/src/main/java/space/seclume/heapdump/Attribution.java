@@ -630,6 +630,12 @@ public final class Attribution {
 
         /** The next {@code length} bytes; a view while it fits in the window, a copy otherwise. */
         ByteBuffer bytes(int length) throws IOException {
+            // A length from the file is the file's word: one that is negative
+            // or runs past its end is a broken dump, not an allocation to make.
+            if (length < 0 || length > remaining()) {
+                throw new IOException("a record at " + position() + " claims " + length
+                        + " bytes, and the dump has " + remaining() + " left");
+            }
             if (length <= WINDOW) {
                 need(length);
                 ByteBuffer view = window.slice(window.position(), length)

@@ -805,8 +805,14 @@ public final class SpiffeWorkloadApi {
                     + "key");
         }
         List<X509Certificate> certificates = certificates(chain);
-        PrivateSigningKey signing = PrivateSigningKey.decode(answer.asSlice(key[0], key[1]),
-                (int) key[1]);
+        PrivateSigningKey signing;
+        try {
+            signing = PrivateSigningKey.decode(answer.asSlice(key[0], key[1]), (int) key[1]);
+        } catch (IllegalArgumentException unreadable) {
+            // The agent's answer, not the caller's setting: a broken answer.
+            throw new IOException("the Workload API's X.509-SVID key could not be read",
+                    unreadable);
+        }
         try {
             if (!Arrays.equals(signing.publicKey(), certificates.get(0).getPublicKey()
                     .getEncoded())) {

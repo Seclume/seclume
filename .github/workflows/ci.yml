@@ -329,6 +329,49 @@ jobs:
           name: json-finding-${{ matrix.method }}
           path: seclume-core/**/crash-*
 
+  # A minute of coverage-guided search per decoder of hostile input on every
+  # pull request: the TLS handshake and records, SCRAM, secret managers' HTTP,
+  # key files, the SPIFFE agent's answers and KMS answers. The nightly fuzz
+  # workflow runs the corpora in full; a finding is uploaded as an artifact.
+  parser-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - ServerHelloFuzzTest#aHostileServerHelloFailsWithAnIoException
+          - TlsRecordFuzzTest#recordsAfterTheHandshake
+          - ScramFuzzTest#anyServerMessageIsReadOrRefused
+          - SecretFetchFuzzTest#anyAnswerIsParsedOrRefused
+          - KeyFilesFuzzTest#anyKeyFileIsReadOrRefused
+          - WorkloadApiAnswerFuzzTest#anX509SvidAnswerEndsInAnSvidOrAnIoException
+          - WorkloadApiAnswerFuzzTest#aJwtSvidAnswerEndsInATokenOrAnIoException
+          - KmsAnswerFuzzTest#aRawSignatureBecomesDerOrAnIoException
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Search for inputs that break the decoder
+        env:
+          JAZZER_FUZZ: '1'
+          TARGET: ${{ matrix.target }}
+        run: >
+          ./mvnw -B -pl seclume-core -am test -Dtest="$TARGET"
+          -Djazzer.max_duration=60s -Dsurefire.failIfNoSpecifiedTests=false
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: parser-finding-${{ strategy.job-index }}
+          path: seclume-core/**/crash-*
+
   # The post-quantum key exchange, end to end. The own TLS stack offers
   # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,
   # so every other job runs with the hybrid off and would not notice it

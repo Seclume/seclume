@@ -415,6 +415,8 @@ decompiled: [PROVENANCE.md](PROVENANCE.md).
 For bug reports, feature requests and pull requests, see
 [CONTRIBUTING.md](CONTRIBUTING.md). Report suspected vulnerabilities privately
 through the process in [SECURITY.md](SECURITY.md).
+The threat model is [THREAT-MODEL.md](THREAT-MODEL.md); seclume has not been reviewed externally
+yet, and [AUDIT.md](AUDIT.md) is the guide for whoever does.
 
 seclume is written and maintained by one person, in the time that person has. It is used in
 earnest, it is kept working, and issues do get read. But there is **no company behind it, no
