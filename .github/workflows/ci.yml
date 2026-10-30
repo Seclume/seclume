@@ -730,6 +730,19 @@ jobs:
           SECLUME_RABBITMQ_CERT: ${{ runner.temp }}/rabbit-cert.pem
           SECLUME_RABBITMQ_PASSWORD_FILE: ${{ runner.temp }}/rabbit-password
           SECLUME_RABBITMQCTL: docker exec rabbit rabbitmqctl close_all_connections recovery-test
+      # Why, on the pull request: the broker's last words and the failed tests.
+      - if: failure()
+        run: |
+          echo "::error title=rabbitmq::$(docker logs rabbit 2>&1 | tail -25 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)"
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:800]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+          PY
 
   # seclume's own MongoDB driver, the pre-authenticated socket for the official
   # one, and Spring Data on the driver - against a standalone, a replica set
