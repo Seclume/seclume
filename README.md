@@ -160,7 +160,8 @@ that shows it.
 and `password=` is refused. The providers are `file`, `env-file`, `process`, `unix-socket`,
 `dpapi`, `credential-manager`, `encrypted`, `rds-iam`, `vault` (including dynamic database
 credentials, and logging in by Kubernetes, JWT or AppRole), `aws-secrets-manager`, `azure-key-vault`, `gcp-secret-manager`,
-`azure-managed-identity`, `gcp-metadata`, `none` (the client certificate is the login), and
+`azure-managed-identity`, `gcp-metadata`, `spiffe-jwt` (a SPIFFE JWT-SVID), `none` (the client
+certificate is the login), and
 `callback` for your own code. **[PROVIDERS.md](PROVIDERS.md)** has every setting of every
 provider and says which one to pick.
 
@@ -200,7 +201,7 @@ Everything below works on all four databases unless the row says otherwise.
 
 | Area | What | More |
 |---|---|---|
-| **Secrets** | 16 providers plus `none` and `callback`: files, Windows DPAPI/Credential Manager, the Linux and macOS keyrings, Vault, AWS/Azure/GCP vaults, RDS IAM, workload identity (VMs, App Service, Arc, Kubernetes, GCP) | [PROVIDERS.md](PROVIDERS.md) |
+| **Secrets** | 17 providers plus `none` and `callback`: files, Windows DPAPI/Credential Manager, the Linux and macOS keyrings, Vault, AWS/Azure/GCP vaults, RDS IAM, workload identity (VMs, App Service, Arc, Kubernetes, GCP, SPIFFE JWT-SVIDs) | [PROVIDERS.md](PROVIDERS.md) |
 | | Dynamic credentials: the driver logs in as the user Vault created, the lease is renewed and revoked at the end; the pool rotates connections before it runs out, without emptying | [PROVIDERS.md](PROVIDERS.md#what-expires-buys) |
 | | Secret columns read and bound off the heap (`Sensitive`, `SensitiveParameters`) | [FEATURES.md](FEATURES.md#secrets-in-columns-not-only-in-the-login) |
 | **TLS** | `verify-full`, a per-connection CA file (`tlsRootCert`) or a key pin (`tlsPin`) | [TLS.md](TLS.md) |

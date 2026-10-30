@@ -58,6 +58,8 @@ public final class FakeWorkloadApi implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicLong windowCredit =
             new java.util.concurrent.atomic.AtomicLong();
     private volatile Mode mode = Mode.ANSWER;
+    private volatile java.util.function.Function<List<String>, byte[]> jwtAnswer =
+            audiences -> new byte[0];
     private volatile boolean stopped;
 
     /**
@@ -91,6 +93,54 @@ public final class FakeWorkloadApi implements AutoCloseable {
     /** Each call's header block as received, decoded as the plain literals a client sends. */
     public List<String> headerBlocks() {
         return headerBlocks;
+    }
+
+    /**
+     * What {@code FetchJWTSVID} answers, from the audiences asked for - a
+     * {@link #jwtSvidResponse}; by default no SVID at all.
+     */
+    public void jwt(java.util.function.Function<List<String>, byte[]> answer) {
+        this.jwtAnswer = answer;
+    }
+
+    /** A {@code JWTSVIDResponse} with one JWT-SVID: its SPIFFE ID and the token. */
+    public static byte[] jwtSvidResponse(String spiffeId, String token) {
+        ByteArrayOutputStream svid = new ByteArrayOutputStream();
+        // seclume-allow: a fake agent's own made-up data, no application secret
+        field(svid, 1, spiffeId.getBytes(StandardCharsets.UTF_8));
+        // seclume-allow: a fake agent's own made-up token, no application secret
+        field(svid, 2, token.getBytes(StandardCharsets.US_ASCII));
+        ByteArrayOutputStream response = new ByteArrayOutputStream();
+        field(response, 1, svid.toByteArray());
+        return response.toByteArray();
+    }
+
+    /** The strings of field {@code number} in a protobuf message. */
+    private static List<String> strings(byte[] message, int number) {
+        List<String> found = new java.util.ArrayList<>();
+        int at = 0;
+        while (at < message.length) {
+            int tag = message[at++] & 0xff;
+            int length = 0;
+            int shift = 0;
+            while (at < message.length) {
+                int b = message[at++] & 0xff;
+                length |= (b & 0x7f) << shift;
+                shift += 7;
+                if ((b & 0x80) == 0) {
+                    break;
+                }
+            }
+            if (length < 0 || at + length > message.length) {
+                break;
+            }
+            if (tag == ((number << 3) | 2)) {
+                // seclume-allow: a request's audience, which is public
+                found.add(new String(message, at, length, StandardCharsets.UTF_8));
+            }
+            at += length;
+        }
+        return found;
     }
 
     /** How many streams are open now. */
@@ -220,6 +270,8 @@ public final class FakeWorkloadApi implements AutoCloseable {
     private void handle(SocketChannel client) throws IOException {
         read(client, 24);                                     // the preface
         boolean requested = false;
+        String block = "";
+        byte[] request = new byte[0];
         while (!requested) {
             byte[] head = read(client, 9);
             int length = ((head[0] & 0xff) << 16) | ((head[1] & 0xff) << 8) | (head[2] & 0xff);
@@ -230,10 +282,31 @@ public final class FakeWorkloadApi implements AutoCloseable {
                 write(client, frame(0x4, 0, 0, new byte[0]));       // our SETTINGS
                 write(client, frame(0x4, 0x1, 0, new byte[0]));     // and the ACK of theirs
             } else if (type == 0x1) {
-                headerBlocks.add(literals(payload));
-            } else if (type == 0x0 && (flags & 0x1) != 0) {
-                requested = true;                                    // the request is whole
+                block = literals(payload);
+                headerBlocks.add(block);
+            } else if (type == 0x0) {
+                request = payload.length > 5
+                        ? java.util.Arrays.copyOfRange(payload, 5, payload.length) : request;
+                requested = (flags & 0x1) != 0;                      // the request is whole
             }
+        }
+        if (block.contains(":path: /SpiffeWorkloadAPI/FetchJWTSVID\n")) {
+            // A unary call: the answer, trailers, and the stream is done.
+            byte[] jwt = jwtAnswer.apply(strings(request, 1));
+            synchronized (client) {
+                write(client, frame(0x1, 0x4, 1, new byte[] {(byte) 0x88}));
+                write(client, frame(0x0, 0, 1, grpc(jwt)));
+                // seclume-allow: a fake agent's own made-up data, no application secret
+                byte[] status = "grpc-status".getBytes(StandardCharsets.US_ASCII);
+                ByteArrayOutputStream trailers = new ByteArrayOutputStream();
+                trailers.write(0);
+                trailers.write(status.length);
+                trailers.write(status, 0, status.length);
+                trailers.write(1);
+                trailers.write('0');
+                write(client, frame(0x1, 0x4 | 0x1, 1, trailers.toByteArray()));
+            }
+            return;
         }
         Mode now = mode;
         if (now == Mode.SILENT) {
