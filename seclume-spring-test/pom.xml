@@ -18,7 +18,7 @@
     this is the proof, not the work.</description>
 
   <properties>
-    <spring.boot.version>4.1.1</spring.boot.version>
+    <spring.boot.version>4.1.2</spring.boot.version>
     <!-- Spring Boot 4 brings its own JUnit version and it has to win
          here: the parent project's is older, and the difference shows as a
          NoSuchMethodError in the middle of a test run. -->
@@ -113,13 +113,13 @@
     <dependency>
       <groupId>org.mybatis</groupId>
       <artifactId>mybatis</artifactId>
-      <version>3.5.19</version>
+      <version>3.6.0</version>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.springframework.data</groupId>
       <artifactId>spring-data-jdbc</artifactId>
-      <version>4.1.1</version>
+      <version>4.1.2</version>
       <scope>test</scope>
     </dependency>
     <dependency>

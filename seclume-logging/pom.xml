@@ -19,7 +19,7 @@
     the message and the stack trace; any other logger calls SecretMasker.</description>
 
   <properties>
-    <logback.version>1.5.36</logback.version>
+    <logback.version>1.6.6</logback.version>
   </properties>
 
   <dependencies>
