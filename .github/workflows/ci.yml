@@ -717,21 +717,23 @@ jobs:
             -v "$PWD/cert.pem:/tls/cert.pem:ro" -v "$PWD/key.pem:/tls/key.pem:ro" \
             -v "$PWD/20-tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro" \
             docker.io/library/rabbitmq:4.4
+          # As the broker's own user: a CLI run as root writes the Erlang
+          # cookie first, owned by root, and the broker then cannot read it.
           for i in $(seq 1 60); do
-            docker exec rabbit rabbitmq-diagnostics -q check_port_connectivity >/dev/null 2>&1 && break
+            docker exec -u rabbitmq rabbit rabbitmq-diagnostics -q check_port_connectivity >/dev/null 2>&1 && break
             sleep 2
           done
           head -c 18 /dev/urandom | base64 | tr -d '/+=' > "$RUNNER_TEMP/rabbit-password"
-          docker exec -i rabbit sh -c 'rabbitmqctl add_user seclume "$(cat)"' \
+          docker exec -i -u rabbitmq rabbit sh -c 'rabbitmqctl add_user seclume "$(cat)"' \
             < "$RUNNER_TEMP/rabbit-password"
-          docker exec rabbit rabbitmqctl set_permissions -p / seclume '.*' '.*' '.*'
+          docker exec -u rabbitmq rabbit rabbitmqctl set_permissions -p / seclume '.*' '.*' '.*'
           cp cert.pem "$RUNNER_TEMP/rabbit-cert.pem"
       - run: ./mvnw -B -pl seclume-rabbitmq -am test
         env:
           SECLUME_RABBITMQ_PORT: '5671'
           SECLUME_RABBITMQ_CERT: ${{ runner.temp }}/rabbit-cert.pem
           SECLUME_RABBITMQ_PASSWORD_FILE: ${{ runner.temp }}/rabbit-password
-          SECLUME_RABBITMQCTL: docker exec rabbit rabbitmqctl close_all_connections recovery-test
+          SECLUME_RABBITMQCTL: docker exec -u rabbitmq rabbit rabbitmqctl close_all_connections recovery-test
       # Why, on the pull request: the broker's last words and the failed tests.
       - if: failure()
         run: |
