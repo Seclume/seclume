@@ -59,6 +59,17 @@ PASS into anything else fails before it can merge.
 | Primitives computed here are correct | A3 | `WycheproofTest`, `DigestTest`, `AesTest`, `GhashTest`, `Ed25519Test` | Wycheproof suites (AES-GCM, HMAC, HKDF, PBKDF2, ECDH), FIPS and RFC vectors | PASS | correctness, not timing | all |
 | Comparisons and AES do not leak through timing | A3, A5 | `ConstantTimeLeakageTest` (nightly) | dudect's method (Welch's t over two input classes) with a negative control that must leak | PASS (nightly) | a measurement on one machine with one JIT, not a proof; C2 gives no constant-time guarantee | linux-x64 |
 
+## Field encryption
+
+| Security property | Attacker | Test | Methodology | Result | Limitations | Platform |
+|---|---|---|---|---|---|---|
+| The database holds only ciphertext | A8 database | `LocalEncryptedColumnTest` (all four drivers) | values written through `EncryptedColumn` are read back raw from the server and searched for the plaintext; their length is the plaintext's plus 34 | PASS | the length of each value, NULL-ness and, in deterministic columns, equality are visible by design ([ENCRYPTION.md](ENCRYPTION.md#what-it-does-not-hide-and-does-not-do)) | linux-x64 |
+| Neither the value nor the key is in a heap dump after a read | A1 heap dump | `LocalEncryptedColumnTest#neitherTheValueNorTheKeyIsInAHeapDump` | a child JVM builds the ring from a key file, reads the value with `readInto`, dumps its heap; searched for the value and for the key in raw and Base64. The control reads it as a `String` and must be found | PASS | `setString`/`getString` are the heap path by name | linux-x64 |
+| An altered, copied or foreign value does not decrypt | A8 | `FieldEncryptionTest`, `FieldEncryptionPropertyTest`, `EncryptedValueFuzzTest`, `LocalEncryptedColumnTest` | every flipped bit and cut of a value; values from another column, mode, row context or key; thousands of random cases and coverage-guided fuzzing; a value copied between rows in a real table | PASS | a value replaced by an older value of the *same* row and context decrypts - that needs a context that changes, such as a version column | all three |
+| The format is the one documented | - | `FieldEncryptionTest#theFormatIsTheOneAnotherImplementationWrites` | vectors produced by a separate implementation (Python, `cryptography`) are written and read | PASS | - | all three |
+| AES-GCM-SIV is RFC 8452 | A3, A8 | `WycheproofTest` (202 vectors), `AesGcmSivTest` | Wycheproof, RFC 8452's own vector; a repeated nonce shown to reveal equality only; every altered byte refused with the output wiped | PASS | built on seclume's AES and GHASH, whose timing `ConstantTimeLeakageTest` measures; the tag check is `ConstantTime.equals` | all three |
+| A data key opened by Vault transit reaches native memory only | A1, A4 | `VaultTransitSecretProviderTest`, `LocalVaultTransitFieldKeyTest` (Vault and OpenBao) | a stand-in Vault answering every malformed shape; real Vault and OpenBao with a token that may open one key and no other | PASS | the token's own protection is the token provider's | linux-x64 (Vault); all three (stand-in) |
+
 ## Hostile input
 
 | Security property | Attacker | Test | Methodology | Result | Limitations | Platform |

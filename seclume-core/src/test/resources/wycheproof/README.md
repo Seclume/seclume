@@ -10,6 +10,7 @@ are here:
 | File | What it checks in seclume |
 | --- | --- |
 | `aes_gcm_test.json` | `AesGcm` in Java for 128/192/256-bit keys, and `AesGcmCipher` (OpenSSL or CNG) |
+| `aes_gcm_siv_test.json` | `AesGcmSiv` for 128- and 256-bit keys (taken at commit `d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9`, 2026-10-23) |
 | `hmac_sha{1,256,384,512}_test.json` | `Hmac` |
 | `hkdf_sha{1,256,384,512}_test.json` | `Hkdf.extract` and `Hkdf.expand`, including the length limit |
 | `pbkdf2_hmacsha{1,256,384,512}_test.json` | `Pbkdf2` |

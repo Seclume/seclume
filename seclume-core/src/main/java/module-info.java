@@ -26,6 +26,8 @@ module seclume.core {
     exports space.seclume;
     exports space.seclume.crypto;
     exports space.seclume.secret;
+    // Field encryption: values encrypted in the application, keys off the heap.
+    exports space.seclume.field;
 
     // Internal building blocks the driver modules need (randomness, encoding,
     // off-heap I/O). Not a stable contract for applications.

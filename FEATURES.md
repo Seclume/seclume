@@ -256,6 +256,19 @@ This is for applications that keep API keys, signing keys and refresh tokens in 
 which until now read every one of them onto the heap. It is proved by a child JVM dumping its
 own heap, with a control that must find the value when it is read the ordinary way.
 
+## Field encryption: columns the database cannot read
+
+**`FieldKeys` and `EncryptedColumn`** (`space.seclume.field`, in seclume-core) encrypt a
+column's values in the application with AES-256-GCM-SIV, under data keys held in locked
+native memory: randomized, or deterministic so that `where ssn = ?`, a unique index and a
+join still work. The ciphertext is a binary value any JDBC driver stores, in the same format
+on all four databases. Values are written from native memory and read back into it; keys come
+from any provider, best as a data key only Vault's transit engine can open
+(`provider=vault-transit`). Rotation runs while the table is in use. Tested against all four
+databases, Vault and OpenBao, with a heap dump that holds neither the value nor the key. The
+whole story - modes, keys, rotation, what it does not hide - is in
+[ENCRYPTION.md](ENCRYPTION.md).
+
 ## Secret memory
 
 A `SecretScope` is native memory that is:

@@ -35,6 +35,7 @@ nested provider rather than a value.
 | `encrypted` | an AES-GCM ciphertext | no | **two**: `cipher-`, `key-` | one decrypt |
 | `rds-iam` | built, not stored — a signed RDS token | 15 min (AWS fixes it) | `key-` | four HMACs |
 | `vault` | HashiCorp Vault or OpenBao over HTTPS | **yes**, with its lease | `token-`, or a login: `jwt-` / `secret-id-` / `aws-` / the cloud's metadata | one HTTPS request |
+| `vault-transit` | a ciphertext Vault's transit engine decrypts — a [field encryption](ENCRYPTION.md) data key | no | `token-`, or a login as for `vault` | one HTTPS request |
 | `aws-secrets-manager` | AWS Secrets Manager | no | `key-`, optional `session-token-` | one HTTPS request |
 | `azure-key-vault` | Azure Key Vault | **yes**, when the secret has `exp` | `token-` | one HTTPS request |
 | `gcp-secret-manager` | Google Secret Manager | no | `token-` | one HTTPS request |
@@ -270,6 +271,29 @@ with a control that puts the token there on purpose and is found. The fake Vault
 AWS signature as AWS would. The AWS, GCP and Azure logins are tested against stand-ins for
 Vault and the metadata services, and the AWS signature additionally against an independent
 SigV4 implementation; a live run needs the cloud and is not part of CI.
+
+### Vault transit: a data key only Vault can open
+
+```properties
+provider=vault-transit
+address=https://vault:8200
+key-name=field-data
+ciphertext=vault:v1:8SDd3WHDOjf7mq69CyCqYjBXAiQQAVZRkFM13ok481zoCmHnSeDX9vyf7w==
+token-provider=file     token-path=/var/run/secrets/vault-token     # or auth-method=... as for vault
+# transit-mount=transit  context=<Base64, for a derived key>  namespace=  verify=true  max-length=1024
+```
+
+`POST transit/decrypt/<key-name>` with the ciphertext; Vault's answer - the plaintext in
+Base64, inside JSON - is read where it lies and decoded into the target, never a `String`.
+The ciphertext is what `transit/datakey/wrapped/<key-name>` or `transit/encrypt/<key-name>`
+handed out, and it is no secret: only Vault opens it. That makes it the envelope for
+[field encryption](ENCRYPTION.md)'s data keys, read once when the key ring is built. The
+token needs `update` on `transit/decrypt/<key-name>` and nothing else; a 400 from Vault
+means a ciphertext of another key or a context that does not match.
+
+Tested against Vault and OpenBao in CI (`LocalVaultTransitFieldKeyTest`, with a token that
+may open this key and no other) and against a stand-in for every answer that is not a
+plaintext (`VaultTransitSecretProviderTest`).
 
 ### The three cloud vaults
 

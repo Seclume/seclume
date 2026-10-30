@@ -99,8 +99,9 @@ public final class SecretProviders {
                     "no secret provider configured - set 'provider' to one of "
                     + "file, env-file, unix-socket, process, dpapi, credential-manager, "
                     + "libsecret, keychain, "
-                    + "rds-iam, encrypted, vault, aws-secrets-manager, azure-key-vault, "
-                    + "gcp-secret-manager, azure-managed-identity, gcp-metadata, or none for a "
+                    + "rds-iam, encrypted, vault, vault-transit, aws-secrets-manager, "
+                    + "azure-key-vault, gcp-secret-manager, azure-managed-identity, "
+                    + "gcp-metadata, or none for a "
                     + "login by client certificate alone");
         }
         int maxLength = maxLength(settings);
@@ -165,6 +166,11 @@ public final class SecretProviders {
                     value(settings, "namespace"),
                     !"false".equalsIgnoreCase(settings.getOrDefault("verify", "true")),
                     Integer.parseInt(settings.getOrDefault("timeout-millis", "10000")),
+                    maxLength);
+            // A secret Vault's transit engine encrypted - a field encryption data
+            // key, typically - decrypted there on every read. The ciphertext is
+            // no secret and stands in the configuration; the token as for vault.
+            case "vault-transit", "vaulttransit" -> new VaultTransitSecretProvider(settings,
                     maxLength);
             // The three cloud vaults. All of them build on the same two
             // pieces - SecretFetch for the HTTPS, JsonOff for the answer - so
@@ -241,8 +247,9 @@ public final class SecretProviders {
                     "unknown secret provider '" + kind + "' - known are file, env-file, "
                     + "unix-socket, process, dpapi, credential-manager, libsecret, keychain, "
                     + "rds-iam, encrypted, "
-                    + "vault, aws-secrets-manager, azure-key-vault, gcp-secret-manager, "
-                    + "azure-managed-identity, gcp-metadata, spiffe-jwt, none");
+                    + "vault, vault-transit, aws-secrets-manager, azure-key-vault, "
+                    + "gcp-secret-manager, azure-managed-identity, gcp-metadata, spiffe-jwt, "
+                    + "none");
         };
     }
 
