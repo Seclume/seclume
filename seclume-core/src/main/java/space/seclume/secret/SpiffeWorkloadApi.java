@@ -768,8 +768,16 @@ public final class SpiffeWorkloadApi {
                     }
                 }
                 if (domain != null && certificates != null && certificates.length > 0) {
-                    federated.put(trustDomain(domain.startsWith("spiffe://") ? domain
-                            : "spiffe://" + domain), certificates(certificates));
+                    String trustDomain;
+                    try {
+                        trustDomain = trustDomain(domain.startsWith("spiffe://") ? domain
+                                : "spiffe://" + domain);
+                    } catch (IllegalArgumentException noDomain) {
+                        // The agent's answer, not the caller's setting: a broken answer.
+                        throw new IOException("the Workload API's answer has a federated "
+                                + "bundle for no trust domain", noDomain);
+                    }
+                    federated.put(trustDomain, certificates(certificates));
                 }
             } else {
                 response.skip();
@@ -805,8 +813,14 @@ public final class SpiffeWorkloadApi {
                     + "key");
         }
         List<X509Certificate> certificates = certificates(chain);
-        PrivateSigningKey signing = PrivateSigningKey.decode(answer.asSlice(key[0], key[1]),
-                (int) key[1]);
+        PrivateSigningKey signing;
+        try {
+            signing = PrivateSigningKey.decode(answer.asSlice(key[0], key[1]), (int) key[1]);
+        } catch (IllegalArgumentException unreadable) {
+            // The agent's answer, not the caller's setting: a broken answer.
+            throw new IOException("the Workload API's X.509-SVID key could not be read",
+                    unreadable);
+        }
         try {
             if (!Arrays.equals(signing.publicKey(), certificates.get(0).getPublicKey()
                     .getEncoded())) {
@@ -873,7 +887,9 @@ public final class SpiffeWorkloadApi {
         /** A length-delimited value: where it starts and how long it is. */
         long[] bytes() throws IOException {
             long length = varint();
-            if (length < 0 || at + length > end) {
+            // length > end - at, not at + length > end: a length near 2^63 from
+            // the wire wraps the sum below end and would pass.
+            if (length < 0 || length > end - at) {
                 throw new IOException("the Workload API's answer is cut short");
             }
             long[] value = {at, length};

@@ -63,3 +63,8 @@ each with a negative control that has to fail (see [TESTING.md](TESTING.md#provi
 
 What is not proven here is listed in the README under *What it protects, and what it does
 not*.
+
+Who is defended against, and who is not, attacker by attacker: [THREAT-MODEL.md](THREAT-MODEL.md).
+seclume has had no external security review yet; [AUDIT.md](AUDIT.md) is the guide for one - the
+cryptography implemented here rather than taken from a library, the decoders of hostile input
+and their fuzz targets, and the open questions.

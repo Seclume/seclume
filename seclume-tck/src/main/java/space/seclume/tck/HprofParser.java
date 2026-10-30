@@ -86,7 +86,17 @@ public final class HprofParser {
                 throw new IOException("heap dump larger than 2 GB is not supported: " + size);
             }
             ByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, size);
-            new HprofParser(buffer, readHeader(buffer)).parse(visitor);
+            try {
+                new HprofParser(buffer, readHeader(buffer)).parse(visitor);
+            } catch (java.nio.BufferUnderflowException | IndexOutOfBoundsException
+                    | IllegalArgumentException | IllegalStateException broken) {
+                // A length or a type in the file that does not fit the file: a
+                // broken dump, which is an I/O failure like a truncated one.
+                throw new IOException("the heap dump is broken near position "
+                        + buffer.position() + " - " + broken.getClass().getSimpleName()
+                        + (broken.getMessage() == null ? "" : ": " + broken.getMessage()),
+                        broken);
+            }
         }
     }
 

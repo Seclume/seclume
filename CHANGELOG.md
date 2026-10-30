@@ -75,6 +75,16 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeCertificateInstruments` in seclume-opentelemetry, and in the starter with
   `seclume.metrics.opentelemetry=true` for every SSL bundle seclume-keys keeps current (Vault
   PKI, SPIFFE, reloading files) - the counterpart of the Micrometer meters of the same names.
+- **Prepared for an external review.** `THREAT-MODEL.md` goes through the attackers seclume
+  defends against and those it does not, with the test that proves each defence. `AUDIT.md`
+  lists the cryptography implemented here and why, the decoders of hostile input with their fuzz
+  targets, and the open questions. New fuzz targets cover the SPIFFE agent's answers and KMS
+  answers, and a seeded sample covers broken heap dumps. CI now runs a minute of Jazzer per
+  hostile-input decoder on every pull request. Fixed on the way: a broken heap dump could make
+  attribution allocate up to 2 GB from a record length; heapcheck's HPROF scanner ended broken
+  dumps in unchecked exceptions; an unreadable SVID key from a SPIFFE agent surfaced as an
+  `IllegalArgumentException`; a protobuf length near 2^63 in its answer wrapped a bounds check, and a
+  federated bundle for no trust domain threw the wrong exception. Each now ends in an `IOException`.
 - **`kubectl seclume redact <pod> -o <file>`**: a heap dump of the pod's JVM for a memory leak or
   a support case, redacted inside the pod - named secrets, the shapes and their echoes, checked
   again there - and only the copy copied out, owner-only, never over a file; a copy that does
