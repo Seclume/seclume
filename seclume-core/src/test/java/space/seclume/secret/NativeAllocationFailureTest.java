@@ -67,10 +67,11 @@ class NativeAllocationFailureTest {
         }
     }
 
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
     private static final byte[] CANARY = new byte[32];
 
     static {
-        new java.security.SecureRandom().nextBytes(CANARY);
+        RANDOM.nextBytes(CANARY);
     }
 
     private static void fill(SecretScope scope) {
