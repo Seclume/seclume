@@ -5,13 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **Log lines with the application's secrets masked** (`seclume-logging`, opt-in with
-  `seclume.logging.redact=true`). `SecretMasker` finds a secret - itself or its Base64 - in a
-  message or stack trace and writes `[redacted:<label>]`, keeping no secret: each is held as a
-  rolling fingerprint and an HMAC-SHA-256 tag keyed with random bytes in locked native memory,
-  and a heap dump test shows no copy is left. Logback converters for `%msg` and `%xEx`; the
-  starter looks for every data source's password and `seclume.heapdump.secrets`, read again
-  every `seclume.logging.refresh-interval`.
 - **SPIFFE rotations as they happen, and federation.** seclume-keys' SPIFFE key manager keeps
   the Workload API's `FetchX509SVID` stream open (`SpiffeWorkloadApi.watchX509Svids`): an SVID
   or bundle the agent pushes is taken at once, the stream reopened when it breaks, the HTTP/2
@@ -21,6 +14,13 @@ All notable changes to seclume are recorded here. Versions follow
   against the CAs of its own ID's trust domain - an SVID from another domain's CA claiming
   this one is refused. `FakeWorkloadApi` serves each call on its own thread, keeps streams
   open, pushes, ends streams and sends federated bundles.
+- **Log lines with the application's secrets masked** (`seclume-logging`, opt-in with
+  `seclume.logging.redact=true`). `SecretMasker` finds a secret - itself or its Base64 - in a
+  message or stack trace and writes `[redacted:<label>]`, keeping no secret: each is held as a
+  rolling fingerprint and an HMAC-SHA-256 tag keyed with random bytes in locked native memory,
+  and a heap dump test shows no copy is left. Logback converters for `%msg` and `%xEx`; the
+  starter looks for every data source's password and `seclume.heapdump.secrets`, read again
+  every `seclume.logging.refresh-interval`.
 - **Keys in AWS KMS, Google Cloud KMS and Azure Key Vault** (`kms=aws-kms`, `gcp-kms`,
   `azure-key-vault`), next to Vault transit and everywhere it goes: JDBC client certificates,
   key managers, Spring SSL bundles, Tomcat. The hash is made here and signed there - AWS with
