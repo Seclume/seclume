@@ -87,8 +87,10 @@ class HeapDumpEndpointTest {
     @Test
     void aNamedSecretOfNoShapeIsRedactedFromTheServedDump() throws Exception {
         Path secretFile = directory.resolve("api-key");
-        Process openssl = new ProcessBuilder("openssl", "rand", "-hex", "-out",
-                secretFile.toString(), "20").redirectErrorStream(true).start();
+        // Through /bin/sh, which finds openssl on the PATH; the file is an argument.
+        Process openssl = space.seclume.tck.Shell.builder("-c", "exec openssl \"$@\"",
+                "openssl", "rand", "-hex", "-out", secretFile.toString(), "20")
+                .redirectErrorStream(true).start();
         assertTrue(openssl.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)
                 && openssl.exitValue() == 0);
         leaked = Files.readString(secretFile).strip();   // what the application did

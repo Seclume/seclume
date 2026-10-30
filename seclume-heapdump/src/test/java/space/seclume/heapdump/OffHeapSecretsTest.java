@@ -74,8 +74,10 @@ class OffHeapSecretsTest {
         // The secret is made by a process of its own and read into native
         // memory only: this JVM never holds it in an array or a String.
         Path secretFile = directory.resolve("api-key");
-        Process openssl = new ProcessBuilder("openssl", "rand", "-hex", "-out",
-                secretFile.toString(), "16").redirectErrorStream(true).start();
+        // Through /bin/sh, which finds openssl on the PATH; the file is an argument.
+        Process openssl = space.seclume.tck.Shell.builder("-c", "exec openssl \"$@\"",
+                "openssl", "rand", "-hex", "-out", secretFile.toString(), "16")
+                .redirectErrorStream(true).start();
         assertTrue(openssl.waitFor(30, TimeUnit.SECONDS) && openssl.exitValue() == 0);
         long length = Files.size(secretFile) - 1;                // without the newline
 
