@@ -252,6 +252,16 @@ All notable changes to seclume are recorded here. Versions follow
   and fails at 1,000. Internal modules (benchmarks, proofs, test harnesses) stay out of the
   deployment as before; `seclume-tck` stays in, because it is for users' own tests.
 
+- **A release gate for the security tests.** `.github/security-gate.json` names the 32
+  tests that carry seclume's security claims, by CI job. `security_gate.py` gives each of them
+  PASS, FAIL, SKIPPED, INCONCLUSIVE or NOT APPLICABLE from the job's reports. Only PASS and NOT
+  APPLICABLE let the build through, so a skipped or missing security test fails it. The gate
+  runs in the core job and the four database jobs. The new `security-platforms` job runs the
+  core group on Linux ARM64 and Windows x64, which CI had never run before.
+  `SECURITY-VERIFICATION.md` ties every claim to its test, method, result, limits and platform,
+  including what each platform protects. `TEST-STRATEGY-REPORT.md` records the state before and
+  after, the defects found, the remaining risks and a rating.
+
 ## [0.13.1] - 2026-10-21
 
 - **Fixed: `seclume-heapcheck` shipped the TCK's fuzz harness** - its classes and the

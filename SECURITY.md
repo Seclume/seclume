@@ -68,3 +68,9 @@ Who is defended against, and who is not, attacker by attacker: [THREAT-MODEL.md]
 seclume has had no external security review yet; [AUDIT.md](AUDIT.md) is the guide for one - the
 cryptography implemented here rather than taken from a library, the decoders of hostile input
 and their fuzz targets, and the open questions.
+
+Every claim with its test, method, result, limits and platform:
+[SECURITY-VERIFICATION.md](SECURITY-VERIFICATION.md). The tests that carry the claims are a
+release gate: CI fails when one of them is missing, skipped or failed, on Linux x86_64 and ARM64
+and on Windows. How the test strategy got here and what it still lacks:
+[TEST-STRATEGY-REPORT.md](TEST-STRATEGY-REPORT.md).
