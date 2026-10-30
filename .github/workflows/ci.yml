@@ -154,10 +154,11 @@ jobs:
       - name: Remove test dumps and credential
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/heapcheck-fixtures"
-  # kubectl seclume heapcheck against a real cluster: kind, three pods whose
-  # JVMs run as an unprivileged user with the credential mounted as a secret.
-  # The check runs in an ephemeral container beside each JVM, and only the
-  # report comes out - the dump must be gone from the pod afterwards.
+  # kubectl seclume heapcheck and redact against a real cluster: kind, three
+  # pods whose JVMs run as an unprivileged user with the credential mounted as
+  # a secret. The work runs in an ephemeral container beside each JVM, and only
+  # the report or the redacted copy comes out - the dump must be gone from the
+  # pod afterwards.
   kubectl-heapcheck:
     runs-on: ubuntu-latest
     steps:
@@ -207,6 +208,22 @@ jobs:
           grep -q '"version": "2.1.0"' clean.sarif
           expect 1 token.md -- token --discover --format md
           grep -q 'vault-token' token.md
+          # redact: the dump redacted inside the pod, only the copy out - which
+          # a check here, with the credential itself, must find clean.
+          credential_file="$RUNNER_TEMP/credential"
+          (umask 077 && kubectl get secret app -o jsonpath='{.data.credential}' | base64 -d \
+            > "$credential_file")
+          "$plugin" redact leak -o leak-redacted.hprof --secret-dir /run/secrets/app --discover
+          test "$(stat -c %a leak-redacted.hprof)" = 600
+          java --enable-native-access=ALL-UNNAMED -jar "$SECLUME_HEAPCHECK_JAR" \
+            --dump leak-redacted.hprof --secret-file "$credential_file" --discover --no-attribution
+          "$plugin" redact token -o token-redacted.hprof --discover
+          java --enable-native-access=ALL-UNNAMED -jar "$SECLUME_HEAPCHECK_JAR" \
+            --dump token-redacted.hprof --discover --no-attribution
+          code=0
+          "$plugin" redact leak -o leak-redacted.hprof --discover 2>/dev/null || code=$?
+          test "$code" = 2 || { echo "an existing copy was overwritten"; exit 1; }
+          rm -f "$credential_file" leak-redacted.hprof token-redacted.hprof
           for pod in leak clean token; do
             left=$(kubectl exec "$pod" -c app -- sh -c 'ls /tmp | grep -c "[.]hprof$" || true')
             test "$left" = 0 || { echo "a heap dump was left in $pod"; exit 1; }
