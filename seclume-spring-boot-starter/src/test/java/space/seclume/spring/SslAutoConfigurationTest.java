@@ -189,7 +189,15 @@ class SslAutoConfigurationTest {
              AnnotationConfigApplicationContext context = context(spiffe)) {
             SslBundle bundle = context.getBean(SslBundles.class).getBundle("mesh");
             assertEquals(MESH, mutual(bundle.createSslContext(), bundle.createSslContext()));
-            assertEquals(1, agent.calls(), "one SVID for the bundle's key and trust");
+            // One look and one stream that stays open, for the key and the trust together.
+            long deadline = System.nanoTime() + 20_000_000_000L;
+            while (!(agent.calls() >= 2 && agent.openStreams() == 1)
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(50);
+            }
+            Thread.sleep(200);
+            assertEquals(2, agent.calls(), "one SVID for the bundle's key and trust");
+            assertEquals(1, agent.openStreams());
 
             List<Map<String, Object>> certificates = (List<Map<String, Object>>)
                     new SeclumeEndpoint(List.of()).report().get("certificates");
@@ -215,7 +223,13 @@ class SslAutoConfigurationTest {
                                 .getProtocolHandler()).findSslHostConfigs();
                 assertEquals(org.apache.tomcat.util.net.SSLHostConfig.CertificateVerification
                         .REQUIRED, hosts[0].getCertificateVerification());
-                assertEquals(before + 1, agent.calls(), "Tomcat fetched an SVID of its own");
+                // This context's bundle: one look and one stream; Tomcat takes no more.
+                long until = System.nanoTime() + 20_000_000_000L;
+                while (agent.calls() < before + 2 && System.nanoTime() < until) {
+                    Thread.sleep(50);
+                }
+                Thread.sleep(200);
+                assertEquals(before + 2, agent.calls(), "Tomcat fetched an SVID of its own");
             }
             Exception unclear = assertThrows(Exception.class, () -> context(spiffe,
                     "seclume.server.ssl.bundle=mesh", "seclume.server.ssl.client-auth=maybe")

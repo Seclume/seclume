@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
@@ -23,6 +24,12 @@ import java.util.function.Supplier;
  * in as many DATA frames as asked, padded or not. Or, for the failures: with
  * trailers and no message, as SPIRE answers a workload it has no entry for,
  * or with nothing at all.
+ *
+ * <p>Each call is served on a thread of its own and its stream left open, as
+ * SPIRE leaves it: {@link #push} sends the current answer down every open
+ * stream - a rotation as the agent pushes it - and {@link #endStreams} ends
+ * them with trailers, as an agent that restarts does. The client's
+ * {@code WINDOW_UPDATE}s on the stream are counted ({@link #windowCredit}).
  *
  * <p>What it cannot show is SPIRE itself - attestation, rotation by the
  * agent; the answers are the shapes the SPIFFE Workload API specification and
@@ -47,6 +54,9 @@ public final class FakeWorkloadApi implements AutoCloseable {
     private final Supplier<byte[]> answer;
     private final List<String> headerBlocks = new CopyOnWriteArrayList<>();
     private final AtomicInteger calls = new AtomicInteger();
+    private final List<SocketChannel> streams = new CopyOnWriteArrayList<>();
+    private final java.util.concurrent.atomic.AtomicLong windowCredit =
+            new java.util.concurrent.atomic.AtomicLong();
     private volatile Mode mode = Mode.ANSWER;
     private volatile boolean stopped;
 
@@ -83,12 +93,71 @@ public final class FakeWorkloadApi implements AutoCloseable {
         return headerBlocks;
     }
 
+    /** How many streams are open now. */
+    public int openStreams() {
+        return streams.size();
+    }
+
+    /** How many bytes the clients have given back to stream 1's window, in all. */
+    public long windowCredit() {
+        return windowCredit.get();
+    }
+
+    /** Sends the current answer down every open stream, as an agent pushes a rotation. */
+    public void push() throws IOException {
+        byte[] data = grpc(answer.get());
+        for (SocketChannel stream : streams) {
+            synchronized (stream) {
+                write(stream, frame(0x0, 0, 1, data));
+            }
+        }
+    }
+
+    /** Ends every open stream with trailers - grpc-status 0 - and closes it. */
+    public void endStreams() throws IOException {
+        for (SocketChannel stream : streams) {
+            synchronized (stream) {
+                // seclume-allow: a fake agent's own made-up data, no application secret
+                byte[] status = "grpc-status".getBytes(StandardCharsets.US_ASCII);
+                ByteArrayOutputStream trailers = new ByteArrayOutputStream();
+                trailers.write(0);
+                trailers.write(status.length);
+                trailers.write(status, 0, status.length);
+                trailers.write(1);
+                trailers.write('0');
+                write(stream, frame(0x1, 0x4 | 0x1, 1, trailers.toByteArray()));
+                stream.close();
+            }
+            streams.remove(stream);
+        }
+    }
+
+    private static byte[] grpc(byte[] message) {
+        ByteArrayOutputStream grpc = new ByteArrayOutputStream();
+        grpc.write(0);
+        grpc.write(message.length >>> 24);
+        grpc.write(message.length >>> 16);
+        grpc.write(message.length >>> 8);
+        grpc.write(message.length);
+        grpc.write(message, 0, message.length);
+        return grpc.toByteArray();
+    }
+
     /**
      * An {@code X509SVIDResponse} with one SVID: its SPIFFE ID, its certificate
      * chain and key (both DER) and the bundle (DER certificates).
      */
     public static byte[] x509SvidResponse(String spiffeId, byte[] chain, byte[] key,
             byte[] bundle) {
+        return x509SvidResponse(spiffeId, chain, key, bundle, Map.of());
+    }
+
+    /**
+     * The same with the bundles of federated trust domains - domain name to
+     * its DER certificates - as {@code federated_bundles} has them.
+     */
+    public static byte[] x509SvidResponse(String spiffeId, byte[] chain, byte[] key,
+            byte[] bundle, Map<String, byte[]> federated) {
         ByteArrayOutputStream svid = new ByteArrayOutputStream();
         // seclume-allow: a fake agent's own made-up data, no application secret
         field(svid, 1, spiffeId.getBytes(StandardCharsets.UTF_8));
@@ -99,6 +168,13 @@ public final class FakeWorkloadApi implements AutoCloseable {
         field(svid, 5, "internal".getBytes(StandardCharsets.UTF_8));   // the hint
         ByteArrayOutputStream response = new ByteArrayOutputStream();
         field(response, 1, svid.toByteArray());
+        for (Map.Entry<String, byte[]> domain : federated.entrySet()) {
+            ByteArrayOutputStream entry = new ByteArrayOutputStream();
+            // seclume-allow: a fake agent's own made-up data, no application secret
+            field(entry, 1, domain.getKey().getBytes(StandardCharsets.UTF_8));
+            field(entry, 2, domain.getValue());
+            field(response, 3, entry.toByteArray());
+        }
         return response.toByteArray();
     }
 
@@ -119,9 +195,20 @@ public final class FakeWorkloadApi implements AutoCloseable {
 
     private void serve() {
         while (!stopped) {
-            try (SocketChannel client = server.accept()) {
+            try {
+                SocketChannel client = server.accept();
                 calls.incrementAndGet();
-                handle(client);
+                Thread call = new Thread(() -> {
+                    try (client) {
+                        handle(client);
+                    } catch (IOException | RuntimeException e) {
+                        // the client went, or the fake was closed
+                    } finally {
+                        streams.remove(client);
+                    }
+                }, "fake-workload-api-call");
+                call.setDaemon(true);
+                call.start();
             } catch (IOException | RuntimeException e) {
                 if (stopped) {
                     return;
@@ -162,16 +249,34 @@ public final class FakeWorkloadApi implements AutoCloseable {
             write(client, frame(0x1, 0x4 | 0x1, 1, new byte[] {(byte) 0x88}));
             return;
         }
-        write(client, frame(0x1, 0x4, 1, new byte[] {(byte) 0x88}));
-        byte[] message = answer.get();
-        ByteArrayOutputStream grpc = new ByteArrayOutputStream();
-        grpc.write(0);
-        grpc.write(message.length >>> 24);
-        grpc.write(message.length >>> 16);
-        grpc.write(message.length >>> 8);
-        grpc.write(message.length);
-        grpc.write(message, 0, message.length);
-        byte[] data = grpc.toByteArray();
+        byte[] data = grpc(answer.get());
+        synchronized (client) {
+            write(client, frame(0x1, 0x4, 1, new byte[] {(byte) 0x88}));
+            first(client, now, data);
+        }
+        streams.add(client);
+        // The stream stays open, as SPIRE leaves it: the client's frames - the
+        // acknowledgements, the windows it opens again - are read until it goes.
+        while (true) {
+            byte[] head;
+            try {
+                head = read(client, 9);
+            } catch (IOException gone) {
+                return;
+            }
+            int length = ((head[0] & 0xff) << 16) | ((head[1] & 0xff) << 8) | (head[2] & 0xff);
+            int type = head[3] & 0xff;
+            int stream = ((head[5] & 0x7f) << 24) | ((head[6] & 0xff) << 16)
+                    | ((head[7] & 0xff) << 8) | (head[8] & 0xff);
+            byte[] payload = read(client, length);
+            if (type == 0x8 && stream == 1 && payload.length == 4) {
+                windowCredit.addAndGet(((payload[0] & 0x7f) << 24) | ((payload[1] & 0xff) << 16)
+                        | ((payload[2] & 0xff) << 8) | (payload[3] & 0xff));
+            }
+        }
+    }
+
+    private static void first(SocketChannel client, Mode now, byte[] data) throws IOException {
         if (now == Mode.SPLIT) {
             int parts = 3;
             int step = (data.length + parts - 1) / parts;
@@ -188,12 +293,6 @@ public final class FakeWorkloadApi implements AutoCloseable {
             }
         } else {
             write(client, frame(0x0, 0, 1, data));
-        }
-        // A stream: no trailers - the client takes its message and goes.
-        // seclume-allow: a fake agent's own made-up data, no application secret
-        ByteBuffer rest = ByteBuffer.allocate(4096);
-        while (client.read(rest) >= 0) {
-            rest.clear();
         }
     }
 
@@ -272,6 +371,9 @@ public final class FakeWorkloadApi implements AutoCloseable {
     @Override
     public void close() throws IOException {
         stopped = true;
+        for (SocketChannel stream : streams) {
+            stream.close();
+        }
         server.close();
         Files.deleteIfExists(socket);
     }

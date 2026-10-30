@@ -14,26 +14,38 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.X509ExtendedTrustManager;
 
 /**
- * Trusts a peer the way SPIFFE does: its chain leads to a CA of the trust
- * bundle the Workload API gave - the latest one, so a rotated bundle counts at
- * once - and its leaf names exactly one SPIFFE ID ({@code spiffe://...} as its
- * only URI SAN), which, if a set of IDs is given, has to be one of them. Host
- * names play no part: an SVID has none to check.
+ * Trusts a peer the way SPIFFE does: its leaf names exactly one SPIFFE ID
+ * ({@code spiffe://...} as its only URI SAN), and its chain leads to a CA of
+ * the bundle of <b>that ID's trust domain</b> - the workload's own, or one it
+ * federates with, as the Workload API gave them last, so a rotated bundle
+ * counts at once. A peer of a domain without a bundle is refused, and so is
+ * one whose ID claims a domain its CA does not speak for. If a set of IDs is
+ * given, the peer's has to be one of them. Host names play no part: an SVID
+ * has none to check.
  */
 final class SpiffeTrustManager extends X509ExtendedTrustManager {
 
-    private final Supplier<List<X509Certificate>> bundle;
+    private final Function<String, List<X509Certificate>> bundles;
+    private final Supplier<List<X509Certificate>> issuers;
     private final Set<String> peers;
 
-    /** @param peers the SPIFFE IDs a peer may have; empty for any of the trust domain */
-    SpiffeTrustManager(Supplier<List<X509Certificate>> bundle, Set<String> peers) {
-        this.bundle = bundle;
+    /**
+     * @param bundles the CAs for a trust domain - empty for one without a bundle
+     * @param issuers every CA, for {@link #getAcceptedIssuers}
+     * @param peers   the SPIFFE IDs a peer may have; empty for any of the trust
+     *                domains that have a bundle
+     */
+    SpiffeTrustManager(Function<String, List<X509Certificate>> bundles,
+            Supplier<List<X509Certificate>> issuers, Set<String> peers) {
+        this.bundles = bundles;
+        this.issuers = issuers;
         this.peers = Set.copyOf(peers);
     }
 
@@ -41,9 +53,21 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
         if (chain == null || chain.length == 0) {
             throw new CertificateException("the peer showed no certificate");
         }
-        List<X509Certificate> anchors = bundle.get();
+        // The ID first - read, not yet believed - because its trust domain says
+        // whose CAs the chain has to lead to.
+        String id = spiffeId(chain[0]);
+        String domain;
+        try {
+            domain = space.seclume.secret.SpiffeWorkloadApi.trustDomain(id);
+        } catch (IllegalArgumentException e) {
+            throw new CertificateException("the peer's SPIFFE ID is malformed: "
+                    + e.getMessage(), e);
+        }
+        List<X509Certificate> anchors = bundles.apply(domain);
         if (anchors.isEmpty()) {
-            throw new CertificateException("the Workload API gave no trust bundle");
+            throw new CertificateException("the peer is of the trust domain " + domain
+                    + ", for which the Workload API gave no bundle - not this workload's, "
+                    + "not one it federates with");
         }
         try {
             Set<TrustAnchor> trust = new HashSet<>();
@@ -55,10 +79,9 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
             CertPathValidator.getInstance("PKIX").validate(CertificateFactory.getInstance("X.509")
                     .generateCertPath(Arrays.asList(chain)), parameters);
         } catch (GeneralSecurityException e) {
-            throw new CertificateException("the peer's certificate is not from the trust "
-                    + "domain's CAs: " + e.getMessage(), e);
+            throw new CertificateException("the peer's certificate is not from the CAs of "
+                    + domain + ": " + e.getMessage(), e);
         }
-        String id = spiffeId(chain[0]);
         if (!peers.isEmpty() && !peers.contains(id)) {
             throw new CertificateException("the peer is " + id + ", which is not one of "
                     + peers);
@@ -128,6 +151,6 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
 
     @Override
     public X509Certificate[] getAcceptedIssuers() {
-        return bundle.get().toArray(X509Certificate[]::new);
+        return issuers.get().toArray(X509Certificate[]::new);
     }
 }
