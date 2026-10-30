@@ -58,8 +58,38 @@ public final class SeclumeTomcat {
         enable(connector, () -> SeclumeKeys.keyManager(chain, keySpec, interval));
     }
 
+    /** Whether the connector asks clients for a certificate. */
+    public enum ClientAuth {
+        /** It does not. */
+        NONE,
+        /** It asks, and lets a client without one in. */
+        WANT,
+        /** A client without a certificate the trust accepts is refused. */
+        NEED
+    }
+
+    /**
+     * HTTPS with a key manager that may keep its own certificate current - one
+     * from {@link SeclumeKeys#vaultPkiKeyManager}, from a SPIFFE agent
+     * ({@link SeclumeKeys#spiffe}), or a Spring SSL bundle's - so that a
+     * renewed certificate is served from the next handshake on, the connector
+     * untouched. With {@code trust} and {@code clientAuth} the connector does
+     * mutual TLS: a SPIFFE trust manager lets in the workloads of its trust
+     * domain, or those its {@code peer-ids} name; {@code null} is the JVM's.
+     */
+    public static void enableHttps(Connector connector, X509ExtendedKeyManager keys,
+                                   javax.net.ssl.X509TrustManager trust, ClientAuth clientAuth) {
+        enable(connector, () -> keys, trust, clientAuth);
+    }
+
     private static void enable(Connector connector,
                                java.util.function.Supplier<X509ExtendedKeyManager> managers) {
+        enable(connector, managers, null, ClientAuth.NONE);
+    }
+
+    private static void enable(Connector connector,
+                               java.util.function.Supplier<X509ExtendedKeyManager> managers,
+                               javax.net.ssl.X509TrustManager trust, ClientAuth clientAuth) {
         if (!(connector.getProtocolHandler() instanceof AbstractHttp11Protocol<?> protocol)) {
             throw new IllegalArgumentException("HTTPS is set up on an HTTP/1.1 connector, not "
                     + "on " + connector.getProtocolHandler().getClass().getName());
@@ -68,18 +98,30 @@ public final class SeclumeTomcat {
         javax.net.ssl.SSLContext context;
         try {
             context = javax.net.ssl.SSLContext.getInstance("TLSv1.3");
-            context.init(new KeyManager[] {manager}, null, null);
+            context.init(new KeyManager[] {manager},
+                    trust == null ? null : new TrustManager[] {trust}, null);
         } catch (java.security.GeneralSecurityException e) {
             throw new IllegalStateException("the TLS context could not be made", e);
         }
-        String algorithm = manager.getPrivateKey(SeclumeKeyManager.ALIAS).getAlgorithm();
+        java.security.PrivateKey key = manager.getPrivateKey(SeclumeKeyManager.ALIAS);
+        if (key == null) {
+            throw new IllegalArgumentException("the key manager has no key under \""
+                    + SeclumeKeyManager.ALIAS + "\" - it is not one of seclume-keys'");
+        }
+        String algorithm = key.getAlgorithm();
 
         SSLHostConfig host = new SSLHostConfig();
         host.setHostName(protocol.getDefaultSSLHostConfigName());
+        host.setCertificateVerification(switch (clientAuth == null ? ClientAuth.NONE
+                : clientAuth) {
+            case NONE -> "none";
+            case WANT -> "optional";
+            case NEED -> "required";
+        });
         SSLHostConfigCertificate certificate = new SSLHostConfigCertificate(host,
                 algorithm.equals("EC") ? SSLHostConfigCertificate.Type.EC
                         : SSLHostConfigCertificate.Type.RSA);
-        certificate.setSslContext(new Provided(context, manager));
+        certificate.setSslContext(new Provided(context, manager, trust));
         host.addCertificate(certificate);
         protocol.addSslHostConfig(host, true);
         protocol.setSSLEnabled(true);
@@ -88,7 +130,8 @@ public final class SeclumeTomcat {
     }
 
     /** Tomcat's view of a context that is already initialized. */
-    private record Provided(javax.net.ssl.SSLContext context, X509ExtendedKeyManager manager)
+    private record Provided(javax.net.ssl.SSLContext context, X509ExtendedKeyManager manager,
+                            javax.net.ssl.X509TrustManager trust)
             implements SSLContext {
 
         @Override
@@ -129,7 +172,7 @@ public final class SeclumeTomcat {
 
         @Override
         public X509Certificate[] getAcceptedIssuers() {
-            return new X509Certificate[0];
+            return trust == null ? new X509Certificate[0] : trust.getAcceptedIssuers();
         }
     }
 }

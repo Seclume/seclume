@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Tomcat serves `vault-pki=` and `spiffe=` bundles.** `seclume.server.ssl.bundle` names any
+  bundle now; for the two that renew their certificate themselves Tomcat shares the bundle's key
+  manager, so a renewed certificate is served from the next handshake on.
+  `seclume.server.ssl.client-auth` (`none`, `want`, `need`) makes the connector ask for a client
+  certificate - checked by the trust domain's bundle for SPIFFE, which is mutual TLS between
+  workloads. `SeclumeTomcat.enableHttps(connector, keyManager, trustManager, clientAuth)` does
+  the same without Spring. Tested with an embedded Tomcat, a SPIFFE agent stand-in and a rotated
+  SVID.
 - **Keys that never leave a key management service** (`kms=vault-transit`, opt-in). A key in
   Vault's or OpenBao's transit engine signs there: the message is hashed here, only the hash is
   sent, and the process holds the public half and a token - nothing a dump could take for the
