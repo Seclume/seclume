@@ -60,7 +60,8 @@
       {"test": "space.seclume.heapdump.RecordingRedactionTest", "module": "seclume-heapdump",
        "property": "a Flight Recorder recording is redacted and still reads"},
       {"test": "space.seclume.heapcheck.HeapCheckTest", "module": "seclume-heapcheck",
-       "property": "heapcheck finds a secret in a running JVM and reports none it does not hold"},
+       "property": "heapcheck finds a secret in a running JVM and reports none it does not hold",
+       "skips": {"windows-x64": "--in-target reads through /proc/<pid>/root, which only Linux has"}},
       {"test": "space.seclume.heapcheck.CommandLineTest", "module": "seclume-heapcheck",
        "property": "heapcheck refuses a secret as an argument and fails rather than reporting a heap it could not read"}
     ],
