@@ -252,6 +252,29 @@ maps a client certificate by its common name, and an SVID's identity is its URI 
 SPIRE has to give it a CN (a registration entry's `dns_names`), or `pg_ident.conf` maps it.
 `clientCertSpiffe-timeout-millis` (10 s) bounds each call to the agent.
 
+**Or a key that is not in the process at all - on Linux too.** `clientKey-kms=vault-transit`
+in place of `clientKey-provider=` leaves the key in Vault's (or OpenBao's) transit engine. The
+certificate stays a file; each handshake hashes its transcript here and has transit sign the
+hash, so the key exists only in Vault, and a dump of the whole process holds nothing but a
+token that expires:
+
+```properties
+jdbc:seclume:postgresql://db:5432/app?user=orders.svc&tls=verify-full&tlsStack=seclume&provider=none&clientCert=/etc/tls/client.crt&clientKey-kms=vault-transit&clientKey-address=https://vault:8200&clientKey-key-name=pg-client&clientKey-auth-method=kubernetes&clientKey-auth-role=orders
+```
+
+`key-name` names the key; `transit-mount` (`transit`) and `key-version` are optional - the
+version is the latest when the connection is configured, and then that one, so that a key
+rotated in Vault does not part from its certificate. The token comes as for `provider=vault`
+and needs `read` on `transit/keys/<name>` and `update` on `transit/sign/<name>/*`. When the
+key is opened, its public half is read, checked against the certificate, and one signature is
+made and verified - a wrong name, version or policy fails there, not in a handshake. Each
+signature is one round trip to Vault and a `space.seclume.RemoteSignature` event: cheap for
+pooled connections, which shake hands once.
+
+The certificate for such a key comes from anywhere that signs a request:
+`VaultPkiIssuer.certify(key)` has the PKI engine certify it, the request signed in transit.
+CI logs into PostgreSQL that way against real Vault and OpenBao.
+
 **And no password at all.** `provider=none` with a client certificate is a login by the
 certificate alone: PostgreSQL's `cert` method, or a MySQL account with an empty password and
 `REQUIRE SUBJECT`. The only credential left is the key, and it need not be in the process.

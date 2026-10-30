@@ -187,6 +187,43 @@ public final class SeclumeEvents {
     }
 
     /**
+     * A signature made by a key that lives in a key management service -
+     * Vault's transit engine, a cloud KMS - and the request that asked for it:
+     * each TLS handshake that presents such a key costs one.
+     *
+     * <p>Its duration is the round trip, which is what a handshake now waits
+     * for; a failure says why the service did not sign. The key is named as
+     * the configuration names it; the hash sent and the signature that came
+     * back are public and still not recorded.
+     */
+    @Name("space.seclume.RemoteSignature")
+    @Label("Remote Signature")
+    @Category({CATEGORY, "Connection"})
+    @Description("A signature made by a key held in a key management service, or a failed request")
+    @StackTrace(false)
+    public static final class RemoteSignature extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public RemoteSignature() {
+        }
+
+        @Label("Key")
+        @Description("The key as configured - service, name and version")
+        public String key;
+
+        @Label("Digest")
+        @Description("SHA256, SHA384 or SHA512")
+        public String digest;
+
+        @Label("Succeeded")
+        public boolean succeeded;
+
+        @Label("Reason")
+        @Description("Why it failed; empty when it did not")
+        public String reason;
+    }
+
+    /**
      * A certificate a key manager obtained for a key of its own - from Vault's
      * PKI, say - or failed to: each issue and renewal.
      *

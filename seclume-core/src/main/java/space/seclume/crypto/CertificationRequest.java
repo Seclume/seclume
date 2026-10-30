@@ -22,17 +22,30 @@ public final class CertificationRequest {
     /** ecdsa-with-SHA256, 1.2.840.10045.4.3.2. */
     private static final byte[] ECDSA_SHA256 = {0x06, 0x08, 0x2a, (byte) 0x86, 0x48,
         (byte) 0xce, 0x3d, 0x04, 0x03, 0x02};
+    /** ecdsa-with-SHA384, 1.2.840.10045.4.3.3. */
+    private static final byte[] ECDSA_SHA384 = {0x06, 0x08, 0x2a, (byte) 0x86, 0x48,
+        (byte) 0xce, 0x3d, 0x04, 0x03, 0x03};
+    /** sha256WithRSAEncryption, 1.2.840.113549.1.1.11, and its NULL parameters. */
+    private static final byte[] RSA_SHA256 = {0x06, 0x09, 0x2a, (byte) 0x86, 0x48,
+        (byte) 0x86, (byte) 0xf7, 0x0d, 0x01, 0x01, 0x0b, 0x05, 0x00};
     /** commonName, 2.5.4.3. */
     private static final byte[] COMMON_NAME = {0x06, 0x03, 0x55, 0x04, 0x03};
 
     private CertificationRequest() {
     }
 
-    /** The request in DER, for {@code commonName}, signed by {@code key} (EC) with SHA-256. */
+    /**
+     * The request in DER, for {@code commonName}, signed by {@code key}: an EC
+     * key with SHA-256 - with SHA-384 on P-384, which is the only hash a cloud
+     * KMS lets such a key sign - and an RSA key with SHA-256, PKCS#1 v1.5.
+     */
     public static byte[] der(PrivateSigningKey key, String commonName) {
-        if (!key.is("EC")) {
-            throw new IllegalArgumentException("a request is signed here with an EC key only");
+        boolean rsa = key.is("RSA");
+        if (!rsa && !key.is("EC")) {
+            throw new IllegalArgumentException("a request is signed here with an EC or RSA "
+                    + "key only");
         }
+        boolean p384 = !rsa && fieldSize(key.publicKey()) == 384;
         if (commonName == null || commonName.isBlank()) {
             throw new IllegalArgumentException("a certificate needs a common name");
         }
@@ -46,11 +59,25 @@ public final class CertificationRequest {
             MemorySegment message = arena.allocate(info.length);
             MemorySegment.copy(info, 0, message, ValueLayout.JAVA_BYTE, 0, info.length);
             MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
-            int written = key.sign("SHA256", false, message, info.length, out);
+            int written = key.sign(p384 ? "SHA384" : "SHA256", false, message, info.length,
+                    out);
             bits = new byte[written + 1];
             MemorySegment.copy(out, ValueLayout.JAVA_BYTE, 0, bits, 1, written);
         }
-        return sequence(info, sequence(ECDSA_SHA256), tlv(0x03, bits));
+        return sequence(info, sequence(rsa ? RSA_SHA256 : p384 ? ECDSA_SHA384 : ECDSA_SHA256),
+                tlv(0x03, bits));
+    }
+
+    private static int fieldSize(byte[] spki) {
+        try {
+            java.security.PublicKey parsed = java.security.KeyFactory.getInstance("EC")
+                    .generatePublic(new java.security.spec.X509EncodedKeySpec(spki));
+            return ((java.security.interfaces.ECPublicKey) parsed).getParams().getCurve()
+                    .getField().getFieldSize();
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalArgumentException("the key's public half is no EC key the JDK "
+                    + "reads", e);
+        }
     }
 
     /** The same as PEM, as Vault's {@code csr} parameter takes it. */

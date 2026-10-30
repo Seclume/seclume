@@ -240,6 +240,31 @@ public final class Observed {
         event.commit();
     }
 
+    public static SeclumeEvents.RemoteSignature beginRemoteSignature() {
+        SeclumeEvents.RemoteSignature event = new SeclumeEvents.RemoteSignature();
+        if (!event.isEnabled()) {
+            return null;
+        }
+        event.begin();
+        return event;
+    }
+
+    public static void endRemoteSignature(SeclumeEvents.RemoteSignature event, String key,
+            String digest, boolean succeeded, String reason) {
+        if (event == null) {
+            return;
+        }
+        event.end();
+        if (!event.shouldCommit()) {
+            return;
+        }
+        event.key = key;
+        event.digest = digest;
+        event.succeeded = succeeded;
+        event.reason = reason == null ? "" : reason;
+        event.commit();
+    }
+
     public static SeclumeEvents.CertificateRenewal beginCertificateRenewal() {
         SeclumeEvents.CertificateRenewal event = new SeclumeEvents.CertificateRenewal();
         if (!event.isEnabled()) {

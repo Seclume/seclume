@@ -14,7 +14,8 @@
 # AppRole login), .local-vault-jwt (a JWT the JWT mount accepts),
 # .local-vault-pki-ca.pem (the root of the PKI engine at pki/, whose role
 # "client" signs client certificates under seclume.test - and which
-# PostgreSQL trusts for orders.seclume.test's certificate login). The
+# PostgreSQL trusts for orders.seclume.test's certificate login). The transit
+# engine holds pg-client, a P-256 key such a certificate can be made for. The
 # PostgreSQL password stays in the work directory, read by Vault from its file
 # and by nobody else.
 #
@@ -115,6 +116,8 @@ path "database/creds/app" { capabilities = ["read"] }
 path "sys/leases/renew"   { capabilities = ["update"] }
 path "sys/leases/revoke"  { capabilities = ["update"] }
 path "pki/sign/client"    { capabilities = ["update"] }
+path "transit/keys/pg-client"   { capabilities = ["read"] }
+path "transit/sign/pg-client/*" { capabilities = ["update"] }
 POLICY
 vault auth enable approle >/dev/null
 vault write auth/approle/role/app token_policies=db-app token_ttl=30s token_max_ttl=90s \
@@ -133,6 +136,11 @@ vault write -field=certificate pki/root/generate/internal common_name="seclume C
   ttl=24h > .local-vault-pki-ca.pem
 vault write pki/roles/client allowed_domains=seclume.test allow_subdomains=true \
   max_ttl=1h client_flag=true server_flag=false key_type=any >/dev/null
+# The transit engine, for keys that sign in Vault and never leave it: pg-client
+# (P-256) is the key of a client certificate the PKI above signs - its request
+# signed in transit too.
+vault secrets enable transit >/dev/null
+vault write -f transit/keys/pg-client type=ecdsa-p256 >/dev/null
 # And PostgreSQL trusts that root for client certificates: orders.seclume.test
 # logs in by its certificate alone (cert), before every other hba line.
 install -m 444 .local-vault-pki-ca.pem "$work/pki-ca.pem"
@@ -150,4 +158,4 @@ vault read -field=role_id auth/approle/role/app/role-id > .local-vault-role-id
 vault write -f -field=secret_id auth/approle/role/app/secret-id > .local-vault-secret-id
 cp "$work/ca.pem" .local-vault-pg-ca.pem
 echo "$vault_cli on 8210 (dev, TLS), database/creds/app for PostgreSQL 17 on 5440," \
-  "logins: approle, jwt; pki/sign/client"
+  "logins: approle, jwt; pki/sign/client; transit/keys/pg-client"
