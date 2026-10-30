@@ -1170,8 +1170,8 @@ jobs:
       # do.
       - name: Wait for SQL Server and create the test database
         run: |
-          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
-          if [ -z "$id" ]; then echo "no SQL Server container found" >&2; exit 1; fi
+          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:${{ matrix.version }}-latest" | head -1)
+          if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server ${{ matrix.version }} container found"; exit 1; fi
           sql="if db_id('seclume_test') is null create database seclume_test"
           pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
           for i in $(seq 1 40); do
@@ -1180,7 +1180,7 @@ jobs:
             fi
             sleep 5
           done
-          echo "SQL Server never accepted a login" >&2
+          echo "::error title=sqlserver::SQL Server ${{ matrix.version }} never accepted a login: $(docker logs "$id" 2>&1 | tail -15 | tr '\n' ' ' | cut -c1-2500)"
           exit 1
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
       - run: ./mvnw -B -pl seclume-sqlserver -am test
