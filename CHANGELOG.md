@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **SPIFFE rotations as they happen, and federation.** seclume-keys' SPIFFE key manager keeps
+  the Workload API's `FetchX509SVID` stream open (`SpiffeWorkloadApi.watchX509Svids`): an SVID
+  or bundle the agent pushes is taken at once, the stream reopened when it breaks, the HTTP/2
+  window reopened as it is read; the look at 55% stays as a fallback, and a replaced SVID that
+  arrives late is not taken back (`stream=false` turns the stream off). The bundles of
+  federated trust domains (`federated_bundles`) come with each SVID, and a peer is checked
+  against the CAs of its own ID's trust domain - an SVID from another domain's CA claiming
+  this one is refused. `FakeWorkloadApi` serves each call on its own thread, keeps streams
+  open, pushes, ends streams and sends federated bundles.
 - **Keys in AWS KMS, Google Cloud KMS and Azure Key Vault** (`kms=aws-kms`, `gcp-kms`,
   `azure-key-vault`), next to Vault transit and everywhere it goes: JDBC client certificates,
   key managers, Spring SSL bundles, Tomcat. The hash is made here and signed there - AWS with

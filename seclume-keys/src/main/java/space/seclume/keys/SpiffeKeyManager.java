@@ -6,6 +6,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,11 +20,15 @@ import space.seclume.secret.VaultPkiIssuer;
  * in OpenSSL or CNG ({@link SpiffeWorkloadApi}), never a {@code PrivateKey}
  * on the heap as every SPIFFE library has it.
  *
- * <p>SPIRE rotates an SVID when half its life is gone; this asks again once
- * 55% has passed, and again a little later each time the agent still has the
- * same one. A new SVID is used from the next handshake on; generations and
- * their aliases are {@link RotatingKeyManager}'s. The trust bundle of each
- * answer is kept for {@link SpiffeTrustManager}.
+ * <p>SPIRE rotates an SVID when half its life is gone and pushes the new one
+ * down the open {@code FetchX509SVID} stream, which this keeps open
+ * ({@link SpiffeWorkloadApi#watchX509Svids}) - a rotated SVID, a changed bundle
+ * is taken the moment it comes. Beside the stream it still asks once 55% has
+ * passed, and again a little later each time the agent has the same one, in
+ * case the stream is down. A new SVID is used from the next handshake on;
+ * generations and their aliases are {@link RotatingKeyManager}'s. The trust
+ * bundle of each answer, and the bundles of the trust domains it federates
+ * with, are kept for {@link SpiffeTrustManager}.
  */
 final class SpiffeKeyManager extends RotatingKeyManager {
 
@@ -36,13 +41,34 @@ final class SpiffeKeyManager extends RotatingKeyManager {
     private final ScheduledExecutorService scheduler;
     private volatile String spiffeId;
     private volatile List<X509Certificate> bundle = List.of();
+    private volatile Map<String, List<X509Certificate>> federated = Map.of();
+    private volatile String trustDomain;
+    private SpiffeWorkloadApi.Watch watch;
+    /**
+     * The serials this has replaced - the last few. An answer that brings one
+     * of them is late, not new: the stream's first message, say, overtaken by
+     * a look that already found the next SVID.
+     */
+    private final java.util.Set<java.math.BigInteger> replaced = // seclume-allow: certificates' serials, which are public
+            java.util.Collections.newSetFromMap(new java.util.LinkedHashMap<>() {
+                private static final long serialVersionUID = 1L;
+
+                @Override
+                protected boolean removeEldestEntry(
+                        Map.Entry<java.math.BigInteger, Boolean> eldest) { // seclume-allow: a public serial
+                    return size() > 16;
+                }
+            });
     private volatile java.math.BigInteger serial; // seclume-allow: a certificate's serial, public
     private volatile Instant notBefore;
     private volatile Instant notAfter;
     private boolean closed;
 
-    /** @param name what it is listed and recorded as; {@code null} for the SPIFFE ID */
-    SpiffeKeyManager(SpiffeWorkloadApi api, String name, Clock clock) {
+    /**
+     * @param name   what it is listed and recorded as; {@code null} for the SPIFFE ID
+     * @param stream whether to keep the stream open for rotations as they come
+     */
+    SpiffeKeyManager(SpiffeWorkloadApi api, String name, Clock clock, boolean stream) {
         this.api = api;
         this.configuredName = name == null || name.isBlank() ? null : name.trim();
         this.clock = clock;
@@ -61,6 +87,42 @@ final class SpiffeKeyManager extends RotatingKeyManager {
             return thread;
         });
         schedule(Duration.between(clock.instant(), nextRenewal()));
+        if (stream) {
+            SpiffeWorkloadApi.Watch opened = api.watchX509Svids(this::pushed, failure -> {
+                failed(failure.getMessage());
+                LOG.log(System.Logger.Level.WARNING, "the stream of X.509-SVIDs from "
+                        + api.socket() + " broke (" + failure.getMessage() + "); opening it "
+                        + "again, and asking at " + nextRenewal() + " in any case");
+            });
+            synchronized (this) {
+                if (closed) {
+                    opened.close();
+                } else {
+                    watch = opened;
+                }
+            }
+        }
+    }
+
+    /** An SVID the agent pushed down the open stream. */
+    private void pushed(SpiffeWorkloadApi.X509Svid svid) {
+        space.seclume.jfr.SeclumeEvents.CertificateRenewal event =
+                space.seclume.jfr.Observed.beginCertificateRenewal();
+        boolean fresh;
+        synchronized (this) {
+            if (closed) {
+                svid.key().close();
+                return;
+            }
+            fresh = take(svid);
+        }
+        succeeded();
+        if (fresh) {
+            space.seclume.jfr.Observed.endCertificateRenewal(event, name(),
+                    api.socket().toString(), true, notAfter.toEpochMilli(), null);
+            LOG.log(System.Logger.Level.INFO, "a new X.509-SVID for " + spiffeId + " pushed by "
+                    + "the agent, valid until " + notAfter + "; used from the next handshake on");
+        }
     }
 
     /** Asks the agent; installs the SVID if it is a new one. Whether it was. */
@@ -69,20 +131,10 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                 space.seclume.jfr.Observed.beginCertificateRenewal();
         try {
             SpiffeWorkloadApi.X509Svid svid = api.fetchX509Svid();
-            X509Certificate leaf = svid.chain().get(0);
-            boolean fresh = !leaf.getSerialNumber().equals(serial);
-            if (fresh) {
-                NativeKey key = NativeKey.of(svid.key());
-                install(new SeclumeKeyManager(svid.chain().toArray(X509Certificate[]::new),
-                        OpenSslPrivateKey.of(key)));
-                serial = leaf.getSerialNumber();
-                notBefore = svid.notBefore();
-                notAfter = svid.notAfter();
-            } else {
-                svid.key().close();
+            boolean fresh;
+            synchronized (this) {
+                fresh = take(svid);
             }
-            spiffeId = svid.spiffeId();
-            bundle = svid.bundle();
             space.seclume.jfr.Observed.endCertificateRenewal(event, name(),
                     api.socket().toString(), true, notAfter.toEpochMilli(), null);
             return fresh;
@@ -92,6 +144,39 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                     e.getMessage());
             throw e;
         }
+    }
+
+    /**
+     * Installs {@code svid} if it is a new one - a new serial - and takes its
+     * bundles either way, closing its key when it is not used. Whether it was
+     * new.
+     */
+    private boolean take(SpiffeWorkloadApi.X509Svid svid) {
+        X509Certificate leaf = svid.chain().get(0);
+        if (replaced.contains(leaf.getSerialNumber())) {
+            // late: this SVID was in use once and has been replaced
+            svid.key().close();
+            return false;
+        }
+        boolean fresh = !leaf.getSerialNumber().equals(serial);
+        if (fresh) {
+            if (serial != null) {
+                replaced.add(serial);
+            }
+            NativeKey key = NativeKey.of(svid.key());
+            install(new SeclumeKeyManager(svid.chain().toArray(X509Certificate[]::new),
+                    OpenSslPrivateKey.of(key)));
+            serial = leaf.getSerialNumber();
+            notBefore = svid.notBefore();
+            notAfter = svid.notAfter();
+        } else {
+            svid.key().close();
+        }
+        spiffeId = svid.spiffeId();
+        trustDomain = svid.trustDomain();
+        bundle = svid.bundle();
+        federated = svid.federatedBundles();
+        return fresh;
     }
 
     /** Asks now; whether the agent had a new SVID. */
@@ -142,6 +227,25 @@ final class SpiffeKeyManager extends RotatingKeyManager {
         return bundle;
     }
 
+    /**
+     * The CAs a peer of {@code domain} is checked against: the workload's own
+     * bundle for its own trust domain, a federated one's for another - none for
+     * a domain it does not federate with.
+     */
+    List<X509Certificate> bundleFor(String domain) {
+        if (domain.equals(trustDomain)) {
+            return bundle;
+        }
+        return federated.getOrDefault(domain, List.of());
+    }
+
+    /** Every CA a peer may chain to: the own bundle and the federated ones. */
+    List<X509Certificate> allBundles() {
+        List<X509Certificate> all = new java.util.ArrayList<>(bundle);
+        federated.values().forEach(all::addAll);
+        return all;
+    }
+
     @Override
     String name() {
         if (configuredName != null) {
@@ -167,6 +271,9 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                 return;
             }
             closed = true;
+            if (watch != null) {
+                watch.close();
+            }
         }
         unregister();
         scheduler.shutdownNow();

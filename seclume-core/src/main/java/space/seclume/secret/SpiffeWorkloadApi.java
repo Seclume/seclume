@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 import space.seclume.crypto.PrivateSigningKey;
 
@@ -37,9 +38,15 @@ import space.seclume.crypto.PrivateSigningKey;
  * <p>The transport is the smallest HTTP/2 a unary call needs, over the Unix
  * socket with prior knowledge: the preface, SETTINGS, one HEADERS with every
  * field a plain literal, one empty request message, and frames read until
- * the first response message is whole. {@code FetchX509SVID} is a stream; a
- * call takes its first message and closes - asked again before the SVID
- * reaches the point SPIRE rotates it, it brings the new one.
+ * the first response message is whole. {@code FetchX509SVID} is a stream: a
+ * single call ({@link #fetchX509Svid}) takes its first message and closes;
+ * {@link #watchX509Svids} keeps the stream open and hands over every message
+ * the agent pushes - a rotated SVID, a changed bundle - the moment it comes,
+ * opening the flow-control window again as it reads.
+ *
+ * <p>An answer carries the bundles of federated trust domains as well
+ * ({@code federated_bundles}); they come with each SVID, so that a peer of
+ * another trust domain is checked against that domain's CAs.
  */
 public final class SpiffeWorkloadApi {
 
@@ -132,11 +139,24 @@ public final class SpiffeWorkloadApi {
      * close.
      */
     public record X509Svid(String spiffeId, List<X509Certificate> chain,
-            List<X509Certificate> bundle, PrivateSigningKey key) {
+            List<X509Certificate> bundle, PrivateSigningKey key,
+            Map<String, List<X509Certificate>> federatedBundles) {
 
         public X509Svid {
             chain = List.copyOf(chain);
             bundle = List.copyOf(bundle);
+            federatedBundles = Map.copyOf(federatedBundles);
+        }
+
+        /** An SVID of no federation. */
+        public X509Svid(String spiffeId, List<X509Certificate> chain,
+                List<X509Certificate> bundle, PrivateSigningKey key) {
+            this(spiffeId, chain, bundle, key, Map.of());
+        }
+
+        /** The trust domain its SPIFFE ID names. */
+        public String trustDomain() {
+            return SpiffeWorkloadApi.trustDomain(spiffeId);
         }
 
         public Instant notBefore() {
@@ -146,6 +166,25 @@ public final class SpiffeWorkloadApi {
         public Instant notAfter() {
             return chain.get(0).getNotAfter().toInstant();
         }
+    }
+
+    /**
+     * The trust domain of a SPIFFE ID: {@code example.org} of
+     * {@code spiffe://example.org/orders}, in lower case.
+     */
+    public static String trustDomain(String spiffeId) {
+        if (spiffeId == null || !spiffeId.regionMatches(true, 0, "spiffe://", 0, 9)) {
+            throw new IllegalArgumentException("a SPIFFE ID begins with spiffe://, not "
+                    + spiffeId);
+        }
+        int slash = spiffeId.indexOf('/', 9);
+        String domain = (slash < 0 ? spiffeId.substring(9) : spiffeId.substring(9, slash))
+                .toLowerCase(java.util.Locale.ROOT);
+        if (domain.isEmpty()) {
+            throw new IllegalArgumentException("the SPIFFE ID " + spiffeId + " names no trust "
+                    + "domain");
+        }
+        return domain;
     }
 
     /** Asks for the workload's X.509-SVID - the first one, when the agent has several. */
@@ -169,7 +208,7 @@ public final class SpiffeWorkloadApi {
                                 java.util.concurrent.TimeUnit.MILLISECONDS));
         try (SecretScope answer = SecretScope.allocate(MAX_ANSWER)) {
             request(channel);
-            int length = response(channel, answer.segment());
+            int length = new Reader(channel, answer.segment()).next();
             answer.length(5 + length);
             return parse(answer.segment(), length);
         } catch (java.nio.channels.AsynchronousCloseException timedOut) {
@@ -178,6 +217,137 @@ public final class SpiffeWorkloadApi {
         } finally {
             deadline.cancel(false);
             closeQuietly(channel);
+        }
+    }
+
+    /**
+     * Keeps {@code FetchX509SVID} open and hands every SVID the agent sends to
+     * {@code each} - the first right away, then each rotation, each changed
+     * bundle - on a thread of its own, until the watch is closed. The SVID's
+     * key is {@code each}'s to keep or close.
+     *
+     * <p>A stream that breaks - the agent restarts, the socket goes - is
+     * reported to {@code failed} and opened again, after a second at first and
+     * at most half a minute after repeated failures; the first answer of each
+     * stream is waited for at most the timeout. Between answers there is no
+     * timeout: an agent pushes only when something changed.
+     */
+    public Watch watchX509Svids(java.util.function.Consumer<X509Svid> each,
+            java.util.function.Consumer<IOException> failed) {
+        if (!PrivateSigningKey.available()) {
+            throw new IllegalStateException("an SVID's key off the heap needs OpenSSL 3 on "
+                    + "64-bit Linux or CNG on Windows, which are not there");
+        }
+        Watch watch = new Watch(each, failed);
+        watch.start();
+        return watch;
+    }
+
+    /** An open {@code FetchX509SVID} stream; closing it ends the stream and its thread. */
+    public final class Watch implements AutoCloseable {
+
+        private final java.util.function.Consumer<X509Svid> each;
+        private final java.util.function.Consumer<IOException> failed;
+        private final Thread thread;
+        private volatile SocketChannel channel;
+        private volatile boolean closed;
+        private volatile int streams;
+
+        private Watch(java.util.function.Consumer<X509Svid> each,
+                java.util.function.Consumer<IOException> failed) {
+            this.each = each;
+            this.failed = failed;
+            this.thread = new Thread(this::run, "seclume-spiffe-watch " + socket);
+            this.thread.setDaemon(true);
+        }
+
+        private void start() {
+            thread.start();
+        }
+
+        /** How many times the stream was opened - for the tests. */
+        public int streams() {
+            return streams;
+        }
+
+        private void run() {
+            long backoff = 1000;
+            while (!closed) {
+                try {
+                    stream();
+                    backoff = 1000;
+                } catch (IOException e) {
+                    if (closed) {
+                        return;
+                    }
+                    failed.accept(e);
+                } catch (RuntimeException e) {
+                    if (closed) {
+                        return;
+                    }
+                    failed.accept(new IOException("an SVID from the Workload API at " + socket
+                            + " could not be taken: " + e.getMessage(), e));
+                }
+                if (closed) {
+                    return;
+                }
+                try {
+                    Thread.sleep(backoff);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                backoff = Math.min(30_000, backoff * 2);
+            }
+        }
+
+        private void stream() throws IOException {
+            SocketChannel opened;
+            try {
+                opened = SocketChannel.open(UnixDomainSocketAddress.of(socket));
+            } catch (java.net.SocketException e) {
+                throw new IOException("the Workload API at " + socket + " could not be "
+                        + "reached: " + e.getMessage(), e);
+            }
+            channel = opened;
+            streams++;
+            if (closed) {
+                closeQuietly(opened);
+                return;
+            }
+            java.util.concurrent.CompletableFuture<Void> deadline =
+                    java.util.concurrent.CompletableFuture.runAsync(() -> closeQuietly(opened),
+                            java.util.concurrent.CompletableFuture.delayedExecutor(
+                                    timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS));
+            try (SecretScope answer = SecretScope.allocate(MAX_ANSWER)) {
+                request(opened);
+                Reader reader = new Reader(opened, answer.segment());
+                while (!closed) {
+                    int length = reader.next();
+                    deadline.cancel(false);
+                    X509Svid svid = parse(answer.segment(), length);
+                    reader.consumed(length);
+                    each.accept(svid);
+                }
+            } catch (java.nio.channels.AsynchronousCloseException stopped) {
+                if (!closed) {
+                    throw new IOException("the Workload API at " + socket + " did not answer "
+                            + "within " + timeoutMillis + " ms", stopped);
+                }
+            } finally {
+                deadline.cancel(false);
+                closeQuietly(opened);
+            }
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            SocketChannel open = channel;
+            if (open != null) {
+                closeQuietly(open);
+            }
+            thread.interrupt();
         }
     }
 
@@ -252,36 +422,28 @@ public final class SpiffeWorkloadApi {
     }
 
     /**
-     * Reads frames until stream 1 has delivered one whole gRPC message; the
-     * message - and only it - goes into {@code into}, native memory, straight
-     * from the socket. Returns the protobuf's length; it starts at offset 5.
+     * The response messages of stream 1, one after the other, each read from
+     * the socket straight into {@code into} - native memory - with nothing on
+     * the way. A frame may end one message and begin the next; what is read
+     * past a message is kept for the next one.
      */
-    private static int response(SocketChannel channel, MemorySegment into) throws IOException {
-        byte[] head = new byte[9];
-        long filled = 0;
-        while (true) {
-            readFully(channel, ByteBuffer.wrap(head));
-            int length = ((head[0] & 0xff) << 16) | ((head[1] & 0xff) << 8) | (head[2] & 0xff);
-            int type = head[3] & 0xff;
-            int flags = head[4] & 0xff;
-            int stream = ((head[5] & 0x7f) << 24) | ((head[6] & 0xff) << 16)
-                    | ((head[7] & 0xff) << 8) | (head[8] & 0xff);
-            if (type == DATA && stream == 1) {
-                int padding = 0;
-                int body = length;
-                if ((flags & PADDED) != 0) {
-                    byte[] pad = new byte[1];
-                    readFully(channel, ByteBuffer.wrap(pad));
-                    padding = pad[0] & 0xff;
-                    body = length - 1 - padding;
-                }
-                if (body < 0 || filled + body > into.byteSize()) {
-                    throw new IOException("the Workload API's answer is larger than an SVID "
-                            + "can be");
-                }
-                readFully(channel, into.asSlice(filled, body).asByteBuffer());
-                filled += body;
-                skip(channel, padding);
+    private static final class Reader {
+
+        private final SocketChannel channel;
+        private final MemorySegment into;
+        private long filled;
+        private long unacknowledged;
+        private int messages;
+
+        Reader(SocketChannel channel, MemorySegment into) {
+            this.channel = channel;
+            this.into = into;
+        }
+
+        /** The next whole message: its protobuf's length; it starts at offset 5. */
+        int next() throws IOException {
+            byte[] head = new byte[9];
+            while (true) {
                 if (filled >= 5) {
                     long message = Integer.toUnsignedLong(
                             into.get(ValueLayout.JAVA_INT_UNALIGNED.withOrder(
@@ -295,47 +457,103 @@ public final class SpiffeWorkloadApi {
                                 + "SVID can be");
                     }
                     if (filled >= 5 + message) {
+                        messages++;
                         return (int) message;
                     }
                 }
-                if ((flags & END_STREAM) != 0) {
-                    throw new IOException("the Workload API ended its answer half-way");
+                readFully(channel, ByteBuffer.wrap(head));
+                int length = ((head[0] & 0xff) << 16) | ((head[1] & 0xff) << 8)
+                        | (head[2] & 0xff);
+                int type = head[3] & 0xff;
+                int flags = head[4] & 0xff;
+                int stream = ((head[5] & 0x7f) << 24) | ((head[6] & 0xff) << 16)
+                        | ((head[7] & 0xff) << 8) | (head[8] & 0xff);
+                if (type == DATA && stream == 1) {
+                    int padding = 0;
+                    int body = length;
+                    if ((flags & PADDED) != 0) {
+                        byte[] pad = new byte[1];
+                        readFully(channel, ByteBuffer.wrap(pad));
+                        padding = pad[0] & 0xff;
+                        body = length - 1 - padding;
+                    }
+                    if (body < 0 || filled + body > into.byteSize()) {
+                        throw new IOException("the Workload API's answer is larger than an "
+                                + "SVID can be");
+                    }
+                    readFully(channel, into.asSlice(filled, body).asByteBuffer());
+                    filled += body;
+                    skip(channel, padding);
+                    // The whole frame counts against the window, padding included.
+                    unacknowledged += length;
+                    if ((flags & END_STREAM) != 0 && filled < 5) {
+                        throw new IOException(messages == 0
+                                ? "the Workload API ended its answer half-way"
+                                : "the Workload API ended the stream");
+                    }
+                    continue;
                 }
-                continue;
+                byte[] payload = new byte[length];
+                readFully(channel, ByteBuffer.wrap(payload));
+                switch (type) {
+                    case SETTINGS -> {
+                        if ((flags & ACK) == 0) {
+                            ByteArrayOutputStream ack = new ByteArrayOutputStream();
+                            frame(ack, SETTINGS, ACK, 0, new byte[0]);
+                            courtesy(channel, ack.toByteArray());
+                        }
+                    }
+                    case PING -> {
+                        if ((flags & ACK) == 0) {
+                            ByteArrayOutputStream pong = new ByteArrayOutputStream();
+                            frame(pong, PING, ACK, 0, payload);
+                            courtesy(channel, pong.toByteArray());
+                        }
+                    }
+                    case HEADERS -> {
+                        if (stream == 1 && (flags & END_STREAM) != 0) {
+                            // Trailers before a message: the call failed. SPIRE
+                            // answers an unregistered workload this way. After
+                            // one, the agent ended the stream.
+                            throw new IOException(messages == 0 ? "the Workload API gave no "
+                                    + "SVID - is this workload registered for one?"
+                                    : "the Workload API ended the stream");
+                        }
+                    }
+                    case RST_STREAM -> throw new IOException("the Workload API reset the call "
+                            + "(HTTP/2 error " + (payload.length >= 4
+                                    ? ((payload[0] & 0xff) << 24 | (payload[1] & 0xff) << 16
+                                    | (payload[2] & 0xff) << 8 | (payload[3] & 0xff)) : -1)
+                            + ")");
+                    case GOAWAY -> throw new IOException("the Workload API closed the "
+                            + "connection");
+                    default -> {
+                        // WINDOW_UPDATE, PRIORITY, an unknown type: nothing to do
+                    }
+                }
             }
-            byte[] payload = new byte[length];
-            readFully(channel, ByteBuffer.wrap(payload));
-            switch (type) {
-                case SETTINGS -> {
-                    if ((flags & ACK) == 0) {
-                        ByteArrayOutputStream ack = new ByteArrayOutputStream();
-                        frame(ack, SETTINGS, ACK, 0, new byte[0]);
-                        courtesy(channel, ack.toByteArray());
-                    }
-                }
-                case PING -> {
-                    if ((flags & ACK) == 0) {
-                        ByteArrayOutputStream pong = new ByteArrayOutputStream();
-                        frame(pong, PING, ACK, 0, payload);
-                        courtesy(channel, pong.toByteArray());
-                    }
-                }
-                case HEADERS -> {
-                    if (stream == 1 && (flags & END_STREAM) != 0) {
-                        // Trailers before a message: the call failed. SPIRE
-                        // answers an unregistered workload this way.
-                        throw new IOException("the Workload API gave no SVID - is this "
-                                + "workload registered for one?");
-                    }
-                }
-                case RST_STREAM -> throw new IOException("the Workload API reset the call "
-                        + "(HTTP/2 error " + (payload.length >= 4
-                                ? ((payload[0] & 0xff) << 24 | (payload[1] & 0xff) << 16
-                                | (payload[2] & 0xff) << 8 | (payload[3] & 0xff)) : -1) + ")");
-                case GOAWAY -> throw new IOException("the Workload API closed the connection");
-                default -> {
-                    // WINDOW_UPDATE, PRIORITY, an unknown type: nothing to do
-                }
+        }
+
+        /**
+         * Done with the message at the front: what was read past it moves up,
+         * the bytes it leaves behind are zeroed, and the flow-control window
+         * opens again by what was read - so that a stream lives longer than its
+         * first megabyte.
+         */
+        void consumed(int message) throws IOException {
+            long used = 5L + message;
+            long rest = filled - used;
+            if (rest > 0) {
+                MemorySegment.copy(into, used, into, 0, rest);
+            }
+            into.asSlice(Math.max(0, rest), used).fill((byte) 0);
+            filled = Math.max(0, rest);
+            if (unacknowledged > 0) {
+                ByteArrayOutputStream update = new ByteArrayOutputStream();
+                frame(update, WINDOW_UPDATE, 0, 0, int32((int) unacknowledged));
+                frame(update, WINDOW_UPDATE, 0, 1, int32((int) unacknowledged));
+                write(channel, update.toByteArray());
+                unacknowledged = 0;
             }
         }
     }
@@ -376,12 +594,36 @@ public final class SpiffeWorkloadApi {
     static X509Svid parse(MemorySegment answer, int length) throws IOException {
         Protobuf response = new Protobuf(answer, 5, 5 + length);
         long[] svid = null;
+        Map<String, List<X509Certificate>> federated = new java.util.LinkedHashMap<>();
         while (response.next()) {
-            if (response.field() == 1 && response.wire() == 2) {
+            if (response.field() == 1 && response.wire() == 2 && svid == null) {
                 svid = response.bytes();
-                break;
+            } else if (response.field() == 3 && response.wire() == 2) {
+                // federated_bundles, a map: entries of key (1) and value (2)
+                long[] entry = response.bytes();
+                Protobuf pair = new Protobuf(answer, entry[0], entry[0] + entry[1]);
+                String domain = null;
+                byte[] certificates = null; // seclume-allow: a trust bundle, which is public
+                while (pair.next()) {
+                    if (pair.wire() != 2) {
+                        pair.skip();
+                    } else if (pair.field() == 1) {
+                        // seclume-allow: a trust domain's name, which is public
+                        domain = new String(publicBytes(answer, pair.bytes()),
+                                StandardCharsets.UTF_8);
+                    } else if (pair.field() == 2) {
+                        certificates = publicBytes(answer, pair.bytes());
+                    } else {
+                        pair.skip();
+                    }
+                }
+                if (domain != null && certificates != null && certificates.length > 0) {
+                    federated.put(trustDomain(domain.startsWith("spiffe://") ? domain
+                            : "spiffe://" + domain), certificates(certificates));
+                }
+            } else {
+                response.skip();
             }
-            response.skip();
         }
         if (svid == null) {
             throw new IOException("the Workload API's answer holds no X.509-SVID");
@@ -421,7 +663,7 @@ public final class SpiffeWorkloadApi {
                 throw new IOException("the Workload API's key is not its certificate's");
             }
             return new X509Svid(id, certificates, bundle == null ? List.of()
-                    : certificates(bundle), signing);
+                    : certificates(bundle), signing, federated);
         } catch (IOException | RuntimeException e) {
             signing.close();
             throw e;

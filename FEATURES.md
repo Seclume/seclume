@@ -1257,20 +1257,31 @@ seclume.ssl.bundles.mesh.spiffe=socket=unix:///run/spire/agent.sock&peer-ids=spi
 
 - **Settings:** `socket` (else `SPIFFE_ENDPOINT_SOCKET`; `unix://` only - a TCP Workload API
   is refused), `timeout-millis` (10 s), `peer-ids` - the SPIFFE IDs a peer may have, comma
-  separated; without it any workload of the trust domain - and `name`, what it is listed as
-  (else its SPIFFE ID; a Spring bundle's name).
+  separated; without it any workload of a trust domain it has a bundle for - `name`, what it
+  is listed as (else its SPIFFE ID; a Spring bundle's name), and `stream` (`true`).
 - **Served by Tomcat** as well: `seclume.server.ssl.bundle=mesh` with
   `seclume.server.ssl.client-auth=need` is mutual TLS between workloads on the embedded
   Tomcat, the SVID renewed under it.
-- **Trust:** a peer's chain must lead to the bundle and its leaf carry exactly one `spiffe://`
-  URI SAN - the SPIFFE ID, which `peer-ids` checks. No host names: a workload is who its ID
-  says.
-- **Rotation:** the agent rotates; seclume asks again past 55% of the SVID's lifetime, and a
-  new one (a new serial) is used from the next handshake; the same one again is no renewal,
-  and asking again comes sooner the closer the end. Listed, graded and counted down like a
-  Vault PKI certificate (kind `spiffe`), each look a `space.seclume.CertificateRenewal` event.
+- **Trust:** a peer's leaf carries exactly one `spiffe://` URI SAN - the SPIFFE ID, which
+  `peer-ids` checks - and its chain must lead to the bundle of **that ID's trust domain**: the
+  workload's own, or a federated one's. No host names: a workload is who its ID says.
+- **Federation:** the bundles of the trust domains the workload federates with come with each
+  SVID (`federated_bundles`), so a peer of `spiffe://other.org/...` is checked against
+  other.org's CAs - and refused once the agent stops sending that bundle. An SVID from another
+  domain's CA that claims to be of this one is refused: its chain does not lead to this
+  domain's CAs.
+- **Rotation, as it happens:** the `FetchX509SVID` stream stays open, and an SVID or bundle the
+  agent pushes is taken the moment it comes - SPIRE pushes at half the SVID's life. The stream
+  is opened again when it breaks (after a second, at most half a minute apart), and the
+  flow-control window is opened again as it is read, so it outlives any number of rotations.
+  Beside it seclume still asks past 55% of the lifetime, in case the stream is down; a new SVID
+  (a new serial) is used from the next handshake, the same one again is no renewal, and one
+  already replaced that turns up late is not taken back. `stream=false` leaves only the looks.
+  Listed, graded and counted down like a Vault PKI certificate (kind `spiffe`), each SVID a
+  `space.seclume.CertificateRenewal` event.
 - **JDBC:** `clientCertSpiffe=true` (or the socket) gives seclume's own TLS the SVID as the
   database client certificate - see [TLS.md](TLS.md#mutual-tls-with-the-client-key-off-the-heap-too).
+  It looks past 55% rather than keeping a stream: a connection presents its certificate once.
 - **Keys:** EC, as SPIRE issues them by default, or RSA and Ed25519 for the key manager -
   all held by OpenSSL or CNG. seclume's own TLS (JDBC) takes P-256 and P-384.
 - **Tests:** against `FakeWorkloadApi` (seclume-tck), a stand-in agent on a Unix socket that

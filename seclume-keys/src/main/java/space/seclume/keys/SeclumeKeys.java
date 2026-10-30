@@ -192,7 +192,7 @@ public final class SeclumeKeys {
         SeclumeKeyProvider.install();
         Map<String, String> options = options(spec);
         return new SpiffeKeyManager(workloadApi(options), options.get("name"),
-                java.time.Clock.systemUTC());
+                java.time.Clock.systemUTC(), streams(options));
     }
 
     /**
@@ -226,7 +226,7 @@ public final class SeclumeKeys {
         Map<String, String> options = options(spec);
         SeclumeKeyProvider.install();
         SpiffeKeyManager keys = new SpiffeKeyManager(workloadApi(options), options.get("name"),
-                java.time.Clock.systemUTC());
+                java.time.Clock.systemUTC(), streams(options));
         java.util.Set<String> peers = new java.util.LinkedHashSet<>();
         String named = options.get("peer-ids");
         if (named != null) {
@@ -237,7 +237,8 @@ public final class SeclumeKeys {
             }
         }
         return new Spiffe(new Factory(keys),
-                new TrustFactory(new SpiffeTrustManager(keys::bundle, peers)));
+                new TrustFactory(new SpiffeTrustManager(keys::bundleFor, keys::allBundles,
+                        peers)));
     }
 
     /** A {@code TrustManagerFactory} that hands out the one trust manager it was made with. */
@@ -261,6 +262,15 @@ public final class SeclumeKeys {
                 }
             }, SeclumeKeyProvider.install(), "SeclumeSpiffe");
         }
+    }
+
+    /** {@code stream}: whether the Workload API's stream stays open for rotations - yes by default. */
+    private static boolean streams(Map<String, String> options) {
+        String value = options.getOrDefault("stream", "true").trim();
+        if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false")) {
+            throw new IllegalArgumentException("stream is true or false, not " + value);
+        }
+        return Boolean.parseBoolean(value);
     }
 
     private static space.seclume.secret.SpiffeWorkloadApi workloadApi(

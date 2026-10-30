@@ -71,7 +71,13 @@ class SpiffeTest {
     private static byte[] ca;
     private static Svid first;
     private static Svid second;
+    private static Svid third;
     private static Svid payments;
+    private static byte[] otherCa;
+    private static Svid partner;
+    private static Svid impostor;
+
+    private static final String PARTNER = "spiffe://other.org/partner";
 
     /** One SVID's parts as the agent sends them: the certificate and its PKCS#8 key, DER. */
     record Svid(byte[] certificate, byte[] key) {
@@ -90,7 +96,17 @@ class SpiffeTest {
         ca = Files.readAllBytes(directory.resolve("ca.der"));
         first = svid("first", ORDERS);
         second = svid("second", ORDERS);
+        third = svid("third", ORDERS);
         payments = svid("payments", PAYMENTS);
+        // A second trust domain, other.org, with a CA of its own - and an SVID
+        // from that CA which claims to be of example.org.
+        openssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                "-days", "2", "-subj", "/O=other.org", "-keyout", "other-ca.key", "-out",
+                "other-ca.pem");
+        openssl("x509", "-in", "other-ca.pem", "-outform", "DER", "-out", "other-ca.der");
+        otherCa = Files.readAllBytes(directory.resolve("other-ca.der"));
+        partner = svid("partner", PARTNER, "other-ca");
+        impostor = svid("impostor", "spiffe://example.org/impostor", "other-ca");
         // A server for the database side: localhost, from the same CA.
         openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
                 "-subj", "/CN=localhost", "-keyout", "server.key", "-out", "server.csr");
@@ -110,11 +126,15 @@ class SpiffeTest {
     }
 
     private static Svid svid(String name, String id) throws Exception {
+        return svid(name, id, "ca");
+    }
+
+    private static Svid svid(String name, String id, String ca) throws Exception {
         openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
                 "-subj", "/O=example.org", "-keyout", name + ".key", "-out", name + ".csr");
         Files.writeString(directory.resolve(name + ".ext"), "subjectAltName=URI:" + id
                 + "\nextendedKeyUsage=clientAuth,serverAuth\nkeyUsage=digitalSignature\n");
-        openssl("x509", "-req", "-in", name + ".csr", "-CA", "ca.pem", "-CAkey", "ca.key",
+        openssl("x509", "-req", "-in", name + ".csr", "-CA", ca + ".pem", "-CAkey", ca + ".key",
                 "-CAcreateserial", "-days", "2", "-extfile", name + ".ext", "-outform", "DER",
                 "-out", name + ".der");
         openssl("pkcs8", "-topk8", "-nocrypt", "-in", name + ".key", "-outform", "DER",
@@ -298,13 +318,136 @@ class SpiffeTest {
                 () -> payments.answer(PAYMENTS))) {
             SeclumeKeys.Spiffe parts = SeclumeKeys.spiffe("socket=unix://" + agent.socket()
                     + "&name=payments-mesh&peer-ids=" + PAYMENTS);
-            assertEquals(1, agent.calls(), "the key and the trust asked the agent apart");
+            // One look and one stream - for the key and the trust together.
+            waitFor(() -> agent.calls() >= 2 && agent.openStreams() == 1,
+                    "the stream was not opened");
+            Thread.sleep(200);
+            assertEquals(2, agent.calls(), "the key and the trust asked the agent apart");
             SSLContext context = SSLContext.getInstance("TLSv1.3");
             context.init(parts.keys().getKeyManagers(), parts.trust().getTrustManagers(), null);
             assertEquals(PAYMENTS, SpiffeTrustManager.spiffeId(mutual(context, context)));
             assertTrue(SeclumeKeys.managedCertificates().stream().anyMatch(c ->
                     c.kind().equals("spiffe") && c.name().equals("payments-mesh")),
                     SeclumeKeys.managedCertificates().toString());
+        }
+    }
+
+    /**
+     * The stream stays open, and a rotation the agent pushes is taken at once -
+     * no renewNow, no schedule - the window opened again as it is read; a
+     * stream the agent ends is opened again.
+     */
+    @Test
+    void aRotationPushedDownTheStreamIsTakenAtOnce() throws Exception {
+        AtomicReference<Svid> current = new AtomicReference<>(first);
+        try (FakeWorkloadApi agent = new FakeWorkloadApi(socket("push"),
+                () -> current.get().answer(ORDERS));
+             SpiffeKeyManager manager = (SpiffeKeyManager) SeclumeKeys.spiffeKeyManager(
+                     "socket=unix://" + agent.socket())) {
+            // the look's connection closed, the stream's open
+            waitFor(() -> agent.calls() >= 2 && agent.openStreams() == 1,
+                    "the stream was not opened");
+            java.math.BigInteger before = manager.getCertificateChain("seclume")[0]
+                    .getSerialNumber();
+            current.set(second);
+            agent.push();
+            waitFor(() -> !before.equals(manager.getCertificateChain("seclume")[0]
+                    .getSerialNumber()), "the pushed SVID was not taken");
+            assertEquals(2, manager.generations());
+            waitFor(() -> agent.windowCredit() > 0, "the window was never opened again");
+
+            agent.endStreams();
+            waitFor(() -> agent.openStreams() == 1, "the ended stream was not opened again");
+            current.set(third);
+            agent.push();
+            waitFor(() -> manager.generations() == 3,
+                    "the SVID pushed after the reconnect was not taken");
+
+            // A replaced SVID that turns up late is not taken back.
+            current.set(first);
+            agent.push();
+            Thread.sleep(500);
+            assertEquals(3, manager.generations());
+            assertNotEquals(before, manager.getCertificateChain("seclume")[0].getSerialNumber());
+        }
+    }
+
+    /** stream=false: no stream is kept - the rotation waits for the next look. */
+    @Test
+    void withoutTheStreamARotationWaitsForTheNextLook() throws Exception {
+        AtomicReference<Svid> current = new AtomicReference<>(first);
+        try (FakeWorkloadApi agent = new FakeWorkloadApi(socket("poll"),
+                () -> current.get().answer(ORDERS));
+             SpiffeKeyManager manager = (SpiffeKeyManager) SeclumeKeys.spiffeKeyManager(
+                     "socket=unix://" + agent.socket() + "&stream=false")) {
+            Thread.sleep(300);
+            assertEquals(0, agent.openStreams());
+            current.set(second);
+            agent.push();
+            assertEquals(1, manager.generations());
+            assertTrue(manager.renewNow());
+            assertEquals(2, manager.generations());
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> SeclumeKeys.spiffeKeyManager("socket=unix:///nowhere&stream=sometimes"));
+    }
+
+    /**
+     * Federation: a partner of other.org is trusted by the CAs other.org's
+     * bundle names - which comes with this workload's SVID - and only while it
+     * does; an SVID from other.org's CA that claims to be of example.org is
+     * refused, its chain not leading to example.org's CAs.
+     */
+    @Test
+    void aFederatedTrustDomainIsTrustedByItsOwnCas() throws Exception {
+        Map<String, byte[]> federation = Map.of("other.org", otherCa);
+        AtomicReference<Map<String, byte[]>> federated = new AtomicReference<>(federation);
+        try (FakeWorkloadApi ours = new FakeWorkloadApi(socket("ours"),
+                () -> FakeWorkloadApi.x509SvidResponse(ORDERS, first.certificate(),
+                        first.key(), ca, federated.get()));
+             FakeWorkloadApi theirs = new FakeWorkloadApi(socket("theirs"),
+                     () -> FakeWorkloadApi.x509SvidResponse(PARTNER, partner.certificate(),
+                             partner.key(), otherCa, Map.of("example.org", ca)));
+             FakeWorkloadApi forged = new FakeWorkloadApi(socket("forged"),
+                     // its agent knows example.org's real CAs - so the impostor
+                     // trusts the server, and it is the server that has to refuse
+                     () -> FakeWorkloadApi.x509SvidResponse("spiffe://example.org/impostor",
+                             impostor.certificate(), impostor.key(), ca))) {
+            SeclumeKeys.Spiffe server = SeclumeKeys.spiffe("socket=unix://" + ours.socket());
+            SSLContext serving = SSLContext.getInstance("TLSv1.3");
+            serving.init(server.keys().getKeyManagers(), server.trust().getTrustManagers(),
+                    null);
+            SSLContext partnerClient = SeclumeKeys.spiffeSslContext("socket=unix://"
+                    + theirs.socket() + "&peer-ids=" + ORDERS);
+            assertEquals(PARTNER, SpiffeTrustManager.spiffeId(mutual(serving, partnerClient)));
+
+            SSLContext impostorClient = SeclumeKeys.spiffeSslContext("socket=unix://"
+                    + forged.socket());
+            assertThrows(Exception.class, () -> mutual(serving, impostorClient),
+                    "an SVID of other.org's CA passed for example.org");
+
+            // The federation ends: the next answer has no bundle for other.org.
+            federated.set(Map.of());
+            ((SpiffeKeyManager) server.keys().getKeyManagers()[0]).renewNow();
+            assertThrows(Exception.class, () -> mutual(serving, partnerClient),
+                    "a partner was let in after the federation ended");
+        }
+        assertEquals("example.org", SpiffeWorkloadApi.trustDomain("spiffe://Example.org/x"));
+        assertEquals("example.org", SpiffeWorkloadApi.trustDomain("spiffe://example.org"));
+        assertThrows(IllegalArgumentException.class,
+                () -> SpiffeWorkloadApi.trustDomain("https://example.org/x"));
+        assertThrows(IllegalArgumentException.class,
+                () -> SpiffeWorkloadApi.trustDomain("spiffe:///x"));
+    }
+
+    private static void waitFor(java.util.function.BooleanSupplier condition, String otherwise)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + 20_000_000_000L;
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError(otherwise);
+            }
+            Thread.sleep(50);
         }
     }
 
