@@ -262,6 +262,12 @@ All notable changes to seclume are recorded here. Versions follow
   and fails at 1,000. Internal modules (benchmarks, proofs, test harnesses) stay out of the
   deployment as before; `seclume-tck` stays in, because it is for users' own tests.
 
+- **Getting started in five minutes** (`examples/getting-started`). A Spring Boot
+  application whose database password comes from Vault over HTTPS, with `setup.sh` for
+  PostgreSQL and Vault in Docker. `compare.sh` runs it twice, the usual way (HikariCP, pgjdbc,
+  the password from the environment) and with seclume, and has heapcheck search a heap dump of
+  each. CI runs the example against every commit and requires the usual way to leak the
+  password and seclume not to.
 - **Tested against the current server releases.** CI now runs the drivers against:
   - PostgreSQL 19 RC1, besides 15 and 18;
   - MySQL 9.7 LTS and 26.10, besides 8.4;

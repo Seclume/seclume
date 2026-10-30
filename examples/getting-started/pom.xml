@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Getting started: a Spring Boot application whose database password comes
+     from Vault and never lands on the Java heap. Not part of seclume's own
+     build: it uses seclume the way an application does, from Maven Central -
+     or, with -Dseclume.version=<snapshot>, from a local build. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>example</groupId>
+  <artifactId>seclume-getting-started</artifactId>
+  <version>1.0</version>
+
+  <properties>
+    <java.version>25</java.version>
+    <seclume.version>0.13.1</seclume.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <!-- The two lines that are the whole integration. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-spring-boot-starter</artifactId>
+      <version>${seclume.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-postgresql</artifactId>
+      <version>${seclume.version}</version>
+    </dependency>
+    <!-- Only for the comparison: the profile "plain" connects the usual way,
+         with HikariCP and pgjdbc. Leave it out of a real application. -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -652,6 +652,45 @@ jobs:
           name: parser-finding-${{ strategy.job-index }}
           path: seclume-core/**/crash-*
 
+  # examples/getting-started as a reader would run it: PostgreSQL and Vault in
+  # Docker, the Spring Boot application built against this commit, and the
+  # comparison - the usual way must leak the password into the heap, seclume
+  # must not. A getting-started that does not start is worse than none.
+  getting-started:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - run: ./mvnw -B -pl seclume-spring-boot-starter,seclume-postgresql,seclume-heapcheck -am install -DskipTests
+      - name: The example, five minutes' worth
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's:^  <version>\(.*\)</version>:\1:p' pom.xml | head -1)
+          cd examples/getting-started
+          ./setup.sh
+          ../../mvnw -B -q -f pom.xml package -DskipTests -Dseclume.version="$version"
+          ./compare.sh "../../seclume-heapcheck/target/seclume-heapcheck-$version.jar"
+      # What the applications and the containers said, on the pull request.
+      - if: failure()
+        run: |
+          cd examples/getting-started
+          for f in target/compare/*.log; do
+            [ -f "$f" ] || continue
+            # The cause, not the stack: Spring's failure analysis and every "Caused by".
+            text=$(grep -E "APPLICATION FAILED|Description:|Reason:|Action:|Caused by|Exception:|ERROR" "$f" \
+              | grep -v "^\s*at " | head -25 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3500)
+            echo "::error title=$(basename "$f")::$text"
+          done
+          text=$(docker compose logs --tail 15 2>&1 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)
+          echo "::error title=containers::$text"
+      - if: always()
+        run: cd examples/getting-started && docker compose down -v || true
+
   # The post-quantum key exchange, end to end. The own TLS stack offers
   # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,
   # so every other job runs with the hybrid off and would not notice it

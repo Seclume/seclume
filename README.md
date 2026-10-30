@@ -132,6 +132,10 @@ seclume.datasources.main.secret-uri=file:/run/secrets/db-password
 That is the whole integration. Spring gets a pooled `DataSource`, and Spring Data, Hibernate
 and Flyway work on it as they would on any other.
 
+**Five minutes, end to end:** [examples/getting-started](examples/getting-started) runs this
+with PostgreSQL and Vault in Docker. It then shows with a heap dump of each that the usual
+way leaves the password in the heap and seclume does not.
+
 Releases are on **Maven Central** from 0.13.1 on: no repository entry and no token are needed.
 Every file is signed with the release key in [SECURITY.md](SECURITY.md#verifying-a-release).
 `seclume-bom` keeps the versions of all modules in step.
