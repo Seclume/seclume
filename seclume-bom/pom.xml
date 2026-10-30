@@ -208,6 +208,11 @@
         <artifactId>seclume-heapcheck</artifactId>
         <version>${project.version}</version>
       </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
+        <artifactId>seclume-admission</artifactId>
+        <version>${project.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 </project>

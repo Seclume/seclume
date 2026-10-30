@@ -102,6 +102,7 @@
     <module>seclume-heapdump</module>
     <module>seclume-logging</module>
     <module>seclume-heapcheck</module>
+    <module>seclume-admission</module>
     <module>seclume-diff</module>
     <module>seclume-jasperreports-proof</module>
     <module>seclume-tls-anvil</module>

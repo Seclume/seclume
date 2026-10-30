@@ -1,0 +1,13 @@
+# Only ever created with --dry-run=server: kind has no SPIFFE CSI driver, and
+# what is checked is the pod the webhook makes of it.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: workload
+  annotations:
+    seclume.space/spiffe: "true"
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/eclipse-temurin:25-jre
+      command: [sleep, infinity]

@@ -61,6 +61,15 @@ All notable changes to seclume are recorded here. Versions follow
   version is pinned. Each signature is a `space.seclume.RemoteSignature` event. Tested against
   `FakeKms` (seclume-tck) and, in CI, by a PostgreSQL login with a transit key certified by
   Vault's and OpenBao's PKI.
+- **A Kubernetes admission webhook** (`seclume-admission`). Pods annotated
+  `seclume.space/redact-dumps: "true"` get an `emptyDir` for heap dumps, the JVM options that write
+  there (as `JAVA_TOOL_OPTIONS`, or `JDK_JAVA_OPTIONS` when the pod sets the first), and a sidecar
+  running `seclume-heapcheck --watch` as the application's user, with the volumes in
+  `seclume.space/secret-volumes` searched as well; `seclume.space/spiffe: "true"` mounts the SPIFFE
+  Workload API socket and sets `SPIFFE_ENDPOINT_SOCKET`. The webhook never refuses a pod, never
+  repeats a value of the pod's in its patch, and changes nothing on a second pass. Its TLS key
+  stays in native memory and is taken up again when renewed. Image, manifests and an install
+  script in `seclume-admission/deploy`; tested on kind with an application that runs out of memory.
 - **Certificate gauges through OpenTelemetry.** `seclume.certificate.expiry` (seconds) and
   `seclume.certificate.renewal.failing`, attributed `bundle`, as OpenTelemetry gauges -
   `SeclumeCertificateInstruments` in seclume-opentelemetry, and in the starter with
