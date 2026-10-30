@@ -257,10 +257,12 @@ own secrets in every message and stack trace and writes `[redacted:<label>]` ins
 ```xml
 <!-- logback-spring.xml -->
 <conversionRule conversionWord="msg"
-                converterClass="space.seclume.logging.logback.RedactingMessageConverter"/>
+                class="space.seclume.logging.logback.RedactingMessageConverter"/>
 <conversionRule conversionWord="xEx"
-                converterClass="space.seclume.logging.logback.RedactingThrowableConverter"/>
+                class="space.seclume.logging.logback.RedactingThrowableConverter"/>
 ```
+
+(`class` is the attribute's name since Logback 1.5; older versions call it `converterClass`.)
 
 ```properties
 seclume.logging.redact=true                   # with seclume-logging on the class path

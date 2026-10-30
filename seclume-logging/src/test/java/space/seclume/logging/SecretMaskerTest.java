@@ -26,6 +26,7 @@ import space.seclume.tck.StaticSecretProvider;
  * under its label, leaves text without one untouched, takes up a rotated
  * secret - and holds no copy of any secret on the heap while it waits.
  */
+@org.junit.jupiter.api.parallel.Isolated
 class SecretMaskerTest {
 
     @Test

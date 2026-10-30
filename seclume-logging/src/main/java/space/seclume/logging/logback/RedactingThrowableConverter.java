@@ -12,7 +12,7 @@ import space.seclume.logging.SecretMasker;
  *
  * <pre>
  * &lt;conversionRule conversionWord="xEx"
- *                 converterClass="space.seclume.logging.logback.RedactingThrowableConverter"/&gt;
+ *                 class="space.seclume.logging.logback.RedactingThrowableConverter"/&gt;
  * </pre>
  */
 public class RedactingThrowableConverter extends ExtendedThrowableProxyConverter {

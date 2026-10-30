@@ -11,7 +11,7 @@ import space.seclume.logging.SecretMasker;
  *
  * <pre>
  * &lt;conversionRule conversionWord="msg"
- *                 converterClass="space.seclume.logging.logback.RedactingMessageConverter"/&gt;
+ *                 class="space.seclume.logging.logback.RedactingMessageConverter"/&gt;
  * </pre>
  *
  * <p>Registered under {@code msg} (and {@code m}, {@code message}) it replaces
