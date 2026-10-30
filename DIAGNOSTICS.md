@@ -251,6 +251,45 @@ that what was looked for is gone, not that nothing else is there; name what you 
 The redaction itself is in `seclume-heapdump`, a library without dependencies
 (`space.seclume.heapdump.Redactor`), together with the discovery and the object attribution.
 
+## A Flight Recorder recording: `--dump app.jfr`
+
+```sh
+java -jar seclume-heapcheck.jar --dump app.jfr                       # what it holds
+java -jar seclume-heapcheck.jar --dump app.jfr --discover --redact app-redacted.jfr
+```
+
+A recording goes to a vendor's support as readily as a heap dump, is opened in more tools,
+and is just as full of credentials. Every recording starts with the process's environment
+(`jdk.InitialEnvironmentVariable`), its system properties (`jdk.InitialSystemProperty`) and
+its command line (`jdk.JVMInformation`), so `DB_PASSWORD=...` and
+`-Dspring.datasource.password=...` are in each one, and any event may have recorded a string
+holding a token.
+
+`--dump` and `--redact` take a `.jfr` as they take an `.hprof` - the file's first bytes decide,
+not its name - and a recording needs no secret named:
+
+- **The recording names its own.** A value whose name says secret - `password`, `passwd`,
+  `pwd`, `passphrase`, `secret`, `token`, `credential`, `authorization`, `bearer`, an API,
+  access, private, client, signing, encryption or master key - is looked for as a named
+  secret. That covers the environment, the system properties and `-Dname=value`/`--name=value`
+  arguments; the check reports it as `environment variable DB_PASSWORD (in the recording)`,
+  never with its value. A name that says where a secret is (`..._FILE`, `..._PATH`, `..._DIR`,
+  `..._URL`, `..._NAME`, ...) is not one, nor are `PWD` and `OLDPWD`; a value that is
+  shorter than 4 characters, a number, `true`, `false`, `none` or masked already is not taken.
+- **Everything else as in a dump.** Named secrets and `--discover` find what an event recorded
+  - a token in an exception's message, a password in a JDBC URL - anywhere in the file.
+- **In place.** Each occurrence becomes `*` of the same length, so every chunk keeps its size
+  and every offset stays right. There are no `String` hashes and no holders in a recording;
+  attribution is skipped.
+- **Read back.** Before the copy gets its name it is searched again, its chunks are walked to
+  the end and every event is parsed by the JDK's own `jdk.jfr.consumer.RecordingFile`. A copy
+  that does not read is deleted and the run exits 2.
+
+The masked settings are still there, by name: `jfr print --events jdk.InitialEnvironmentVariable
+app-redacted.jfr` shows the event with `key = "DB_PASSWORD"` and `value = "************"`. `--redact-dir` and `--watch` take the
+recordings in their folder the same way, so the sidecar above also covers
+`-XX:StartFlightRecording:dumponexit=true,filename=/dumps/`.
+
 ## Log lines: the application's secrets masked before they are written
 
 A password that reaches a log line is on the heap already; what is left to stop is the line
@@ -291,45 +330,6 @@ its tag.
   `seclume.logging.refresh-interval`.
 - **Other loggers:** `SecretMasker.maskInstalled(text)` is the whole of it - a Log4j2 rewrite
   policy or a JUL formatter can call it; `new SecretMasker(providers)` works without Spring.
-
-## A Flight Recorder recording: `--dump app.jfr`
-
-```sh
-java -jar seclume-heapcheck.jar --dump app.jfr                       # what it holds
-java -jar seclume-heapcheck.jar --dump app.jfr --discover --redact app-redacted.jfr
-```
-
-A recording goes to a vendor's support as readily as a heap dump, is opened in more tools,
-and is just as full of credentials. Every recording starts with the process's environment
-(`jdk.InitialEnvironmentVariable`), its system properties (`jdk.InitialSystemProperty`) and
-its command line (`jdk.JVMInformation`), so `DB_PASSWORD=...` and
-`-Dspring.datasource.password=...` are in each one, and any event may have recorded a string
-holding a token.
-
-`--dump` and `--redact` take a `.jfr` as they take an `.hprof` - the file's first bytes decide,
-not its name - and a recording needs no secret named:
-
-- **The recording names its own.** A value whose name says secret - `password`, `passwd`,
-  `pwd`, `passphrase`, `secret`, `token`, `credential`, `authorization`, `bearer`, an API,
-  access, private, client, signing, encryption or master key - is looked for as a named
-  secret. That covers the environment, the system properties and `-Dname=value`/`--name=value`
-  arguments; the check reports it as `environment variable DB_PASSWORD (in the recording)`,
-  never with its value. A name that says where a secret is (`..._FILE`, `..._PATH`, `..._DIR`,
-  `..._URL`, `..._NAME`, ...) is not one, nor are `PWD` and `OLDPWD`; a value that is
-  shorter than 4 characters, a number, `true`, `false`, `none` or masked already is not taken.
-- **Everything else as in a dump.** Named secrets and `--discover` find what an event recorded
-  - a token in an exception's message, a password in a JDBC URL - anywhere in the file.
-- **In place.** Each occurrence becomes `*` of the same length, so every chunk keeps its size
-  and every offset stays right. There are no `String` hashes and no holders in a recording;
-  attribution is skipped.
-- **Read back.** Before the copy gets its name it is searched again, its chunks are walked to
-  the end and every event is parsed by the JDK's own `jdk.jfr.consumer.RecordingFile`. A copy
-  that does not read is deleted and the run exits 2.
-
-The masked settings are still there, by name: `jfr print --events jdk.InitialEnvironmentVariable
-app-redacted.jfr` shows the event with `key = "DB_PASSWORD"` and `value = "************"`. `--redact-dir` and `--watch` take the
-recordings in their folder the same way, so the sidecar above also covers
-`-XX:StartFlightRecording:dumponexit=true,filename=/dumps/`.
 
 ## Reports and baselines
 
