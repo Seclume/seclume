@@ -207,7 +207,7 @@ public final class SpiffeWorkloadApi {
                         java.util.concurrent.CompletableFuture.delayedExecutor(timeoutMillis,
                                 java.util.concurrent.TimeUnit.MILLISECONDS));
         try (SecretScope answer = SecretScope.allocate(MAX_ANSWER)) {
-            request(channel);
+            request(channel, "/SpiffeWorkloadAPI/FetchX509SVID", new byte[0]);
             int length = new Reader(channel, answer.segment()).next();
             answer.length(5 + length);
             return parse(answer.segment(), length);
@@ -320,7 +320,7 @@ public final class SpiffeWorkloadApi {
                             java.util.concurrent.CompletableFuture.delayedExecutor(
                                     timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS));
             try (SecretScope answer = SecretScope.allocate(MAX_ANSWER)) {
-                request(opened);
+                request(opened, "/SpiffeWorkloadAPI/FetchX509SVID", new byte[0]);
                 Reader reader = new Reader(opened, answer.segment());
                 while (!closed) {
                     int length = reader.next();
@@ -359,7 +359,154 @@ public final class SpiffeWorkloadApi {
         }
     }
 
-    private static void request(SocketChannel channel) throws IOException {
+    /**
+     * A JWT-SVID: whose it is and when it ends - and, in the caller's segment,
+     * the token itself, {@code length} bytes of it.
+     */
+    public record JwtSvid(String spiffeId, Instant expiresAt, int length) {
+    }
+
+    /**
+     * Asks for a JWT-SVID for {@code audiences} - of {@code spiffeId}, or the
+     * workload's first identity when that is {@code null} - and writes the
+     * token into {@code target}, from the socket through native memory: a JWT
+     * is a bearer credential, and it never becomes a {@code String} here. Its
+     * {@code exp} is read where it lies, decoded in native memory.
+     */
+    public JwtSvid fetchJwtSvid(List<String> audiences, String spiffeId, MemorySegment target)
+            throws IOException {
+        if (audiences.isEmpty()) {
+            throw new IllegalArgumentException("a JWT-SVID is asked for an audience - name at "
+                    + "least one");
+        }
+        ByteArrayOutputStream message = new ByteArrayOutputStream();
+        for (String audience : audiences) {
+            protobufString(message, 1, audience);
+        }
+        if (spiffeId != null && !spiffeId.isBlank()) {
+            protobufString(message, 2, spiffeId.trim());
+        }
+        SocketChannel channel;
+        try {
+            channel = SocketChannel.open(UnixDomainSocketAddress.of(socket));
+        } catch (java.net.SocketException e) {
+            throw new IOException("the Workload API at " + socket + " could not be reached: "
+                    + e.getMessage(), e);
+        }
+        java.util.concurrent.CompletableFuture<Void> deadline =
+                java.util.concurrent.CompletableFuture.runAsync(() -> closeQuietly(channel),
+                        java.util.concurrent.CompletableFuture.delayedExecutor(timeoutMillis,
+                                java.util.concurrent.TimeUnit.MILLISECONDS));
+        try (SecretScope answer = SecretScope.allocate(MAX_ANSWER)) {
+            request(channel, "/SpiffeWorkloadAPI/FetchJWTSVID", message.toByteArray());
+            int length = new Reader(channel, answer.segment()).next();
+            answer.length(5 + length);
+            return jwt(answer.segment(), length, target);
+        } catch (java.nio.channels.AsynchronousCloseException timedOut) {
+            throw new IOException("the Workload API at " + socket + " did not answer within "
+                    + timeoutMillis + " ms", timedOut);
+        } finally {
+            deadline.cancel(false);
+            closeQuietly(channel);
+        }
+    }
+
+    private static void protobufString(ByteArrayOutputStream out, int field, String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.UTF_8); // seclume-allow: an audience or a SPIFFE ID - public
+        out.write((field << 3) | 2);
+        int length = bytes.length;
+        while ((length & ~0x7f) != 0) {
+            out.write((length & 0x7f) | 0x80);
+            length >>>= 7;
+        }
+        out.write(length);
+        out.write(bytes, 0, bytes.length);
+    }
+
+    /** {@code JWTSVIDResponse}: the first SVID's token into {@code target}, its ID and end. */
+    static JwtSvid jwt(MemorySegment answer, int length, MemorySegment target)
+            throws IOException {
+        Protobuf response = new Protobuf(answer, 5, 5 + length);
+        long[] svid = null;
+        while (response.next()) {
+            if (response.field() == 1 && response.wire() == 2) {
+                svid = response.bytes();
+                break;
+            }
+            response.skip();
+        }
+        if (svid == null) {
+            throw new IOException("the Workload API's answer holds no JWT-SVID");
+        }
+        String id = null;
+        long[] where = null;
+        Protobuf fields = new Protobuf(answer, svid[0], svid[0] + svid[1]);
+        while (fields.next()) {
+            if (fields.wire() != 2) {
+                fields.skip();
+                continue;
+            }
+            long[] value = fields.bytes();
+            if (fields.field() == 1) {
+                // seclume-allow: the SPIFFE ID, which the token names openly
+                id = new String(publicBytes(answer, value), StandardCharsets.UTF_8);
+            } else if (fields.field() == 2) {
+                where = value;
+            }
+        }
+        if (id == null || where == null || where[1] == 0) {
+            throw new IOException("the Workload API's JWT-SVID lacks its ID or token");
+        }
+        if (where[1] > target.byteSize()) {
+            throw new IOException("the JWT-SVID is " + where[1] + " bytes, more than the "
+                    + target.byteSize() + " there is room for");
+        }
+        MemorySegment.copy(answer, where[0], target, 0, where[1]);
+        return new JwtSvid(id, expiry(target, (int) where[1]), (int) where[1]);
+    }
+
+    /** The {@code exp} of a JWT in native memory, its payload decoded there. */
+    private static Instant expiry(MemorySegment jwt, int length) throws IOException {
+        int first = -1;
+        int second = -1;
+        for (int i = 0; i < length; i++) {
+            if (jwt.get(ValueLayout.JAVA_BYTE, i) == '.') {
+                if (first < 0) {
+                    first = i;
+                } else {
+                    second = i;
+                    break;
+                }
+            }
+        }
+        if (first < 0 || second < 0) {
+            throw new IOException("the JWT-SVID is no JWT: not three parts");
+        }
+        int encoded = second - first - 1;
+        try (SecretScope payload = SecretScope.allocate(encoded + 4);
+             SecretScope decoded = SecretScope.allocate(
+                     space.seclume.internal.Base64Off.decodedUpperBound(encoded + 4))) {
+            // base64url to base64, in native memory
+            for (int i = 0; i < encoded; i++) {
+                byte c = jwt.get(ValueLayout.JAVA_BYTE, first + 1 + i);
+                payload.segment().set(ValueLayout.JAVA_BYTE, i,
+                        c == '-' ? (byte) '+' : c == '_' ? (byte) '/' : c);
+            }
+            int n = space.seclume.internal.Base64Off.decode(payload.segment(), 0, encoded,
+                    decoded.segment(), 0);
+            if (!space.seclume.internal.JsonOff.has(decoded.segment(), n, "exp")) {
+                return null;
+            }
+            return Instant.ofEpochSecond(space.seclume.internal.JsonOff.number(
+                    decoded.segment(), n, "exp"));
+        } catch (RuntimeException e) {
+            throw new IOException("the JWT-SVID's claims could not be read: " + e.getMessage(),
+                    e);
+        }
+    }
+
+    private static void request(SocketChannel channel, String path, byte[] message)
+            throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(PREFACE, 0, PREFACE.length);
         // SETTINGS: no push, a window large enough for any SVID.
@@ -370,14 +517,17 @@ public final class SpiffeWorkloadApi {
         ByteArrayOutputStream block = new ByteArrayOutputStream();
         literal(block, ":method", "POST");
         literal(block, ":scheme", "http");
-        literal(block, ":path", "/SpiffeWorkloadAPI/FetchX509SVID");
+        literal(block, ":path", path);
         literal(block, ":authority", "localhost");
         literal(block, "content-type", "application/grpc");
         literal(block, "te", "trailers");
         literal(block, "workload.spiffe.io", "true");
         frame(out, HEADERS, END_HEADERS, 1, block.toByteArray());
-        // One gRPC message, the empty X509SVIDRequest: no compression, length 0.
-        frame(out, DATA, END_STREAM, 1, new byte[5]);
+        // One gRPC message: no compression, its length, the request.
+        byte[] grpc = new byte[5 + message.length];
+        System.arraycopy(int32(message.length), 0, grpc, 1, 4);
+        System.arraycopy(message, 0, grpc, 5, message.length);
+        frame(out, DATA, END_STREAM, 1, grpc);
         write(channel, out.toByteArray());
     }
 

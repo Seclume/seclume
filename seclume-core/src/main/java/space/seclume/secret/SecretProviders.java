@@ -218,6 +218,22 @@ public final class SecretProviders {
                     value(settings, "scopes"),
                     value(settings, "audience"),
                     tokenLength(settings));
+            // A JWT-SVID from the SPIFFE Workload API: a bearer token for an
+            // audience, through native memory from the agent's socket.
+            case "spiffe-jwt", "spiffejwt" -> {
+                String socket = value(settings, "socket");
+                List<String> audiences = new java.util.ArrayList<>();
+                for (String audience : required(settings, "audience", "spiffe-jwt").split(",")) {
+                    if (!audience.isBlank()) {
+                        audiences.add(audience.trim());
+                    }
+                }
+                yield new SpiffeJwtSecretProvider(new SpiffeWorkloadApi(
+                        socket == null ? null : SpiffeWorkloadApi.socketOf(socket),
+                        SpiffeWorkloadApi.timeoutMillis("timeout-millis",
+                                value(settings, "timeout-millis"), 10_000)),
+                        audiences, value(settings, "spiffe-id"), tokenLength(settings));
+            }
             // No password: the client certificate is the login - see
             // NoSecretProvider for why this is a word and not an absence.
             case "none" -> NoSecretProvider.INSTANCE;
@@ -226,7 +242,7 @@ public final class SecretProviders {
                     + "unix-socket, process, dpapi, credential-manager, libsecret, keychain, "
                     + "rds-iam, encrypted, "
                     + "vault, aws-secrets-manager, azure-key-vault, gcp-secret-manager, "
-                    + "azure-managed-identity, gcp-metadata, none");
+                    + "azure-managed-identity, gcp-metadata, spiffe-jwt, none");
         };
     }
 

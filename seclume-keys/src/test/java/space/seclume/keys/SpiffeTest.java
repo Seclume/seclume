@@ -440,6 +440,57 @@ class SpiffeTest {
                 () -> SpiffeWorkloadApi.trustDomain("spiffe:///x"));
     }
 
+    /**
+     * A JWT-SVID as a secret provider: the audiences asked for, the token
+     * written through native memory into the caller's scope, its exp the end
+     * a pool goes by; an agent without one, and no audience, said so.
+     */
+    @Test
+    void aJwtSvidIsABearerTokenFromTheAgent() throws Exception {
+        long exp = java.time.Instant.now().plusSeconds(300).getEpochSecond();
+        java.util.Base64.Encoder url = java.util.Base64.getUrlEncoder().withoutPadding();
+        String token = url.encodeToString("{\"alg\":\"ES256\",\"typ\":\"JWT\"}"
+                .getBytes(StandardCharsets.US_ASCII)) + "."
+                + url.encodeToString(("{\"sub\":\"" + ORDERS + "\",\"aud\":[\"https://api.example."
+                        + "com\"],\"exp\":" + exp + "}").getBytes(StandardCharsets.US_ASCII))
+                + "." + url.encodeToString(new byte[64]);
+        AtomicReference<List<String>> asked = new AtomicReference<>();
+        try (FakeWorkloadApi agent = new FakeWorkloadApi(socket("jwt"),
+                () -> first.answer(ORDERS))) {
+            agent.jwt(audiences -> {
+                asked.set(audiences);
+                return FakeWorkloadApi.jwtSvidResponse(ORDERS, token);
+            });
+            try (space.seclume.secret.SecretProvider provider = space.seclume.secret
+                    .SecretProviders.of(Map.of("provider", "spiffe-jwt", "socket", "unix://"
+                            + agent.socket(), "audience", "https://api.example.com, db"));
+                 space.seclume.secret.SecretScope scope =
+                         space.seclume.secret.SecretScope.fromProvider(provider)) {
+                byte[] read = scope.secret().asSlice(0, scope.length())
+                        .toArray(ValueLayout.JAVA_BYTE);
+                assertEquals(token, new String(read, StandardCharsets.US_ASCII));
+                assertEquals(List.of("https://api.example.com", "db"), asked.get());
+                assertEquals(java.time.Instant.ofEpochSecond(exp),
+                        ((space.seclume.secret.ExpiringCredentials) provider)
+                                .credentialsValidUntil());
+                assertTrue(agent.headerBlocks().get(agent.headerBlocks().size() - 1)
+                        .contains(":path: /SpiffeWorkloadAPI/FetchJWTSVID\n"));
+            }
+            agent.jwt(audiences -> new byte[0]);
+            try (space.seclume.secret.SecretProvider none = space.seclume.secret.SecretProviders
+                    .of(Map.of("provider", "spiffe-jwt", "socket", "unix://" + agent.socket(),
+                            "audience", "db"))) {
+                RuntimeException refused = assertThrows(RuntimeException.class,
+                        () -> space.seclume.secret.SecretScope.fromProvider(none).close());
+                assertTrue(refused.getMessage().contains("no JWT-SVID"),
+                        refused.getMessage());
+            }
+        }
+        assertThrows(IllegalArgumentException.class, () -> space.seclume.secret.SecretProviders
+                .of(Map.of("provider", "spiffe-jwt", "socket", "unix:///nowhere",
+                        "audience", " , ")));
+    }
+
     private static void waitFor(java.util.function.BooleanSupplier condition, String otherwise)
             throws InterruptedException {
         long deadline = System.nanoTime() + 20_000_000_000L;

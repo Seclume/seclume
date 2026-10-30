@@ -36,6 +36,12 @@ All notable changes to seclume are recorded here. Versions follow
   workloads. `SeclumeTomcat.enableHttps(connector, keyManager, trustManager, clientAuth)` does
   the same without Spring. Tested with an embedded Tomcat, a SPIFFE agent stand-in and a rotated
   SVID.
+- **SPIFFE JWT-SVIDs as a secret provider** (`provider=spiffe-jwt&audience=...`): a bearer token
+  for an audience from the Workload API's `FetchJWTSVID`, written from the agent's socket
+  through native memory into wherever it is sent - HTTP clients, Kafka's OAUTHBEARER,
+  PostgreSQL 18's `oauth` login - never a `String`; its `exp`, decoded in native memory, is
+  reported as the credential's end. `SpiffeWorkloadApi.fetchJwtSvid`; `FakeWorkloadApi` answers
+  `FetchJWTSVID`.
 - **Keys that never leave a key management service** (`kms=vault-transit`, opt-in). A key in
   Vault's or OpenBao's transit engine signs there: the message is hashed here, only the hash is
   sent, and the process holds the public half and a token - nothing a dump could take for the

@@ -20,7 +20,7 @@ prevent. Settings say *where* a secret lives, never what it is. That is also why
 secret a provider needs — a Vault token, a bearer token, an AWS session token — is itself a
 nested provider rather than a value.
 
-## The fourteen
+## The providers
 
 | Provider | Reads from | Expires | Needs a provider underneath | Per connect |
 |---|---|---|---|---|
@@ -40,8 +40,9 @@ nested provider rather than a value.
 | `gcp-secret-manager` | Google Secret Manager | no | `token-` | one HTTPS request |
 | `azure-managed-identity` | nothing stored — the VM's Entra token, from IMDS | not reported (see below) | — | one local HTTP request |
 | `gcp-metadata` | nothing stored — the workload's Google token, from the metadata server | not reported (see below) | — | one local HTTP request |
+| `spiffe-jwt` | nothing stored — a JWT-SVID for an audience, from the SPIFFE Workload API | **yes**, its `exp` | — | one local gRPC call |
 
-`callback` is a fifteenth and is not configuration: it is the interface your own code
+`callback` is one more and is not configuration: it is the interface your own code
 implements, handed native memory to write into.
 
 ### What "expires" buys
@@ -366,6 +367,23 @@ read; its content goes back as `Authorization: Basic ...`, written from native m
 file in the agent's token directory, ending in `.key` and at most 4 KiB, is read - an endpoint
 cannot make the provider read any other file. Tested against a stand-in agent; not yet on a real
 Arc machine.
+
+### SPIFFE: a JWT-SVID for an audience
+
+```properties
+provider=spiffe-jwt
+audience=https://api.example.com          # comma separated
+socket=unix:///run/spire/agent.sock        # optional: else SPIFFE_ENDPOINT_SOCKET
+spiffe-id=spiffe://example.org/orders      # optional: which of the workload's identities
+```
+
+Where SPIRE hands out workload identities, the JWT-SVID is the bearer token a service of that
+audience accepts - an API behind a JWT check, Kafka's OAUTHBEARER, PostgreSQL 18's `oauth`
+login with a validator that knows the trust domain. It comes from the agent's socket
+(`FetchJWTSVID`, the same small HTTP/2 client as the X.509-SVIDs) through native memory into
+wherever it is sent; every SPIFFE library hands it out as a `String`. Each read asks the agent,
+which caches, so the token is the one valid now, and its `exp` - read where it lies, decoded in
+native memory - is when a pool replaces the connections opened with it.
 
 ### No password: the certificate is the login
 
