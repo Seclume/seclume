@@ -115,6 +115,166 @@ class KmsKeyTest {
         return settings;
     }
 
+    /** The settings of {@code kms}'s key as {@code service} - aws-kms, gcp-kms, azure-key-vault - names it. */
+    private static Map<String, String> cloud(String service, FakeKms kms, String keyName)
+            throws IOException {
+        Map<String, String> settings = new LinkedHashMap<>();
+        settings.put("kms", service);
+        settings.put("verify", "false");
+        switch (service) {
+            case "aws-kms" -> {
+                settings.put("key", keyName);
+                settings.put("region", "eu-central-1");
+                settings.put("endpoint", kms.address());
+                settings.put("access-key-id", "AKIAIOSFODNN7EXAMPLE");
+                settings.put("key-provider", "file");
+                settings.put("key-path", Files.writeString(directory.resolve("aws-secret"),
+                        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY").toString());
+            }
+            case "gcp-kms" -> {
+                settings.put("key", kms.gcpKeyName(1));
+                settings.put("endpoint", kms.address());
+                settings.put("token-provider", "file");
+                settings.put("token-path", token.toString());
+            }
+            default -> {
+                settings.put("vault-uri", kms.address());
+                settings.put("key-name", keyName);
+                settings.put("token-provider", "file");
+                settings.put("token-path", token.toString());
+            }
+        }
+        return settings;
+    }
+
+    private static final List<String> CLOUDS = List.of("aws-kms", "gcp-kms", "azure-key-vault");
+
+    private static byte[] signed(KmsSigningKey key, String digest, boolean pss, byte[] message) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment in = arena.allocate(message.length);
+            MemorySegment.copy(message, 0, in, ValueLayout.JAVA_BYTE, 0, message.length);
+            MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
+            int written = key.sign(digest, pss, in, message.length, out);
+            return out.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
+        }
+    }
+
+    /**
+     * AWS KMS, Cloud KMS and Key Vault, each with a P-256, a P-384 and an RSA
+     * key: the public half read in its own shape (DER, PEM, JWK), the hash
+     * signed with the hash the key is bound to, the signature in DER - Key
+     * Vault's r and s converted here - verifying with the JDK.
+     */
+    @Test
+    void eachCloudSignsWithEachKindOfKey() throws Exception {
+        byte[] message = "a handshake transcript".getBytes(StandardCharsets.US_ASCII);
+        for (String service : CLOUDS) {
+            for (FakeKms.KeyType type : FakeKms.KeyType.values()) {
+                try (FakeKms kms = new FakeKms(type, "tls-" + type.name().toLowerCase());
+                     KmsSigningKey key = KmsSigningKey.of(cloud(service, kms,
+                             "tls-" + type.name().toLowerCase()))) {
+                    boolean rsa = type == FakeKms.KeyType.RSA2048;
+                    String digest = type == FakeKms.KeyType.P384 ? "SHA384" : "SHA256";
+                    byte[] signature = signed(key, digest, rsa, message);
+                    int scheme = rsa ? space.seclume.tls.HandshakeSignature.RSA_PSS_RSAE_SHA256
+                            : type == FakeKms.KeyType.P384
+                                    ? space.seclume.tls.HandshakeSignature.ECDSA_SECP384R1_SHA384
+                                    : space.seclume.tls.HandshakeSignature.ECDSA_SECP256R1_SHA256;
+                    assertTrue(space.seclume.tls.HandshakeSignature.verifyTls12(
+                            java.security.KeyFactory.getInstance(rsa ? "RSA" : "EC")
+                                    .generatePublic(new java.security.spec.X509EncodedKeySpec(
+                                            key.publicKey())), scheme, message, signature),
+                            service + " " + type);
+                    String encoded = Base64.getEncoder().encodeToString(message);
+                    assertTrue(kms.requests().stream().noneMatch(r -> r.contains(encoded)
+                            || r.contains("transcript")), service + " sent the message itself");
+                }
+            }
+        }
+    }
+
+    /** A JSSE server whose key is in each cloud, and a database connection's from Cloud KMS. */
+    @Test
+    void cloudKeysServeAndLogIn() throws Exception {
+        for (String service : CLOUDS) {
+            FakeKms.KeyType type = service.equals("azure-key-vault") ? FakeKms.KeyType.RSA2048
+                    : FakeKms.KeyType.P384;
+            try (FakeKms kms = new FakeKms(type, "web")) {
+                Path certificate;
+                try (KmsSigningKey key = KmsSigningKey.of(cloud(service, kms, "web"))) {
+                    certificate = certify(key, "server", "serverAuth");
+                }
+                SSLContext server = SSLContext.getInstance("TLSv1.3");
+                server.init(SeclumeKeys.keyManagerFactory(certificate,
+                        spec(cloud(service, kms, "web"))).getKeyManagers(), null, null);
+                TrustManagerFactory trusting = TrustManagerFactory.getInstance("PKIX");
+                trusting.init(trust);
+                SSLContext client = SSLContext.getInstance("TLSv1.3");
+                client.init(null, trusting.getTrustManagers(), null);
+                assertEquals(1, echo(server, client), service);
+            }
+        }
+        try (FakeKms kms = new FakeKms(FakeKms.KeyType.P256, "db-client")) {
+            Path certificate;
+            try (KmsSigningKey key = KmsSigningKey.of(cloud("gcp-kms", kms, "db-client"))) {
+                certificate = certify(key, "gcp-client", "clientAuth");
+            }
+            Map<String, String> url = new LinkedHashMap<>();
+            url.put(ClientIdentities.CERTIFICATE, certificate.toString());
+            cloud("gcp-kms", kms, "db-client").forEach((name, value) ->
+                    url.put(ClientIdentities.KEY_PREFIX + name, value));
+            ClientIdentity identity = ClientIdentities.of(url);
+            try {
+                assertTrue(seclumeHandshake(identity).getSubjectX500Principal().getName()
+                        .contains("CN=gcp-client"));
+            } finally {
+                identity.close();
+            }
+        }
+    }
+
+    @Test
+    void whatGoesWrongWithACloudIsSaid() throws Exception {
+        try (FakeKms kms = new FakeKms(FakeKms.KeyType.P256, "orders")) {
+            // A key bound to SHA-256 refuses SHA-384 here, before asking.
+            try (KmsSigningKey key = KmsSigningKey.of(cloud("gcp-kms", kms, "orders"))) {
+                IllegalStateException bound = assertThrows(IllegalStateException.class,
+                        () -> signed(key, "SHA384", false, new byte[4]));
+                assertTrue(bound.getMessage().contains("EC_SIGN_P256_SHA256 only"),
+                        bound.getMessage());
+            }
+            Map<String, String> anonymous = cloud("aws-kms", kms, "orders");
+            anonymous.remove("key-provider");
+            anonymous.remove("key-path");
+            assertTrue(assertThrows(IllegalArgumentException.class,
+                    () -> KmsSigningKey.of(anonymous)).getMessage().contains("credentials"));
+            Map<String, String> wrongKey = cloud("aws-kms", kms, "elsewhere");
+            assertTrue(assertThrows(IllegalArgumentException.class,
+                    () -> KmsSigningKey.of(wrongKey)).getMessage().contains("NotFoundException"));
+            Map<String, String> notAName = cloud("gcp-kms", kms, "orders");
+            notAName.put("key", "orders");
+            assertThrows(IllegalArgumentException.class, () -> KmsSigningKey.of(notAName));
+            Map<String, String> plain = cloud("azure-key-vault", kms, "orders");
+            plain.put("vault-uri", kms.address().replace("https", "http"));
+            assertThrows(IllegalArgumentException.class, () -> KmsSigningKey.of(plain));
+            Map<String, String> noToken = cloud("azure-key-vault", kms, "orders");
+            noToken.remove("token-provider");
+            noToken.remove("token-path");
+            assertTrue(assertThrows(IllegalArgumentException.class,
+                    () -> KmsSigningKey.of(noToken)).getMessage().contains("bearer token"));
+
+            // Key Vault's current version is pinned when the key is opened.
+            try (KmsSigningKey pinned = KmsSigningKey.of(cloud("azure-key-vault", kms,
+                    "orders"))) {
+                kms.rotate();
+                signed(pinned, "SHA256", false, new byte[4]);
+                assertTrue(pinned.name().contains("version ver1"), pinned.name());
+                assertTrue(kms.requests().get(kms.requests().size() - 1)
+                        .startsWith("POST /keys/orders/ver1/sign"), kms.requests().toString());
+            }
+        }
+    }
+
     private static String spec(Map<String, String> settings) {
         StringBuilder spec = new StringBuilder();
         settings.forEach((name, value) -> spec.append(spec.length() == 0 ? "" : "&")

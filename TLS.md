@@ -271,6 +271,10 @@ made and verified - a wrong name, version or policy fails there, not in a handsh
 signature is one round trip to Vault and a `space.seclume.RemoteSignature` event: cheap for
 pooled connections, which shake hands once.
 
+`clientKey-kms=aws-kms`, `gcp-kms` and `azure-key-vault` do the same with a key in AWS KMS,
+Google Cloud KMS or Azure Key Vault, with that cloud's workload credentials - see
+[FEATURES.md](FEATURES.md) for their settings.
+
 The certificate for such a key comes from anywhere that signs a request:
 `VaultPkiIssuer.certify(key)` has the PKI engine certify it, the request signed in transit.
 CI logs into PostgreSQL that way against real Vault and OpenBao.

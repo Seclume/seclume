@@ -1280,10 +1280,11 @@ seclume.ssl.bundles.mesh.spiffe=socket=unix:///run/spire/agent.sock&peer-ids=spi
   rotation taken up, and a TLS 1.3 handshake of seclume's own whose server demands the
   certificate.
 
-**A key in Vault's transit engine, which never leaves it.** Every other key here is in the
-process - off the heap, in OpenSSL or CNG, but in its memory. `kms=` in place of `provider=`
-keeps it out altogether: the key lives in a key management service, and each signature is a
-hash sent there and a signature back. The process holds the public half and a token.
+**A key in a key management service, which never leaves it - Vault transit, AWS KMS, Cloud
+KMS, Key Vault.** Every other key here is in the process - off the heap, in OpenSSL or CNG, but
+in its memory. `kms=` in place of `provider=` keeps it out altogether: the key lives in a key
+management service, and each signature is a hash sent there and a signature back. The process
+holds the public half and a credential.
 
 ```java
 X509ExtendedKeyManager web = SeclumeKeys.keyManager(Path.of("/etc/tls/web.crt"),
@@ -1297,12 +1298,19 @@ seclume.ssl.bundles.web.certificate=/etc/tls/web.crt
 seclume.ssl.bundles.web.key=kms=vault-transit&address=https://vault:8200&key-name=web-tls&auth-method=kubernetes&auth-role=web
 ```
 
-- **Settings:** `address`, `key-name`, and optionally `transit-mount` (`transit`),
-  `key-version` (the latest when opened, then kept), `namespace`, `verify`,
-  `timeout-millis`; the Vault token as for `provider=vault`. The policy needs `read` on
-  `transit/keys/<name>` and `update` on `transit/sign/<name>/*`.
-- **Keys:** `ecdsa-p256`, `ecdsa-p384` and `rsa-2048/3072/4096`, signed as TLS asks -
-  ECDSA in DER, RSA-PSS with a salt as long as the hash, PKCS#1 v1.5.
+| `kms=` | Settings | The credential | Permissions |
+|---|---|---|---|
+| `vault-transit` | `address`, `key-name`; `transit-mount`, `key-version` (latest when opened, then kept), `namespace` | the Vault token as for `provider=vault` (`token-`, `auth-method=...`) | `read` on `transit/keys/<name>`, `update` on `transit/sign/<name>/*` |
+| `aws-kms` | `key` (id, ARN, `alias/...`), `region`; `endpoint` (VPC endpoint) | `credentials=instance\|container\|web-identity`, or `access-key-id` with `key-` and `session-token-` providers - SigV4, the secret key in native memory | `kms:GetPublicKey`, `kms:Sign` |
+| `gcp-kms` | `key` (`projects/.../cryptoKeyVersions/<n>`); `endpoint` | a bearer token under `token-`, e.g. `token-provider=gcp-metadata` | `cloudkms.cryptoKeyVersions.viewPublicKey`, `.useToSign` |
+| `azure-key-vault` | `vault-uri`, `key-name`; `key-version` (current when opened, then kept) | a bearer token under `token-`, e.g. `token-provider=azure-managed-identity&token-resource=https://vault.azure.net` | key permissions `get`, `sign` (Key Vault Crypto User) |
+
+All four take `verify` and `timeout-millis`.
+
+- **Keys:** EC on P-256 and P-384, RSA from 2048 bits, signed as TLS asks - ECDSA in DER (Key
+  Vault's r and s converted here), RSA-PSS with a salt as long as the hash, PKCS#1 v1.5. A
+  Cloud KMS key is bound to one algorithm and refuses any other hash or padding, said here
+  before the request.
 - **Checked when opened:** the public half is read and one signature verified with it, and a
   certificate that is not the key's is refused - a wrong name, version or policy fails in the
   configuration, not in front of a peer.
@@ -1314,10 +1322,11 @@ seclume.ssl.bundles.web.key=kms=vault-transit&address=https://vault:8200&key-nam
   seclume's own JDBC TLS (`clientKey-kms=`), anything that takes a `PrivateSigningKey` - such as
   `CertificationRequest`, so that `VaultPkiIssuer.certify(key)` gets the key its certificate
   from Vault's PKI. Not with `reload-interval`: the key stays where it is.
-- **Tests:** against `FakeKms` (seclume-tck), a stand-in transit engine whose keys `openssl`
-  holds - P-256, P-384 and RSA, a JSSE server and seclume's own TLS client, a rotated key, the
-  failures - and in CI against real Vault and OpenBao: a transit key certified by the PKI
-  engine logs into PostgreSQL.
+- **Tests:** against `FakeKms` (seclume-tck), a stand-in that answers as all four services do -
+  their paths, their credentials, their answers' shapes - with keys `openssl` holds: P-256,
+  P-384 and RSA in each, a JSSE server and seclume's own TLS client, rotated keys, the failures;
+  and in CI against real Vault and OpenBao: a transit key certified by the PKI engine logs into
+  PostgreSQL.
 
 **SSH and SFTP.** `seclume-ssh` gives Apache MINA SSHD, and Spring Integration's SFTP on top
 of it, such a key for public-key logins:
