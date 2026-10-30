@@ -1,0 +1,12 @@
+apiVersion: v2
+name: seclume-admission
+description: >-
+  A mutating admission webhook that wires seclume into annotated pods: a dump
+  folder with a sidecar that redacts every heap dump and Flight Recorder
+  recording where it lies, and the SPIFFE Workload API socket.
+type: application
+version: 0.14.0
+appVersion: "0.14.0"
+home: https://github.com/Seclume/seclume
+sources: [https://github.com/Seclume/seclume/tree/main/seclume-admission]
+keywords: [security, heap-dump, redaction, spiffe, admission-webhook]

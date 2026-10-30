@@ -1,0 +1,75 @@
+{{- $mode := .Values.tls.mode -}}
+{{- if not (has $mode (list "selfSigned" "certManager" "existingSecret")) -}}
+{{- fail (printf "tls.mode is selfSigned, certManager or existingSecret, not %s" $mode) -}}
+{{- end -}}
+{{- if and (eq $mode "certManager") (empty .Values.tls.certManager.issuerRef) }}
+{{- /* No issuer given: a CA of the chart's own - a self-signed root that
+       issues the serving certificate. A self-signed serving certificate
+       straight from the SelfSigned issuer has an empty issuer DN, which the
+       JDK refuses to parse. */}}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}-ca
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ include "seclume-admission.fullname" . }} CA
+  secretName: {{ include "seclume-admission.fullname" . }}-ca
+  duration: 87600h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ include "seclume-admission.fullname" . }}-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}-ca
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "seclume-admission.fullname" . }}-ca
+{{- end }}
+{{- if eq $mode "certManager" }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "seclume-admission.tlsSecret" . }}
+  duration: {{ .Values.tls.certManager.duration }}
+  renewBefore: {{ .Values.tls.certManager.renewBefore }}
+  commonName: {{ include "seclume-admission.service" . }}
+  dnsNames:
+    - {{ include "seclume-admission.service" . }}
+    - {{ include "seclume-admission.service" . }}.cluster.local
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    {{- if .Values.tls.certManager.issuerRef }}
+    {{- toYaml .Values.tls.certManager.issuerRef | nindent 4 }}
+    {{- else }}
+    name: {{ include "seclume-admission.fullname" . }}-ca
+    kind: Issuer
+    {{- end }}
+{{- end }}

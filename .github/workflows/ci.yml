@@ -330,6 +330,101 @@ jobs:
           assert 'seclume.space/injected' not in other['metadata'].get('annotations', {})
           print('the socket where asked, nothing elsewhere')
           PY
+      # Why, on the pull request: the webhook's and the pods' last words.
+      - if: failure()
+        run: |
+          say() { echo "::error title=$1::$(printf '%s' "$2" | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)"; }
+          say webhook "$(kubectl logs -n seclume-system -l app.kubernetes.io/name=seclume-admission --tail=30 2>&1; kubectl logs -n seclume-system -l app=seclume-admission --tail=30 2>&1)"
+          say pods "$(kubectl get pods -A -o wide 2>&1 | tail -20)"
+          say events "$(kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -20)"
+          say oom "$(kubectl -n shop logs oom --all-containers --tail=20 2>&1)"
+          say webhook-config "$(kubectl get mutatingwebhookconfiguration -o yaml 2>&1 | grep -v caBundle | tail -40)"
+      - name: Remove the cluster
+        if: always()
+        run: kind delete cluster --name seclume || true
+  # The Helm chart: linted and rendered in every TLS mode, then installed on
+  # kind - first with the CA Helm makes, then switched to cert-manager - and
+  # each time a pod in an opted-in namespace must come back mutated.
+  admission-helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - name: Lint and render every TLS mode
+        run: |
+          set -euo pipefail
+          chart=seclume-admission/helm/seclume-admission
+          helm lint "$chart" --set image.repository=example/seclume-admission
+          for mode in selfSigned certManager; do
+            helm template t "$chart" --set image.repository=example/seclume-admission \
+              --set tls.mode=$mode > /dev/null
+          done
+          helm template t "$chart" --set image.repository=example/seclume-admission \
+            --set tls.mode=existingSecret --set tls.existingSecret=mine \
+            --set tls.caBundle=Y2E= > /dev/null
+          # What must not render: no image, an unknown mode.
+          ! helm template t "$chart" > /dev/null 2>&1
+          ! helm template t "$chart" --set image.repository=x --set tls.mode=none > /dev/null 2>&1
+      - run: ./mvnw -B -pl seclume-admission,seclume-heapcheck -am package -DskipTests
+      - name: Installed on kind with the chart's own CA
+        run: |
+          set -euo pipefail
+          command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          kind create cluster --name seclume --wait 180s
+          bash seclume-admission/deploy/build-image.sh seclume-admission:ci
+          kind load docker-image seclume-admission:ci --name seclume
+          helm install seclume seclume-admission/helm/seclume-admission \
+            --namespace seclume-system --create-namespace \
+            --set image.repository=seclume-admission --set image.tag=ci --wait --timeout 180s
+          kubectl create namespace shop
+          kubectl label namespace shop seclume.space/inject=enabled
+          check() {
+            kubectl -n shop create --dry-run=server -o json \
+              -f seclume-admission/ci/spiffe-pod.yaml > pod.json
+            python3 -c "import json; p = json.load(open('pod.json')); \
+              assert p['metadata']['annotations']['seclume.space/injected'] == 'spiffe', p"
+          }
+          check
+          # An upgrade keeps the CA: the webhook still answers.
+          helm upgrade seclume seclume-admission/helm/seclume-admission \
+            --namespace seclume-system --reuse-values --wait --timeout 180s
+          check
+      - name: Switched to cert-manager
+        run: |
+          set -euo pipefail
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.18.2/cert-manager.yaml
+          kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=180s
+          helm upgrade seclume seclume-admission/helm/seclume-admission \
+            --namespace seclume-system --reuse-values --set tls.mode=certManager \
+            --wait --timeout 180s
+          kubectl -n seclume-system wait certificate/seclume-seclume-admission --for=condition=Ready \
+            --timeout=120s
+          kubectl -n seclume-system rollout restart deploy/seclume-seclume-admission
+          kubectl -n seclume-system rollout status deploy/seclume-seclume-admission --timeout=180s
+          for _ in $(seq 1 30); do
+            bundle=$(kubectl get mutatingwebhookconfiguration seclume-seclume-admission \
+              -o jsonpath='{.webhooks[0].clientConfig.caBundle}')
+            test -n "$bundle" && break
+            sleep 2
+          done
+          kubectl -n shop create --dry-run=server -o json \
+            -f seclume-admission/ci/spiffe-pod.yaml > pod.json
+          python3 -c "import json; p = json.load(open('pod.json')); \
+            assert p['metadata']['annotations']['seclume.space/injected'] == 'spiffe', p"
+      # Why, on the pull request: the webhook's and the pods' last words.
+      - if: failure()
+        run: |
+          say() { echo "::error title=$1::$(printf '%s' "$2" | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3000)"; }
+          say webhook "$(kubectl logs -n seclume-system -l app.kubernetes.io/name=seclume-admission --tail=30 2>&1; kubectl logs -n seclume-system -l app=seclume-admission --tail=30 2>&1)"
+          say pods "$(kubectl get pods -A -o wide 2>&1 | tail -20)"
+          say events "$(kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -20)"
+          say oom "$(kubectl -n shop logs oom --all-containers --tail=20 2>&1)"
+          say webhook-config "$(kubectl get mutatingwebhookconfiguration -o yaml 2>&1 | grep -v caBundle | tail -40)"
       - name: Remove the cluster
         if: always()
         run: kind delete cluster --name seclume || true

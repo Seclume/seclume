@@ -1,0 +1,83 @@
+{{- $image := include "seclume-admission.image" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "seclume-admission.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "seclume-admission.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "seclume-admission.selector" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "seclume-admission.selector" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: webhook
+          image: {{ $image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --tls-cert
+            - /tls/tls.crt
+            - --tls-key
+            - /tls/tls.key
+            - --sidecar-image
+            - {{ default $image .Values.sidecar.image | quote }}
+            - --heapcheck-jar
+            - {{ .Values.sidecar.heapcheckJar | quote }}
+            - --interval-seconds
+            - {{ .Values.sidecar.intervalSeconds | quote }}
+            - --sidecar-memory
+            - {{ .Values.sidecar.memory | quote }}
+            {{- if .Values.sidecar.native }}
+            - --native-sidecar
+            {{- end }}
+            {{- with .Values.sidecar.dumpSizeLimit }}
+            - --dump-size-limit
+            - {{ . | quote }}
+            {{- end }}
+            - --spiffe-csi-driver
+            - {{ .Values.spiffe.csiDriver | quote }}
+            {{- with .Values.spiffe.hostPath }}
+            - --spiffe-host-path
+            - {{ . | quote }}
+            {{- end }}
+            - --spiffe-mount-path
+            - {{ .Values.spiffe.mountPath | quote }}
+            - --spiffe-socket
+            - {{ .Values.spiffe.socket | quote }}
+          ports:
+            - {name: https, containerPort: 8443}
+          readinessProbe:
+            httpGet: {path: /healthz, port: https, scheme: HTTPS}
+          livenessProbe:
+            httpGet: {path: /healthz, port: https, scheme: HTTPS}
+            initialDelaySeconds: 20
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - {name: tls, mountPath: /tls, readOnly: true}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "seclume-admission.tlsSecret" . }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}

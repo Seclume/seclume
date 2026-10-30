@@ -1,0 +1,75 @@
+# The image of the webhook and of the sidecar it injects: both jars, Java 25
+# (seclume-admission/deploy/build-image.sh). A digest pins it.
+image:
+  repository: ""            # required, e.g. registry.example/seclume-admission
+  tag: ""                   # defaults to the chart's appVersion
+  digest: ""                # sha256:..., wins over the tag
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicaCount: 2
+
+# How the webhook's serving certificate is made:
+#   selfSigned      - a CA made by Helm, kept across upgrades (the default)
+#   certManager     - cert-manager issues it and injects the CA bundle
+#   existingSecret  - a kubernetes.io/tls secret you provide, with caBundle below
+tls:
+  mode: selfSigned
+  certManager:
+    # An issuer of your own; empty makes a CA for the webhook (a self-signed
+    # root that issues the serving certificate).
+    issuerRef: {}
+    #   name: my-issuer
+    #   kind: ClusterIssuer
+    duration: 2160h         # 90 days; seclume-keys takes up the renewal without a restart
+    renewBefore: 360h
+  existingSecret: ""
+  caBundle: ""              # base64 PEM, for existingSecret
+
+webhook:
+  # Never in a pod's way: a webhook that cannot be reached lets the pod through.
+  failurePolicy: Ignore
+  timeoutSeconds: 5
+  # Only namespaces with this label are sent to the webhook.
+  namespaceSelector:
+    matchLabels:
+      seclume.space/inject: enabled
+  objectSelector: {}
+
+# What the webhook injects; see DIAGNOSTICS.md, "Injected by annotation".
+sidecar:
+  heapcheckJar: /opt/seclume/seclume-heapcheck.jar
+  intervalSeconds: 10
+  native: false             # an init container with restartPolicy Always (Kubernetes 1.29+)
+  memory: 256Mi
+  dumpSizeLimit: ""         # the dump folder's sizeLimit, e.g. 4Gi
+  image: ""                 # defaults to the webhook's image
+spiffe:
+  csiDriver: csi.spiffe.io
+  hostPath: ""              # a host directory with the socket instead of the CSI driver
+  mountPath: /spiffe-workload-api
+  socket: spire-agent.sock
+
+resources:
+  requests: {cpu: 20m, memory: 96Mi}
+  limits: {memory: 256Mi}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
+podAnnotations: {}
