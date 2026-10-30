@@ -1,0 +1,30 @@
+# PostgreSQL and a Vault dev server, both on this machine only. The password
+# and the token are made by ./setup.sh, random for each run; nothing here holds
+# one.
+services:
+  db:
+    image: docker.io/library/postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD_FILE: /secrets/db-password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes: ["./secrets:/secrets:ro"]
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "app"]
+      interval: 2s
+      retries: 30
+  # Vault's dev server with TLS: it makes a CA of its own in ./secrets/vault-tls,
+  # which setup.sh turns into the trust store the application uses. seclume
+  # refuses to fetch a secret over plain http.
+  vault:
+    image: docker.io/hashicorp/vault:2.0.0
+    cap_add: [IPC_LOCK]
+    entrypoint: ["sh", "-c", "VAULT_DEV_ROOT_TOKEN_ID=\"$$(cat /secrets/vault-token)\" exec vault server -dev -dev-tls -dev-tls-cert-dir=/vault-tls -dev-listen-address=0.0.0.0:8200"]
+    volumes: ["./secrets:/secrets:ro", "./secrets/vault-tls:/vault-tls"]
+    ports: ["127.0.0.1:8200:8200"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault-tls/vault-ca.pem vault status"]
+      interval: 2s
+      retries: 30
