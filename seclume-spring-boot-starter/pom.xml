@@ -96,6 +96,13 @@
       <artifactId>seclume-heapdump</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- Masking secrets in log output, with seclume.logging.redact=true. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-logging</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-autoconfigure</artifactId>

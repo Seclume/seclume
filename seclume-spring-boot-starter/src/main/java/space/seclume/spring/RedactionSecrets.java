@@ -49,6 +49,19 @@ public final class RedactionSecrets implements OffHeapSecrets, AutoCloseable {
         DATA_SOURCES.put(provider, label);
     }
 
+    /**
+     * Every provider, by label - the data sources' and the configured ones -
+     * for a masker that reads them itself. Nothing is read here.
+     */
+    public Map<String, SecretProvider> providers() {
+        Map<String, SecretProvider> providers = new LinkedHashMap<>();
+        synchronized (DATA_SOURCES) {
+            DATA_SOURCES.forEach((provider, label) -> providers.put(label, provider));
+        }
+        providers.putAll(configured);
+        return providers;
+    }
+
     /** What is looked for, by label - names only. */
     public List<String> labels() {
         List<String> labels = new ArrayList<>();

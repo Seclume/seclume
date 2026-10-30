@@ -13,3 +13,4 @@ space.seclume.spring.SeclumeMessagingAutoConfiguration
 space.seclume.spring.SeclumeRedisAutoConfiguration
 space.seclume.spring.SeclumeHeapDumpAutoConfiguration
 space.seclume.spring.SeclumeOomDumpAutoConfiguration
+space.seclume.spring.SeclumeLogRedactionAutoConfiguration
