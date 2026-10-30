@@ -99,6 +99,10 @@ The fuzz targets use [Jazzer](https://github.com/CodeIntelligenceTesting/jazzer)
   `IOException`.
 - **A SPIFFE agent's unreadable key threw the wrong exception.** It surfaced as an
   `IllegalArgumentException` instead of a broken answer.
+- **A Workload API length could pass the bounds check.** A protobuf length close to 2^63 in
+  the SPIFFE agent's answer wrapped the bounds check `at + length > end`, and reading it ended
+  in an `IndexOutOfBoundsException`. The check is now `length > end - at`. The `parser-fuzz` job
+  found this within its first minute.
 
 ## Open questions for a reviewer
 

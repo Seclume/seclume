@@ -171,6 +171,25 @@ class WorkloadApiAnswerFuzzTest {
         }
     }
 
+    /**
+     * Found by the coverage-guided search: a length of nearly 2^63 wrapped
+     * the bounds check's sum and reached the slice as an index out of bounds.
+     */
+    @Test
+    void aLengthNear2To63IsACutShortAnswer() {
+        ByteArrayOutputStream message = new ByteArrayOutputStream();
+        varint(message, 1L << 3 | 2);                     // field 1, length-delimited
+        varint(message, Long.MAX_VALUE - 2);
+        message.write(0);
+        byte[] bytes = message.toByteArray();
+        x509(bytes);
+        jwt(bytes);
+        ByteArrayOutputStream nested = new ByteArrayOutputStream();
+        field(nested, 1, bytes);
+        x509(nested.toByteArray());
+        jwt(nested.toByteArray());
+    }
+
     @Test
     void mutatedAnswersEndInAnSvidOrAnIoException() {
         assumeTrue(PrivateSigningKey.available(), "OpenSSL 3 on 64-bit Linux or CNG on Windows");

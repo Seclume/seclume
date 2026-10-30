@@ -366,6 +366,24 @@ jobs:
         run: >
           ./mvnw -B -pl seclume-core -am test -Dtest="$TARGET"
           -Djazzer.max_duration=60s -Dsurefire.failIfNoSpecifiedTests=false
+      # The finding on the pull request itself: the failure and the input, as
+      # Base64, so that it can be turned into a regression test without
+      # downloading the artifact.
+      - if: failure()
+        run: |
+          python3 - <<'PY'
+          import base64, glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = ((bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                              + ' ' + (bad.text or '')[:600])
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text[:900]}")
+          for crash in glob.glob('**/crash-*', recursive=True)[:3]:
+              data = open(crash, 'rb').read()[:3000]
+              print(f"::error title=input {crash.split('/')[-1]}::{base64.b64encode(data).decode()}")
+          PY
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

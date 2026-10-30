@@ -879,7 +879,9 @@ public final class SpiffeWorkloadApi {
         /** A length-delimited value: where it starts and how long it is. */
         long[] bytes() throws IOException {
             long length = varint();
-            if (length < 0 || at + length > end) {
+            // length > end - at, not at + length > end: a length near 2^63 from
+            // the wire wraps the sum below end and would pass.
+            if (length < 0 || length > end - at) {
                 throw new IOException("the Workload API's answer is cut short");
             }
             long[] value = {at, length};
