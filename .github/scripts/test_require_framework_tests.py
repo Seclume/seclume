@@ -14,7 +14,7 @@ class FrameworkGateTest(unittest.TestCase):
             for framework, methods in EXPECTED.items():
                 (reports / f"TEST-space.seclume.frameworks.{framework}OnPostgresTest.xml").write_text(
                     '<testsuite>' + ''.join(f'<testcase name="{method}"/>' for method in methods) + '</testsuite>')
-            self.assertEqual(require("Postgres", reports), 9)
+            self.assertEqual(require("Postgres", reports), sum(map(len, EXPECTED.values())))
             file = reports / 'TEST-space.seclume.frameworks.JooqOnPostgresTest.xml'
             valid = file.read_text()
             for tag in ("skipped", "error", "failure"):

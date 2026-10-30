@@ -77,6 +77,39 @@ public final class FieldKeys implements AutoCloseable {
         this.primary = primary;
     }
 
+    /** The ring {@link #install} made available to code that cannot be handed one. */
+    private static volatile FieldKeys installed;
+
+    /**
+     * Makes {@code keys} the ring of code that is constructed by a framework
+     * rather than handed one - JPA attribute converters, chiefly. The Spring
+     * Boot starter installs the ring it builds; closing an installed ring
+     * uninstalls it.
+     *
+     * @param keys the ring, or {@code null} to uninstall
+     */
+    public static void install(FieldKeys keys) {
+        if (keys != null) {
+            keys.checkOpen();
+        }
+        installed = keys;
+    }
+
+    /**
+     * The installed ring.
+     *
+     * @throws IllegalStateException if none is - with what to do about it
+     */
+    public static FieldKeys installed() {
+        FieldKeys keys = installed;
+        if (keys == null) {
+            throw new IllegalStateException("no field encryption keys are installed: configure "
+                    + "seclume.field-encryption.keys.<n>.* with the Spring Boot starter, or call "
+                    + "FieldKeys.install(keys) before the first value is encrypted");
+        }
+        return keys;
+    }
+
     public static Builder builder() {
         return new Builder();
     }
@@ -156,6 +189,9 @@ public final class FieldKeys implements AutoCloseable {
     public synchronized void close() {
         if (closed) {
             return;
+        }
+        if (installed == this) {
+            installed = null;
         }
         use.writeLock().lock();
         try {

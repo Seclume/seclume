@@ -264,7 +264,9 @@ native memory: randomized, or deterministic so that `where ssn = ?`, a unique in
 join still work. The ciphertext is a binary value any JDBC driver stores, in the same format
 on all four databases. Values are written from native memory and read back into it; keys come
 from any provider, best as a data key only Vault's transit engine can open
-(`provider=vault-transit`). Rotation runs while the table is in use. Tested against all four
+(`provider=vault-transit`) or a cloud KMS (`provider=kms-decrypt`). Rotation runs while the
+table is in use. `seclume-jpa` brings JPA converters and a `Sealed` attribute type that stays
+ciphertext in the entity; the starter builds the key ring from `seclume.field-encryption.*`. Tested against all four
 databases, Vault and OpenBao, with a heap dump that holds neither the value nor the key. The
 whole story - modes, keys, rotation, what it does not hide - is in
 [ENCRYPTION.md](ENCRYPTION.md).

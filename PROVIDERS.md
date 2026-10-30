@@ -36,6 +36,7 @@ nested provider rather than a value.
 | `rds-iam` | built, not stored — a signed RDS token | 15 min (AWS fixes it) | `key-` | four HMACs |
 | `vault` | HashiCorp Vault or OpenBao over HTTPS | **yes**, with its lease | `token-`, or a login: `jwt-` / `secret-id-` / `aws-` / the cloud's metadata | one HTTPS request |
 | `vault-transit` | a ciphertext Vault's transit engine decrypts — a [field encryption](ENCRYPTION.md) data key | no | `token-`, or a login as for `vault` | one HTTPS request |
+| `kms-decrypt` | a ciphertext AWS KMS, Cloud KMS or Azure Key Vault decrypts (`kms=`) — a [field encryption](ENCRYPTION.md) data key | no | the service's credentials: `key-` / `credentials=` (AWS), `token-` (Google, Azure) | one HTTPS request |
 | `aws-secrets-manager` | AWS Secrets Manager | no | `key-`, optional `session-token-` | one HTTPS request |
 | `azure-key-vault` | Azure Key Vault | **yes**, when the secret has `exp` | `token-` | one HTTPS request |
 | `gcp-secret-manager` | Google Secret Manager | no | `token-` | one HTTPS request |
@@ -294,6 +295,31 @@ means a ciphertext of another key or a context that does not match.
 Tested against Vault and OpenBao in CI (`LocalVaultTransitFieldKeyTest`, with a token that
 may open this key and no other) and against a stand-in for every answer that is not a
 plaintext (`VaultTransitSecretProviderTest`).
+
+### Cloud KMS: a data key only the cloud can open
+
+```properties
+provider=kms-decrypt
+kms=aws-kms                      # or gcp-kms, azure-key-vault, vault-transit
+ciphertext=<Base64 the service handed out>
+```
+
+| `kms=` | Settings | The request | The principal needs |
+|---|---|---|---|
+| `aws-kms` | `key` (ARN, id or alias), `region`; `credentials=instance\|container\|web-identity`, or `access-key-id` with `key-provider` (and `session-token-provider`); `endpoint` | `TrentService.Decrypt` with `CiphertextBlob` and `KeyId` - a ciphertext of another key is refused by AWS | `kms:Decrypt` |
+| `gcp-kms` | `key` = `projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>` (the version is in the ciphertext); `token-provider`, e.g. `gcp-metadata`; `endpoint` | `POST /v1/<key>:decrypt` | `cloudkms.cryptoKeyVersions.useToDecrypt` |
+| `azure-key-vault` | `vault-uri`, `key-name`, `key-version` (the one it was wrapped with), `algorithm` (`RSA-OAEP-256`; `RSA-OAEP`; `A128KW`..`A256KW` on Managed HSM); `token-provider`, e.g. `azure-managed-identity` with `token-resource=https://vault.azure.net` | `POST /keys/<name>/<version>/unwrapkey` | the `unwrapKey` key permission |
+| `vault-transit` | as `provider=vault-transit` above | | |
+
+Each answer carries the plaintext in Base64 (Key Vault: Base64url) inside JSON; both are read
+where the answer lies, in native memory, and the decoded secret is written into the target.
+The ciphertext is no secret: it stands in the configuration because only the service can open
+it. Made for [field encryption](ENCRYPTION.md)'s data keys, read once when the key ring is
+built; any other secret stored this way works the same.
+
+Tested against stand-ins for the three services: the request each is sent, the plaintext
+decoded from each answer, every refusal with what the principal needs, every malformed answer
+(`KmsDecryptSecretProviderTest`). A live run needs the cloud and is not part of CI.
 
 ### The three cloud vaults
 

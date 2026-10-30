@@ -99,8 +99,9 @@ public final class SecretProviders {
                     "no secret provider configured - set 'provider' to one of "
                     + "file, env-file, unix-socket, process, dpapi, credential-manager, "
                     + "libsecret, keychain, "
-                    + "rds-iam, encrypted, vault, vault-transit, aws-secrets-manager, "
-                    + "azure-key-vault, gcp-secret-manager, azure-managed-identity, "
+                    + "rds-iam, encrypted, vault, vault-transit, kms-decrypt, "
+                    + "aws-secrets-manager, azure-key-vault, gcp-secret-manager, "
+                    + "azure-managed-identity, "
                     + "gcp-metadata, or none for a "
                     + "login by client certificate alone");
         }
@@ -172,6 +173,9 @@ public final class SecretProviders {
             // no secret and stands in the configuration; the token as for vault.
             case "vault-transit", "vaulttransit" -> new VaultTransitSecretProvider(settings,
                     maxLength);
+            // The same for the clouds' key management services: AWS KMS, Cloud KMS,
+            // Key Vault's unwrapKey - kms= names the service as for signing keys.
+            case "kms-decrypt", "kmsdecrypt" -> KmsDecryptSecretProvider.of(settings, maxLength);
             // The three cloud vaults. All of them build on the same two
             // pieces - SecretFetch for the HTTPS, JsonOff for the answer - so
             // that no SDK ever hands out a String. "token-" says where the
@@ -247,7 +251,7 @@ public final class SecretProviders {
                     "unknown secret provider '" + kind + "' - known are file, env-file, "
                     + "unix-socket, process, dpapi, credential-manager, libsecret, keychain, "
                     + "rds-iam, encrypted, "
-                    + "vault, vault-transit, aws-secrets-manager, azure-key-vault, "
+                    + "vault, vault-transit, kms-decrypt, aws-secrets-manager, azure-key-vault, "
                     + "gcp-secret-manager, azure-managed-identity, gcp-metadata, spiffe-jwt, "
                     + "none");
         };

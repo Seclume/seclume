@@ -10,6 +10,11 @@ EXPECTED = {
                 "earlyCursorCloseAllowsAnotherQuery"),
     "Liquibase": ("liquibaseUpdatesRollsBackAndUpdatesAgain", "repeatedDeploymentDoesNotRepeatChanges",
                   "failedDataMigrationRollsBackAndReleasesLock"),
+    "JpaFieldEncryption": ("attributesComeBackAsTheyWent", "theServerHoldsOnlyCiphertext",
+                           "aDeterministicAttributeIsQueriedAndUnique",
+                           "aSealedTokenIsOpenedIntoNativeMemory", "nullsStayNull",
+                           "anUpdateIsEncryptedAgain",
+                           "aHeapDumpAfterLoadingHoldsNeitherTheTokenNorTheKey"),
 }
 
 

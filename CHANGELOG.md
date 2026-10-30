@@ -5,6 +5,31 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Field encryption in JPA entities** (`seclume-jpa`, new). `EncryptedStringConverter` and
+  `EncryptedBytesConverter` - one small subclass per column, which names it and its mode -
+  encrypt a `String` or `byte[]` attribute; JPQL `=`/`in` and derived queries on a
+  deterministic attribute work, because the parameter is converted like the attribute.
+  `Sealed` (seclume-core) is an attribute type that stays ciphertext in the entity:
+  `column.seal(...)` from native memory, `column.open(sealed, target)` into it, and
+  `SealedConverter` maps it, registered with Hibernate by a `TypeContributor`. Converters take
+  the ring `FieldKeys.install` made available, at their first value.
+- **The key ring from `application.properties`**: `seclume.field-encryption.keys.<n>.*` - a
+  provider's settings under each key's number, or one `uri` - and
+  `seclume.field-encryption.primary`. The starter builds the ring, installs it and wipes it
+  when the context closes; a key that cannot be read stops the start.
+- **`provider=kms-decrypt`**: a data key the cloud opens - AWS KMS `Decrypt`, Cloud KMS
+  `decrypt`, Azure Key Vault `unwrapKey` (`kms=aws-kms|gcp-kms|azure-key-vault`, and
+  `vault-transit`), with the services' own credentials as for signing keys and the answer's
+  Base64 (Key Vault's Base64url) decoded off the heap.
+- Tests: Hibernate 7.4 on PostgreSQL, MySQL/MariaDB, SQL Server and Oracle with a generated
+  schema, ciphertext-only storage, a JPQL query and unique constraint on a deterministic
+  attribute, `in`, NULLs, an update, a `Sealed` token as a query parameter and a heap dump in
+  which the sealed token and the key are not and the `String` attribute is
+  (`JpaFieldEncryptionCase`, required by the framework gate); the converters and the
+  contributor alone (`ConvertersTest`, `SealedTypeContributorTest`); the starter's ring, its
+  installation, wiping and every misconfiguration (`FieldEncryptionAutoConfigurationTest`);
+  the three services against stand-ins (`KmsDecryptSecretProviderTest`).
+
 - **Field encryption: columns the database cannot read** (`space.seclume.field`, in
   seclume-core). `FieldKeys` holds a ring of 256-bit data keys in locked native memory, read
   from any provider; `EncryptedColumn` encrypts a column's values in the application with

@@ -34,7 +34,8 @@ try (FieldKeys keys = FieldKeys.builder()
 }
 ```
 
-It is in `seclume-core` (`space.seclume.field`) and needs nothing else. The ciphertext is an
+It is in `seclume-core` (`space.seclume.field`) and needs nothing else; `seclume-jpa` adds JPA
+converters and the Spring Boot starter a ring from `application.properties`. The ciphertext is an
 ordinary binary value bound with `setBytes` and read with `getBytes`, so it works on **every
 JDBC driver**, seclume's or not, and the format is the same everywhere: a value written
 through PostgreSQL decrypts after a move to SQL Server.
@@ -95,6 +96,27 @@ path "transit/decrypt/field-data" { capabilities = ["update"] }
 Revoking the token or disabling the transit key stops every new start from opening the data
 key - one switch for the whole column set. Settings in [PROVIDERS.md](PROVIDERS.md#vault-transit-a-data-key-only-vault-can-open).
 
+The clouds' key management services do the same with `provider=kms-decrypt`: AWS KMS
+(`GenerateDataKeyWithoutPlaintext`), Cloud KMS (`encrypt` a key made with `openssl rand`) and
+Azure Key Vault (`wrapKey` with an RSA key):
+
+```bash
+aws kms generate-data-key-without-plaintext --key-id alias/field-data --key-spec AES_256 \
+    --query CiphertextBlob --output text
+```
+
+```properties
+provider=kms-decrypt
+kms=aws-kms
+key=alias/field-data          region=eu-central-1
+ciphertext=AQIDAHh...==
+credentials=web-identity      # or instance, container; or access-key-id with key-provider
+```
+
+The principal needs `kms:Decrypt` (AWS), `cloudkms.cryptoKeyVersions.useToDecrypt` (Google)
+or the `unwrapKey` permission (Azure), and nothing else. Settings in
+[PROVIDERS.md](PROVIDERS.md#cloud-kms-a-data-key-only-the-cloud-can-open).
+
 ### One key per column
 
 A column encrypts with a key derived from the data key, its **name** and its mode
@@ -116,6 +138,75 @@ database does not need renaming it here.
 4. Drop the old key from the ring when nothing is under it.
 
 `LocalEncryptedColumnTest` does exactly this against all four databases, with the table in use.
+
+## Spring Boot
+
+With the starter, the ring comes from `application.properties` - each key a provider's
+settings under its number, or one `uri` line - and is a bean, installed for seclume-jpa's
+converters and wiped when the context closes:
+
+```properties
+seclume.field-encryption.keys.1.provider=vault-transit
+seclume.field-encryption.keys.1.address=https://vault:8200
+seclume.field-encryption.keys.1.key-name=field-data
+seclume.field-encryption.keys.1.ciphertext=vault:v1:8SDd3WHDOjf7mq69CyCqYjBXAiQQAVZRkFM13ok481zoCmHnSeDX9vyf7w==
+seclume.field-encryption.keys.1.auth-method=kubernetes
+seclume.field-encryption.keys.1.auth-role=app
+# seclume.field-encryption.keys.2.uri=kms-decrypt?kms=aws-kms&key=alias/field-data&...
+# seclume.field-encryption.primary=2        # the highest number when left out
+```
+
+```java
+@Autowired FieldKeys keys;
+EncryptedColumn token = keys.column("tenant.api_token", Mode.RANDOMIZED);
+```
+
+A key that cannot be read - a wrong number, a key that is not 32 bytes, a provider Vault
+refuses - stops the start, with the reason; nothing half-built is left in memory.
+
+## JPA entities
+
+`seclume-jpa` has the converters, for Hibernate, EclipseLink or any Jakarta Persistence 3
+provider:
+
+```java
+@Entity
+class Patient {
+
+    @Converter
+    public static class SsnConverter extends EncryptedStringConverter {
+        public SsnConverter() { super("patient.ssn", Mode.DETERMINISTIC); }
+    }
+
+    @Convert(converter = SsnConverter.class)
+    @Column(length = 100, unique = true)
+    String ssn;                      // encrypted in the database, a String in the entity
+
+    @Column(length = 300)
+    Sealed apiToken;                 // ciphertext in the entity too; opened into native memory
+}
+
+em.createQuery("from Patient where ssn = :ssn", Patient.class)
+        .setParameter("ssn", "078-05-1120");      // the parameter is encrypted like the attribute
+```
+
+- **`EncryptedStringConverter`, `EncryptedBytesConverter`**: one small subclass per column,
+  because a converter is not told which attribute it converts, and the column's name is part of
+  its key. They take the ring installed by the starter (or `FieldKeys.install`) at the first
+  value, or one handed in by a container that injects converters. The attribute is a `String`
+  or `byte[]` in the entity, so it is on the heap like any other: this keeps it from the
+  database, not from a heap dump.
+- **`Sealed`** with **`SealedConverter`** (applied by itself; Hibernate registers it through
+  seclume-jpa's `TypeContributor`, other providers need it listed): for secrets the application
+  only passes on - a token, a TOTP seed. The entity holds the ciphertext; `column.seal(...)`
+  makes one from native memory and `column.open(sealed, target)` writes the plaintext into
+  native memory. Nothing on the heap is ever the plaintext.
+- A deterministic attribute is searched by `=` and `in`, also in derived queries
+  (`findBySsn`). During a rotation that finds the values under the primary key; use
+  `column.searchSealed(value)` with `in` on a `Sealed` attribute, or re-encrypt first.
+
+Hibernate generates the schema for these attributes as it does for any `byte[]`: `bytea`,
+`varbinary(n)`, `raw(n)` - with `length` the plaintext's longest plus 34.
 
 ## Context: a value bound to its row
 
@@ -189,6 +280,18 @@ always be read; a later format will have another version byte.
   column, rotation in use, a value copied into another row or tampered with refused, the
   heap dump - PostgreSQL 15, 18 and 19 RC, MySQL 8.4, 9.7 and 26.10, MariaDB 11.4, 12.3 and
   13.0, SQL Server 2022 and 2025, Oracle Free 23 (`LocalEncryptedColumnTest`).
+- **Hibernate on the four databases:** generated schema, ciphertext only on the server, a
+  JPQL query and a unique constraint on a deterministic attribute, `in`, NULLs, an update, a
+  `Sealed` token opened into native memory and used as a query parameter, and a heap dump of a
+  process that loaded the entity: the sealed token and the key are not in it, the `String`
+  attribute is - the control, and the documented difference (`JpaFieldEncryptionCase`).
+- **Spring Boot:** the ring from the properties, its primary, the `uri` form, installed while
+  the context lives, wiped when it closes, every misconfiguration refused at start with
+  nothing left in memory (`FieldEncryptionAutoConfigurationTest`).
+- **Cloud KMS:** AWS KMS, Cloud KMS and Key Vault against stand-ins - the request each
+  service is sent, the plaintext decoded from its answer (Key Vault's Base64url too), every
+  refusal and malformed answer (`KmsDecryptSecretProviderTest`). A live run needs the cloud
+  and is not part of CI.
 - **Vault and OpenBao:** a data key made by transit, opened by `vault-transit` with a token
   that may decrypt that key and no other (`LocalVaultTransitFieldKeyTest`); every answer that
   is not a plaintext refused (`VaultTransitSecretProviderTest`).

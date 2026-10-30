@@ -57,6 +57,10 @@
        "property": "over thousands of random rings, columns and values, what is encrypted decrypts to itself and to nothing else"},
       {"test": "space.seclume.secret.VaultTransitSecretProviderTest", "module": "seclume-core",
        "property": "a data key unwrapped by Vault transit reaches native memory only, and every refusal is said"},
+      {"test": "space.seclume.secret.KmsDecryptSecretProviderTest", "module": "seclume-core",
+       "property": "a data key opened by AWS KMS, Cloud KMS or Key Vault reaches native memory only, and every refusal is said"},
+      {"test": "space.seclume.jpa.ConvertersTest", "module": "seclume-jpa",
+       "property": "JPA attributes go to the database encrypted and come back themselves; foreign or altered values are refused"},
       {"test": "space.seclume.internal.ChannelBindingTest", "module": "seclume-core",
        "property": "SCRAM channel binding is computed from the server's certificate"},
       {"test": "space.seclume.internal.JsonOffTest", "module": "seclume-core",
@@ -79,7 +83,9 @@
       {"test": "space.seclume.postgresql.wire.ReceiveBufferWipeTest", "module": "seclume-postgresql",
        "property": "received bytes are wiped once read"},
       {"test": "space.seclume.postgresql.jdbc.LocalEncryptedColumnTest", "module": "seclume-postgresql",
-       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"},
+      {"test": "space.seclume.spring.FieldEncryptionAutoConfigurationTest", "module": "seclume-spring-boot-starter",
+       "property": "the starter's key ring is wiped when the context closes, and a bad configuration leaves nothing in memory"}
     ],
     "mysql": [
       {"test": "space.seclume.mysql.LoginFailureWipeTest", "module": "seclume-mysql",
