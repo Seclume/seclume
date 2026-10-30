@@ -1176,6 +1176,13 @@ seclume.server.ssl.bundle=web      # Tomcat: HTTPS with that key
 # server.ssl.bundle=web            # Reactor Netty, and clients that present a certificate
 ```
 
+Tomcat takes every kind of bundle - files, `vault-pki=`, `spiffe=` - and for the two that renew
+themselves it shares the bundle's key manager: one key, one certificate, and a renewed one
+served from the next handshake on, the connector untouched. `seclume.server.ssl.client-auth`
+(`none`, `want`, `need`) asks clients for a certificate - checked against the trust domain's
+bundle for a SPIFFE bundle, so that only its workloads (or those `peer-ids` names) get in.
+Without Spring: `SeclumeTomcat.enableHttps(connector, keyManager, trustManager, ClientAuth.NEED)`.
+
 - **Keys:** RSA, EC and Ed25519, as PEM or DER (PKCS#8, PKCS#1, SEC 1), or as OpenSSH's own
   format, which `ssh-keygen` writes. An OpenSSH file is converted in native memory, and RSA's
   CRT values are computed there too, without `BigInteger`. A passphrase-protected OpenSSH key
@@ -1222,8 +1229,9 @@ seclume.ssl.bundles.client.vault-pki=address=https://vault:8200&pki-role=client&
 - **Where it goes:** anything that takes a JSSE key manager or a Spring SSL bundle - HTTP and
   gRPC clients, Kafka, Reactor Netty. seclume's own JDBC connections take it as
   `clientCertVaultPki-` settings, for a database login by certificate alone - see
-  [TLS.md](TLS.md#mutual-tls-with-the-client-key-off-the-heap-too). Tomcat
-  (`seclume.server.ssl.bundle`) takes files so far.
+  [TLS.md](TLS.md#mutual-tls-with-the-client-key-off-the-heap-too). Tomcat serves such a
+  bundle too (`seclume.server.ssl.bundle`), sharing its key manager: a renewed certificate is
+  served from the next handshake on.
 - **Tests:** against a stand-in for Vault that checks the request's signature and signs with
   `openssl`, through a TLS 1.3 handshake whose server demands the certificate; and in CI against
   real Vault and OpenBao PKI engines, with the root token and with an AppRole whose policy
@@ -1251,6 +1259,9 @@ seclume.ssl.bundles.mesh.spiffe=socket=unix:///run/spire/agent.sock&peer-ids=spi
   is refused), `timeout-millis` (10 s), `peer-ids` - the SPIFFE IDs a peer may have, comma
   separated; without it any workload of the trust domain - and `name`, what it is listed as
   (else its SPIFFE ID; a Spring bundle's name).
+- **Served by Tomcat** as well: `seclume.server.ssl.bundle=mesh` with
+  `seclume.server.ssl.client-auth=need` is mutual TLS between workloads on the embedded
+  Tomcat, the SVID renewed under it.
 - **Trust:** a peer's chain must lead to the bundle and its leaf carry exactly one `spiffe://`
   URI SAN - the SPIFFE ID, which `peer-ids` checks. No host names: a workload is who its ID
   says.

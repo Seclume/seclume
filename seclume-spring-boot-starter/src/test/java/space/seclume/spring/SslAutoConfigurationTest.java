@@ -157,7 +157,8 @@ class SslAutoConfigurationTest {
      * stand-in for a SPIRE agent here - as the key, the trust domain's bundle as
      * the trust. Two contexts from the one bundle shake hands with each other,
      * mutually, the peer named by its SPIFFE ID; the SVID is listed under the
-     * bundle's name; never beside files, never for Tomcat.
+     * bundle's name; never beside files; and served by Tomcat, which can demand
+     * a client certificate of the trust domain.
      */
     @Test
     @SuppressWarnings("unchecked")
@@ -200,10 +201,27 @@ class SslAutoConfigurationTest {
             Exception both = assertThrows(Exception.class, () -> context(spiffe,
                     "seclume.ssl.bundles.mesh.certificate=" + certificate).close());
             assertTrue(rootMessage(both).contains("has spiffe= and"), rootMessage(both));
-            Exception tomcat = assertThrows(Exception.class, () -> context(spiffe,
-                    "seclume.server.ssl.bundle=mesh").close());
-            assertTrue(rootMessage(tomcat).contains("Tomcat cannot take yet"),
-                    rootMessage(tomcat));
+            // Tomcat serves the bundle - its key manager, not one of its own - and,
+            // asked to, demands a client certificate the trust domain vouches for.
+            int before = agent.calls();
+            try (AnnotationConfigApplicationContext served = context(spiffe,
+                    "seclume.server.ssl.bundle=mesh", "seclume.server.ssl.client-auth=need")) {
+                Connector connector = new Connector();
+                served.getBean(TomcatConnectorCustomizer.class).customize(connector);
+                assertEquals("https", connector.getScheme());
+                assertTrue(connector.getSecure());
+                org.apache.tomcat.util.net.SSLHostConfig[] hosts =
+                        ((org.apache.coyote.http11.AbstractHttp11Protocol<?>) connector
+                                .getProtocolHandler()).findSslHostConfigs();
+                assertEquals(org.apache.tomcat.util.net.SSLHostConfig.CertificateVerification
+                        .REQUIRED, hosts[0].getCertificateVerification());
+                assertEquals(before + 1, agent.calls(), "Tomcat fetched an SVID of its own");
+            }
+            Exception unclear = assertThrows(Exception.class, () -> context(spiffe,
+                    "seclume.server.ssl.bundle=mesh", "seclume.server.ssl.client-auth=maybe")
+                    .close());
+            assertTrue(rootMessage(unclear).contains("none, want or need"),
+                    rootMessage(unclear));
         }
     }
 

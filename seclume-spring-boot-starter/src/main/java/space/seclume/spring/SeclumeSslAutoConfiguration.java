@@ -285,7 +285,15 @@ public class SeclumeSslAutoConfiguration {
         }
     }
 
-    /** Tomcat's connector, when {@code seclume.server.ssl.bundle} names a bundle. */
+    /**
+     * Tomcat's connector, when {@code seclume.server.ssl.bundle} names a bundle -
+     * one of files, or one that keeps its certificate current itself
+     * ({@code vault-pki=}, {@code spiffe=}), whose key manager the connector
+     * then shares with the bundle: one key, one certificate, renewed for both.
+     * {@code seclume.server.ssl.client-auth} ({@code none}, {@code want},
+     * {@code need}) asks clients for a certificate - checked by the bundle's
+     * trust for a SPIFFE bundle, by the JVM's otherwise.
+     */
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(name = {"org.apache.catalina.connector.Connector",
             "org.springframework.boot.tomcat.TomcatConnectorCustomizer"})
@@ -293,14 +301,27 @@ public class SeclumeSslAutoConfiguration {
     static class TomcatHttps {
 
         @Bean
-        TomcatConnectorCustomizer seclumeTomcatHttps(Environment environment) {
-            BundleProperties bundle = bundle(environment,
-                    environment.getRequiredProperty("seclume.server.ssl.bundle"));
+        TomcatConnectorCustomizer seclumeTomcatHttps(Environment environment,
+                org.springframework.beans.factory.ObjectProvider<
+                        org.springframework.boot.ssl.SslBundles> bundles) {
+            String name = environment.getRequiredProperty("seclume.server.ssl.bundle");
+            BundleProperties bundle = bundle(environment, name);
+            SeclumeTomcat.ClientAuth clientAuth = clientAuth(environment);
             if (bundle.getVaultPki() != null || bundle.getSpiffe() != null) {
-                throw new IllegalStateException("seclume.server.ssl.bundle names a bundle with "
-                        + "vault-pki= or spiffe=, which Tomcat cannot take yet: give it "
-                        + "certificate= and key=, or serve with Reactor Netty "
-                        + "(server.ssl.bundle)");
+                SslManagerBundle managers = bundles.getObject().getBundle(name).getManagers();
+                javax.net.ssl.X509ExtendedKeyManager keys =
+                        (javax.net.ssl.X509ExtendedKeyManager) managers.getKeyManagers()[0];
+                javax.net.ssl.X509TrustManager trust = bundle.getSpiffe() == null ? null
+                        : (javax.net.ssl.X509TrustManager) managers.getTrustManagers()[0];
+                return connector -> SeclumeTomcat.enableHttps(connector, keys, trust,
+                        clientAuth);
+            }
+            if (clientAuth != SeclumeTomcat.ClientAuth.NONE) {
+                return connector -> SeclumeTomcat.enableHttps(connector, bundle.reloads()
+                        ? SeclumeKeys.keyManager(Path.of(bundle.getCertificate()),
+                                bundle.getKey(), bundle.getReloadInterval())
+                        : SeclumeKeys.keyManager(Path.of(bundle.getCertificate()),
+                                bundle.getKey()), null, clientAuth);
             }
             return connector -> {
                 if (bundle.reloads()) {
@@ -311,6 +332,17 @@ public class SeclumeSslAutoConfiguration {
                             bundle.getKey());
                 }
             };
+        }
+
+        private static SeclumeTomcat.ClientAuth clientAuth(Environment environment) {
+            String value = environment.getProperty("seclume.server.ssl.client-auth", "none");
+            try {
+                return SeclumeTomcat.ClientAuth.valueOf(value.trim()
+                        .toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalStateException("seclume.server.ssl.client-auth is none, want "
+                        + "or need, not " + value, e);
+            }
         }
     }
 }
