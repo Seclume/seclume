@@ -696,31 +696,40 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - name: RabbitMQ with TLS 1.3
+      # The current release in a container: Ubuntu's package is two
+      # majors behind (3.12, out of support), and what users run is 4.x.
+      - name: RabbitMQ 4.4 with TLS 1.3
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q rabbitmq-server
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rabbit"
+          cd "$RUNNER_TEMP/rabbit"
           openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem -days 2 \
             -subj /CN=localhost -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
-          sudo cp cert.pem key.pem /etc/rabbitmq/
-          sudo chown rabbitmq:rabbitmq /etc/rabbitmq/cert.pem /etc/rabbitmq/key.pem
           printf '%s\n' 'listeners.ssl.default = 5671' \
-            'ssl_options.cacertfile = /etc/rabbitmq/cert.pem' \
-            'ssl_options.certfile = /etc/rabbitmq/cert.pem' \
-            'ssl_options.keyfile = /etc/rabbitmq/key.pem' \
-            'ssl_options.versions.1 = tlsv1.3' | sudo tee /etc/rabbitmq/rabbitmq.conf
-          sudo systemctl restart rabbitmq-server
-          for i in $(seq 1 30); do (echo > /dev/tcp/127.0.0.1/5671) 2>/dev/null && break; sleep 2; done
+            'ssl_options.cacertfile = /tls/cert.pem' \
+            'ssl_options.certfile = /tls/cert.pem' \
+            'ssl_options.keyfile = /tls/key.pem' \
+            'ssl_options.versions.1 = tlsv1.3' > 20-tls.conf
+          chmod 644 key.pem cert.pem 20-tls.conf
+          docker run -d --name rabbit -p 5671:5671 \
+            -v "$PWD/cert.pem:/tls/cert.pem:ro" -v "$PWD/key.pem:/tls/key.pem:ro" \
+            -v "$PWD/20-tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro" \
+            docker.io/library/rabbitmq:4.4
+          for i in $(seq 1 60); do
+            docker exec rabbit rabbitmq-diagnostics -q check_port_connectivity >/dev/null 2>&1 && break
+            sleep 2
+          done
           head -c 18 /dev/urandom | base64 | tr -d '/+=' > "$RUNNER_TEMP/rabbit-password"
-          sudo rabbitmqctl add_user seclume "$(cat "$RUNNER_TEMP/rabbit-password")"
-          sudo rabbitmqctl set_permissions -p / seclume '.*' '.*' '.*'
+          docker exec -i rabbit sh -c 'rabbitmqctl add_user seclume "$(cat)"' \
+            < "$RUNNER_TEMP/rabbit-password"
+          docker exec rabbit rabbitmqctl set_permissions -p / seclume '.*' '.*' '.*'
           cp cert.pem "$RUNNER_TEMP/rabbit-cert.pem"
       - run: ./mvnw -B -pl seclume-rabbitmq -am test
         env:
           SECLUME_RABBITMQ_PORT: '5671'
           SECLUME_RABBITMQ_CERT: ${{ runner.temp }}/rabbit-cert.pem
           SECLUME_RABBITMQ_PASSWORD_FILE: ${{ runner.temp }}/rabbit-password
-          SECLUME_RABBITMQCTL: sudo rabbitmqctl close_all_connections recovery-test
+          SECLUME_RABBITMQCTL: docker exec rabbit rabbitmqctl close_all_connections recovery-test
 
   # seclume's own MongoDB driver, the pre-authenticated socket for the official
   # one, and Spring Data on the driver - against a standalone, a replica set
@@ -729,6 +738,13 @@ jobs:
   # itself, and a green build would say nothing about them.
   mongodb:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 8.0, which most installations run, and the current 9.0.
+        version: ['8.0', '9.0']
+    env:
+      MONGO_IMAGE: docker.io/library/mongo:${{ matrix.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -889,7 +905,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version: ['15', '18']
+        # 15 and 18, and the release candidate of 19, so that a protocol
+        # change shows up before the release reaches anyone.
+        version: ['15', '18', '19rc1']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -1071,6 +1089,16 @@ jobs:
             health: 'mysqladmin ping -h 127.0.0.1'
           - image: 'mariadb:11.4'
             health: 'healthcheck.sh --connect --innodb_initialized'
+          # The current lines: MySQL 9.7 LTS and the 26.x innovation release,
+          # MariaDB 12.3 LTS and 13.0.
+          - image: 'mysql:9.7'
+            health: 'mysqladmin ping -h 127.0.0.1'
+          - image: 'mysql:26.10'
+            health: 'mysqladmin ping -h 127.0.0.1'
+          - image: 'mariadb:12.3'
+            health: 'healthcheck.sh --connect --innodb_initialized'
+          - image: 'mariadb:13.0'
+            health: 'healthcheck.sh --connect --innodb_initialized'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -1105,10 +1133,16 @@ jobs:
         run: rm -f .local-mysql-password
 
   sqlserver:
+    # 2022 keeps the plain name, which branch protection requires.
+    name: ${{ matrix.version == '2022' && 'sqlserver' || format('sqlserver ({0})', matrix.version) }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['2022', '2025']
     services:
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:${{ matrix.version }}-latest
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
@@ -1269,7 +1303,7 @@ jobs:
       - name: Start CockroachDB with certificates and a password
         run: |
           set -e
-          image=cockroachdb/cockroach:v24.1.5
+          image=cockroachdb/cockroach:v26.2.10
           certs="--certs-dir=/certs --ca-key=/certs/ca.key"
           docker volume create crdb-certs
           docker run --rm -v crdb-certs:/certs "$image" cert create-ca $certs
@@ -1311,7 +1345,7 @@ jobs:
       - name: Start YugabyteDB with authentication
         run: |
           set -e
-          docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2024.1.3.0-b105 bin/yugabyted start --daemon=false --ysql_enable_auth=true
+          docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2026.1.2.0-b137 bin/yugabyted start --daemon=false --ysql_enable_auth=true
           pw="${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}"
           for i in $(seq 1 40); do
             ip=$(docker exec yb hostname -i | tr -d '\r' | awk '{print $1}')

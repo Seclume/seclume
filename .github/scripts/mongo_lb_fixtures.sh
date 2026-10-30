@@ -13,8 +13,8 @@
 set -euo pipefail
 work=$(mkdir -p "${1:?usage: mongo_lb_fixtures.sh <work directory> [address]}" && cd "$1" && pwd)
 address=${2:-127.0.0.1}
-image=docker.io/library/mongo:8.0
-balancer=docker.io/library/haproxy:3.0
+image=${MONGO_IMAGE:-docker.io/library/mongo:8.0}
+balancer=docker.io/library/haproxy:3.4
 # The image hands rseq to tcmalloc (glibc.pthread.rseq=0). On kernels 6.19 to
 # 7.0.13 that crashes, so mongod refuses to start there (SERVER-121912); with
 # glibc keeping rseq, tcmalloc does without it and mongod starts.

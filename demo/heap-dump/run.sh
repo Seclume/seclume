@@ -40,9 +40,9 @@ step "PostgreSQL 17 and a Vault dev server; the database password lives in Vault
 podman pod create --name seclume-demo >/dev/null
 podman run -d --pod seclume-demo --name seclume-demo-db \
   -e POSTGRES_PASSWORD_FILE=/shared/db-password -v "$shared":/shared:ro,z \
-  docker.io/library/postgres:17-alpine >/dev/null
+  docker.io/library/postgres:18-alpine >/dev/null
 podman run -d --pod seclume-demo --name seclume-demo-vault --cap-add IPC_LOCK \
-  -v "$shared":/shared:z --entrypoint sh docker.io/hashicorp/vault:1.20 -c '
+  -v "$shared":/shared:z --entrypoint sh docker.io/hashicorp/vault:2.0.0 -c '
     export VAULT_DEV_ROOT_TOKEN_ID="$(cat /shared/vault-token)"
     exec vault server -dev -dev-tls -dev-tls-cert-dir=/shared/vault-tls \
       -dev-listen-address=127.0.0.1:8200' >/dev/null

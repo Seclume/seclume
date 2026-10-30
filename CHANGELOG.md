@@ -262,6 +262,19 @@ All notable changes to seclume are recorded here. Versions follow
   and fails at 1,000. Internal modules (benchmarks, proofs, test harnesses) stay out of the
   deployment as before; `seclume-tck` stays in, because it is for users' own tests.
 
+- **Tested against the current server releases.** CI now runs the drivers against:
+  - PostgreSQL 19 RC1, besides 15 and 18;
+  - MySQL 9.7 LTS and 26.10, besides 8.4;
+  - MariaDB 12.3 LTS and 13.0, besides 11.4;
+  - SQL Server 2025, besides 2022;
+  - MongoDB 9.0, besides 8.0.
+
+  Images that had fallen behind were brought up to date:
+  - CockroachDB 24.1 to 26.2, YugabyteDB 2024.1 to 2026.1;
+  - Vault 1.20 to 2.0, the Kafka broker 4.1 to 4.4, HAProxy 3.0 to 3.4;
+  - RabbitMQ 3.12 (Ubuntu's package) to 4.4 in a container.
+
+  SUPPORTED-VERSIONS.md says which versions CI covers; it claimed SQL Server 2025 before CI ran it.
 - **A release gate for the security tests.** `.github/security-gate.json` names the 33
   tests that carry seclume's security claims, by CI job. `security_gate.py` gives each of them
   PASS, FAIL, SKIPPED, INCONCLUSIVE or NOT APPLICABLE from the job's reports. Only PASS and NOT
