@@ -30,7 +30,7 @@ final class Patches {
                         if ("-".equals(last)) {
                             l.add(value);
                         } else {
-                            l.add(Integer.parseInt(last), value);
+                            l.add(index(last, path), value);
                         }
                     } else {
                         Map<String, Object> m = (Map<String, Object>) parent;
@@ -54,13 +54,22 @@ final class Patches {
     }
 
     private static Object child(Object parent, String name) {
-        Object child = parent instanceof List<?> list ? list.get(Integer.parseInt(name))
+        Object child = parent instanceof List<?> list ? list.get(index(name, name))
                 : ((Map<?, ?>) parent).get(name);
         if (child == null) {
             throw new IllegalStateException("the path goes through " + name
                     + ", which is not there - the API server would refuse the patch");
         }
         return child;
+    }
+
+    /** An array index of a JSON pointer, or a patch the API server would refuse. */
+    private static int index(String part, String path) {
+        try {
+            return Integer.parseInt(part);
+        } catch (NumberFormatException notAnIndex) {
+            throw new IllegalStateException("not an array index in " + path, notAnIndex);
+        }
     }
 
     private static String unescape(String part) {
