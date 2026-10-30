@@ -216,6 +216,15 @@ All notable changes to seclume are recorded here. Versions follow
   In the Spring Boot starter, `seclume.metrics.opentelemetry=true` starts it through the
   application's `OpenTelemetry` bean and observes every configured pool.
 
+- **A release fits Maven Central's 1,000 files.** The central plugin makes MD5 and SHA-1
+  checksums only (`<checksums>required</checksums>`), no longer SHA-256 and SHA-512 as well; the
+  signatures get none, and `.mvn/maven.config` says the same for deploys through Maven Resolver
+  (`aether.checksums.algorithms=SHA-1,MD5`). A jar module now adds 20 files to the bundle instead
+  of 30: 0.13.1 had 1,056, the next release with today's modules has 744 instead of 1,116. CI
+  counts the bundle from the poms on every pull request (`.github/scripts/central_bundle.py`)
+  and fails at 1,000. Internal modules (benchmarks, proofs, test harnesses) stay out of the
+  deployment as before; `seclume-tck` stays in, because it is for users' own tests.
+
 ## [0.13.1] - 2026-10-21
 
 - **Fixed: `seclume-heapcheck` shipped the TCK's fuzz harness** - its classes and the

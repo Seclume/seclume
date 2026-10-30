@@ -434,6 +434,12 @@
             <extensions>true</extensions>
             <configuration>
               <publishingServerId>central</publishingServerId>
+              <!-- MD5 and SHA-1, which Central requires, and no more: SHA-256
+                   and SHA-512 on top doubled the bundle's checksum files and
+                   took it past Central's 1,000 files. The signatures (.asc)
+                   get none. .github/scripts/central_bundle.py counts the
+                   bundle on every pull request. -->
+              <checksums>required</checksums>
               <autoPublish>false</autoPublish>
               <waitUntil>validated</waitUntil>
               <deploymentName>seclume ${project.version}</deploymentName>
