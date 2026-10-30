@@ -152,6 +152,94 @@ class SslAutoConfigurationTest {
         assertTrue(rootMessage(both).contains("vault-pki= and certificate="), rootMessage(both));
     }
 
+    /**
+     * {@code spiffe=}: the workload's X.509-SVID from the Workload API - a
+     * stand-in for a SPIRE agent here - as the key, the trust domain's bundle as
+     * the trust. Two contexts from the one bundle shake hands with each other,
+     * mutually, the peer named by its SPIFFE ID; the SVID is listed under the
+     * bundle's name; never beside files, never for Tomcat.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void aBundleFromTheSpiffeWorkloadApi() throws Exception {
+        Path script = directory.resolve("make-svid.sh");
+        java.nio.file.Files.writeString(script, "cd '" + directory + "' && "
+                + "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes"
+                + " -days 2 -subj /O=example.org -keyout ca.key -out ca.pem"
+                + " && openssl x509 -in ca.pem -outform DER -out ca.der"
+                + " && openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes"
+                + " -subj /O=example.org -keyout svid.key -out svid.csr"
+                + " && printf 'subjectAltName=URI:" + MESH + "\\nextendedKeyUsage=clientAuth,"
+                + "serverAuth\\nkeyUsage=digitalSignature\\n' > svid.ext"
+                + " && openssl x509 -req -in svid.csr -CA ca.pem -CAkey ca.key -CAcreateserial"
+                + " -days 2 -extfile svid.ext -outform DER -out svid.der"
+                + " && openssl pkcs8 -topk8 -nocrypt -in svid.key -outform DER -out svid.pk8\n");
+        Process process = space.seclume.tck.Shell.builder(script.toString())
+                .redirectErrorStream(true).start();
+        assertTrue(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0);
+        byte[] answer = space.seclume.tck.FakeWorkloadApi.x509SvidResponse(MESH,
+                java.nio.file.Files.readAllBytes(directory.resolve("svid.der")),
+                java.nio.file.Files.readAllBytes(directory.resolve("svid.pk8")),
+                java.nio.file.Files.readAllBytes(directory.resolve("ca.der")));
+        String spiffe = "seclume.ssl.bundles.mesh.spiffe=socket=unix://"
+                + directory.resolve("agent.sock") + "&peer-ids=" + MESH;
+        try (space.seclume.tck.FakeWorkloadApi agent = new space.seclume.tck.FakeWorkloadApi(
+                directory.resolve("agent.sock"), () -> answer);
+             AnnotationConfigApplicationContext context = context(spiffe)) {
+            SslBundle bundle = context.getBean(SslBundles.class).getBundle("mesh");
+            assertEquals(MESH, mutual(bundle.createSslContext(), bundle.createSslContext()));
+            assertEquals(1, agent.calls(), "one SVID for the bundle's key and trust");
+
+            List<Map<String, Object>> certificates = (List<Map<String, Object>>)
+                    new SeclumeEndpoint(List.of()).report().get("certificates");
+            Map<String, Object> shown = certificates.stream()
+                    .filter(c -> c.get("name").equals("mesh"))
+                    .findFirst().orElseThrow(() -> new AssertionError(certificates.toString()));
+            assertEquals("spiffe", shown.get("kind"));
+
+            Exception both = assertThrows(Exception.class, () -> context(spiffe,
+                    "seclume.ssl.bundles.mesh.certificate=" + certificate).close());
+            assertTrue(rootMessage(both).contains("has spiffe= and"), rootMessage(both));
+            Exception tomcat = assertThrows(Exception.class, () -> context(spiffe,
+                    "seclume.server.ssl.bundle=mesh").close());
+            assertTrue(rootMessage(tomcat).contains("Tomcat cannot take yet"),
+                    rootMessage(tomcat));
+        }
+    }
+
+    private static final String MESH = "spiffe://example.org/mesh";
+
+    /** One mutual TLS connection between two contexts; the SPIFFE ID the server saw. */
+    private static String mutual(SSLContext server, SSLContext client) throws Exception {
+        try (SSLServerSocket listener = (SSLServerSocket) server.getServerSocketFactory()
+                .createServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())) {
+            listener.setNeedClientAuth(true);
+            CompletableFuture<String> peer = CompletableFuture.supplyAsync(() -> {
+                try (SSLSocket accepted = (SSLSocket) listener.accept()) {
+                    accepted.startHandshake();
+                    java.security.cert.X509Certificate seen = (java.security.cert.X509Certificate)
+                            accepted.getSession().getPeerCertificates()[0];
+                    accepted.getOutputStream().write(1);
+                    accepted.getOutputStream().flush();
+                    for (List<?> name : seen.getSubjectAlternativeNames()) {
+                        if (Integer.valueOf(6).equals(name.get(0))) {
+                            return String.valueOf(name.get(1));
+                        }
+                    }
+                    return "(no URI)";
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            });
+            try (SSLSocket socket = (SSLSocket) client.getSocketFactory().createSocket(
+                    java.net.InetAddress.getLoopbackAddress(), listener.getLocalPort())) {
+                socket.startHandshake();
+                assertEquals(1, socket.getInputStream().read());
+            }
+            return peer.get(30, TimeUnit.SECONDS);
+        }
+    }
+
     private static String rootMessage(Throwable thrown) {
         StringBuilder messages = new StringBuilder();
         for (Throwable t = thrown; t != null; t = t.getCause()) {

@@ -75,6 +75,22 @@ public class SeclumeSslAutoConfiguration {
          */
         private String vaultPki;
 
+        /**
+         * Instead of certificate and key: the workload's X.509-SVID from the
+         * SPIFFE Workload API, its key off the heap, and the trust domain's
+         * bundle as the trust - {@code socket=unix:///run/spire/agent.sock
+         * &peer-ids=spiffe://...} (both optional).
+         */
+        private String spiffe;
+
+        public String getSpiffe() {
+            return spiffe;
+        }
+
+        public void setSpiffe(String spiffe) {
+            this.spiffe = spiffe;
+        }
+
         public String getVaultPki() {
             return vaultPki;
         }
@@ -127,6 +143,15 @@ public class SeclumeSslAutoConfiguration {
 
     static BundleProperties bundle(Environment environment, String name) {
         BundleProperties bundle = bundles(environment).get(name);
+        if (bundle != null && bundle.getSpiffe() != null) {
+            if (bundle.getCertificate() != null || bundle.getKey() != null
+                    || bundle.getVaultPki() != null || bundle.reloads()) {
+                throw new IllegalStateException(PREFIX + "." + name + " has spiffe= and "
+                        + "certificate=, key=, vault-pki= or reload-interval=: an SVID comes "
+                        + "from the Workload API alone and renews itself");
+            }
+            return bundle;
+        }
         if (bundle != null && bundle.getVaultPki() != null) {
             if (bundle.getCertificate() != null || bundle.getKey() != null) {
                 throw new IllegalStateException(PREFIX + "." + name + " has vault-pki= and "
@@ -161,6 +186,14 @@ public class SeclumeSslAutoConfiguration {
     public SslBundleRegistrar seclumeSslBundles(Environment environment) {
         return registry -> bundles(environment).forEach((name, properties) -> {
             bundle(environment, name);                     // the parts fit together
+            if (properties.getSpiffe() != null) {
+                SeclumeKeys.Spiffe spiffe = SeclumeKeys.spiffe(named(name,
+                        properties.getSpiffe()));
+                registry.registerBundle(name, SslBundle.of(SslStoreBundle.NONE, null, null,
+                        SslBundle.DEFAULT_PROTOCOL, SslManagerBundle.of(spiffe.keys(),
+                                spiffe.trust())));
+                return;
+            }
             registry.registerBundle(name, SslBundle.of(SslStoreBundle.NONE, null, null,
                     SslBundle.DEFAULT_PROTOCOL, SslManagerBundle.of(keys(name, properties),
                             jvmTrust())));
@@ -172,10 +205,13 @@ public class SeclumeSslAutoConfiguration {
 
     /** The bundle's settings, named after the bundle unless they name themselves. */
     static String vaultPkiSpec(String bundle, BundleProperties properties) {
-        String spec = properties.getVaultPki();
+        return named(bundle, properties.getVaultPki());
+    }
+
+    private static String named(String bundle, String spec) {
         return NAME.matcher(spec).find() ? spec
-                : spec + "&name=" + java.net.URLEncoder.encode(bundle,
-                        java.nio.charset.StandardCharsets.UTF_8);
+                : spec + (spec.isEmpty() ? "" : "&") + "name=" + java.net.URLEncoder.encode(
+                        bundle, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /**
@@ -186,8 +222,10 @@ public class SeclumeSslAutoConfiguration {
     static Map<String, String> managedNames(Environment environment) {
         Map<String, String> names = new java.util.TreeMap<>();
         bundles(environment).forEach((bundle, properties) -> {
-            if (properties.getVaultPki() != null) {
-                java.util.regex.Matcher named = NAME.matcher(vaultPkiSpec(bundle, properties));
+            String spec = properties.getVaultPki() != null ? properties.getVaultPki()
+                    : properties.getSpiffe();
+            if (spec != null) {
+                java.util.regex.Matcher named = NAME.matcher(named(bundle, spec));
                 named.find();
                 names.put(bundle, java.net.URLDecoder.decode(named.group(1),
                         java.nio.charset.StandardCharsets.UTF_8));
@@ -231,10 +269,11 @@ public class SeclumeSslAutoConfiguration {
         TomcatConnectorCustomizer seclumeTomcatHttps(Environment environment) {
             BundleProperties bundle = bundle(environment,
                     environment.getRequiredProperty("seclume.server.ssl.bundle"));
-            if (bundle.getVaultPki() != null) {
+            if (bundle.getVaultPki() != null || bundle.getSpiffe() != null) {
                 throw new IllegalStateException("seclume.server.ssl.bundle names a bundle with "
-                        + "vault-pki=, which Tomcat cannot take yet: give it certificate= and "
-                        + "key=, or serve with Reactor Netty (server.ssl.bundle)");
+                        + "vault-pki= or spiffe=, which Tomcat cannot take yet: give it "
+                        + "certificate= and key=, or serve with Reactor Netty "
+                        + "(server.ssl.bundle)");
             }
             return connector -> {
                 if (bundle.reloads()) {

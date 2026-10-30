@@ -236,6 +236,22 @@ that fails is tried again while the certificate in hand still works.
 Each issue and renewal is a `space.seclume.CertificateRenewal` event. CI logs into PostgreSQL
 this way, by certificate alone, against real Vault and OpenBao PKI engines.
 
+**Or the workload's SPIFFE identity.** `clientCertSpiffe=true` fetches the X.509-SVID from
+the SPIFFE Workload API at `SPIFFE_ENDPOINT_SOCKET` - or name the socket,
+`clientCertSpiffe=unix:///run/spire/agent.sock` - and presents it. The answer is read into
+native memory and parsed there; its PKCS#8 key goes from there into OpenSSL or CNG. SPIRE
+rotates the SVID; past 55% of its lifetime seclume asks again, and a new one is presented from
+the next handshake on, the old key freed a minute later, as with Vault:
+
+```properties
+jdbc:seclume:postgresql://db:5432/app?user=orders&tls=verify-full&tlsStack=seclume&provider=none&clientCertSpiffe=true
+```
+
+The database checks the certificate against the trust domain's CA. PostgreSQL's `cert` method
+maps a client certificate by its common name, and an SVID's identity is its URI SAN - so
+SPIRE has to give it a CN (a registration entry's `dns_names`), or `pg_ident.conf` maps it.
+`clientCertSpiffe-timeout-millis` (10 s) bounds each call to the agent.
+
 **And no password at all.** `provider=none` with a client certificate is a login by the
 certificate alone: PostgreSQL's `cert` method, or a MySQL account with an empty password and
 `REQUIRE SUBJECT`. The only credential left is the key, and it need not be in the process.

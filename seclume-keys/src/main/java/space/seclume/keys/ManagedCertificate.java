@@ -11,7 +11,7 @@ import java.time.Instant;
  *
  * @param name        what it is configured under: a Spring SSL bundle's name,
  *                    the {@code name} setting, or the chain's file
- * @param kind        {@code vault-pki} or {@code file}
+ * @param kind        {@code vault-pki}, {@code spiffe} or {@code file}
  * @param subject     the certificate's subject
  * @param notBefore   when it began
  * @param notAfter    when it ends

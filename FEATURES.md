@@ -1229,6 +1229,46 @@ seclume.ssl.bundles.client.vault-pki=address=https://vault:8200&pki-role=client&
   real Vault and OpenBao PKI engines, with the root token and with an AppRole whose policy
   may sign and nothing else.
 
+**An X.509-SVID from SPIFFE, its key straight into native memory.** Where SPIRE (or another
+SPIFFE Workload API) hands out workload identities, the SVID is fetched over the agent's Unix
+socket - gRPC `FetchX509SVID`, spoken by seclume's own small HTTP/2 client, so no gRPC or
+Netty on the class path. The answer is read into locked native memory and parsed there; the
+PKCS#8 key goes from that buffer into OpenSSL (or CNG) and the buffer is wiped. The key never
+was a Java object, not even for the length of a parse. The trust domain's bundle comes with
+the SVID and becomes the trust:
+
+```java
+SSLContext mesh = SeclumeKeys.spiffeSslContext(
+        "socket=unix:///run/spire/agent.sock&peer-ids=spiffe://example.org/payments");
+SeclumeKeys.Spiffe parts = SeclumeKeys.spiffe("...");   // key and trust manager factories
+```
+
+```properties
+seclume.ssl.bundles.mesh.spiffe=socket=unix:///run/spire/agent.sock&peer-ids=spiffe://example.org/payments
+```
+
+- **Settings:** `socket` (else `SPIFFE_ENDPOINT_SOCKET`; `unix://` only - a TCP Workload API
+  is refused), `timeout-millis` (10 s), `peer-ids` - the SPIFFE IDs a peer may have, comma
+  separated; without it any workload of the trust domain - and `name`, what it is listed as
+  (else its SPIFFE ID; a Spring bundle's name).
+- **Trust:** a peer's chain must lead to the bundle and its leaf carry exactly one `spiffe://`
+  URI SAN - the SPIFFE ID, which `peer-ids` checks. No host names: a workload is who its ID
+  says.
+- **Rotation:** the agent rotates; seclume asks again past 55% of the SVID's lifetime, and a
+  new one (a new serial) is used from the next handshake; the same one again is no renewal,
+  and asking again comes sooner the closer the end. Listed, graded and counted down like a
+  Vault PKI certificate (kind `spiffe`), each look a `space.seclume.CertificateRenewal` event.
+- **JDBC:** `clientCertSpiffe=true` (or the socket) gives seclume's own TLS the SVID as the
+  database client certificate - see [TLS.md](TLS.md#mutual-tls-with-the-client-key-off-the-heap-too).
+- **Keys:** EC, as SPIRE issues them by default, or RSA and Ed25519 for the key manager -
+  all held by OpenSSL or CNG. seclume's own TLS (JDBC) takes P-256 and P-384.
+- **Tests:** against `FakeWorkloadApi` (seclume-tck), a stand-in agent on a Unix socket that
+  speaks the HTTP/2 and gRPC the call takes - one DATA frame or several, padded, with a PING
+  on the way, or trailers only, as SPIRE answers a workload it has no entry for - with SVIDs
+  `openssl` made for a trust domain of its own: mutual TLS between workloads by SPIFFE ID, a
+  rotation taken up, and a TLS 1.3 handshake of seclume's own whose server demands the
+  certificate.
+
 **SSH and SFTP.** `seclume-ssh` gives Apache MINA SSHD, and Spring Integration's SFTP on top
 of it, such a key for public-key logins:
 
