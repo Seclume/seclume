@@ -21,7 +21,9 @@ import java.util.stream.Stream;
 
 /**
  * The heap dumps a JVM leaves behind - {@code -XX:+HeapDumpOnOutOfMemoryError}
- * into {@code -XX:HeapDumpPath} - redacted where they lie.
+ * into {@code -XX:HeapDumpPath} - and the Flight Recorder recordings
+ * ({@code -XX:StartFlightRecording:dumponexit=true,filename=...}), redacted
+ * where they lie.
  *
  * <p>A dump written on an {@code OutOfMemoryError} is the one nobody asked
  * for: it lands on a volume, outlives the container, is copied into a ticket,
@@ -29,11 +31,13 @@ import java.util.stream.Stream;
  * is redacted with {@link Redactor} into a copy next to it -
  * {@code java_pid1.hprof} becomes {@code java_pid1-20261030T001500Z.redacted.hprof},
  * stamped with the dump's time, so that the next dump of a process with the
- * same pid finds its name free - and the original is deleted.
+ * same pid finds its name free - and the original is deleted. A recording
+ * becomes {@code <name>-<time>.redacted.jfr} the same way; see {@link Recordings}.
  *
  * <p>Only a <b>finished</b> dump is touched: HotSpot ends one with a
  * {@code HEAP DUMP END} record, and a dump still being written does not end
- * with one yet. Watching also waits for the size to stay the same between two
+ * with one yet; a recording is finished when every chunk in it is, the last
+ * one ending where the file does. Watching also waits for the size to stay the same between two
  * looks. A dump that cannot be made clean keeps its original - with a failure
  * in the outcome - unless {@link Settings#deleteUnredactable()} says to delete
  * it, which loses the dump but not the secrets.
@@ -42,6 +46,8 @@ public final class DumpFolder {
 
     /** What a redacted copy's name ends with. */
     public static final String REDACTED = ".redacted.hprof";
+    /** What a redacted recording's name ends with. */
+    public static final String REDACTED_RECORDING = ".redacted.jfr";
     private static final byte[] HEADER = "JAVA PROFILE ".getBytes(StandardCharsets.US_ASCII); // seclume-allow: the format's own name
     private static final int HEAP_DUMP_END = 0x2c;
     private static final DateTimeFormatter STAMP =
@@ -117,10 +123,14 @@ public final class DumpFolder {
     }
 
     /**
-     * Whether {@code file} is an HPROF dump that was written to its end: the
-     * header, and the {@code HEAP DUMP END} record HotSpot writes last.
+     * Whether {@code file} is an HPROF dump that was written to its end - the
+     * header, and the {@code HEAP DUMP END} record HotSpot writes last - or a
+     * Flight Recorder recording whose every chunk is finished.
      */
     public static boolean complete(Path file) throws IOException {
+        if (recording(file)) {
+            return Recordings.complete(file);
+        }
         try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
             long size = channel.size();
             if (size < HEADER.length + 9) {
@@ -144,13 +154,19 @@ public final class DumpFolder {
         }
     }
 
-    /** The dumps in {@code folder} that wait for redaction - finished or not. */
+    /** Whether {@code file} is named as a recording: {@code .jfr}. */
+    private static boolean recording(Path file) {
+        return file.getFileName().toString().endsWith(".jfr");
+    }
+
+    /** The dumps and recordings in {@code folder} that wait for redaction - finished or not. */
     public static List<Path> candidates(Path folder) throws IOException {
         try (Stream<Path> files = Files.list(folder)) {
             return files.filter(Files::isRegularFile)
                     .filter(file -> {
                         String name = file.getFileName().toString();
-                        return name.endsWith(".hprof") && !name.endsWith(REDACTED)
+                        return (name.endsWith(".hprof") || name.endsWith(".jfr"))
+                                && !name.endsWith(REDACTED) && !name.endsWith(REDACTED_RECORDING)
                                 && !name.startsWith(".");
                     })
                     .sorted()
@@ -158,14 +174,19 @@ public final class DumpFolder {
         }
     }
 
-    /** Where the redacted copy of {@code dump} goes: its name, the dump's time, {@code .redacted.hprof}. */
+    /**
+     * Where the redacted copy of {@code dump} goes: its name, the dump's time,
+     * {@code .redacted.hprof} - or {@code .redacted.jfr} for a recording.
+     */
     static Path target(Path dump) throws IOException {
         String name = dump.getFileName().toString();
-        String base = name.substring(0, name.length() - ".hprof".length());
+        boolean recording = recording(dump);
+        String base = name.substring(0, name.length() - (recording ? ".jfr" : ".hprof").length());
+        String suffix = recording ? REDACTED_RECORDING : REDACTED;
         String stamp = STAMP.format(Files.getLastModifiedTime(dump).toInstant());
-        Path target = dump.resolveSibling(base + "-" + stamp + REDACTED);
+        Path target = dump.resolveSibling(base + "-" + stamp + suffix);
         for (int i = 2; Files.exists(target); i++) {
-            target = dump.resolveSibling(base + "-" + stamp + "-" + i + REDACTED);
+            target = dump.resolveSibling(base + "-" + stamp + "-" + i + suffix);
         }
         return target;
     }
@@ -175,7 +196,9 @@ public final class DumpFolder {
         Path target = null;
         try {
             if (!complete(dump)) {
-                return new Outcome(dump, null, null, "not a finished HPROF dump", false);
+                return new Outcome(dump, null, null, recording(dump)
+                        ? "not a finished Flight Recorder recording" : "not a finished HPROF dump",
+                        false);
             }
             target = target(dump);
             Redactor.Report report = Redactor.redact(dump, target, settings.needles(),
@@ -218,7 +241,8 @@ public final class DumpFolder {
         try (Stream<Path> files = Files.list(folder)) {
             for (Path part : files.filter(file -> {
                 String name = file.getFileName().toString();
-                return name.startsWith(".seclume-redact-") && name.endsWith(".hprof.part");
+                return name.startsWith(".seclume-redact-")
+                        && (name.endsWith(".hprof.part") || name.endsWith(".jfr.part"));
             }).toList()) {
                 if (Files.getLastModifiedTime(part).toInstant().isBefore(before)) {
                     Files.deleteIfExists(part);

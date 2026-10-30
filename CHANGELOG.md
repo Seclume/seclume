@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Flight Recorder recordings redacted like heap dumps.** `heapcheck --dump app.jfr` checks a
+  recording and `--redact app-redacted.jfr` writes a copy without its credentials; `--redact-dir`,
+  `--watch` and the starter's folder watch take `.jfr` files as well (`.redacted.jfr`). A
+  recording names its own secrets: values of environment variables, system properties and
+  arguments whose names say password, secret, token or key are looked for without being named,
+  reported by name only. Occurrences are masked in place, so chunks and offsets stay as they
+  were, and the copy is walked chunk by chunk and parsed by `jdk.jfr.consumer.RecordingFile`
+  before it is let out. `Recordings` in seclume-heapdump; tested with recordings of real JVMs.
 - **SPIFFE rotations as they happen, and federation.** seclume-keys' SPIFFE key manager keeps
   the Workload API's `FetchX509SVID` stream open (`SpiffeWorkloadApi.watchX509Svids`): an SVID
   or bundle the agent pushes is taken at once, the stream reopened when it breaks, the HTTP/2

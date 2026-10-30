@@ -248,6 +248,15 @@ public final class Redactor {
     private static Report redactOnly(Path dump, Path out, List<Needle> needles,
             List<OffHeapSecrets.Needle> offHeap, boolean discover, Set<String> ignore)
             throws IOException {
+        boolean recording = Recordings.isRecording(dump);
+        if (recording) {
+            // A Flight Recorder file carries the environment, the system
+            // properties and the command line in events of their own: a value
+            // under a name that says secret is looked for as a named one.
+            List<Needle> all = new ArrayList<>(needles);
+            all.addAll(Recordings.needles(dump));
+            needles = all;
+        }
         if (needles.isEmpty() && offHeap.isEmpty() && !discover) {
             throw new IllegalArgumentException("nothing to redact: name a secret or discover");
         }
@@ -285,11 +294,13 @@ public final class Redactor {
         }
 
         long[] starts = regions.stream().mapToLong(Region::position).distinct().toArray();
-        List<Long> hashes = starts.length == 0 ? List.of()
+        // A String's cached hash is a heap dump's; a recording has none.
+        List<Long> hashes = starts.length == 0 || recording ? List.of()
                 : Attribution.analyse(dump, starts).stringHashes();
 
         Path directory = out.toAbsolutePath().getParent();
-        Path partial = Files.createTempFile(directory, ".seclume-redact-", ".hprof.part");
+        Path partial = Files.createTempFile(directory, ".seclume-redact-",
+                recording ? ".jfr.part" : ".hprof.part");
         boolean done = false;
         try {
             restrict(partial);
@@ -315,6 +326,10 @@ public final class Redactor {
                 channel.force(true);
             }
             check(partial, needles, offHeap, discover, ignore, echoes);
+            if (recording) {
+                // Overwritten in place, every length kept - and read back to be sure.
+                Recordings.readable(partial);
+            }
             publish(partial, out);
             done = true;
             return new Report(Map.copyOf(named), discovered, regions.size(), echoed,

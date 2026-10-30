@@ -3,6 +3,7 @@ package space.seclume.heapcheck;
 import space.seclume.heapdump.Attribution;
 import space.seclume.heapdump.Discovery;
 import space.seclume.heapdump.DumpFolder;
+import space.seclume.heapdump.Recordings;
 import space.seclume.heapdump.Redactor;
 
 import java.io.IOException;
@@ -241,7 +242,9 @@ public final class HeapCheck {
                 secretFiles.add(dir.resolve(file.getFileName().toString()));
             }
         }
-        if ((pid == null) == (dumpFile == null) || (secretFiles.isEmpty() && !discover)) {
+        // A recording names its own secrets - its environment, properties and arguments.
+        if ((pid == null) == (dumpFile == null)
+                || (secretFiles.isEmpty() && !discover && !recording(dumpFile))) {
             if (pid != null && dumpFile != null) {
                 System.err.println("--pid and --dump both given - one of them, please: a "
                         + "process to dump, or a dump that exists");
@@ -264,6 +267,15 @@ public final class HeapCheck {
         }
         System.exit(run(new Options(pid, dumpFile, secretFiles, reports, keep, discover,
                 Set.copyOf(ignore), attribute, redact, dumpDir, inTarget)));
+    }
+
+    /** Whether {@code file} is a Flight Recorder recording; no when it cannot be read. */
+    private static boolean recording(Path file) {
+        try {
+            return file != null && Files.isRegularFile(file) && Recordings.isRecording(file);
+        } catch (IOException unreadable) {
+            return false;
+        }
     }
 
     /** {@code 30s}, {@code 5m}, {@code 1h} or plain seconds. */
@@ -317,7 +329,8 @@ public final class HeapCheck {
                 deleteUnredactable);
         if (watch) {
             System.out.println("watching " + folder + " every " + interval.toSeconds()
-                    + "s: a finished heap dump is redacted next to itself and deleted");
+                    + "s: a finished heap dump or recording is redacted next to itself "
+                    + "and deleted");
             DumpFolder.Watch watching = DumpFolder.watch(folder, settings, interval,
                     outcome -> (outcome.ok() ? System.out : System.err)
                             .println(outcome.describe()));
@@ -332,7 +345,7 @@ public final class HeapCheck {
         try {
             List<DumpFolder.Outcome> outcomes = DumpFolder.redactAll(folder, settings);
             if (outcomes.isEmpty()) {
-                System.out.println("no finished heap dump in " + folder);
+                System.out.println("no finished heap dump or recording in " + folder);
             }
             boolean failed = false;
             for (DumpFolder.Outcome outcome : outcomes) {
@@ -397,22 +410,38 @@ public final class HeapCheck {
                 target = new AuditReport.Target(null, null, dump.toString());
             }
             long size = Files.size(dump);
-            System.out.println("dump is " + size / (1024 * 1024) + " MB, searching for "
-                    + secrets.size() + " secret(s)"
+            // A recording holds the environment, the system properties and the
+            // command line: what is named secret there is looked for as well.
+            boolean recording = !takesDump && Recordings.isRecording(dump);
+            List<Secret> recorded = new ArrayList<>();
+            if (recording) {
+                Recordings.secretSettings(dump).forEach((label, value) -> recorded.add(
+                        new Secret(label + " (in the recording)", value.strip(), null)));
+            }
+            System.out.println((recording ? "recording is " : "dump is ")
+                    + size / (1024 * 1024) + " MB, searching for "
+                    + (secrets.size() + recorded.size()) + " secret(s)"
+                    + (recorded.isEmpty() ? "" : " - " + recorded.size()
+                            + " of them named by the recording itself")
                     + (options.discover() ? " and for credentials of known shapes" : ""));
             List<AuditReport.SecretResult> results = new ArrayList<>();
             for (Secret secret : secrets) {
-                results.add(new AuditReport.SecretResult(secret.source().toString(),
-                        secret.binary(), secret.scan(dump)));
+                results.add(new AuditReport.SecretResult(secret.source(),
+                        secret.binary(), secret.scan(dump, !recording)));
+            }
+            for (Secret secret : recorded) {
+                results.add(new AuditReport.SecretResult(secret.source(), false,
+                        secret.scan(dump, false)));
             }
             Discovery.Result discovery = options.discover()
                     ? Discovery.scan(dump, options.ignore()) : null;
-            Map<Long, String> heldBy = options.attribute()
+            // What holds a finding is a heap's question; a recording has no heap.
+            Map<Long, String> heldBy = options.attribute() && !recording
                     ? attribute(dump, results, discovery) : Map.of();
             AuditReport report = new AuditReport(Instant.now(), host(),
                     target, new AuditReport.Dump(size, sha256(dump), !takesDump
                             || options.keep() != null), results, discovery, heldBy);
-            print(report);
+            print(report, recording);
             for (Path file : options.reports()) {
                 String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
                 Files.writeString(file, name.endsWith(".sarif") || name.endsWith(".sarif.json")
@@ -450,8 +479,8 @@ public final class HeapCheck {
         List<Redactor.Needle> needles = new ArrayList<>();
         for (Secret secret : secrets) {
             needles.add(secret.binary()
-                    ? Redactor.Needle.bytes(secret.source().toString(), secret.bytes())
-                    : Redactor.Needle.text(secret.source().toString(), secret.text()));
+                    ? Redactor.Needle.bytes(secret.source(), secret.bytes())
+                    : Redactor.Needle.text(secret.source(), secret.text()));
         }
         System.out.println();
         System.out.println("writing a redacted copy to " + options.redact() + " ...");
@@ -510,9 +539,10 @@ public final class HeapCheck {
         }
     }
 
-    private static void print(AuditReport report) {
+    private static void print(AuditReport report, boolean recording) {
         String where = report.target().pid() != null
-                ? "the heap of process " + report.target().pid() : "the heap dump";
+                ? "the heap of process " + report.target().pid()
+                : recording ? "the recording" : "the heap dump";
         for (AuditReport.SecretResult secret : report.secrets()) {
             System.out.println();
             if (!secret.found()) {
@@ -549,6 +579,10 @@ public final class HeapCheck {
             System.out.println("That is a statement about this moment, not a guarantee: "
                     + "a secret can arrive in the heap later, and one that was there "
                     + "may have been overwritten already.");
+        } else if (recording) {
+            System.out.println("Every recording of this process carries these credentials - "
+                    + "including the one that goes to a vendor's support. --redact <copy.jfr> "
+                    + "writes one that does not.");
         } else {
             System.out.println("Every heap dump of this process carries these credentials - "
                     + "including the one that goes to a vendor's support.");
@@ -556,13 +590,19 @@ public final class HeapCheck {
     }
 
     /** A secret to look for: text, or - when the file is not UTF-8 - bytes, a key. */
-    private record Secret(Path source, String text, byte[] bytes) {
+    private record Secret(String source, String text, byte[] bytes) {
 
         boolean binary() {
             return bytes != null;
         }
 
-        List<space.seclume.tck.HeapDumpScanner.Finding> scan(Path dump) throws IOException {
+        /** Over the raw file, and - in a heap dump, which has a heap - through its objects. */
+        List<space.seclume.tck.HeapDumpScanner.Finding> scan(Path dump, boolean heap)
+                throws IOException {
+            if (!heap) {
+                return binary() ? space.seclume.tck.HeapDumpScanner.scanRawBytes(dump, bytes)
+                        : space.seclume.tck.HeapDumpScanner.scanRaw(dump, text);
+            }
             return binary() ? space.seclume.tck.HeapDumpScanner.scanBytes(dump, bytes)
                     : space.seclume.tck.HeapDumpScanner.scan(dump, text);
         }
@@ -590,14 +630,14 @@ public final class HeapCheck {
                         .onUnmappableCharacter(CodingErrorAction.REPORT)
                         .decode(ByteBuffer.wrap(content)).toString().strip();
             } catch (CharacterCodingException e) {
-                return new Secret(file, null, content);
+                return new Secret(file.toString(), null, content);
             }
             if (text.isEmpty()) {
                 System.err.println(file + " is empty - without a secret there is nothing "
                         + "to look for, and a check that looks for nothing always passes");
                 return null;
             }
-            return new Secret(file, text, null);
+            return new Secret(file.toString(), text, null);
         }
     }
 
@@ -662,7 +702,7 @@ public final class HeapCheck {
 
     private static void usage() {
         System.err.println("""
-                usage: java -jar seclume-heapcheck.jar (--pid <pid> | --dump <file.hprof>)
+                usage: java -jar seclume-heapcheck.jar (--pid <pid> | --dump <file.hprof|file.jfr>)
                                                        [--secret-file <path> | --secret-dir <dir>]...
                                                        [--discover [--ignore <detector>]...]
                                                        [--report <file>]... [--keep-dump <path>]
@@ -677,7 +717,10 @@ public final class HeapCheck {
                   --pid          the Java process to examine; its heap is dumped, searched
                                  and the dump deleted again
                   --dump         a heap dump that exists already - from
-                                 -XX:+HeapDumpOnOutOfMemoryError, jcmd, a support case
+                                 -XX:+HeapDumpOnOutOfMemoryError, jcmd, a support case -
+                                 or a Flight Recorder recording (.jfr): its environment
+                                 variables, system properties and arguments named like
+                                 a secret are looked for without naming them
                   --secret-file  a file holding a secret to look for - never the secret
                                  itself as an argument, because arguments are visible to
                                  every process on this machine; may be given again
@@ -707,7 +750,8 @@ public final class HeapCheck {
                   --redact-dir   redact every finished heap dump in this folder next to
                                  itself (name-<time>.redacted.hprof) and delete it:
                                  the dumps -XX:+HeapDumpOnOutOfMemoryError leaves in
-                                 -XX:HeapDumpPath. Exit 0 when all were redacted
+                                 -XX:HeapDumpPath - and every finished recording
+                                 (name-<time>.redacted.jfr). Exit 0 when all were redacted
                   --watch        the same, for every dump finished there from now on,
                                  until stopped - beside the application, a sidecar
                   --interval     how often --watch looks (10s); a dump is taken when it

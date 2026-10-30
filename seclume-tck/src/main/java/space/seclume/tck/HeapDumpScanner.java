@@ -49,6 +49,17 @@ public final class HeapDumpScanner {
     }
 
     /**
+     * The raw scan for a secret that is bytes, over a file of any format - a
+     * Flight Recorder recording, say, which has no heap to walk.
+     */
+    public static List<Finding> scanRawBytes(Path file, byte[] secret) throws IOException {
+        Map<String, byte[]> needles = new LinkedHashMap<>();
+        needles.put("bytes", secret);
+        needles.put("Base64", Base64.getEncoder().encode(secret)); // seclume-allow: the searcher builds the pattern it hunts for
+        return raw(file, needles);
+    }
+
+    /**
      * Both searches for a secret that is bytes rather than text - a DER key, a
      * raw key - as it is and in base64; an empty list means it is not in the dump.
      */

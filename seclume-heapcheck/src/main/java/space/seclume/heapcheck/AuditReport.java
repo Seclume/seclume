@@ -75,7 +75,8 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
     /** A process that was dumped for the check, or a dump that was given. */
     record Target(String pid, ProcessHeap.Jvm jvm, String dumpFile) {
         String describe() {
-            return pid != null ? "process " + pid : "heap dump " + dumpFile;
+            return pid != null ? "process " + pid
+                    : (dumpFile.endsWith(".jfr") ? "recording " : "heap dump ") + dumpFile;
         }
     }
 

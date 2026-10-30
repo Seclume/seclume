@@ -1739,6 +1739,12 @@ What uses it:
     and deleted if anything is left. In `seclume-heapdump`, a library without dependencies -
     which the Spring Boot starter uses to make `/actuator/heapdump` serve such a copy instead
     of the heap itself (see [OBSERVABILITY.md](OBSERVABILITY.md#actuatorheapdump-a-redacted-copy-never-the-heap-itself)).
+  - takes a **Flight Recorder recording** the same way (`--dump app.jfr`, `--redact
+    app-redacted.jfr`, and `.jfr` files in `--redact-dir`/`--watch` folders): the environment
+    variables, system properties and arguments the recording holds under a name that says
+    secret are looked for without being named, everything is masked in place, and the copy is
+    parsed event by event before it is let out (see
+    [DIAGNOSTICS.md](DIAGNOSTICS.md#a-flight-recorder-recording---dump-appjfr)).
 - **`seclume-tck`'s `NoSecretInHeap`** runs the same proof in **your own test suite**:
   - `@ExtendWith(NoSecretInHeap.class)` checks after every test.
   - `NoSecretInHeap.assertAbsent(secretFile)` checks at a moment you choose, say right after
