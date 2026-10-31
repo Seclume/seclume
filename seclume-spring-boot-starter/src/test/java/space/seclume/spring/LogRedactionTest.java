@@ -51,8 +51,14 @@ class LogRedactionTest {
         try (AnnotationConfigApplicationContext on = context(properties)) {
             assertEquals("calling with [redacted:seclume.heapdump.secrets.api]",
                     SecretMasker.maskInstalled("calling with an-api-key-0123456789"));
-            assertEquals(2, on.getBean(SeclumeLogRedactionAutoConfiguration.LogRedaction.class)
-                    .masker().forms());
+            // Two forms per secret - UTF-16 and Base64. The data sources other
+            // tests in this JVM made are registered too, for as long as the
+            // garbage collector leaves them, so the count is two or more.
+            int forms = on.getBean(SeclumeLogRedactionAutoConfiguration.LogRedaction.class)
+                    .masker().forms();
+            assertTrue(forms >= 2 && forms % 2 == 0, "two per secret, the configured one among them: " + forms);
+            assertTrue(on.getBean(RedactionSecrets.class).labels().contains("seclume.heapdump.secrets.api"),
+                    on.getBean(RedactionSecrets.class).labels().toString());
         }
         assertEquals("calling with an-api-key-0123456789",
                 SecretMasker.maskInstalled("calling with an-api-key-0123456789"));
