@@ -36,6 +36,8 @@ import space.seclume.field.BlindIndex;
 import space.seclume.field.EncryptedColumn;
 import space.seclume.field.EncryptedColumn.Mode;
 import space.seclume.field.FieldKeys;
+import space.seclume.field.SubjectKeyStore;
+import space.seclume.field.SubjectKeys;
 import space.seclume.secret.FileSecretProvider;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
@@ -478,6 +480,116 @@ public abstract class EncryptedColumnContract {
             }
         }
         return found;
+    }
+
+    /** The subject keys of the crypto-shredding test. */
+    private static final String SUBJECT_KEYS = "zl_subject_keys";
+
+    /**
+     * Crypto-shredding against this database: subject keys in a table of their
+     * own, two subjects' values in the same table, one subject shredded - their
+     * values stay in the table and open nothing, the other's read as before; a
+     * second key for the same subject loses to the table's primary key.
+     */
+    @Test
+    void aShreddedSubjectsValuesStayAndOpenNothing() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            dropSubjectKeys(statement);
+            statement.execute("create table " + SUBJECT_KEYS + " (subject varchar(200) primary key, wrapped "
+                    + binary(128) + ")");
+        }
+        try (FieldKeys master = ring1();
+             SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.jdbc(dataSource(), SUBJECT_KEYS));
+             Connection connection = connect()) {
+            for (int id = 1; id <= 4; id++) {
+                String subject = id % 2 == 0 ? "customer-even" : "customer-odd";
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "insert into " + TABLE + " (id, secret, ssn) values (?, ?, ?)")) {
+                    insert.setInt(1, id);
+                    subjects.column(subject, "zl.secret", Mode.RANDOMIZED).set(insert, 2,
+                            bytes("secret of " + subject + " " + id), context(id));
+                    // A value of its own in the unique column: SQL Server allows one NULL there.
+                    insert.setBytes(3, new byte[] {(byte) id});
+                    assertEquals(1, insert.executeUpdate());
+                }
+            }
+            assertTrue(subjects.shred("customer-odd"));
+            assertThrows(space.seclume.field.FieldEncryptionException.class,
+                    () -> subjects.existingColumn("customer-odd", "zl.secret", Mode.RANDOMIZED));
+            EncryptedColumn even = subjects.existingColumn("customer-even", "zl.secret", Mode.RANDOMIZED);
+            assertEquals("secret of customer-even 2", readSecret(connection, even, 2));
+            assertEquals("secret of customer-even 4", readSecret(connection, even, 4));
+            // The odd rows are still there - as noise, under a key nobody has.
+            EncryptedColumn newOdd = subjects.column("customer-odd", "zl.secret", Mode.RANDOMIZED);
+            SQLException noise = assertThrows(SQLException.class, () -> readSecret(connection, newOdd, 1));
+            assertTrue(noise.getCause() instanceof space.seclume.field.FieldEncryptionException,
+                    "refused by the field encryption: " + noise);
+            // A second key for a subject that has one: the table's primary key refuses it.
+            assertFalse(SubjectKeyStore.jdbc(dataSource(), SUBJECT_KEYS).insert("customer-even",
+                    new byte[] {1, 2, 3}));
+        } finally {
+            try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+                dropSubjectKeys(statement);
+            }
+        }
+    }
+
+    private static void dropSubjectKeys(Statement statement) {
+        try {
+            statement.execute("drop table " + SUBJECT_KEYS);
+        } catch (SQLException itWasNotThere) {
+            // the first run, or the last one tidied up
+        }
+    }
+
+    /** {@link #connect()} as a {@code DataSource}, for the subject key store. */
+    private javax.sql.DataSource dataSource() {
+        return new javax.sql.DataSource() {
+            @Override
+            public Connection getConnection() throws SQLException {
+                return connect();
+            }
+
+            @Override
+            public Connection getConnection(String user, String password) {
+                throw new UnsupportedOperationException("the URL has the login");
+            }
+
+            @Override
+            public java.io.PrintWriter getLogWriter() {
+                return null;
+            }
+
+            @Override
+            public void setLogWriter(java.io.PrintWriter out) {
+                // not used
+            }
+
+            @Override
+            public void setLoginTimeout(int seconds) {
+                // not used
+            }
+
+            @Override
+            public int getLoginTimeout() {
+                return 0;
+            }
+
+            @Override
+            public java.util.logging.Logger getParentLogger() {
+                return java.util.logging.Logger.getLogger("seclume.tck");
+            }
+
+            @Override
+            public <T> T unwrap(Class<T> type) throws SQLException {
+                throw new SQLException("nothing to unwrap");
+            }
+
+            @Override
+            public boolean isWrapperFor(Class<?> type) {
+                return false;
+            }
+        };
     }
 
     @Test

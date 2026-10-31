@@ -216,6 +216,40 @@ while the application writes, a census before and after, a second run with nothi
 job's back, fails a batch, ends exactly on a batch boundary and refuses what cannot be an SQL
 identifier (`ColumnRotationTest`).
 
+## Crypto-shredding: a key per subject
+
+```java
+SubjectKeys subjects = SubjectKeys.of(ring, SubjectKeyStore.jdbc(dataSource, "subject_keys"));
+
+EncryptedColumn email = subjects.column("customer-4711", "customer.email", Mode.DETERMINISTIC);
+email.set(insert, 3, address);                      // as with any column
+
+subjects.existingColumn("customer-4711", ...);      // to read: refuses a subject without a key
+subjects.shred("customer-4711");                    // erasure: every value of theirs is noise
+```
+
+Each subject - a customer, a patient, a tenant - gets 32 random bytes of its own the first time
+something is written for it, stored **wrapped**: encrypted under the ring's primary key and bound
+to the subject's name, in a table of two columns (`subject` primary key, `wrapped` binary). Its
+values are encrypted with a ring built from that key, in the usual format, key commitment
+included - one subject's value never opens under another's key. `shred` deletes the wrapped key
+and wipes the cached ring: the subject's values stay wherever they were copied - the table, its
+indexes, replicas, exports, logs - and open nothing ever again. Deterministic columns stay
+searchable within a subject.
+
+**Backups.** A backup of the *key table* still holds the wrapped key, and the ring still opens
+it - so a restored backup brings a shredded subject back as long as the ring key that wrapped it
+exists. Rotate the ring regularly - `ColumnRotation` over the key table with
+`Context.ROW_ID` rewraps every live key without touching the subjects' own keys or values - and
+destroy the old ring key once the backups older than the rotation have expired: from then on a
+shredded subject stays shredded in every backup too. `SubjectKeysTest` shows both halves.
+
+Subject rings are not listed one by one in the cryptography inventory - the ring that wraps
+them is. Tested in memory (`SubjectKeysTest`: isolation between subjects, shredding, a key copied
+to another subject, a second instance, another ring, rewrapping, the backup case, the cache, two
+writers making a key at once) and against the four databases (`EncryptedColumnContract`: two
+subjects in one table, one shredded, a duplicate key refused by the table's primary key).
+
 ## Spring Boot
 
 With the starter, the ring comes from `application.properties` - each key a provider's

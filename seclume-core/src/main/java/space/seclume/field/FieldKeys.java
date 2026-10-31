@@ -268,6 +268,7 @@ public final class FieldKeys implements AutoCloseable {
 
         private final Map<Integer, SecretProvider> providers = new TreeMap<>();
         private Integer primary;
+        private boolean listed = true;
 
         private Builder() {
         }
@@ -295,6 +296,16 @@ public final class FieldKeys implements AutoCloseable {
         /** The key new values are encrypted with; the highest number if not set. */
         public Builder primary(int id) {
             this.primary = id;
+            return this;
+        }
+
+        /**
+         * Not in the cryptography inventory: a subject's own ring
+         * ({@link SubjectKeys}) - one per customer would flood it. The ring
+         * that wraps them is there.
+         */
+        Builder unlisted() {
+            this.listed = false;
             return this;
         }
 
@@ -331,6 +342,9 @@ public final class FieldKeys implements AutoCloseable {
                 throw failures.get(0);
             }
             FieldKeys keys = new FieldKeys(Collections.unmodifiableSortedMap(read), chosen);
+            if (!listed) {
+                return keys;
+            }
             Map<Integer, String> sources = new TreeMap<>();
             providers.forEach((id, provider) -> sources.put(id,
                     space.seclume.inventory.CryptoInventory.kindOf(provider)));

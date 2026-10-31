@@ -111,7 +111,14 @@ class AccessLogTest {
             Path file = signedLog(key, 4);
             String text = Files.readString(file);
             assertFalse(text.contains(CANARY), "the secret is in the access log");
-            assertFalse(text.contains(Integer.toString(CANARY.length()) + "\""), text);
+            // Nor its length: no field holds it as its value (a hash may well contain the digits).
+            for (String line : lines(file)) {
+                for (Map.Entry<String, String> field : AccessLogVerifier.fields(line).entrySet()) {
+                    assertFalse(!field.getKey().equals("seq")
+                            && field.getValue().equals(Integer.toString(CANARY.length())),
+                            field.getKey() + " holds the secret's length");
+                }
+            }
             List<String> lines = lines(file);
             assertTrue(lines.get(0).contains("\"event\":\"log.opened\""), lines.get(0));
             assertTrue(lines.get(1).contains("\"event\":\"secret.read\""), lines.get(1));
