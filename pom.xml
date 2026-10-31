@@ -96,6 +96,7 @@
     <module>seclume-grpc</module>
     <module>seclume-quarkus</module>
     <module>seclume-micronaut</module>
+    <module>seclume-helidon</module>
     <module>seclume-spring-boot-starter</module>
     <module>seclume-bench</module>
     <module>seclume-verify</module>
