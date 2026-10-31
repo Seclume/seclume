@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **seclume-heapcheck dumps a process that refuses JMX.** `--pid` asks for the dump through
+  JMX, which runs over RMI; a process whose serialization filter rejects what RMI sends -
+  Helidon sets `!*` - refused it (`InvalidClassException: filter status: REJECTED`). The same dump
+  is then asked for with this JDK's `jcmd <pid> GC.heap_dump -all`, through the attach mechanism
+  alone. `ProcessHeapTest` dumps a JVM started with `-Djdk.serialFilter=!*` and finds in the dump
+  the text that JVM holds.
 - **Examples for Micronaut and Helidon MP** (`examples/micronaut`, `examples/helidon`): an
   application with no seclume code, the pool from `application.yml` or
   `microprofile-config.properties`, the password from Vault. `examples/check-example.sh` starts
