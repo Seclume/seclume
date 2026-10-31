@@ -54,7 +54,8 @@ import space.seclume.secret.SecretScope;
  * <h2>One key per column</h2>
  *
  * <p>A column does not encrypt with the data key itself but with a key derived
- * from it, its name and its mode (HKDF-SHA-256). The same value in two columns
+ * from it, its name and its mode (HKDF-SHA-256) - and a second key from the
+ * same derivation commits every value to the key it was made with. The same value in two columns
  * therefore never has the same ciphertext, even deterministically, and a
  * ciphertext copied from one column into another does not decrypt there.
  */
@@ -156,13 +157,14 @@ public final class FieldKeys implements AutoCloseable {
             info.set(ValueLayout.JAVA_BYTE, 1, (byte) 0);
             MemorySegment.copy(label, 0, info, ValueLayout.JAVA_BYTE, 2, label.length);
             for (Map.Entry<Integer, SecretScope> key : keys.entrySet()) {
-                SecretScope columnKey = SecretScope.allocate(KEY_LENGTH);
+                // 64 bytes: the column's encryption key, then its commitment key.
+                SecretScope columnKey = SecretScope.allocate(2 * KEY_LENGTH);
                 try (SecretScope prk = SecretScope.in(arena, KEY_LENGTH)) {
                     Hkdf.extract(HashAlgorithm.SHA_256, SALT, key.getValue().secret(),
                             prk.segment(), 0);
                     Hkdf.expand(HashAlgorithm.SHA_256, prk.segment(), info,
-                            columnKey.segment(), 0, KEY_LENGTH);
-                    columnKey.length(KEY_LENGTH);
+                            columnKey.segment(), 0, 2 * KEY_LENGTH);
+                    columnKey.length(2 * KEY_LENGTH);
                 } catch (RuntimeException e) {
                     columnKey.close();
                     derived.values().forEach(SecretScope::close);
