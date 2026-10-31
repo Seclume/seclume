@@ -134,7 +134,6 @@ class LocalLettuceTest {
         NoSecretInHeap.assertAbsent(password);
     }
 
-    /** The password written into Lettuce's AUTH on a real connection: one SecretUse event. */
     /** Values through the encrypting codec: the server holds ciphertext, the codec reads the value. */
     @Test
     void anEncryptedCodecStoresCiphertextInRedis() throws Exception {
@@ -172,6 +171,7 @@ class LocalLettuceTest {
         }
     }
 
+    /** The password written into Lettuce's AUTH on a real connection: one SecretUse event. */
     @Test
     void thePasswordWrittenInIsRecorded() throws Exception {
         assumeTrue(!Boolean.getBoolean("seclume.redis.control"), "the control runs instead");
