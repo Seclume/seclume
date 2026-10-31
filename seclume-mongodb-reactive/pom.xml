@@ -19,7 +19,7 @@
   </description>
 
   <properties>
-    <mongodb.version>5.13.0</mongodb.version>
+    <mongodb.version>5.14.0</mongodb.version>
   </properties>
 
   <dependencies>

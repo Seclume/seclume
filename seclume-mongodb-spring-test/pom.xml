@@ -18,7 +18,7 @@
     <spring.boot.version>4.1.2</spring.boot.version>
     <!-- What Spring Boot 4.1.1 manages: an application on Boot gets these
          interfaces, so the driver is tested against them. -->
-    <boot.mongodb.version>5.13.0</boot.mongodb.version>
+    <boot.mongodb.version>5.14.0</boot.mongodb.version>
     <junit.version>6.0.1</junit.version>
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>

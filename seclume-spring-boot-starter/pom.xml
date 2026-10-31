@@ -20,9 +20,9 @@
     <spring-framework.version>7.0.10</spring-framework.version>
     <tomcat.version>11.0.27</tomcat.version>
     <spring-cloud-aws.version>4.2.1</spring-cloud-aws.version>
-    <aws-sdk.version>2.57.4</aws-sdk.version>
+    <aws-sdk.version>2.57.5</aws-sdk.version>
     <spring-ldap.version>4.1.2</spring-ldap.version>
-    <sshd-core.version>2.20.0</sshd-core.version>
+    <sshd-core.version>2.20.1</sshd-core.version>
     <spring-integration.version>7.1.2</spring-integration.version>
     <jakarta.mail-api.version>2.1.5</jakarta.mail-api.version>
     <angus-mail.version>2.0.5</angus-mail.version>
