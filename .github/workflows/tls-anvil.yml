@@ -42,7 +42,7 @@ jobs:
         # for a server without it), and the TLS 1.2 profile alone - the only
         # way TLS-Anvil's TLS 1.2 tests reach the TLS 1.2 code.
         offer: [default, tls12]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 240
     permissions:
       contents: read
