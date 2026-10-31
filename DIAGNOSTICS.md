@@ -375,6 +375,28 @@ own secrets in every message and stack trace and writes `[redacted:<label>]` ins
 
 (`class` is the attribute's name since Logback 1.5; older versions call it `converterClass`.)
 
+**Log4j 2** - `%redact{...}` masks what the pattern in its braces writes. Put the message and
+the stack trace inside, and the layout writes the stack trace once, masked:
+
+```xml
+<!-- log4j2-spring.xml -->
+<PatternLayout pattern="%d %-5level %logger - %redact{%msg%n%throwable}"/>
+```
+
+The plugin is in Log4j's own index in the jar; no `packages` attribute is needed.
+
+**java.util.logging**, and `System.Logger`, which writes there unless something else is
+installed - `RedactingFormatter` masks what another formatter makes of a record:
+
+```properties
+# logging.properties
+java.util.logging.ConsoleHandler.formatter=space.seclume.logging.jul.RedactingFormatter
+space.seclume.logging.jul.RedactingFormatter.delegate=java.util.logging.SimpleFormatter
+```
+
+In code, `handler.setFormatter(new RedactingFormatter(myFormatter))`, or
+`RedactingFormatter.wrap(handler)` around the formatter the handler has.
+
 ```properties
 seclume.logging.redact=true                   # with seclume-logging on the class path
 seclume.heapdump.secrets.api.provider=file    # a secret of the application's own, besides
