@@ -239,7 +239,12 @@ abstract class JakartaDataCase {
                 String stored = new String(name, StandardCharsets.UTF_8) + new String(email, StandardCharsets.UTF_8)
                         + new String(name, StandardCharsets.ISO_8859_1) + new String(email, StandardCharsets.ISO_8859_1)
                         + new String(ssn, StandardCharsets.ISO_8859_1);
-                assertFalse(stored.contains(NAMES.get(i)), "a name is in the database: row " + (i + 1));
+                // Two or three bytes turn up in random ciphertext by chance - "Al" did,
+                // once in about a hundred runs - so the search is for names of four
+                // bytes and more; the lengths above hold for every row.
+                if (NAMES.get(i).getBytes(StandardCharsets.UTF_8).length >= 4) {
+                    assertFalse(stored.contains(NAMES.get(i)), "a name is in the database: row " + (i + 1));
+                }
                 assertFalse(stored.contains("Example"), "an address is in the database");
                 assertFalse(stored.contains(String.format(Locale.ROOT, "%03d-", i)), "an SSN is in the database");
                 assertEquals(0, name[1], "the name is randomized");
