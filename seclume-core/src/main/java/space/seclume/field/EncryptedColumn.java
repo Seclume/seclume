@@ -74,12 +74,15 @@ import space.seclume.secret.SecretScope;
  * <h2>The format, version 1</h2>
  *
  * <pre>
- *   [ 1 version = 1 ][ 1 flags ][ 4 key number, big endian ][ 12 nonce ][ ciphertext ][ 16 tag ]
+ *   [ 1 version = 1 ][ 1 flags ][ 4 key number, big endian ][ 12 nonce ][ 32 commitment ][ ciphertext ][ 16 tag ]
  * </pre>
  *
  * <p>Flags: bit 0 is set for deterministic; no other bit is defined, and a
  * value with another set is refused. The first six bytes are the associated
- * data, followed by the caller's {@code context} if there is one. Thirty-four
+ * data, followed by the caller's {@code context} if there is one. The
+ * commitment is HMAC-SHA-256 of the first eighteen bytes under the column's
+ * commitment key: AES-GCM-SIV alone does not bind a ciphertext to one key, and
+ * with this a value cannot be made to open under two keys of a ring. Sixty-six
  * bytes of overhead, whatever the value.
  *
  * <h2>Context</h2>
@@ -120,8 +123,12 @@ public final class EncryptedColumn {
     public static final byte VERSION = 1;
     /** Version, flags and key number: the associated data every value starts with. */
     static final int HEADER = 6;
+    /** HMAC-SHA-256 of the header and the nonce under the column's commitment key. */
+    static final int COMMITMENT = 32;
+    /** Where the ciphertext starts. */
+    static final int BODY = HEADER + AesGcmSiv.NONCE + COMMITMENT;
     /** What a value costs beyond its plaintext. */
-    public static final int OVERHEAD = HEADER + AesGcmSiv.NONCE + AesGcmSiv.TAG;
+    public static final int OVERHEAD = BODY + AesGcmSiv.TAG;
 
     private static final ValueLayout.OfInt BE_INT =
             ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN);
@@ -183,9 +190,11 @@ public final class EncryptedColumn {
             MemorySegment aad = associatedData(arena, value, context0);
             ring.lock().lock();
             try {
-                AesGcmSiv.encrypt(columnKey(keyId), 0, FieldKeys.KEY_LENGTH,
+                MemorySegment keys = columnKey(keyId);
+                commitment(keys, value, value, HEADER + AesGcmSiv.NONCE);
+                AesGcmSiv.encrypt(keys, 0, FieldKeys.KEY_LENGTH,
                         value, HEADER, aad, 0, aad.byteSize(),
-                        plaintext, 0, length, value, HEADER + AesGcmSiv.NONCE);
+                        plaintext, 0, length, value, BODY);
             } finally {
                 ring.lock().unlock();
             }
@@ -233,9 +242,17 @@ public final class EncryptedColumn {
             boolean authentic;
             ring.lock().lock();
             try {
-                authentic = AesGcmSiv.decrypt(columnKey(keyId), 0, FieldKeys.KEY_LENGTH,
-                        value, HEADER, aad, 0, aad.byteSize(),
-                        value, HEADER + AesGcmSiv.NONCE, length, target, 0);
+                MemorySegment keys = columnKey(keyId);
+                // The commitment first: a value made under another key - one that
+                // happens to open under this one too - is refused before AES-GCM-SIV
+                // is asked, and with the same words, so that neither check is an oracle.
+                MemorySegment expected = arena.allocate(COMMITMENT);
+                commitment(keys, value, expected, 0);
+                authentic = space.seclume.crypto.ConstantTime.equals(expected, 0, value,
+                        HEADER + AesGcmSiv.NONCE, COMMITMENT)
+                        && AesGcmSiv.decrypt(keys, 0, FieldKeys.KEY_LENGTH,
+                                value, HEADER, aad, 0, aad.byteSize(),
+                                value, BODY, length, target, 0);
             } finally {
                 ring.lock().unlock();
             }
@@ -473,6 +490,17 @@ public final class EncryptedColumn {
                     + ", which the ring does not hold (it holds " + ring.keyIds() + ")");
         }
         return keyId;
+    }
+
+    /** HMAC-SHA-256 of the value's header and nonce, under the commitment half of {@code keys}. */
+    private static void commitment(MemorySegment keys, MemorySegment value, MemorySegment out,
+            long offset) {
+        try (space.seclume.crypto.Hmac hmac = new space.seclume.crypto.Hmac(
+                space.seclume.crypto.HashAlgorithm.SHA_256, keys, FieldKeys.KEY_LENGTH,
+                FieldKeys.KEY_LENGTH)) {
+            hmac.update(value, 0, HEADER + AesGcmSiv.NONCE);
+            hmac.doFinal(out, offset);
+        }
     }
 
     private MemorySegment columnKey(int keyId) {
