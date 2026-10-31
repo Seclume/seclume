@@ -32,10 +32,10 @@ public interface PrivateSigningKey extends AutoCloseable {
      */
     static PrivateSigningKey decode(MemorySegment encoded, int length) {
         if (OpenSslSigningKey.available()) {
-            return OpenSslSigningKey.decode(encoded, length);
+            return recorded(OpenSslSigningKey.decode(encoded, length), "OpenSSL");
         }
         if (CngSigningKey.available()) {
-            return CngSigningKey.decode(encoded, length);
+            return recorded(CngSigningKey.decode(encoded, length), "CNG");
         }
         throw new IllegalStateException("signing with a private key needs OpenSSL 3 on 64-bit "
                 + "Linux or CNG on Windows, and this is " + (Platform.isMac() ? "macOS"
@@ -48,7 +48,17 @@ public interface PrivateSigningKey extends AutoCloseable {
      * is to have a certificate issued for it, never stored.
      */
     static PrivateSigningKey generateP256() {
-        return SigningKeys.p256();
+        return recorded(SigningKeys.p256(), OpenSslSigningKey.available() ? "OpenSSL" : "CNG");
+    }
+
+    /** Into the cryptography inventory: its algorithm and size, from the public half. */
+    private static PrivateSigningKey recorded(PrivateSigningKey key, String where) {
+        try {
+            space.seclume.inventory.CryptoInventory.privateKey(key, key.publicKey(), where);
+        } catch (RuntimeException ignored) {
+            // the inventory never stands in the way of a key
+        }
+        return key;
     }
 
     /** {@code RSA}, {@code EC}, {@code ED25519}, {@code RSA-PSS} - whether this key is of that type. */
