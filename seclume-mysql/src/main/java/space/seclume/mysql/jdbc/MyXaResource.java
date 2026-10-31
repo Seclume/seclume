@@ -29,7 +29,9 @@ import space.seclume.internal.jdbc.XidText;
  * <p>Recovery reads {@code XA RECOVER CONVERT XID}, which returns the id in
  * hexadecimal. Plain {@code XA RECOVER} would hand back raw bytes in a text
  * column, and any id that is not valid UTF-8 would come back damaged - which
- * is the one thing recovery must not do.
+ * is the one thing recovery must not do. MariaDB does not know
+ * {@code CONVERT XID}; its {@code XA RECOVER FORMAT='SQL'} writes the id as
+ * the XA statements take it, {@code X'..',X'..',n}, which is as safe.
  */
 final class MyXaResource extends AbstractXaResource {
 
@@ -80,13 +82,16 @@ final class MyXaResource extends AbstractXaResource {
     @Override
     protected Xid[] scan() throws SQLException {
         List<Xid> found = new ArrayList<>();
+        boolean mariaDb = session.session().isMariaDb();
         try (Statement statement = session.createStatement();
-             ResultSet rows = statement.executeQuery("xa recover convert xid")) {
+             ResultSet rows = statement.executeQuery(mariaDb ? "xa recover format='SQL'"
+                     : "xa recover convert xid")) {
             while (rows.next()) {
                 int formatId = rows.getInt("formatID");
                 int gtridLength = rows.getInt("gtrid_length");
                 int bqualLength = rows.getInt("bqual_length");
-                byte[] data = unhex(rows.getString("data")); // seclume-allow: a transaction id, not a secret
+                byte[] data = mariaDb ? fromSqlFormat(rows.getString("data"), formatId) // seclume-allow: a transaction id, not a secret
+                        : unhex(rows.getString("data"));
                 if (data == null || data.length < gtridLength + bqualLength) {
                     continue;                    // not ours, or not what we asked for
                 }
@@ -135,6 +140,41 @@ final class MyXaResource extends AbstractXaResource {
             text.append(Character.forDigit(value & 0xf, 16));
         }
         text.append('\'');
+    }
+
+    /**
+     * MariaDB's {@code X'4142',X'43',1} - global id, branch, format - as the
+     * id's bytes, global then branch; {@code null} for anything else.
+     */
+    static byte[] fromSqlFormat(String text, int formatId) {
+        if (text == null) {
+            return null;
+        }
+        String[] parts = text.split(",", -1);
+        if (parts.length != 3 || !parts[2].strip().equals(Integer.toString(formatId))) {
+            return null;
+        }
+        byte[] global = literal(parts[0].strip()); // seclume-allow: a transaction id, not a secret
+        byte[] branch = literal(parts[1].strip()); // seclume-allow: a transaction id, not a secret
+        if (global == null || branch == null) {
+            return null;
+        }
+        byte[] data = new byte[global.length + branch.length]; // seclume-allow: a transaction id, not a secret
+        System.arraycopy(global, 0, data, 0, global.length);
+        System.arraycopy(branch, 0, data, global.length, branch.length);
+        return data;
+    }
+
+    /** {@code X'4142'} or {@code ''}. */
+    private static byte[] literal(String text) {
+        if (text.equals("''") || text.equalsIgnoreCase("X''")) {
+            return new byte[0]; // seclume-allow: an empty transaction id part
+        }
+        if (text.length() < 3 || (text.charAt(0) != 'X' && text.charAt(0) != 'x')
+                || text.charAt(1) != '\'' || text.charAt(text.length() - 1) != '\'') {
+            return null;
+        }
+        return unhex(text.substring(2, text.length() - 1));
     }
 
     /** {@code 0x4142..} as the server writes it after CONVERT XID. */

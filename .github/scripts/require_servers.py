@@ -27,6 +27,12 @@ NOT_FOUND = {
                "no .local-oracle-password"),
 }
 
+# Tests that need a second server of the same kind, which the job does not start.
+SECOND_SERVER = {
+    "space.seclume.sqlserver.jdbc.LocalTds8Test":
+        "a second SQL Server, with strict encryption (TDS 8), on port 1435",
+}
+
 
 def skipped_for_want_of(server, root, modules):
     """Every test case of the modules' reports that skipped because the server was not found."""
@@ -37,7 +43,7 @@ def skipped_for_want_of(server, root, modules):
                 pattern.strip() + "/target/surefire-reports/TEST-*.xml")):
             for case in ET.parse(report).getroot().iter("testcase"):
                 skipped = case.find("skipped")
-                if skipped is None:
+                if skipped is None or case.get("classname") in SECOND_SERVER:
                     continue
                 said = (skipped.get("message") or "") + " " + (skipped.text or "")
                 if any(reason in said for reason in reasons):

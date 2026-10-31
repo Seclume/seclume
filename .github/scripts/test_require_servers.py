@@ -26,6 +26,13 @@ class RequireServersTest(unittest.TestCase):
             self.assertEqual([name for name, _ in found], ["A.lost"])
             self.assertEqual(skipped_for_want_of("oracle", directory, "seclume-mysql"), [])
 
+    def test_a_test_that_needs_a_second_server_is_not_counted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report(directory, "seclume-sqlserver", [
+                '<testcase classname="space.seclume.sqlserver.jdbc.LocalTds8Test" name="x">'
+                '<skipped message="no SQL Server on localhost:1435"/></testcase>'])
+            self.assertEqual(skipped_for_want_of("sqlserver", directory, "seclume-sqlserver"), [])
+
     def test_the_exit_code(self):
         with tempfile.TemporaryDirectory() as directory:
             report(directory, "seclume-oracle", [

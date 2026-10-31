@@ -509,7 +509,10 @@ jobs:
               for case in ET.parse(path).getroot().iter('testcase'):
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
-                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if causes:
+                          text += ' | ' + causes[-1]
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
                       found += 1
           print('failing tests:', found)
@@ -1065,7 +1068,10 @@ jobs:
               for case in ET.parse(path).getroot().iter('testcase'):
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
-                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if causes:
+                          text += ' | ' + causes[-1]
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
                       found += 1
           print('failing tests:', found)
@@ -1196,6 +1202,18 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
+      # What the driver's tests need of the server, set as a DBA would: functions
+      # created with binary logging on (MySQL), and the right to list prepared XA
+      # transactions (MySQL 8's XA_RECOVER_ADMIN). MariaDB needs neither.
+      - name: Server settings for the function and XA tests
+        env:
+          MYSQL_PWD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+        run: |
+          if mysql -h 127.0.0.1 -P 3306 -u root -N -e 'select version()' | grep -qi mariadb; then
+            echo "MariaDB: nothing to set"
+          else
+            mysql -h 127.0.0.1 -P 3306 -u root -e "SET PERSIST log_bin_trust_function_creators = 1; GRANT XA_RECOVER_ADMIN ON *.* TO 'seclume_test'@'%'"
+          fi
       # The module's Local* tests default to port 3307, a developer's second
       # server; this job's is on 3306. Without saying so they skipped here -
       # eighteen of them - and require_servers.py now fails a job where that
@@ -1220,7 +1238,10 @@ jobs:
               for case in ET.parse(path).getroot().iter('testcase'):
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
-                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if causes:
+                          text += ' | ' + causes[-1]
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against MySQL
@@ -1302,7 +1323,10 @@ jobs:
               for case in ET.parse(path).getroot().iter('testcase'):
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
-                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if causes:
+                          text += ' | ' + causes[-1]
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against SQL Server
@@ -1386,7 +1410,10 @@ jobs:
               for case in ET.parse(path).getroot().iter('testcase'):
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
-                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if causes:
+                          text += ' | ' + causes[-1]
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against Oracle
