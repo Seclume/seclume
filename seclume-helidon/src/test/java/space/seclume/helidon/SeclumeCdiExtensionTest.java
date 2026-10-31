@@ -141,6 +141,17 @@ class SeclumeCdiExtensionTest {
         Files.deleteIfExists(keyFile);
     }
 
+    /** Each data source is one bean - and if not, where the others came from. */
+    @Test
+    void eachDataSourceIsOneBean() {
+        var beans = container.getBeanManager().getBeans(DataSource.class, Any.Literal.INSTANCE);
+        String seen = beans.stream().map(bean -> bean.getQualifiers() + " from " + bean.getBeanClass().getName()
+                + " in " + bean.getBeanClass().getClassLoader() + " (" + System.identityHashCode(bean) + ")")
+                .collect(Collectors.joining("; "));
+        assertEquals(2, beans.size(), "this extension's loader " + SeclumeCdiExtension.class.getClassLoader()
+                + ", active " + SeclumeCdiExtension.active() + ": " + seen);
+    }
+
     @Test
     void theBeansAreThere() throws Exception {
         DataSource primary = container.select(DataSource.class).get();
