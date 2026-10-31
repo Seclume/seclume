@@ -126,9 +126,10 @@ build replays them.
 - **Downgrade and fallback.** TLS 1.2 is spoken where a server needs it. Check the downgrade
   sentinel, the cipher suites offered, and renegotiation being refused.
 - **Field encryption.** Deterministic mode is AES-GCM-SIV with a fixed nonce per column key.
-  Is the derivation of column keys (HKDF over the column's name and mode) adequate, and should
-  the format carry a commitment to the key, so that one ciphertext cannot be made to open under
-  two keys of the ring? The ring holds few keys chosen by the operator, which limits that.
+  Is the derivation of column keys (HKDF over the column's name and mode) adequate? Every value
+  carries a key commitment (HMAC-SHA-256 of header and nonce under a second derived key, checked
+  first) so that one ciphertext cannot open under two keys; is binding header and nonce enough,
+  or should the commitment also cover the context?
 - **Allowed exceptions.** Each `seclume-allow:` reason should be checked to really be public
   data: certificates, public keys, names, structure.
 - **Native interop.** The Foreign Function & Memory calls into OpenSSL and CNG

@@ -1035,10 +1035,13 @@ jobs:
           # are not in this job and skip. Case [1] is PostgreSQL, and it must
           # have run and passed - a self-closed testcase has no <skipped/>.
           ./mvnw -B -pl seclume-r2dbc -am test \
-            -Dtest='LocalR2dbcFourDatabasesTest#thePasswordIsNotOnTheHeap' \
+            -Dtest='LocalR2dbcFourDatabasesTest#thePasswordIsNotOnTheHeap,LocalEncryptedR2dbcTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           grep -qE 'name="thePasswordIsNotOnTheHeap\(Db\)\[1\]"[^>]*/>' \
             seclume-r2dbc/target/surefire-reports/TEST-*LocalR2dbcFourDatabasesTest.xml
+          # Field encryption over R2DBC, against the same server: case [1] again.
+          grep -qE 'name="valuesGoInEncryptedAndComeBackIntoNativeMemory\(Db\)\[1\]"[^>]*/>' \
+            seclume-r2dbc/target/surefire-reports/TEST-*LocalEncryptedR2dbcTest.xml
       - if: always()
         run: |
           rm -f .local-pgtls-password
