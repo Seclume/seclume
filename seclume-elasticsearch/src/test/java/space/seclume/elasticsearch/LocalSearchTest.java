@@ -98,6 +98,54 @@ class LocalSearchTest {
         }
     }
 
+    /** Encrypted fields in a real cluster: stored as ciphertext, found by a terms query, opened again. */
+    @Test
+    void encryptedFieldsAreStoredSealedAndFoundByTheirTerms() throws Exception {
+        Path key = find(".local-es-apikey");
+        String url = elasticsearch(key);
+        String index = "zl_seclume_enc_" + Long.toHexString(System.nanoTime());
+        space.seclume.secret.SecretProvider ringKey = new space.seclume.secret.SecretProvider() {
+            @Override
+            public int writeSecret(java.lang.foreign.MemorySegment target) {
+                for (int i = 0; i < 32; i++) {
+                    target.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, (byte) (i * 7 + 1));
+                }
+                return 32;
+            }
+
+            @Override
+            public int maxSecretLength() {
+                return 32;
+            }
+        };
+        ElasticsearchClient es = SeclumeElasticsearch.client(url);
+        try (space.seclume.field.FieldKeys keys = space.seclume.field.FieldKeys.builder().key(1, ringKey).build()) {
+            EncryptedDocument patients = EncryptedDocument.of(keys, index)
+                    .field("ssn", space.seclume.field.EncryptedColumn.Mode.DETERMINISTIC)
+                    .field("diagnosis", space.seclume.field.EncryptedColumn.Mode.RANDOMIZED);
+            es.index(i -> i.index(index).id("1").refresh(Refresh.True).document(patients.encrypt(
+                    Map.of("name", "Alice", "ssn", "123-45-6789", "diagnosis", "zl-es-canary"))));
+            es.index(i -> i.index(index).id("2").refresh(Refresh.True).document(patients.encrypt(
+                    Map.of("name", "Bob", "ssn", "987-65-4321", "diagnosis", "other"))));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> stored = es.get(g -> g.index(index).id("1"), Map.class).source();
+            assertTrue(!stored.toString().contains("zl-es-canary") && !stored.toString().contains("123-45-6789"),
+                    "the cluster holds the fields in the clear: " + stored);
+            var hits = es.search(s -> s.index(index).query(q -> q.terms(t -> t.field("ssn.keyword")
+                    .terms(v -> v.value(patients.searchTerms("ssn", "123-45-6789").stream()
+                            .map(co.elastic.clients.elasticsearch._types.FieldValue::of).toList())))),
+                    Map.class).hits().hits();
+            assertEquals(1, hits.size());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> found = patients.decrypt((Map<String, Object>) hits.get(0).source());
+            assertEquals("Alice", found.get("name"));
+            assertEquals("zl-es-canary", found.get("diagnosis"));
+        } finally {
+            es.indices().delete(d -> d.index(index));
+            es.close();
+        }
+    }
+
     /** The control: the same way with a key the server does not know is refused by it. */
     @Test
     void aWrongKeyIsRefusedByTheServer(@TempDir Path dir) throws Exception {
