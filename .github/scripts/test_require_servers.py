@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import tempfile
 import unittest
@@ -41,9 +43,14 @@ class RequireServersTest(unittest.TestCase):
             here = os.getcwd()
             try:
                 os.chdir(directory)
-                self.assertEqual(main(["", "oracle", "seclume-oracle"]), 1)
-                self.assertEqual(main(["", "sqlserver", "seclume-oracle"]), 0)
-                self.assertEqual(main(["", "db2", "seclume-oracle"]), 2)
+                # Captured: an "::error" line on the job's own output would be
+                # an annotation on the pull request.
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(main(["", "oracle", "seclume-oracle"]), 1)
+                    self.assertEqual(main(["", "sqlserver", "seclume-oracle"]), 0)
+                    self.assertEqual(main(["", "db2", "seclume-oracle"]), 2)
+                self.assertIn("::error title=skipped without its server::A.x", out.getvalue())
             finally:
                 os.chdir(here)
 

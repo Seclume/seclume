@@ -1218,6 +1218,9 @@ jobs:
           else
             mysql -h 127.0.0.1 -P 3306 -u root -e "SET PERSIST log_bin_trust_function_creators = 1; GRANT XA_RECOVER_ADMIN ON *.* TO 'seclume_test'@'%'"
           fi
+          # The Spring application's Flyway wants an empty schema, not the one
+          # the driver tests have filled.
+          mysql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS seclume_spring; GRANT ALL ON seclume_spring.* TO 'seclume_test'@'%'"
       # The module's Local* tests default to port 3307, a developer's second
       # server; this job's is on 3306. Without saying so they skipped here -
       # eighteen of them - and require_servers.py now fails a job where that
@@ -1227,7 +1230,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.database=seclume_test
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py MySql
@@ -1298,7 +1301,8 @@ jobs:
         run: |
           id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:${{ matrix.version }}-latest" | head -1)
           if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server ${{ matrix.version }} container found"; exit 1; fi
-          sql="if db_id('seclume_test') is null create database seclume_test"
+          # seclume_spring: the Spring application's, whose Flyway wants it empty.
+          sql="if db_id('seclume_test') is null create database seclume_test; if db_id('seclume_spring') is null create database seclume_spring"
           pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
           for i in $(seq 1 40); do
             if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" -Q "$sql"; then
@@ -1397,13 +1401,21 @@ jobs:
           echo 'alter session set container=FREEPDB1;
           grant create any context to seclume_test;
           exit' | docker exec -i oracle sqlplus -s / as sysdba
+      # The Spring application's own schema: its Flyway wants an empty one,
+      # not the one the driver tests have filled.
+      - name: A schema for the Spring application
+        run: |
+          printf '%s\n' 'alter session set container=FREEPDB1;' \
+            "create user seclume_spring identified by \"$ORA_PASSWORD\" quota unlimited on users;" \
+            'grant create session, create table, create sequence, create view, create procedure, create trigger to seclume_spring;' \
+            'exit' | docker exec -i oracle sqlplus -s / as sysdba
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
       - run: ./mvnw -B -pl seclume-oracle -am test
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Oracle
