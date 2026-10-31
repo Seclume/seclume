@@ -128,9 +128,12 @@ configuration files with a heap dump searched for the password.
 | Quarkus | `seclume-quarkus` | 3.40 | JVM and native | - |
 | Micronaut | `seclume-micronaut` | 4.10 | an application context with a stub driver; a pool against PostgreSQL 15, 18 and 19 RC with a heap dump | [micronaut](examples/micronaut) |
 | Helidon SE and MP | `seclume-helidon` | 4.5 | SE from `Config`; MP in a Helidon CDI container; a pool against PostgreSQL 15, 18 and 19 RC with a heap dump | [helidon](examples/helidon) (MP) |
+| Jakarta Data | `seclume-jpa` | Jakarta Data 1.0, Hibernate 7.4 | repositories from Hibernate's processor against the four databases, blind index searches included | - |
 | Jakarta Persistence | `seclume-jpa` | 3.2 (Hibernate 7.4) | the converters against the four databases | - |
 
-Micronaut 5 and Helidon's later major releases are not covered by these rows yet.
+Beside these, the `framework-compat` job builds and tests the integrations against the next major
+releases: Micronaut 5.2 on JDK 25, and Helidon 27 SE on JDK 27 (Helidon 27 has no MicroProfile;
+its MP moved to a project of its own, so the CDI extension stays on Helidon 4.5).
 
 ## Repeating it
 
