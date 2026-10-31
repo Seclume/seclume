@@ -16,7 +16,6 @@ import jakarta.inject.Named;
 import org.junit.jupiter.api.Test;
 
 import io.helidon.microprofile.testing.AddConfig;
-import io.helidon.microprofile.testing.AddExtension;
 import io.helidon.microprofile.testing.DisableDiscovery;
 import io.helidon.microprofile.testing.junit5.HelidonTest;
 
@@ -26,10 +25,14 @@ import space.seclume.pool.SeclumePool;
 /**
  * Helidon MP: the extension turns MicroProfile Config into a default and a
  * named {@code DataSource} and a {@link FieldKeys} bean, installed.
+ *
+ * <p>No {@code @AddExtension}: the extension is found through
+ * {@code META-INF/services} as it is in an application, with bean discovery
+ * off. Naming it as well registered it twice and made every bean ambiguous -
+ * {@link #theExtensionIsFoundByTheServiceLoader} keeps it found that way.
  */
 @HelidonTest
 @DisableDiscovery
-@AddExtension(SeclumeCdiExtension.class)
 @AddConfig(key = "seclume.datasources.default.url", value = "jdbc:seclume:stub://db/app?user=a&provider=file&path=/x")
 @AddConfig(key = "seclume.datasources.default.pool.maximum-pool-size", value = "3")
 @AddConfig(key = "seclume.datasources.orders.url", value = "jdbc:seclume:stub://db/orders?user=o&provider=file&path=/y")
@@ -58,6 +61,17 @@ class SeclumeCdiExtensionTest {
     @Inject
     FieldKeys keys;
 
+    @Inject
+    @Named("default")
+    DataSource namedDefault;
+
+    @Inject
+    SeclumePool primaryPool;
+
+    @Inject
+    @jakarta.enterprise.inject.Any
+    jakarta.enterprise.inject.Instance<DataSource> every;
+
     @Test
     void theBeansAreThere() throws Exception {
         assertEquals("default", ((SeclumePool) primary).settings().getName());
@@ -67,5 +81,23 @@ class SeclumeCdiExtensionTest {
         orders.getConnection().close();
         assertSame(keys, FieldKeys.installed());
         assertEquals(java.util.List.of(1), keys.keyIds());
+    }
+
+    @Test
+    void theExtensionIsFoundByTheServiceLoader() {
+        long found = java.util.ServiceLoader.load(jakarta.enterprise.inject.spi.Extension.class).stream()
+                .filter(provider -> provider.type() == SeclumeCdiExtension.class)
+                .count();
+        assertEquals(1, found, "on the class path, an application needs no code to get the beans");
+    }
+
+    @Test
+    void theDefaultIsOneBeanUnderEveryName() {
+        assertSame(primary, namedDefault, "@Default and @Named(\"default\") are the same pool");
+        assertSame(primary, primaryPool, "and so is the SeclumePool type");
+        assertEquals(2, every.stream().count(), "one bean per configured data source");
+        assertEquals(java.util.Set.of("default", "orders"), every.stream()
+                .map(source -> ((SeclumePool) source).settings().getName())
+                .collect(java.util.stream.Collectors.toSet()));
     }
 }
