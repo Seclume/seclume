@@ -73,8 +73,11 @@ jobs:
       - if: failure()
         run: |
           [ -f build.log ] || exit 0
-          text=$(grep -E "^\[(ERROR|WARNING)\]" build.log | grep -v "Re-run Maven\|full stack trace\|\[Help \|^\[ERROR\] *$\|To see the full\|For more information" \
-            | tail -30 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3800)
+          # The compiler's own lines (with a .java path) and Maven's errors -
+          # not the shade plugin's overlapping-resource warnings.
+          text=$( (grep -E "^\[WARNING\] .*\.java" build.log; grep -E "^\[ERROR\]" build.log) \
+            | grep -v "Re-run Maven\|full stack trace\|\[Help \|^\[ERROR\] *$\|To see the full\|For more information" \
+            | head -30 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3800)
           echo "::error title=build::$text"
       # Each finding also becomes an annotation on the check - package, version,
       # advisory and the version that fixes it - so a red run says what to bump
