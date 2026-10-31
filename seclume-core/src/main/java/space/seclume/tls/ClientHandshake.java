@@ -422,6 +422,8 @@ public final class ClientHandshake {
             // rather than what was offered.
             connection.describe(serverChain.isEmpty() ? null : serverChain.get(0), "TLSv1.3",
                     facts.cipherSuite());
+            space.seclume.inventory.CryptoInventory.tls(host, "seclume",
+                    connection.description(), connection.peerCertificate());
             if (presented) {
                 // In TLS 1.3 the server judges our certificate after our
                 // Finished, so its refusal usually meets the first read.
@@ -580,6 +582,8 @@ public final class ClientHandshake {
         TlsConnection connection = new TlsConnection(records.transport(), records);
         connection.describe(serverChain.isEmpty() ? null : serverChain.get(0), "TLSv1.2",
                 outcome.cipherSuite());
+        space.seclume.inventory.CryptoInventory.tls(host, "seclume", connection.description(),
+                connection.peerCertificate());
         if (outcome.presented()) {
             connection.certificatePresented();
         }

@@ -175,6 +175,14 @@ public final class TlsChannel implements TlsLayer {
                     + "\" and the server answered with \"" + engine.getApplicationProtocol()
                     + "\" - carrying on would mean speaking a protocol it never agreed to");
         }
+        java.security.cert.X509Certificate leaf = null;
+        try {
+            leaf = peerCertificate();
+        } catch (IOException noCertificate) {
+            // a session without one is still a session
+        }
+        space.seclume.inventory.CryptoInventory.tls(engine.getPeerHost() + ":"
+                + engine.getPeerPort(), "JSSE", description(), leaf);
     }
 
     /** Encrypts and sends everything remaining in {@code plain}. */
