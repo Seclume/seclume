@@ -1,0 +1,62 @@
+name: Seclume crypto policy
+description: Check a CBOM against a crypto policy, compare it with the last release's, and report post-quantum readiness
+outputs:
+  status:
+    description: 0 the policy is met and nothing stepped back, 1 it is not or something did, 2 an input could not be read
+    value: ${{ steps.check.outputs.status }}
+inputs:
+  jar:
+    description: Path to the built seclume-verify executable JAR
+    required: true
+  cbom:
+    description: The CBOM to check (CycloneDX 1.6, as seclume writes it - /actuator/cbom, seclume-verify --cbom, CycloneDxCbom)
+    required: true
+  policy:
+    description: A crypto policy, as properties (see space.seclume.inventory.CryptoPolicy); empty for the defaults
+    default: ''
+  baseline:
+    description: The last release's CBOM; when given, a step back from it fails the check
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Check the CBOM
+      id: check
+      shell: bash
+      env:
+        VERIFY_JAR: ${{ inputs.jar }}
+        CBOM: ${{ inputs.cbom }}
+        POLICY: ${{ inputs.policy }}
+        BASELINE: ${{ inputs.baseline }}
+      run: |
+        status=0
+        if [ -z "$POLICY" ]; then
+          POLICY=$(mktemp "$RUNNER_TEMP/crypto-policy.XXXXXX")
+        fi
+        run() {
+          set +e
+          java --enable-native-access=ALL-UNNAMED -jar "$VERIFY_JAR" "$@" > "$RUNNER_TEMP/crypto-policy.md"
+          local code=$?
+          set -e
+          cat "$RUNNER_TEMP/crypto-policy.md" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/crypto-policy.md"
+          if [ "$code" -gt "$status" ]; then status=$code; fi
+        }
+        run --policy "$POLICY" "$CBOM"
+        if [ -n "$BASELINE" ]; then
+          run --cbom-diff "$BASELINE" "$CBOM"
+        fi
+        run --quantum "$CBOM"
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+    - name: Enforce result
+      if: always()
+      shell: bash
+      env:
+        POLICY_STATUS: ${{ steps.check.outputs.status }}
+      run: |
+        case "$POLICY_STATUS" in
+          0) exit 0 ;;
+          1) echo '::error::The CBOM fails the crypto policy, or is a step back from the baseline - see the job summary.'; exit 1 ;;
+          *) echo '::error::The crypto policy check could not read its input.'; exit 2 ;;
+        esac

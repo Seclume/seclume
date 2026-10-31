@@ -116,6 +116,17 @@ All notable changes to seclume are recorded here. Versions follow
   against the CAs of its own ID's trust domain - an SVID from another domain's CA claiming
   this one is refused. `FakeWorkloadApi` serves each call on its own thread, keeps streams
   open, pushes, ends streams and sends federated bundles.
+- **A crypto policy, and what a quantum computer would break.** `CryptoPolicy` checks the
+  inventory against rules - RSA and EC key sizes, TLS version and forward secrecy, the ML-KEM
+  hybrid, certificate lifetimes, forbidden signatures and algorithms, where secrets and data
+  keys may come from, quantum-vulnerable assets: from `seclume.crypto-policy.rules.*` at
+  start-up (`on-start=warn|fail`) and in the `cryptoPolicy` health contributor, and in a
+  pipeline with `seclume-verify --policy` on a CBOM or a connection. `--cbom-diff` compares two
+  CBOMs and fails on a step back; `.github/actions/crypto-policy` does both in a GitHub job
+  summary. `QuantumReadiness` (`/actuator/quantum`, `--quantum`) sorts what breaks by the
+  threat - harvest-now-decrypt-later key exchanges first, then signatures, then AES-128 - with
+  the replacement and how to get there. `CbomReader` reads seclume's CBOMs back; the CBOM
+  carries `seclume:algorithm`, `seclume:bits` and `seclume:expires` for that.
 - **Log lines with the application's secrets masked** (`seclume-logging`, opt-in with
   `seclume.logging.redact=true`). `SecretMasker` finds a secret - itself or its Base64 - in a
   message or stack trace and writes `[redacted:<label>]`, keeping no secret: each is held as a
