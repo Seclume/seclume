@@ -28,7 +28,7 @@ import space.seclume.inventory.CryptoInventory.Kind;
 public final class CycloneDxCbom {
 
     /** Algorithms by name: primitive, mode, parameter set, classical level, quantum level, functions. */
-    private record Algorithm(String name, String primitive, String mode, String parameters,
+    record Algorithm(String name, String primitive, String mode, String parameters,
             int classical, int quantum, List<String> functions) {
     }
 
@@ -313,6 +313,16 @@ public final class CycloneDxCbom {
     private static String component(Asset asset, String assetType, String properties) {
         List<String> props = new ArrayList<>();
         props.add(property("seclume:kind", asset.kind().name().toLowerCase(Locale.ROOT)));
+        // What the inventory itself had, so that CbomReader gets the asset back whole.
+        if (asset.algorithm() != null) {
+            props.add(property("seclume:algorithm", asset.algorithm()));
+        }
+        if (asset.bits() > 0) {
+            props.add(property("seclume:bits", Integer.toString(asset.bits())));
+        }
+        if (asset.expires() != null) {
+            props.add(property("seclume:expires", asset.expires().toString()));
+        }
         if (asset.source() != null) {
             props.add(property("seclume:source", asset.source()));
         }

@@ -8,6 +8,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.List;
 
 import space.seclume.Pipelined;
 import space.seclume.RoundTrips;
@@ -50,6 +51,25 @@ public final class Verify {
             System.exit(Doctor.mainRun(arguments, System.out, System.err));
             return;
         }
+        if (arguments.length > 0) {
+            List<String> rest = java.util.Arrays.stream(arguments).skip(1).map(String::strip).toList();
+            switch (arguments[0].strip()) {
+                case "--policy" -> {
+                    System.exit(Policy.policy(rest, System.out, System.err, Policy::connect));
+                    return;
+                }
+                case "--quantum" -> {
+                    System.exit(Policy.quantum(rest, System.out, System.err, Policy::connect));
+                    return;
+                }
+                case "--cbom-diff" -> {
+                    System.exit(Policy.diff(rest, System.out, System.err));
+                    return;
+                }
+                default -> {
+                }
+            }
+        }
         if (arguments.length == 2 && arguments[0].strip().equals("--migrate")) {
             System.exit(Migrate.run(arguments[1].strip(), System.out, System.err));
             return;
@@ -80,6 +100,9 @@ public final class Verify {
                            java -jar seclume-verify.jar --cbom "<jdbc url>"
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
+                           java -jar seclume-verify.jar --policy <policy.properties> <cbom.json | "<jdbc url>"> [--json]
+                           java -jar seclume-verify.jar --quantum <cbom.json | "<jdbc url>"> [--json]
+                           java -jar seclume-verify.jar --cbom-diff <before.json> <after.json>
 
                     The URL is the one the application uses, password included -
                     which is to say: not included. It names where the secret comes
@@ -103,7 +126,18 @@ public final class Verify {
                     --migrate translates a pgjdbc, Connector/J, MariaDB, mssql-jdbc,
                     Oracle thin or HikariCP configuration into seclume's, and names
                     every unsafe setting in it. Password values are never read.
-                    Exit code 1 means unsafe settings were found.""");
+                    Exit code 1 means unsafe settings were found.
+
+                    --policy checks a CBOM (or the inventory of one connection) against
+                    a crypto policy - key sizes, TLS version and forward secrecy, the
+                    post-quantum hybrid, certificate lifetimes, where secrets and data
+                    keys come from. Exit code 1 when it fails.
+
+                    --quantum reports what a quantum computer would break, most urgent
+                    first, and what to use instead.
+
+                    --cbom-diff compares two CBOMs and exits 1 when the second is a step
+                    back: new quantum-vulnerable assets, older TLS, smaller keys.""");
             System.exit(2);
             return;
         }

@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A crypto policy, and what a quantum computer would break.** `CryptoPolicy` checks the
+  inventory against rules - RSA and EC key sizes, TLS version and forward secrecy, the ML-KEM
+  hybrid, certificate lifetimes, forbidden signatures and algorithms, where secrets and data
+  keys may come from, quantum-vulnerable assets: from `seclume.crypto-policy.rules.*` at
+  start-up (`on-start=warn|fail`) and in the `cryptoPolicy` health contributor, and in a
+  pipeline with `seclume-verify --policy` on a CBOM or a connection. `--cbom-diff` compares two
+  CBOMs and fails on a step back; `.github/actions/crypto-policy` does both in a GitHub job
+  summary. `QuantumReadiness` (`/actuator/quantum`, `--quantum`) sorts what breaks by the
+  threat - harvest-now-decrypt-later key exchanges first, then signatures, then AES-128 - with
+  the replacement and how to get there. `CbomReader` reads seclume's CBOMs back; the CBOM
+  carries `seclume:algorithm`, `seclume:bits` and `seclume:expires` for that.
+
 - **A cryptography bill of materials** (`space.seclume.inventory`, `/actuator/cbom`,
   `seclume-verify --cbom`). `CryptoInventory` records, where seclume does the work, every secret
   a provider read, every field encryption ring, every private key opened in OpenSSL, CNG or a

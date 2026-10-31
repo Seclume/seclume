@@ -37,6 +37,61 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # The crypto policy action as a user's pipeline runs it: the first release
+  # meets a strict policy, the second - the hybrid lost, an RSA-2048 key, a
+  # data key from a file - fails it and is a step back from the first.
+  crypto-policy-action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - run: ./mvnw -B -pl seclume-verify -am package -DskipTests
+      - name: The policy and the jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar=$(find seclume-verify/target -maxdepth 1 -name 'seclume-verify-*.jar' -not -name '*-sources.jar' -not -name '*-javadoc.jar' | head -1)
+          test -n "$jar"
+          echo "VERIFY_JAR=$jar" >> "$GITHUB_ENV"
+          printf 'rsa.min-bits=3072\ntls.require-hybrid=true\ndata-key.require-kms=true\n' > "$RUNNER_TEMP/policy.properties"
+      - name: The first release meets the policy
+        uses: ./.github/actions/crypto-policy
+        with:
+          jar: ${{ env.VERIFY_JAR }}
+          cbom: seclume-verify/src/test/resources/cbom/release-1.json
+          policy: ${{ runner.temp }}/policy.properties
+      - name: The second fails it and steps back
+        id: negative
+        continue-on-error: true
+        uses: ./.github/actions/crypto-policy
+        with:
+          jar: ${{ env.VERIFY_JAR }}
+          cbom: seclume-verify/src/test/resources/cbom/release-2.json
+          policy: ${{ runner.temp }}/policy.properties
+          baseline: seclume-verify/src/test/resources/cbom/release-1.json
+      - name: Require the negative control
+        env:
+          NEGATIVE_OUTCOME: ${{ steps.negative.outcome }}
+          NEGATIVE_STATUS: ${{ steps.negative.outputs.status }}
+        run: test "$NEGATIVE_OUTCOME" = failure && test "$NEGATIVE_STATUS" = 1
+      - name: A step back alone, with the default policy, fails as well
+        id: diff-only
+        continue-on-error: true
+        uses: ./.github/actions/crypto-policy
+        with:
+          jar: ${{ env.VERIFY_JAR }}
+          cbom: seclume-verify/src/test/resources/cbom/release-2.json
+          baseline: seclume-verify/src/test/resources/cbom/release-1.json
+      - name: Require the step back to fail
+        env:
+          OUTCOME: ${{ steps.diff-only.outcome }}
+        run: test "$OUTCOME" = failure
+
   heapcheck-action:
     runs-on: ubuntu-latest
     steps:
@@ -501,6 +556,8 @@ jobs:
         run: >-
           node .github/ci-tools/validate-cbom.mjs
           seclume-core/target/cbom-sample.json seclume-core/target/cbom-end-to-end.json
+          seclume-verify/src/test/resources/cbom/release-1.json
+          seclume-verify/src/test/resources/cbom/release-2.json
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group core --platform linux-x64
