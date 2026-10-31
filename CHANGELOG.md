@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Ranges over a blind index, as buckets.** `StringBlindIndex.findAny(values, query,
+  attribute)` searches for several values in one query - every value's search terms, the rows
+  kept that match one - so a range is the buckets it covers: a `prefix(7)` index over ISO dates
+  and `findAny(List.of("2026-01", "2026-02", "2026-03"), ...)` for a quarter. There is no
+  order-revealing index on purpose; ENCRYPTION.md says why.
 - **Log lines masked with Log4j 2 and java.util.logging too.** Besides Logback's converters,
   `seclume-logging` has `%redact{...}` for Log4j 2 - what the inner pattern writes, message and
   stack trace, masked, the stack trace written once - and `RedactingFormatter` for

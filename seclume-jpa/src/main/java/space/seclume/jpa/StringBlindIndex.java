@@ -172,6 +172,38 @@ public final class StringBlindIndex {
         return keep(query.apply(searchTerms(wanted)), attribute, wanted);
     }
 
+    /**
+     * Searches for any of several values in one query: the search terms of
+     * all of them, and the rows kept that match one. This is how a range is
+     * searched without an index that reveals order - as the buckets it
+     * covers: with {@code prefix(7)} over ISO dates, January to March 2026 is
+     * {@code findAny(List.of("2026-01", "2026-02", "2026-03"), ...)}.
+     *
+     * @param wanted the values, at least one; {@code null} among them is refused
+     */
+    public <T> List<T> findAny(java.util.Collection<String> wanted,
+            Function<? super List<Long>, ? extends Iterable<? extends T>> query,
+            Function<? super T, String> attribute) {
+        if (wanted == null || wanted.isEmpty()) {
+            throw new IllegalArgumentException("at least one value to search for");
+        }
+        java.util.LinkedHashSet<Long> terms = new java.util.LinkedHashSet<>();
+        for (String value : wanted) {
+            terms.addAll(searchTerms(value));
+        }
+        List<T> kept = new ArrayList<>();
+        for (T candidate : query.apply(List.copyOf(terms))) {
+            String value = attribute.apply(candidate);
+            for (String one : wanted) {
+                if (matches(value, one)) {
+                    kept.add(candidate);
+                    break;
+                }
+            }
+        }
+        return kept;
+    }
+
     private static byte[] utf8(String value) {
         // seclume-allow: the attribute is a String already - this keeps it from the database
         return value.getBytes(StandardCharsets.UTF_8);

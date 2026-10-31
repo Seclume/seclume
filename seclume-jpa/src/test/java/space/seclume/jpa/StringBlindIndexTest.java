@@ -217,4 +217,79 @@ class StringBlindIndexTest {
         closed.close();
         assertThrows(IllegalStateException.class, () -> index.term("x"), "a closed ring");
     }
+
+    /** Rows of patients by birth date, ISO: what a month bucket is searched over. */
+    private static Table births(StringBlindIndex months) {
+        Table table = new Table();
+        String[] dates = {"2025-12-31", "2026-01-01", "2026-01-17", "2026-02-28", "2026-03-01",
+            "2026-03-31", "2026-04-01", "2026-06-15", "2027-01-05", "1926-02-11"};
+        for (int i = 0; i < dates.length; i++) {
+            table.add(i, dates[i], months);
+        }
+        return table;
+    }
+
+    @Test
+    void aRangeIsSearchedAsTheBucketsItCovers() {
+        try (FieldKeys keys = ring(10)) {
+            // Two bits: most months share an index value with others.
+            StringBlindIndex months = StringBlindIndex.of(keys, "patient.birth_month", 2, Transform.prefix(7));
+            Table table = births(months);
+            int[] calls = {0};
+            List<Row> firstQuarter = months.findAny(List.of("2026-01", "2026-02", "2026-03"), terms -> {
+                calls[0]++;
+                return table.byIndex(terms);
+            }, Row::name);
+            assertEquals(List.of(1, 2, 3, 4, 5), firstQuarter.stream().map(Row::id).toList(),
+                    "January to March 2026, in the table's order");
+            assertEquals(1, calls[0], "one query for all the buckets");
+            assertTrue(table.asked.get().size() <= 3, "a term per bucket at most: " + table.asked.get());
+            assertEquals(List.of(7), months.findAny(List.of("2026-06"), table::byIndex, Row::name)
+                    .stream().map(Row::id).toList());
+            assertEquals(List.of(), months.findAny(List.of("2030-01", "2030-02"), table::byIndex, Row::name));
+        }
+    }
+
+    @Test
+    void theBucketsCanRepeatAndEachRowComesOnce() {
+        try (FieldKeys keys = ring(11)) {
+            StringBlindIndex months = StringBlindIndex.of(keys, "patient.birth_month", 1, Transform.prefix(7));
+            Table table = births(months);
+            List<Row> found = months.findAny(List.of("2026-03", "2026-03", "2026-01", "2026-03-15"),
+                    table::byIndex, Row::name);
+            assertEquals(List.of(1, 2, 4, 5), found.stream().map(Row::id).toList(),
+                    "a value longer than the prefix is its bucket; a row matching two values comes once");
+            assertEquals(new java.util.HashSet<>(table.asked.get()).size(), table.asked.get().size(),
+                    "each term asked for once");
+        }
+    }
+
+    @Test
+    void findAnyDuringARotationAsksForEveryKeysTerms() {
+        StringBlindIndex months = StringBlindIndex.of("patient.birth_month", 32, Transform.prefix(7));
+        Table table = new Table();
+        try (FieldKeys old = ring(12)) {
+            FieldKeys.install(old);
+            table.add(1, "2026-01-10", months);
+        }
+        try (FieldKeys both = FieldKeys.builder().key(1, key(12)).key(2, key(13)).primary(2).build()) {
+            FieldKeys.install(both);
+            table.add(2, "2026-02-10", months);
+            assertEquals(List.of(1, 2), months.findAny(List.of("2026-01", "2026-02"), table::byIndex, Row::name)
+                    .stream().map(Row::id).toList(), "old and new rows");
+            assertEquals(4, table.asked.get().size(), "two buckets, two keys");
+        }
+    }
+
+    @Test
+    void findAnyNeedsSomethingToFind() {
+        try (FieldKeys keys = ring(14)) {
+            StringBlindIndex months = StringBlindIndex.of(keys, "m", 8, Transform.prefix(7));
+            Table table = new Table();
+            assertThrows(IllegalArgumentException.class, () -> months.findAny(List.of(), table::byIndex, Row::name));
+            assertThrows(IllegalArgumentException.class, () -> months.findAny(null, table::byIndex, Row::name));
+            assertThrows(IllegalArgumentException.class, () -> months.findAny(
+                    java.util.Arrays.asList("2026-01", null), table::byIndex, Row::name));
+        }
+    }
 }

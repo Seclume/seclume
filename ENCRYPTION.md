@@ -105,6 +105,14 @@ With JPA, a deterministic attribute is queried as it is (`where p.ssn = :ssn` - 
 encrypts the parameter, `aDeterministicAttributeIsQueriedAndUnique`); a blind index is a numeric
 attribute set from the value - see [Jakarta Data and blind indexes](#jakarta-data-and-blind-indexes).
 
+**Ranges are searched as buckets, not by order.** An index that keeps the order of the values -
+order-preserving or order-revealing encryption - would let anyone with the table sort it, and
+from a sorted column of birth dates or salaries much of the values follows. seclume has none on
+purpose. A range is the buckets it covers instead: a `prefix(7)` index over ISO dates is a
+month, and `StringBlindIndex.findAny(List.of("2026-01", "2026-02", "2026-03"), ...)` asks for
+January to March in one query and keeps the rows that match one of them. What the table says is
+which rows share a month's index value - no more than for any other blind index.
+
 Tested with known answers from an independent implementation (Python's `hmac` and `hashlib`),
 every transform including multi-byte characters, the bit masks and an even spread of buckets
 (chi-square over 25600 values), separate keys per name, transform, size and ring key, and a
