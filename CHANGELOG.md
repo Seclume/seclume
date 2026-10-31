@@ -102,6 +102,11 @@ All notable changes to seclume are recorded here. Versions follow
   KMS by the key's one algorithm, Key Vault's r and s turned into DER, its version pinned when
   opened. The AWS request signing is now shared with Secrets Manager (`AwsJsonCall`).
   `FakeKms` answers as all four services.
+- **Crypto-shredding: a key per subject** (`SubjectKeys`, `SubjectKeyStore`). Every customer,
+  patient or tenant gets a data key of its own, stored wrapped by the ring in a two-column table;
+  `shred(subject)` deletes it, and every value of theirs - in any table, index, replica or export -
+  opens nothing again. Backups of the key table end with the ring key that wrapped them, which a
+  rotation retires. Tested in memory and against the four databases.
 - **Tomcat serves `vault-pki=` and `spiffe=` bundles.** `seclume.server.ssl.bundle` names any
   bundle now; for the two that renew their certificate themselves Tomcat shares the bundle's key
   manager, so a renewed certificate is served from the next handshake on.
