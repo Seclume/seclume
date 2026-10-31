@@ -98,7 +98,6 @@ class LocalSearchTest {
         }
     }
 
-    /** The control: the same way with a key the server does not know is refused by it. */
     /** Encrypted fields in a real cluster: stored as ciphertext, found by a terms query, opened again. */
     @Test
     void encryptedFieldsAreStoredSealedAndFoundByTheirTerms() throws Exception {
@@ -147,6 +146,7 @@ class LocalSearchTest {
         }
     }
 
+    /** The control: the same way with a key the server does not know is refused by it. */
     @Test
     void aWrongKeyIsRefusedByTheServer(@TempDir Path dir) throws Exception {
         Path wrong = dir.resolve("wrong.key");
