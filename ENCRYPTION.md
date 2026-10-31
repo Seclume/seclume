@@ -271,6 +271,45 @@ collection and holds them as Java objects; this keeps them in locked native memo
 nothing on the server. A value written through JDBC and one written through R2DBC are the same
 bytes.
 
+## Kafka, Redis, Elasticsearch: the same format beyond databases
+
+The ring, the format and the rotation are the same; only what carries the ciphertext changes.
+
+```java
+// Kafka - seclume-kafka: the broker, its log segments and a mirror see ciphertext.
+new KafkaProducer<>(properties, new EncryptingSerializer<>(new StringSerializer(), keys, Mode.DETERMINISTIC),
+        new EncryptingSerializer<>(new OrderSerializer(), keys, Mode.RANDOMIZED));
+new KafkaConsumer<>(properties, new DecryptingDeserializer<>(new StringDeserializer(), keys),
+        new DecryptingDeserializer<>(new OrderDeserializer(), keys));
+
+// Redis through Lettuce - seclume-redis: the server, RDB, AOF and MONITOR see ciphertext.
+StatefulRedisConnection<String, String> redis =
+        client.connect(EncryptedCodec.of(StringCodec.UTF8, keys, "sessions"));
+
+// Elasticsearch and OpenSearch - seclume-elasticsearch: chosen fields of a document.
+EncryptedDocument patients = EncryptedDocument.of(keys, "patients")
+        .field("ssn", Mode.DETERMINISTIC).field("diagnosis", Mode.RANDOMIZED);
+es.index(i -> i.index("patients").document(patients.encrypt(document)));
+// terms query on ssn.keyword with patients.searchTerms("ssn", value); patients.decrypt(hit.source())
+```
+
+| | Column key | Bound to | Searchable |
+|---|---|---|---|
+| Kafka | `kafka.<topic>.value` / `.key` | the topic - a record copied to another topic does not open | a deterministic key keeps its partition |
+| Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name | an encrypted key is found by `GET` again, not by a pattern |
+| Elasticsearch | `search.<index>.<field>` | index and field | a deterministic field by an exact `terms` query, through a rotation |
+
+A `null` - a Kafka tombstone, a missing field - stays `null`. A record or value that does not open
+with the ring is an error (`SerializationException` for Kafka, so a consumer can dead-letter it),
+never a wrong value. Lettuce does not hand the key to the value codec, so a Redis value is not
+bound to its key; Elasticsearch values are bound to their field, not their document.
+
+Tested on their own (`EncryptedRecordsTest`, `EncryptedCodecTest`, `EncryptedDocumentTest`: back as
+they went, never in the clear, other topic, name, index, field or ring refused, a rotation read
+through) and against the real servers in CI - a Kafka broker, Redis and Elasticsearch 9 hold the
+canary only as ciphertext, and the value comes back through the ring (`LocalKafkaSaslSslTest`,
+`LocalLettuceTest`, `LocalSearchTest`).
+
 ## Context: a value bound to its row
 
 `encrypt(value, context)`, `set(..., context)`, `readInto(..., context, ...)`: the context - a
