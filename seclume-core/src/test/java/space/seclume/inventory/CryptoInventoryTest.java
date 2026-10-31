@@ -90,6 +90,19 @@ class CryptoInventoryTest {
     }
 
     @Test
+    void aKeySizeThatIsNotANumberIsZeroNotAnException() {
+        assertEquals(2048, CryptoInventory.number("2048"));
+        assertEquals(0, CryptoInventory.number("0"));
+        assertEquals(0, CryptoInventory.number(null));
+        assertEquals(0, CryptoInventory.number(""));
+        assertEquals(0, CryptoInventory.number("25519x"));
+        assertEquals(0, CryptoInventory.number("-1"));
+        assertEquals(0, CryptoInventory.number("+256"));
+        assertEquals(0, CryptoInventory.number("9999999999"));
+        assertEquals(0, CryptoInventory.number("\u0663\u0662"));
+    }
+
+    @Test
     void aSecretReadIsRecordedAsWhereItCameFromAndWhenNeverAsWhatItIs() {
         Instant until = Instant.parse("2031-01-01T00:00:00Z");
         CanaryProvider provider = new CanaryProvider(until);

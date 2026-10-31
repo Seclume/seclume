@@ -68,7 +68,9 @@ class InventoryEndToEndTest {
     @Test
     void anApplicationsCryptographyIsInventoriedAndNothingSecretIsInIt() throws Exception {
         byte[] key = new byte[32];
-        new java.util.Random(20261030L).nextBytes(key);
+        for (int i = 0; i < key.length; i++) {
+            key[i] = (byte) (i * 37 + 11);
+        }
         String keyBase64 = Base64.getEncoder().encodeToString(key);
         Path token = Files.writeString(directory.resolve("token"), TOKEN);
         FakeVaultServer.Script script = new FakeVaultServer.Script().on("POST",

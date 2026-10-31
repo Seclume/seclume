@@ -155,7 +155,7 @@ public final class CycloneDxCbom {
         }
         if (n.startsWith("EC P-")) {
             String curve = n.substring(3);
-            int size = Integer.parseInt(curve.substring(2));
+            int size = CryptoInventory.number(curve.substring(2));
             return new Algorithm("ECDSA " + curve, "signature", null, curve,
                     size >= 521 ? 256 : size / 2, 0, List.of("sign", "verify"));
         }

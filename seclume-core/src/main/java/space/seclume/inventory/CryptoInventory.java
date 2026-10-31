@@ -135,7 +135,7 @@ public final class CryptoInventory {
         }
         try {
             String[] algorithm = algorithmOf(publicKey);
-            KEYS.put(key, new Key(Instant.now(), algorithm[0], Integer.parseInt(algorithm[1]),
+            KEYS.put(key, new Key(Instant.now(), algorithm[0], number(algorithm[1]),
                     where));
         } catch (RuntimeException ignored) {
             // best effort
@@ -192,8 +192,24 @@ public final class CryptoInventory {
         facts.put("serialNumber", certificate.getSerialNumber().toString(16));
         facts.put("peer", peer);
         String ref = "certificate:" + facts.get("issuer") + ":" + facts.get("serialNumber");
-        seen(ref, Kind.CERTIFICATE, facts.get("subject"), key[0], Integer.parseInt(key[1]),
+        seen(ref, Kind.CERTIFICATE, facts.get("subject"), key[0], number(key[1]),
                 peer, now, certificate.getNotAfter().toInstant(), facts);
+    }
+
+    /** A key size as a number, or 0 when it is not one. */
+    static int number(String digits) {
+        if (digits == null || digits.isEmpty() || digits.length() > 6) {
+            return 0;
+        }
+        int value = 0;
+        for (int i = 0; i < digits.length(); i++) {
+            char c = digits.charAt(i);
+            if (c < '0' || c > '9') {
+                return 0;
+            }
+            value = value * 10 + (c - '0');
+        }
+        return value;
     }
 
     private static void seen(String ref, Kind kind, String name, String algorithm, int bits,
