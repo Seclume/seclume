@@ -1145,6 +1145,15 @@ jobs:
         run: |
           rm -f .local-pgtls-password
           docker rm -f pgtls || true
+      # Micronaut from properties alone: the pool logs in to this server, and the
+      # password is not on the heap afterwards.
+      - name: Micronaut against this server
+        run: >-
+          ./mvnw -B -pl seclume-micronaut -am test
+          -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest' -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Require executed Micronaut tests
+        if: always()
+        run: python3 .github/scripts/require_mongo_tests.py 'seclume-micronaut' 'Micronaut'
       - name: Verify framework edge cases
         run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest,SpringDataOnPostgresTest,EntityShapesOnPostgresTest,HibernateEdgesOnPostgresTest,SpringJdbcOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests

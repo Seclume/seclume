@@ -180,6 +180,11 @@
       </dependency>
       <dependency>
         <groupId>space.seclume</groupId>
+        <artifactId>seclume-micronaut</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>space.seclume</groupId>
         <artifactId>seclume-spring-boot-starter</artifactId>
         <version>${project.version}</version>
       </dependency>
