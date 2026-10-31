@@ -464,6 +464,14 @@ This is proven by a running Spring Boot application against all four servers, wi
 single test runs. Hibernate, Flyway, Liquibase, jOOQ, MyBatis and Spring Data JDBC are listed
 in [FRAMEWORKS.md](FRAMEWORKS.md).
 
+## Jakarta Data
+
+Jakarta Data repositories, as Hibernate's annotation processor implements them, on all four
+servers: `@Insert`, `@Update`, `@Delete`, `@Find` and `@Query` over encrypted attributes, a
+deterministic attribute found by equality and `in`, and a randomized one through a blind index
+with `StringBlindIndex.find` - the candidates the index returns, kept where they match. See
+[ENCRYPTION.md](ENCRYPTION.md#jakarta-data-and-blind-indexes).
+
 ## Spring Boot: data services from `application.properties`
 
 With `seclume-spring-boot-starter` and the module of the service on the class path, one property
