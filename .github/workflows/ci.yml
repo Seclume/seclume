@@ -495,6 +495,12 @@ jobs:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # Every test that carries a security claim ran and passed - none
       # skipped, none missing (.github/security-gate.json).
+      # The CBOMs the core tests wrote - one of every kind of asset, one from an
+      # application that read a key over TLS - against CycloneDX's own schema.
+      - name: CBOMs are valid CycloneDX 1.6
+        run: >-
+          node .github/ci-tools/validate-cbom.mjs
+          seclume-core/target/cbom-sample.json seclume-core/target/cbom-end-to-end.json
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group core --platform linux-x64

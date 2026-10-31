@@ -56,6 +56,7 @@ public final class Verify {
         }
         boolean json = false;
         boolean printPin = false;
+        boolean cbom = false;
         String url = null;
         for (String argument : arguments) {
             String value = argument.strip();
@@ -63,6 +64,8 @@ public final class Verify {
                 json = true;
             } else if (value.equals("--print-pin")) {
                 printPin = true;
+            } else if (value.equals("--cbom")) {
+                cbom = true;
             } else if (url == null && !value.isBlank()) {
                 url = value;
             } else {
@@ -74,6 +77,7 @@ public final class Verify {
             System.err.println("""
                     usage: java -jar seclume-verify.jar [--json] "<jdbc url>"
                            java -jar seclume-verify.jar --print-pin "<jdbc url>"
+                           java -jar seclume-verify.jar --cbom "<jdbc url>"
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
 
@@ -91,6 +95,11 @@ public final class Verify {
                     for the URL - with the certificate's subject, issuer and expiry,
                     to compare with what the server's owner says it should be.
 
+                    --cbom connects as the report does and prints, instead of it, a
+                    CycloneDX 1.6 cryptography bill of materials: the secret read, the
+                    TLS session, the server's certificate and every algorithm, each
+                    with its NIST quantum security level. Never a secret's value.
+
                     --migrate translates a pgjdbc, Connector/J, MariaDB, mssql-jdbc,
                     Oracle thin or HikariCP configuration into seclume's, and names
                     every unsafe setting in it. Password values are never read.
@@ -104,7 +113,11 @@ public final class Verify {
         }
         Report report = new Report();
         int status = run(url, report);
-        System.out.print(json ? report.json(status) : report.toString());
+        if (cbom) {
+            System.out.print(space.seclume.inventory.CycloneDxCbom.write("seclume-verify"));
+        } else {
+            System.out.print(json ? report.json(status) : report.toString());
+        }
         System.exit(status);
     }
 

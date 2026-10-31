@@ -13,6 +13,14 @@ All notable changes to seclume are recorded here. Versions follow
   (seclume-r2dbc) binds and reads encrypted values over R2DBC; `EncryptedFields`
   (seclume-mongodb-driver) stores them as BSON binary of subtype 0x80 and searches a
   deterministic field with `$in` over every key of the ring.
+- **A cryptography bill of materials** (`space.seclume.inventory`, `/actuator/cbom`,
+  `seclume-verify --cbom`). `CryptoInventory` records, where seclume does the work, every secret
+  a provider read, every field encryption ring, every private key opened in OpenSSL, CNG or a
+  KMS, every TLS session on either stack with its key exchange, and every server certificate -
+  facts, never values. `CycloneDxCbom` writes it as CycloneDX 1.6, each algorithm with its
+  classical and NIST quantum security level and `seclume:quantum-vulnerable` counting what a
+  quantum computer would break. CI checks the CBOMs the tests write against CycloneDX's JSON
+  schema (ajv, pinned in `.github/ci-tools`).
 
 - **Field encryption in JPA entities** (`seclume-jpa`, new). `EncryptedStringConverter` and
   `EncryptedBytesConverter` - one small subclass per column, which names it and its mode -
