@@ -103,12 +103,19 @@ public class SeclumeCdiExtension implements Extension {
         return ACTIVE.get();
     }
 
+    @Override
+    public String toString() {
+        return "SeclumeCdiExtension[data sources " + dataSourceNames()
+                + (keys != null ? ", a key ring" : "") + "]";
+    }
+
     /** The data sources this extension made beans of, by name - for a look from outside. */
     java.util.Set<String> dataSourceNames() {
         return java.util.Set.copyOf(pools.keySet());
     }
 
     void beforeShutdown(@Observes BeforeShutdown shutdown) {
+        java.util.Objects.requireNonNull(shutdown, "the container's BeforeShutdown event");
         ACTIVE.compareAndSet(this, null);
         madeBeans = false;
         pools.values().forEach(SeclumePool::close);

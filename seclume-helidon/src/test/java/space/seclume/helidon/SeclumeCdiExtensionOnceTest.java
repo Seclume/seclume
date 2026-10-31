@@ -39,6 +39,15 @@ import space.seclume.field.FieldKeys;
 class SeclumeCdiExtensionOnceTest {
 
     private static final Map<String, String> SETTINGS = new LinkedHashMap<>();
+
+    /** The container's last event, which carries nothing the extension reads. */
+    private static final jakarta.enterprise.inject.spi.BeforeShutdown SHUTDOWN =
+            (jakarta.enterprise.inject.spi.BeforeShutdown) Proxy.newProxyInstance(
+                    SeclumeCdiExtensionOnceTest.class.getClassLoader(),
+                    new Class<?>[] {jakarta.enterprise.inject.spi.BeforeShutdown.class},
+                    (proxy, method, arguments) -> {
+                        throw new UnsupportedOperationException(method.getName());
+                    });
     private static Path keyFile;
 
     /** What a container would have been asked to do. */
@@ -129,8 +138,8 @@ class SeclumeCdiExtensionOnceTest {
                 assertEquals(isDefault, qualifiers.contains("Default"), qualifiers.toString());
             }
         } finally {
-            first.beforeShutdown(null);
-            second.beforeShutdown(null);
+            first.beforeShutdown(SHUTDOWN);
+            second.beforeShutdown(SHUTDOWN);
         }
         assertNull(SeclumeCdiExtension.active(), "the slot is free once the container stopped");
 
@@ -140,7 +149,7 @@ class SeclumeCdiExtensionOnceTest {
             assertEquals(3, next.beans.size(), "the next container gets its beans");
             assertSame(second, SeclumeCdiExtension.active());
         } finally {
-            second.beforeShutdown(null);
+            second.beforeShutdown(SHUTDOWN);
         }
     }
 
@@ -168,7 +177,7 @@ class SeclumeCdiExtensionOnceTest {
             after.afterBeanDiscovery(next.event());
             assertEquals(3, next.beans.size(), "and the next start works");
         } finally {
-            after.beforeShutdown(null);
+            after.beforeShutdown(SHUTDOWN);
         }
     }
 
