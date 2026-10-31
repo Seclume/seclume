@@ -111,6 +111,13 @@
                not use; run, they claim nothing and -Xlint:processing turns
                that into an error. -->
           <proc>none</proc>
+          <!-- MicroProfile Config's ConfigProviderResolver carries bnd's
+               @ServiceConsumer, an OSGi annotation that is not on the class
+               path: "classfile" warns about it. Everything else stays an error. -->
+          <compilerArgs combine.self="override">
+            <arg>-Xlint:all,-restricted,-classfile</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
         </configuration>
       </plugin>
     </plugins>
