@@ -41,7 +41,7 @@ jobs:
   # meets a strict policy, the second - the hybrid lost, an RSA-2048 key, a
   # data key from a file - fails it and is a step back from the first.
   crypto-policy-action:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -93,7 +93,7 @@ jobs:
         run: test "$OUTCOME" = failure
 
   heapcheck-action:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -215,7 +215,7 @@ jobs:
   # the report or the redacted copy comes out - the dump must be gone from the
   # pod afterwards.
   kubectl-heapcheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -230,9 +230,7 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          for image in docker.io/library/eclipse-temurin:25-jdk; do
-            docker pull -q "$image" && kind load docker-image "$image" --name seclume
-          done
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk
           kubectl create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
           kubectl create configmap probe --from-file=seclume-heapcheck/ci/Probe.java
           kubectl apply -f seclume-heapcheck/kubectl/ci/pods.yaml
@@ -296,7 +294,7 @@ jobs:
   # that opted in. The dump it writes must be redacted where it lies by the
   # injected sidecar - no plain dump left, the copy clean of the credential.
   admission-webhook:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -311,11 +309,10 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          for image in docker.io/library/eclipse-temurin:25-jdk docker.io/library/eclipse-temurin:25-jre; do
-            docker pull -q "$image" && kind load docker-image "$image" --name seclume
-          done
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk \
+            docker.io/library/eclipse-temurin:25-jre
           bash seclume-admission/deploy/build-image.sh seclume-admission:ci
-          kind load docker-image seclume-admission:ci --name seclume
+          bash .github/scripts/kind_load.sh seclume seclume-admission:ci
           SECLUME_IMAGE=seclume-admission:ci bash seclume-admission/deploy/install.sh
           kubectl -n seclume-system rollout status deploy/seclume-admission --timeout=180s
           jar=$(find seclume-heapcheck/target -maxdepth 1 -name 'seclume-heapcheck-*.jar' | head -1)
@@ -401,7 +398,7 @@ jobs:
   # kind - first with the CA Helm makes, then switched to cert-manager - and
   # each time a pod in an opted-in namespace must come back mutated.
   admission-helm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -432,7 +429,7 @@ jobs:
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
           bash seclume-admission/deploy/build-image.sh seclume-admission:ci
-          kind load docker-image seclume-admission:ci --name seclume
+          bash .github/scripts/kind_load.sh seclume seclume-admission:ci
           helm install seclume seclume-admission/helm/seclume-admission \
             --namespace seclume-system --create-namespace \
             --set image.repository=seclume-admission --set image.tag=ci --wait --timeout 180s
@@ -506,7 +503,7 @@ jobs:
   # published vectors, the heap-dump proof with its negative control, the pool
   # mechanics, and the rule that no forbidden API call slips in.
   core:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Test required database coverage gate
@@ -607,7 +604,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-24.04-arm, platform: linux-arm64}
+          - {os: ubuntu-26.04-arm, platform: linux-arm64}
           - {os: windows-latest, platform: windows-x64}
     defaults:
       run:
@@ -642,7 +639,7 @@ jobs:
   # Short coverage-guided JSON searches on every PR; the nightly fuzz
   # workflow runs the same targets for fifteen minutes each.
   json-fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -677,7 +674,7 @@ jobs:
   # key files, the SPIFFE agent's answers and KMS answers. The nightly fuzz
   # workflow runs the corpora in full; a finding is uploaded as an artifact.
   parser-fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -741,7 +738,7 @@ jobs:
   # comparison - the usual way must leak the password into the heap, seclume
   # must not. A getting-started that does not start is worse than none.
   getting-started:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -814,14 +811,14 @@ jobs:
         run: cd examples/getting-started && docker compose down -v || true
 
   # The post-quantum key exchange, end to end. The own TLS stack offers
-  # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-latest has 3.0,
+  # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-26.04 has 3.0,
   # so every other job runs with the hybrid off and would not notice it
   # breaking. Here OpenSSL 3.5 is built (once, then cached; the tarball checked
   # against its published SHA-256) and the handshake is made against its
   # s_server with the hybrid as the only group. SECLUME_OPENSSL35 makes the
   # test mandatory: a libcrypto without ML-KEM fails it rather than skips it.
   post-quantum:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       OPENSSL_VERSION: '3.5.4'
       OPENSSL_SHA256: '967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99'
@@ -864,7 +861,7 @@ jobs:
   # through seclume, a dropped connection recovers, and the password is not on
   # the heap. The broker is Ubuntu's own package, configured here.
   rabbitmq:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -935,7 +932,7 @@ jobs:
   # Without this job every MongoDB test skips
   # itself, and a green build would say nothing about them.
   mongodb:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -977,7 +974,7 @@ jobs:
           docker rm -f slm-haproxy slm-mongos1 slm-mongos2 slm-shard slm-cfg || true
 
   search:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -1008,7 +1005,7 @@ jobs:
   # docker. Then the controls: the vendors' own clients given the secret, and
   # the same heap search finding it.
   brokers:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       CONTAINER_ENGINE: docker
     steps:
@@ -1100,7 +1097,7 @@ jobs:
           bash seclume-kafka/proof/broker.sh down || true
 
   postgresql:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       postgres:
         # Two releases, so that a protocol difference shows up here and not at
@@ -1244,7 +1241,7 @@ jobs:
   # client shares the same server session - what proxyMode=transaction is for,
   # and the leak it prevents shows up in PgBouncerTest's control.
   pgbouncer:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       postgres:
         image: postgres:18
@@ -1301,7 +1298,7 @@ jobs:
           docker rm -f bouncer || true
 
   mysql:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     services:
       mysql:
         image: ${{ matrix.image }}
@@ -1409,7 +1406,7 @@ jobs:
   sqlserver:
     # 2022 keeps the plain name, which branch protection requires.
     name: ${{ matrix.version == '2022' && 'sqlserver' || format('sqlserver ({0})', matrix.version) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -1504,7 +1501,7 @@ jobs:
   # the proxy every cancellation and query timeout arrived only once the
   # statement had finished anyway (26.09.2026).
   oracle:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       ORA_PASSWORD: ${{ secrets.ORA_TEST_PASSWORD || 'seclume-ci-password' }}
     steps:
@@ -1601,7 +1598,7 @@ jobs:
   # with md5. The tests assert which, so a server that quietly stopped asking
   # would fail here instead of passing.
   cockroachdb:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -1643,7 +1640,7 @@ jobs:
         run: rm -f .local-crdb-password; docker rm -f crdb || true
 
   yugabytedb:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
