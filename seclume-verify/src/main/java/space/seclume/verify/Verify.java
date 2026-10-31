@@ -50,6 +50,11 @@ public final class Verify {
             System.exit(Doctor.mainRun(arguments, System.out, System.err));
             return;
         }
+        if (arguments.length > 0 && arguments[0].strip().equals("--split")) {
+            System.exit(Split.run(java.util.Arrays.asList(arguments).subList(1, arguments.length),
+                    System.out, System.err));
+            return;
+        }
         if (arguments.length == 2 && arguments[0].strip().equals("--migrate")) {
             System.exit(Migrate.run(arguments[1].strip(), System.out, System.err));
             return;
@@ -80,6 +85,7 @@ public final class Verify {
                            java -jar seclume-verify.jar --cbom "<jdbc url>"
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
+                           java -jar seclume-verify.jar --split "<secret uri>" <k> <n> <directory>
 
                     The URL is the one the application uses, password included -
                     which is to say: not included. It names where the secret comes
@@ -103,7 +109,11 @@ public final class Verify {
                     --migrate translates a pgjdbc, Connector/J, MariaDB, mssql-jdbc,
                     Oracle thin or HikariCP configuration into seclume's, and names
                     every unsafe setting in it. Password values are never read.
-                    Exit code 1 means unsafe settings were found.""");
+                    Exit code 1 means unsafe settings were found.
+
+                    --split reads a secret through its provider (file:/path, vault?...)
+                    and writes n Shamir shares into the directory, any k of which give
+                    it back - for provider=shamir. A share is never printed.""");
             System.exit(2);
             return;
         }

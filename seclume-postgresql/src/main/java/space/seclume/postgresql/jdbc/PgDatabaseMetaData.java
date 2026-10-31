@@ -570,27 +570,45 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
 
     @Override
     public int getDatabaseMajorVersion() throws SQLException {
-        String version = getDatabaseProductVersion();
-        int dot = version.indexOf('.');
-        try {
-            return Integer.parseInt(dot < 0 ? version.trim() : version.substring(0, dot));
-        } catch (NumberFormatException e) {
-            return 0;
-        }
+        return versionPart(getDatabaseProductVersion(), 0);
     }
 
     @Override
     public int getDatabaseMinorVersion() throws SQLException {
-        String version = getDatabaseProductVersion();
-        int dot = version.indexOf('.');
-        if (dot < 0) {
+        return versionPart(getDatabaseProductVersion(), 1);
+    }
+
+    /**
+     * The major ({@code part} 0) or minor (1) number of a {@code server_version}:
+     * the leading digits of the first and second dotted component. A release
+     * candidate, beta or development build reports {@code 19rc1}, {@code 19beta2}
+     * or {@code 19devel} - major 19, minor 0 - and a distribution may append
+     * its own text, {@code 16.4 (Debian 16.4-1.pgdg120+1)}. Only something with
+     * no leading number at all is 0.
+     */
+    static int versionPart(String version, int part) {
+        if (version == null) {
             return 0;
         }
-        try {
-            return Integer.parseInt(version.substring(dot + 1).replaceAll("\\D.*", ""));
-        } catch (NumberFormatException e) {
-            return 0;
+        String text = version.trim();
+        int p = 0;
+        for (int index = 0; index <= part; index++) {
+            int value = 0;
+            int digits = 0;
+            while (p < text.length() && Character.isDigit(text.charAt(p)) && digits < 9) {
+                value = value * 10 + (text.charAt(p) - '0');
+                p++;
+                digits++;
+            }
+            if (index == part) {
+                return value;
+            }
+            if (digits == 0 || p >= text.length() || text.charAt(p) != '.') {
+                return 0;
+            }
+            p++;
         }
+        return 0;
     }
 
     @Override
