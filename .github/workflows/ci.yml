@@ -230,9 +230,7 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          for image in docker.io/library/eclipse-temurin:25-jdk; do
-            docker pull -q "$image" && kind load docker-image "$image" --name seclume
-          done
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk
           kubectl create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
           kubectl create configmap probe --from-file=seclume-heapcheck/ci/Probe.java
           kubectl apply -f seclume-heapcheck/kubectl/ci/pods.yaml
@@ -311,11 +309,10 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          for image in docker.io/library/eclipse-temurin:25-jdk docker.io/library/eclipse-temurin:25-jre; do
-            docker pull -q "$image" && kind load docker-image "$image" --name seclume
-          done
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk \
+            docker.io/library/eclipse-temurin:25-jre
           bash seclume-admission/deploy/build-image.sh seclume-admission:ci
-          kind load docker-image seclume-admission:ci --name seclume
+          bash .github/scripts/kind_load.sh seclume seclume-admission:ci
           SECLUME_IMAGE=seclume-admission:ci bash seclume-admission/deploy/install.sh
           kubectl -n seclume-system rollout status deploy/seclume-admission --timeout=180s
           jar=$(find seclume-heapcheck/target -maxdepth 1 -name 'seclume-heapcheck-*.jar' | head -1)
@@ -432,7 +429,7 @@ jobs:
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
           bash seclume-admission/deploy/build-image.sh seclume-admission:ci
-          kind load docker-image seclume-admission:ci --name seclume
+          bash .github/scripts/kind_load.sh seclume seclume-admission:ci
           helm install seclume seclume-admission/helm/seclume-admission \
             --namespace seclume-system --create-namespace \
             --set image.repository=seclume-admission --set image.tag=ci --wait --timeout 180s
