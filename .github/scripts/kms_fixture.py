@@ -33,11 +33,14 @@ def call(endpoint, certificate, target, body):
         "Authorization": f"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/{day}/{REGION}/kms/"
                          "aws4_request, SignedHeaders=host, Signature=" + "0" * 64,
     })
-    with urllib.request.urlopen(request, context=context, timeout=30) as answer:
+    # The emulator on this job's loopback only (checked in main), over TLS to its own certificate.
+    with urllib.request.urlopen(request, context=context, timeout=30) as answer:  # nosemgrep
         return json.loads(answer.read())
 
 
 def main(endpoint, certificate):
+    if not endpoint.startswith("https://127.0.0.1:"):
+        raise SystemExit("the emulator is expected on https://127.0.0.1:<port>, not " + endpoint)
     for _ in range(60):
         try:
             key = call(endpoint, certificate, "CreateKey", {"Description": "seclume field data",
