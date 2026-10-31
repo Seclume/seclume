@@ -123,8 +123,10 @@ class SeclumeCdiExtensionTest {
 
     @Test
     void theExtensionRanInTheContainerWithTheConfiguration() {
-        SeclumeCdiExtension extension = container.getBeanManager().getExtension(SeclumeCdiExtension.class);
-        assertEquals(Set.of("default", "orders"), extension.dataSourceNames(),
+        container.getBeanManager().getExtension(SeclumeCdiExtension.class);
+        SeclumeCdiExtension active = SeclumeCdiExtension.active();
+        assertTrue(active != null, "no instance of the extension made the beans");
+        assertEquals(Set.of("default", "orders"), active.dataSourceNames(),
                 "the data sources the extension found in the container's configuration");
     }
 
