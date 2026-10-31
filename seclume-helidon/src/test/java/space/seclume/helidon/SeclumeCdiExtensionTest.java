@@ -44,9 +44,9 @@ import space.seclume.pool.SeclumePool;
  * Helidon MP: the extension, found by the service loader as in an
  * application, turns MicroProfile Config into a default and a named
  * {@code DataSource} and a {@link FieldKeys} bean, installed - in a Helidon
- * CDI container started here, with bean discovery off and the configuration
- * registered for this class loader, so that what the extension was given can
- * be checked before the container is.
+ * CDI container started here as an application starts it, with the
+ * configuration in system properties, so that what the extension was given
+ * can be checked before the container is.
  *
  * <p>Isolated: the container, the registered configuration and the installed
  * ring are each one per JVM.
@@ -115,7 +115,10 @@ class SeclumeCdiExtensionTest {
                 "seclume.field-encryption.keys.1.path", "seclume.datasources.default.url",
                 "seclume.datasources.orders.url")), flat.keySet().toString());
 
-        container = SeContainerInitializer.newInstance().disableDiscovery().initialize();
+        // Discovery on, as in an application: that is when the container
+        // loads extensions from META-INF/services - with it off, Helidon's
+        // takes only those added by hand.
+        container = SeContainerInitializer.newInstance().initialize();
     }
 
     @Test
