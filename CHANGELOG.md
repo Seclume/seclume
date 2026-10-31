@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Examples for Micronaut and Helidon MP** (`examples/micronaut`, `examples/helidon`): an
+  application with no seclume code, the pool from `application.yml` or
+  `microprofile-config.properties`, the password from Vault. `examples/check-example.sh` starts
+  each, searches a heap dump for the password and checks that a configured password stops the
+  start without being printed; the `framework-examples` job runs both on every pull request.
+  SUPPORTED-VERSIONS.md has a table of the framework versions.
 - **Helidon** (`seclume-helidon`, new). `SeclumeHelidon` for SE (from `Config`) and
   `SeclumeCdiExtension` for MP (from MicroProfile Config): a `SeclumePool` per
   `seclume.datasources.<name>` - named beans in MP, `default` the default one - and the field
