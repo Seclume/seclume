@@ -322,6 +322,19 @@ jobs:
           set -euo pipefail
           kubectl create namespace shop
           kubectl label namespace shop seclume.space/inject=enabled
+          # Rolled out is not yet answering: until the service has the new pods
+          # as endpoints, failurePolicy=Ignore lets a pod through unchanged.
+          # Ask with a dry run until the webhook mutates one, for a minute.
+          for i in $(seq 1 30); do
+            kubectl -n shop create --dry-run=server -o json \
+              -f seclume-admission/ci/spiffe-pod.yaml > answering.json
+            python3 -c "import json, sys; p = json.load(open('answering.json')); \
+              sys.exit(0 if p['metadata'].get('annotations', {}).get('seclume.space/injected') else 1)" \
+              && break
+            [ "$i" = 30 ] && { echo "::error title=admission-webhook::the webhook never answered"; exit 1; }
+            sleep 2
+          done
+          rm -f answering.json
           kubectl -n shop create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
           kubectl -n shop create configmap oom --from-file=seclume-admission/ci/Oom.java
           kubectl -n shop apply -f seclume-admission/ci/oom-pod.yaml
