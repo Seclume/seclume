@@ -92,17 +92,28 @@ public class SeclumeCryptoPolicyAutoConfiguration {
             }
             List<CryptoPolicy.Finding> findings = policy.check(CryptoInventory.snapshot(),
                     Instant.now());
+            // The log names rules and counts, not assets: what an asset is called comes
+            // from the inventory, and the log is read by more people than the health
+            // endpoint, which has the findings in full.
+            java.util.Map<String, long[]> perRule = new java.util.TreeMap<>();
             for (CryptoPolicy.Finding finding : findings) {
-                LOG.log(finding.severity() == CryptoPolicy.Severity.FAIL
-                        ? System.Logger.Level.ERROR : System.Logger.Level.WARNING,
-                        "crypto policy " + finding.rule() + ": " + finding.message());
+                long[] counts = perRule.computeIfAbsent(finding.rule(), rule -> new long[2]);
+                counts[finding.severity() == CryptoPolicy.Severity.FAIL ? 0 : 1]++;
+            }
+            for (java.util.Map.Entry<String, long[]> rule : perRule.entrySet()) {
+                long failing = rule.getValue()[0];
+                long warnings = rule.getValue()[1];
+                LOG.log(failing > 0 ? System.Logger.Level.ERROR : System.Logger.Level.WARNING,
+                        "crypto policy rule " + rule.getKey() + ": " + failing + " failing, "
+                        + warnings + " warnings - the findings are in the cryptoPolicy health "
+                        + "contributor and in seclume-verify --policy");
             }
             if (onStart.equals("fail") && CryptoPolicy.fails(findings)) {
-                throw new IllegalStateException("the crypto policy is not met ("
-                        + findings.stream().filter(f -> f.severity() == CryptoPolicy.Severity.FAIL)
-                                .count() + " failing): "
-                        + findings.get(0).message() + " - see the log for the rest, or set "
-                        + PREFIX + ".on-start=warn");
+                throw new IllegalStateException("the crypto policy is not met: " + perRule.entrySet()
+                        .stream().filter(rule -> rule.getValue()[0] > 0)
+                        .map(rule -> rule.getKey() + " (" + rule.getValue()[0] + ")").toList()
+                        + " - set " + PREFIX + ".on-start=warn to start anyway and see the findings "
+                        + "in the cryptoPolicy health contributor");
             }
         }
     }

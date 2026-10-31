@@ -90,7 +90,8 @@ class CryptoPolicyAutoConfigurationTest {
             ApplicationRunner check = context.getBean("seclumeCryptoPolicyCheck", ApplicationRunner.class);
             IllegalStateException e = assertThrows(IllegalStateException.class,
                     () -> check.run(new DefaultApplicationArguments()));
-            assertTrue(e.getMessage().contains("the crypto policy is not met"), e.getMessage());
+            assertTrue(e.getMessage().contains("the crypto policy is not met: ["), e.getMessage());
+            assertTrue(e.getMessage().contains("tls.forward-secrecy ("), e.getMessage());
         }
         Map<String, Object> warnOnly = lenient();
         warnOnly.put("seclume.crypto-policy.on-start", "fail");
