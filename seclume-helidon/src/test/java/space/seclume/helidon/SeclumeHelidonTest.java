@@ -55,7 +55,7 @@ class SeclumeHelidonTest {
             assertThrows(IllegalArgumentException.class, () -> seclume.dataSource("billing"));
         }
         assertThrows(SQLException.class, orders::getConnection, "closed");
-        assertNull(FieldKeys.installed(), "and the ring uninstalled with its close");
+        assertThrows(IllegalStateException.class, FieldKeys::installed, "and the ring uninstalled with its close");
     }
 
     @Test
