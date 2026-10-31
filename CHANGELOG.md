@@ -11,6 +11,13 @@ All notable changes to seclume are recorded here. Versions follow
   encryption key ring, built, installed and wiped with the application; a password in the
   configuration stops the start. Tested with a stub driver, inside a Helidon MP container and
   against CI's PostgreSQL with a heap dump.
+- **Jakarta Data, and blind indexes for JPA.** `StringBlindIndex` (seclume-jpa) is the index
+  value an entity stores next to a randomized `String` attribute and the search through any
+  repository: `find(value, repository::byNameIndex, Patient::name)` asks for every search term of
+  the ring and keeps the rows whose attribute matches. `BlindIndex.matches` compares two values
+  after the transform, in native memory and without an early exit. `JakartaDataCase` runs
+  Hibernate 7.4's Jakarta Data repositories against the four databases; `FrameworkMatrix` has a
+  row for them.
 - **`PoolConfiguration` refuses every inline secret, and repeats none.** Besides `password=`,
   a URL with `secret=` or `value=` (the keys the drivers refuse at the first login) or a password
   in its user information (`//user:password@host`) is refused when the pool is made, not when

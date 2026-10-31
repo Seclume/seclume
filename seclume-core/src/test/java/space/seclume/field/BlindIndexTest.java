@@ -185,4 +185,141 @@ class BlindIndexTest {
         assertThrows(IllegalArgumentException.class, () -> new Transform("exact", 3, false));
         assertEquals("BlindIndex[n, exact, 16 bits]", index.toString());
     }
+
+    @Test
+    void matchesIsEqualityAfterTheTransform() {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, KEY)) {
+            BlindIndex email = keys.blindIndex("customer.email", 24, Transform.CASE_INSENSITIVE);
+            assertTrue(email.matches(text("Alice@Example.ORG"), text("alice@example.org")));
+            assertTrue(!email.matches(text("alice@example.org"), text("alice@example.com")));
+            assertTrue(!email.matches(text("alice@example.org"), text("alice@example.or")),
+                    "a prefix is not the value");
+
+            BlindIndex card = keys.blindIndex("card.number", 16, Transform.suffix(4));
+            assertTrue(card.matches(text("4111222233331234"), text("1234")));
+            assertTrue(card.matches(text("5500000000001234"), text("4111222233331234")));
+            assertTrue(!card.matches(text("4111222233331235"), text("1234")));
+
+            BlindIndex name = keys.blindIndex("customer.name", 20, Transform.prefix(3).caseInsensitive());
+            assertTrue(name.matches(text("Müller"), text("MÜLLER-Lüdenscheidt")) == false,
+                    "case folding is ASCII's: ü and Ü differ");
+            assertTrue(name.matches(text("Müller"), text("müllerin")));
+            assertTrue(name.matches(text("MÜller"), text("mÜ")) == false, "mÜ is two characters, not three");
+            assertTrue(name.matches(text("MÜ"), text("mÜ")), "shorter than the prefix: the whole value");
+
+            BlindIndex phone = keys.blindIndex("customer.phone", 20, Transform.DIGITS);
+            assertTrue(phone.matches(text("+49 (30) 1234-567"), text("4930 1234567")));
+            assertTrue(!phone.matches(text("+49 30 1234 568"), text("4930 1234567")));
+
+            BlindIndex exact = keys.blindIndex("ssn", 32, Transform.EXACT);
+            assertTrue(exact.matches(text(""), text("")));
+            assertTrue(!exact.matches(text(""), text("x")));
+            assertTrue(!exact.matches(null, text("x")));
+            assertTrue(!exact.matches(text("x"), null));
+            assertTrue(!exact.matches(null, null), "NULL matches nothing");
+        }
+    }
+
+    /**
+     * What a search does: every value that shares the index value is a
+     * candidate, and matches keeps exactly those that are the value searched
+     * for - with few bits, many share it.
+     */
+    @Test
+    void matchesKeepsExactlyTheRightCandidates() {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, KEY)) {
+            BlindIndex index = keys.blindIndex("customer.email", 3, Transform.CASE_INSENSITIVE);
+            String wanted = "Bob@Example.org";
+            long term = index.term(text(wanted));
+            int candidates = 0;
+            int kept = 0;
+            for (int i = 0; i < 400; i++) {
+                String value = i % 50 == 0 ? (i % 100 == 0 ? "bob@example.ORG" : "BOB@EXAMPLE.ORG")
+                        : "user" + i + "@example.org";
+                if (index.term(text(value)) == term) {
+                    candidates++;
+                    if (index.matches(text(value), text(wanted))) {
+                        kept++;
+                        assertTrue(value.equalsIgnoreCase(wanted), value);
+                    }
+                }
+            }
+            assertEquals(8, kept, "every spelling of the address, and nothing else");
+            assertTrue(candidates > 20, "three bits: about one in eight shares the value, " + candidates);
+        }
+    }
+
+    /** The transforms as written here, apart from the class: code points, ASCII folding. */
+    private static String independently(Transform transform, String value) {
+        int[] points = value.codePoints().toArray();
+        int from = 0;
+        int to = points.length;
+        if (transform.kind().equals("prefix")) {
+            to = Math.min(points.length, transform.length());
+        } else if (transform.kind().equals("suffix")) {
+            from = Math.max(0, points.length - transform.length());
+        }
+        StringBuilder out = new StringBuilder();
+        for (int i = from; i < to; i++) {
+            int c = points[i];
+            if (transform.kind().equals("digits") && (c < '0' || c > '9')) {
+                continue;
+            }
+            if (transform.foldCase() && c >= 'A' && c <= 'Z') {
+                c += 'a' - 'A';
+            }
+            out.appendCodePoint(c);
+        }
+        return out.toString();
+    }
+
+    /**
+     * Thousands of random pairs over a small alphabet - so that equal
+     * transforms are common - with ASCII, Latin-1, CJK and astral characters:
+     * matches agrees with the transform written above, every time, and so do
+     * the index values of matching pairs.
+     */
+    @Test
+    void matchesAgreesWithAnIndependentTransformOnRandomPairs() {
+        String[] alphabet = {"a", "A", "b", "B", "1", "2", "-", " ", "ü", "Ü", "李", "😀", "ß"};
+        List<Transform> transforms = List.of(Transform.EXACT, Transform.CASE_INSENSITIVE, Transform.DIGITS,
+                Transform.prefix(1), Transform.prefix(2), Transform.prefix(3).caseInsensitive(),
+                Transform.suffix(1), Transform.suffix(2).caseInsensitive(), Transform.suffix(4));
+        java.util.SplittableRandom random = new java.util.SplittableRandom(20261031L);
+        int agreed = 0;
+        int equal = 0;
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, KEY)) {
+            for (Transform transform : transforms) {
+                BlindIndex index = keys.blindIndex("random." + transform.code(), 64, transform);
+                for (int i = 0; i < 600; i++) {
+                    String a = randomText(random, alphabet);
+                    String b = random.nextInt(4) == 0 ? a : randomText(random, alphabet);
+                    boolean expected = independently(transform, a).equals(independently(transform, b));
+                    assertEquals(expected, index.matches(text(a), text(b)),
+                            transform.code() + ": '" + a + "' and '" + b + "'");
+                    assertEquals(expected, index.matches(text(b), text(a)), "symmetric");
+                    if (expected) {
+                        equal++;
+                        assertEquals(index.term(text(a)), index.term(text(b)),
+                                "values that match have the same index value");
+                    } else {
+                        assertNotEquals(index.term(text(a)), index.term(text(b)),
+                                "64 bits: values that differ do not collide");
+                    }
+                    agreed++;
+                }
+            }
+        }
+        assertEquals(9 * 600, agreed);
+        assertTrue(equal > 1000 && equal < agreed - 1000, "both outcomes are tried often: " + equal);
+    }
+
+    private static String randomText(java.util.SplittableRandom random, String[] alphabet) {
+        StringBuilder text = new StringBuilder();
+        int length = random.nextInt(6);
+        for (int i = 0; i < length; i++) {
+            text.append(alphabet[random.nextInt(alphabet.length)]);
+        }
+        return text.toString();
+    }
 }

@@ -103,8 +103,7 @@ says more than a suffix of 4 digits only if it has more bits; the bits decide.
 
 With JPA, a deterministic attribute is queried as it is (`where p.ssn = :ssn` - the converter
 encrypts the parameter, `aDeterministicAttributeIsQueriedAndUnique`); a blind index is a numeric
-attribute set from the value, and a derived query like `findByNamePrefixIn(List<Long> terms)`
-returns the candidates.
+attribute set from the value - see [Jakarta Data and blind indexes](#jakarta-data-and-blind-indexes).
 
 Tested with known answers from an independent implementation (Python's `hmac` and `hashlib`),
 every transform including multi-byte characters, the bit masks and an even spread of buckets
@@ -327,6 +326,62 @@ em.createQuery("from Patient where ssn = :ssn", Patient.class)
 
 Hibernate generates the schema for these attributes as it does for any `byte[]`: `bytea`,
 `varbinary(n)`, `raw(n)` - with `length` the plaintext's longest plus 66.
+
+## Jakarta Data and blind indexes
+
+A Jakarta Data repository needs nothing of its own: Hibernate's annotation processor implements
+it over a stateless session, and the converters encrypt as they do for any JPA query.
+`StringBlindIndex` (seclume-jpa) is the piece for a randomized attribute that is still searched:
+
+```java
+@Entity
+class Patient {
+    static final StringBlindIndex NAME = StringBlindIndex.of("patient.name", 16,
+            BlindIndex.Transform.prefix(3).caseInsensitive());
+
+    @Convert(converter = NameConverter.class)        // randomized
+    String name;
+
+    @Column(name = "name_index")
+    Long nameIndex;
+
+    void name(String name) {
+        this.name = name;
+        this.nameIndex = NAME.term(name);            // where the value is set
+    }
+
+    @Convert(converter = SsnConverter.class)         // deterministic
+    String ssn;
+}
+
+@Repository
+interface Patients {
+    @Insert void add(Patient patient);
+    @Find Optional<Patient> bySsn(String ssn);       // the parameter is encrypted
+
+    @Query("where nameIndex in :terms order by id")
+    List<Patient> byNameIndex(List<Long> terms);
+}
+
+List<Patient> found = Patient.NAME.find("Mül", patients::byNameIndex, Patient::name);
+```
+
+`find` asks the repository for the rows under every search term - one per key of the ring, so
+rows indexed before a rotation are found - and keeps those whose decrypted attribute
+`matches`: the same after the transform, compared in native memory without an early exit. The
+index value is set where the attribute is, not in `@PrePersist`: a stateless session calls no
+entity callbacks. The same works with Spring Data (`findByNameIndexIn(List<Long>)`) and with
+JPQL.
+
+Tested without a database (`StringBlindIndexTest`: the core's values, the installed ring, a
+search over a two-bit index, a rotation and a retired key), and with Hibernate 7.4's Jakarta Data
+repositories against the four databases (`JakartaDataCase`, 13 tests): what comes back, what the
+server holds - ciphertext and numbers below `2^bits`, never a name - `@Find` and `in` on the
+deterministic SSN and its unique constraint, a search for each of forty names checked against
+an implementation of the transform written in the test, more candidates than matches, prefixes
+in other scripts and the ASCII-only case folding, an update and a removal moving the index,
+NULLs, a rotation with every row rewritten and the old key retired, and three hundred rows at
+once.
 
 ## R2DBC and MongoDB
 

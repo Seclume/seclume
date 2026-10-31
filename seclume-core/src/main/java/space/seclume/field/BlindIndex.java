@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import space.seclume.crypto.ConstantTime;
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Hmac;
 import space.seclume.secret.SecretScope;
@@ -162,6 +163,29 @@ public final class BlindIndex {
             statement.setNull(index, Types.BIGINT);
         } else {
             statement.setLong(index, term(plaintext));
+        }
+    }
+
+    /**
+     * Whether {@code value} is what was searched for, as this index sees it:
+     * the same after the transform - the same last four digits, the same
+     * address whatever its case. A search by index returns every row that
+     * shares the index value; this keeps the ones that match.
+     *
+     * <p>Both are transformed into native memory, compared without an early
+     * exit and wiped. {@code null} matches nothing, not even {@code null}.
+     */
+    public boolean matches(MemorySegment value, MemorySegment wanted) {
+        if (value == null || wanted == null) {
+            return false;
+        }
+        try (Arena arena = Arena.ofConfined();
+             SecretScope a = SecretScope.in(arena, (int) Math.max(1, value.byteSize()));
+             SecretScope b = SecretScope.in(arena, (int) Math.max(1, wanted.byteSize()))) {
+            int aLength = apply(transform, value, a.segment());
+            int bLength = apply(transform, wanted, b.segment());
+            return aLength == bLength
+                    && ConstantTime.equals(a.segment(), 0, b.segment(), 0, aLength);
         }
     }
 
