@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import space.seclume.field.ColumnRotation;
 import space.seclume.field.EncryptedColumn;
 import space.seclume.field.EncryptedColumn.Mode;
 import space.seclume.field.FieldKeys;
@@ -334,29 +335,86 @@ public abstract class EncryptedColumnContract {
     }
 
     /**
+     * The same move with {@link ColumnRotation}: in batches of five, stopped
+     * after the first and continued from its last id, while the application
+     * writes a row under the new key; a census before and after, and a second
+     * run that finds nothing to do.
+     */
+    @Test
+    void theRotationJobMovesTheTableInBatchesAndResumes() throws Exception {
+        try (Connection connection = connect()) {
+            try (FieldKeys before = ring1()) {
+                for (int id = 1; id <= 23; id++) {
+                    insert(connection, before.column("zl.secret", Mode.RANDOMIZED),
+                            before.column("zl.ssn", Mode.DETERMINISTIC), id,
+                            id % 4 == 0 ? null : "secret " + id, "ssn " + id);
+                }
+            }
+            try (FieldKeys during = ring12()) {
+                ColumnRotation first = rotation(during, null);
+                assertEquals(18 + 23, first.census(connection).remaining());
+                ColumnRotation.Progress one = first.step(connection, null);
+                assertEquals(5, one.rows());
+                assertEquals(4 + 5, one.rotated());
+                // The application, meanwhile: a new row, under key 2 already.
+                insert(connection, during.column("zl.secret", Mode.RANDOMIZED),
+                        during.column("zl.ssn", Mode.DETERMINISTIC), 100, "secret 100", "ssn 100");
+                ColumnRotation.Progress rest = rotation(during, one.lastId()).run(connection);
+                assertTrue(rest.done());
+                assertEquals(19, rest.rows());
+                assertEquals(14 + 18, rest.rotated());
+                assertEquals(2, rest.current(), "row 100, written under key 2");
+                assertEquals(0, rest.conflicts());
+                assertEquals(0, rotation(during, null).census(connection).remaining());
+                ColumnRotation.Progress again = rotation(during, null).run(connection);
+                assertEquals(0, again.rotated());
+            }
+            try (FieldKeys after = ring2()) {
+                EncryptedColumn secret = after.column("zl.secret", Mode.RANDOMIZED);
+                EncryptedColumn ssn = after.column("zl.ssn", Mode.DETERMINISTIC);
+                for (int id = 1; id <= 23; id++) {
+                    assertEquals(id % 4 == 0 ? null : "secret " + id, readSecret(connection, secret, id));
+                    assertEquals(List.of(id), find(connection, ssn, "ssn " + id));
+                }
+            }
+        }
+    }
+
+    private static ColumnRotation rotation(FieldKeys keys, Object after) {
+        return ColumnRotation.builder(keys).table(TABLE).id("id")
+                .column("secret", "zl.secret", Mode.RANDOMIZED, ColumnRotation.Context.ROW_ID)
+                .column("ssn", "zl.ssn", Mode.DETERMINISTIC, ColumnRotation.Context.NONE)
+                .batchSize(5).after(after).build();
+    }
+
+    /** The subject keys of the crypto-shredding test. */
+    private static final String SUBJECT_KEYS = "zl_subject_keys";
+
+    /**
      * Crypto-shredding against this database: subject keys in a table of their
      * own, two subjects' values in the same table, one subject shredded - their
      * values stay in the table and open nothing, the other's read as before; a
-     * second writer of the same subject's key loses to the primary key.
+     * second key for the same subject loses to the table's primary key.
      */
     @Test
     void aShreddedSubjectsValuesStayAndOpenNothing() throws Exception {
-        String keys = "zl_subject_keys";
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            drop(statement, keys);
-            statement.execute("create table " + keys + " (subject varchar(200) primary key, wrapped "
+            dropTable(statement, SUBJECT_KEYS);
+            statement.execute("create table " + SUBJECT_KEYS + " (subject varchar(200) primary key, wrapped "
                     + binary(128) + ")");
         }
         try (FieldKeys master = ring1();
-             SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.jdbc(dataSource(), keys));
+             SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.jdbc(dataSource(), SUBJECT_KEYS));
              Connection connection = connect()) {
             for (int id = 1; id <= 4; id++) {
                 String subject = id % 2 == 0 ? "customer-even" : "customer-odd";
                 try (PreparedStatement insert = connection.prepareStatement(
-                        "insert into " + TABLE + " (id, secret) values (?, ?)")) {
+                        "insert into " + TABLE + " (id, secret, ssn) values (?, ?, ?)")) {
                     insert.setInt(1, id);
                     subjects.column(subject, "zl.secret", Mode.RANDOMIZED).set(insert, 2,
                             bytes("secret of " + subject + " " + id), context(id));
+                    // A value of its own in the unique column: SQL Server allows one NULL there.
+                    insert.setBytes(3, new byte[] {(byte) id});
                     assertEquals(1, insert.executeUpdate());
                 }
             }
@@ -371,16 +429,16 @@ public abstract class EncryptedColumnContract {
             assertThrows(space.seclume.field.FieldEncryptionException.class,
                     () -> readSecret(connection, newOdd, 1));
             // A second key for a subject that has one: the table's primary key refuses it.
-            SubjectKeyStore store = SubjectKeyStore.jdbc(dataSource(), keys);
-            assertFalse(store.insert("customer-even", new byte[] {1, 2, 3}));
+            assertFalse(SubjectKeyStore.jdbc(dataSource(), SUBJECT_KEYS).insert("customer-even",
+                    new byte[] {1, 2, 3}));
         } finally {
             try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-                drop(statement, keys);
+                dropTable(statement, SUBJECT_KEYS);
             }
         }
     }
 
-    private static void drop(Statement statement, String table) {
+    private static void dropTable(Statement statement, String table) {
         try {
             statement.execute("drop table " + table);
         } catch (SQLException itWasNotThere) {

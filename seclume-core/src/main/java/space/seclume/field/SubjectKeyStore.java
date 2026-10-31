@@ -76,7 +76,7 @@ public interface SubjectKeyStore {
             @Override
             public byte[] load(String subject) {
                 try (Connection connection = dataSource.getConnection();
-                     PreparedStatement select = connection.prepareStatement(
+                     PreparedStatement select = connection.prepareStatement( // nosemgrep - the table name is checked above to be a plain identifier
                              "select wrapped from " + table + " where subject = ?")) {
                     select.setString(1, subject);
                     try (ResultSet rows = select.executeQuery()) {
@@ -91,15 +91,17 @@ public interface SubjectKeyStore {
             @Override
             public boolean insert(String subject, byte[] wrapped) {
                 try (Connection connection = dataSource.getConnection();
-                     PreparedStatement insert = connection.prepareStatement(
+                     PreparedStatement insert = connection.prepareStatement( // nosemgrep - the table name is checked above to be a plain identifier
                              "insert into " + table + " (subject, wrapped) values (?, ?)")) {
                     insert.setString(1, subject);
                     insert.setBytes(2, wrapped);
                     return insert.executeUpdate() == 1;
                 } catch (SQLException e) {
+                    // Someone else was first, and the primary key said so - by SQLSTATE 23xxx,
+                    // or, from a driver that does not set it, by the key now being there.
                     String state = e.getSQLState();
-                    if (state != null && state.startsWith("23")) {
-                        return false; // someone else was first: the primary key says so
+                    if (state != null && state.startsWith("23") || load(subject) != null) {
+                        return false;
                     }
                     throw new FieldEncryptionException("the subject key table " + table
                             + " cannot be written: " + e.getMessage(), e);
@@ -109,7 +111,7 @@ public interface SubjectKeyStore {
             @Override
             public boolean delete(String subject) {
                 try (Connection connection = dataSource.getConnection();
-                     PreparedStatement delete = connection.prepareStatement(
+                     PreparedStatement delete = connection.prepareStatement( // nosemgrep - the table name is checked above to be a plain identifier
                              "delete from " + table + " where subject = ?")) {
                     delete.setString(1, subject);
                     return delete.executeUpdate() > 0;

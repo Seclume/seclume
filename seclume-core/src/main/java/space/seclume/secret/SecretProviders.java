@@ -99,7 +99,7 @@ public final class SecretProviders {
                     "no secret provider configured - set 'provider' to one of "
                     + "file, env-file, unix-socket, process, dpapi, credential-manager, "
                     + "libsecret, keychain, "
-                    + "rds-iam, encrypted, vault, vault-transit, kms-decrypt, "
+                    + "rds-iam, encrypted, vault, vault-transit, kms-decrypt, shamir, "
                     + "aws-secrets-manager, azure-key-vault, gcp-secret-manager, "
                     + "azure-managed-identity, "
                     + "gcp-metadata, or none for a "
@@ -176,6 +176,9 @@ public final class SecretProviders {
             // The same for the clouds' key management services: AWS KMS, Cloud KMS,
             // Key Vault's unwrapKey - kms= names the service as for signing keys.
             case "kms-decrypt", "kmsdecrypt" -> KmsDecryptSecretProvider.of(settings, maxLength);
+            // k of n shares, each from a provider of its own: share.1.*, share.2.*, ...
+            case "shamir" -> new ShamirSecretProvider(shamirShares(settings),
+                    intValue(settings, "threshold", 0));
             // The three cloud vaults. All of them build on the same two
             // pieces - SecretFetch for the HTTPS, JsonOff for the answer - so
             // that no SDK ever hands out a String. "token-" says where the
@@ -388,6 +391,30 @@ public final class SecretProviders {
             sized.put("max-length", "16384");
         }
         return sized;
+    }
+
+    /** The shares of provider=shamir, share.1.* to share.255.*, gaps allowed. */
+    private static List<SecretProvider> shamirShares(Map<String, String> settings) {
+        List<SecretProvider> shares = new java.util.ArrayList<>();
+        for (int i = 1; i <= space.seclume.crypto.Shamir.MAX_SHARES; i++) {
+            Map<String, String> share = nested(settings, "share." + i + ".");
+            if (!share.isEmpty()) {
+                shares.add(of(share));
+            }
+        }
+        return shares;
+    }
+
+    private static int intValue(Map<String, String> settings, String key, int fallback) {
+        String text = value(settings, key);
+        if (text == null || text.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(text.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("'" + key + "' is a number, not '" + text + "'", e);
+        }
     }
 
     /**
