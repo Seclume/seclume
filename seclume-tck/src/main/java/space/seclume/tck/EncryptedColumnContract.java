@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import space.seclume.field.BlindIndex;
 import space.seclume.field.EncryptedColumn;
 import space.seclume.field.EncryptedColumn.Mode;
 import space.seclume.field.FieldKeys;
@@ -329,6 +330,97 @@ public abstract class EncryptedColumnContract {
                 }
             }
         }
+    }
+
+    private static void drop(Statement statement, String table) {
+        try {
+            statement.execute("drop table " + table);
+        } catch (SQLException itWasNotThere) {
+            // the first run, or the last one tidied up
+        }
+    }
+
+    /**
+     * Blind indexes against this database: a randomized column with a 1-bit
+     * index of its first three letters next to it, so that every index value
+     * is shared by about half the rows; a search returns those candidates, the
+     * application keeps the ones that match - exactly the right ones. During a
+     * rotation the old rows are found through the old key's index value.
+     */
+    @Test
+    void aBlindIndexFindsCandidatesAndTheRightOnesAmongThem() throws Exception {
+        String table = "zl_blind";
+        String[] names = {"Müller", "Mueller", "Meier", "Mayer", "Schmidt", "Schneider", "Fischer",
+            "Weber", "Wagner", "Becker", "Schulz", "Hoffmann", "Müllheim", "Mülhaupt", "Koch", "Bauer",
+            "Richter", "Klein", "Wolf", "Schröder", "Neumann", "Schwarz", "Zimmermann", "Braun"};
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            drop(statement, table);
+            statement.execute("create table " + table + " (id int primary key, name " + binary(300)
+                    + ", name_prefix numeric(20))");
+        }
+        try (Connection connection = connect()) {
+            try (FieldKeys one = ring1()) {
+                EncryptedColumn name = one.column("zl.name", Mode.RANDOMIZED);
+                BlindIndex prefix = one.blindIndex("zl.name", 1, BlindIndex.Transform.prefix(3).caseInsensitive());
+                for (int i = 0; i < names.length; i++) {
+                    try (PreparedStatement insert = connection.prepareStatement(
+                            "insert into " + table + " (id, name, name_prefix) values (?, ?, ?)")) {
+                        insert.setInt(1, i + 1);
+                        name.set(insert, 2, bytes(names[i]));
+                        prefix.set(insert, 3, bytes(names[i]));
+                        assertEquals(1, insert.executeUpdate());
+                    }
+                }
+                List<String> candidates = new ArrayList<>();
+                List<String> found = blindSearch(connection, table, name, prefix, "mül", candidates);
+                assertEquals(List.of("Müller", "Müllheim", "Mülhaupt"), found);
+                assertTrue(candidates.size() > found.size(), "1 bit: other names share the index value "
+                        + candidates);
+            }
+            try (FieldKeys both = ring12()) {
+                EncryptedColumn name = both.column("zl.name", Mode.RANDOMIZED);
+                BlindIndex prefix = both.blindIndex("zl.name", 1, BlindIndex.Transform.prefix(3).caseInsensitive());
+                assertEquals(List.of("Schmidt", "Schneider", "Schulz", "Schröder", "Schwarz"),
+                        blindSearch(connection, table, name, prefix, "SCH", new ArrayList<>()),
+                        "rows indexed under key 1, searched with the ring of keys 1 and 2");
+            }
+        } finally {
+            try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+                drop(statement, table);
+            }
+        }
+    }
+
+    /** {@code where name_prefix in (...)}, then the decrypted candidates that really start so. */
+    private static List<String> blindSearch(Connection connection, String table, EncryptedColumn name,
+            BlindIndex prefix, String query, List<String> candidates) throws SQLException {
+        List<Long> terms = prefix.searchTerms(bytes(query));
+        StringBuilder sql = new StringBuilder("select id, name from " + table + " where name_prefix in (");
+        for (int i = 0; i < terms.size(); i++) {
+            sql.append(i == 0 ? "?" : ", ?");
+        }
+        List<String> found = new ArrayList<>();
+        try (PreparedStatement select = connection.prepareStatement(sql + ") order by id")) {
+            for (int i = 0; i < terms.size(); i++) {
+                select.setLong(i + 1, terms.get(i));
+            }
+            try (ResultSet rows = select.executeQuery()) {
+                while (rows.next()) {
+                    try (SecretScope out = SecretScope.allocate(512)) {
+                        out.length(name.readInto(rows, 2, out.segment()));
+                        // seclume-allow: test code: the control's String, the test's own key file, or ciphertext
+                        String value = new String(out.secret().toArray(ValueLayout.JAVA_BYTE),
+                                StandardCharsets.UTF_8);
+                        candidates.add(value);
+                        if (value.toLowerCase(java.util.Locale.ROOT).startsWith(
+                                query.toLowerCase(java.util.Locale.ROOT))) {
+                            found.add(value);
+                        }
+                    }
+                }
+            }
+        }
+        return found;
     }
 
     @Test

@@ -127,6 +127,12 @@ All notable changes to seclume are recorded here. Versions follow
   version is pinned. Each signature is a `space.seclume.RemoteSignature` event. Tested against
   `FakeKms` (seclume-tck) and, in CI, by a PostgreSQL login with a transit key certified by
   Vault's and OpenBao's PKI.
+- **Blind indexes: searching encrypted columns with less said** (`FieldKeys.blindIndex`).
+  HMAC-SHA-256 of the value - or its digits, its first or last characters, case folded - under a
+  key of its own, cut to a chosen number of bits, stored in a numeric column: a search returns
+  candidates that share the index value, the application keeps the matches. `bitsFor` sizes it
+  for a table, `searchTerms` covers a rotation. Known answers from an independent implementation;
+  run against the four databases.
 - **A Kubernetes admission webhook** (`seclume-admission`). Pods annotated
   `seclume.space/redact-dumps: "true"` get an `emptyDir` for heap dumps, the JVM options that write
   there (as `JAVA_TOOL_OPTIONS`, or `JDK_JAVA_OPTIONS` when the pod sets the first), and a sidecar
