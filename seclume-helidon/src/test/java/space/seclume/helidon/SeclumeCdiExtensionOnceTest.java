@@ -118,6 +118,16 @@ class SeclumeCdiExtensionOnceTest {
             assertEquals(java.util.Set.of(), second.dataSourceNames());
             assertSame(FieldKeys.installed(), creator(discovery, 2).apply(null),
                     "the ring bean is the installed ring");
+            // CDI gives a bean with only @Named and @Any the @Default qualifier too:
+            // every pool carries @SeclumeDataSource, and only "default" is @Default.
+            for (Object[] bean : discovery.beans.subList(0, 2)) {
+                List<String> qualifiers = java.util.Arrays.stream((java.lang.annotation.Annotation[]) bean[1])
+                        .map(q -> q.annotationType().getSimpleName()).toList();
+                assertTrue(qualifiers.contains("SeclumeDataSource"), qualifiers.toString());
+                boolean isDefault = java.util.Arrays.stream((java.lang.annotation.Annotation[]) bean[1])
+                        .anyMatch(q -> q instanceof SeclumeDataSource named && named.value().equals("default"));
+                assertEquals(isDefault, qualifiers.contains("Default"), qualifiers.toString());
+            }
         } finally {
             first.beforeShutdown(null);
             second.beforeShutdown(null);

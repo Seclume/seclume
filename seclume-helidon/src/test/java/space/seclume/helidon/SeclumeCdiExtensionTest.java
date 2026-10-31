@@ -180,6 +180,10 @@ class SeclumeCdiExtensionTest {
         assertEquals(Set.of("default", "orders"), every.stream()
                 .map(source -> ((SeclumePool) source).settings().getName()).collect(Collectors.toSet()));
         assertTrue(container.select(DataSource.class, NamedLiteral.of("billing")).isUnsatisfied());
+        assertSame(container.select(DataSource.class, NamedLiteral.of("orders")).get(),
+                container.select(DataSource.class, SeclumeDataSource.Literal.of("orders")).get(),
+                "@SeclumeDataSource(\"orders\") and @Named(\"orders\") are one bean");
+        assertTrue(container.select(DataSource.class, SeclumeDataSource.Literal.of("billing")).isUnsatisfied());
     }
 
     @Test

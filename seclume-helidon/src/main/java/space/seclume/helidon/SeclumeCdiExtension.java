@@ -72,11 +72,15 @@ public class SeclumeCdiExtension implements Extension {
         }
         for (Map.Entry<String, SeclumePool> pool : pools.entrySet()) {
             SeclumePool instance = pool.getValue();
-            // The qualifiers replaced, not added to: a bean with only @Named would get
-            // @Default as well, and two pools would make DataSource ambiguous.
+            // @SeclumeDataSource on every pool: a bean whose only qualifiers are
+            // @Named and @Any gets @Default as well, by CDI's rule, and two named
+            // pools would make @Inject DataSource ambiguous. Only "default" is
+            // @Default.
+            Annotation named = NamedLiteral.of(pool.getKey());
+            Annotation qualifier = SeclumeDataSource.Literal.of(pool.getKey());
             Annotation[] qualifiers = pool.getKey().equals("default")
-                    ? new Annotation[] {NamedLiteral.of(pool.getKey()), Any.Literal.INSTANCE, Default.Literal.INSTANCE}
-                    : new Annotation[] {NamedLiteral.of(pool.getKey()), Any.Literal.INSTANCE};
+                    ? new Annotation[] {named, qualifier, Any.Literal.INSTANCE, Default.Literal.INSTANCE}
+                    : new Annotation[] {named, qualifier, Any.Literal.INSTANCE};
             discovery.addBean()
                     .types(Object.class, DataSource.class, SeclumePool.class)
                     .scope(Singleton.class)
