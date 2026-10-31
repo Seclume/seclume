@@ -5,13 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **Key rotation for encrypted columns, as a job.** `ColumnRotation` moves a table's encrypted
-  columns onto the ring's primary key in batches, one transaction each, resumable from the last
-  id, writing a value back only if it is still the one it read - a row the application changed
-  meanwhile stays as written and is counted as a conflict. `census()` says how many values are
-  under each key; a listener gets the progress after every batch. Run against all four
-  databases in `EncryptedColumnContract`.
-
 - **Field encryption: a key commitment in every value, and R2DBC and MongoDB.** The format
   (unreleased until now, so changed in place) carries HMAC-SHA-256 of header and nonce under a
   second key derived with the column key, checked first: a value opens under the key it was made
@@ -37,6 +30,12 @@ All notable changes to seclume are recorded here. Versions follow
   `column.seal(...)` from native memory, `column.open(sealed, target)` into it, and
   `SealedConverter` maps it (`@Convert`, or `autoApply` when listed with the entities). Converters take
   the ring `FieldKeys.install` made available, at their first value.
+- **Key rotation for encrypted columns, as a job.** `ColumnRotation` moves a table's encrypted
+  columns onto the ring's primary key in batches, one transaction each, resumable from the last
+  id, writing a value back only if it is still the one it read - a row the application changed
+  meanwhile stays as written and is counted as a conflict. `census()` says how many values are
+  under each key; a listener gets the progress after every batch. Run against all four
+  databases in `EncryptedColumnContract`.
 - **The key ring from `application.properties`**: `seclume.field-encryption.keys.<n>.*` - a
   provider's settings under each key's number, or one `uri` - and
   `seclume.field-encryption.primary`. The starter builds the ring, installs it and wipes it
