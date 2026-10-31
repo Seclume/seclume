@@ -18,6 +18,8 @@
        "property": "no exception message carries a secret"},
       {"test": "space.seclume.secret.SecretScopeTest", "module": "seclume-core",
        "property": "a secret scope is zero after close, read back from its memory"},
+      {"test": "space.seclume.audit.AccessLogTest", "module": "seclume-core",
+       "property": "the access log holds no secret, and a changed, removed, swapped or re-hashed entry is found"},
       {"test": "space.seclume.secret.AsyncSecretScopeTest", "module": "seclume-core",
        "property": "a scope wiped from another thread is wiped completely"},
       {"test": "space.seclume.secret.SecretLifecycleRegressionTest", "module": "seclume-core",

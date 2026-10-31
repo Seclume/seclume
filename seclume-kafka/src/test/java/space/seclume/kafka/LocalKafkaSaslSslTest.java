@@ -1,6 +1,7 @@
 package space.seclume.kafka;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -192,6 +193,62 @@ class LocalKafkaSaslSslTest {
             admin.listTopics().names().get();
         }
         assertThrows(AssertionError.class, () -> NoSecretInHeap.assertAbsent(password));
+    }
+
+    /**
+     * Field encryption on the wire to a real broker: what the broker stores and
+     * a consumer without the ring reads is ciphertext; with the ring, the value.
+     */
+    @Test
+    void encryptedRecordsReachTheBrokerAsCiphertext() throws Exception {
+        assumeTrue(!Boolean.getBoolean("seclume.kafka.control"), "the control runs instead");
+        String topic = "seclume-encrypted-" + UUID.randomUUID();
+        String value = "card 4111-1111-1111-1111 of customer 7";
+        space.seclume.secret.SecretProvider key = new space.seclume.secret.SecretProvider() {
+            @Override
+            public int writeSecret(java.lang.foreign.MemorySegment target) {
+                for (int i = 0; i < 32; i++) {
+                    target.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, (byte) (i * 13 + 5));
+                }
+                return 32;
+            }
+
+            @Override
+            public int maxSecretLength() {
+                return 32;
+            }
+        };
+        try (Admin admin = Admin.create(plain(password));
+             space.seclume.field.FieldKeys keys = space.seclume.field.FieldKeys.builder().key(1, key).build()) {
+            admin.createTopics(List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+            try (KafkaProducer<String, String> producer = new KafkaProducer<>(plain(password),
+                    new StringSerializer(), new EncryptingSerializer<>(new StringSerializer(), keys,
+                            space.seclume.field.EncryptedColumn.Mode.RANDOMIZED))) {
+                producer.send(new ProducerRecord<>(topic, "order", value)).get();
+            }
+            byte[] raw = consumeOne(topic, new org.apache.kafka.common.serialization.ByteArrayDeserializer());
+            assertFalse(new String(raw, java.nio.charset.StandardCharsets.ISO_8859_1).contains("4111"),
+                    "the broker holds the card number in the clear");
+            assertEquals(value, consumeOne(topic, new DecryptingDeserializer<>(new StringDeserializer(), keys)));
+            admin.deleteTopics(List.of(topic)).all().get();
+        }
+    }
+
+    private static <T> T consumeOne(String topic, org.apache.kafka.common.serialization.Deserializer<T> values) {
+        Properties consuming = new Properties();
+        consuming.putAll(plain(password));
+        consuming.put("group.id", "seclume-" + UUID.randomUUID());
+        consuming.put("auto.offset.reset", "earliest");
+        try (KafkaConsumer<String, T> consumer = new KafkaConsumer<>(consuming, new StringDeserializer(), values)) {
+            consumer.subscribe(List.of(topic));
+            for (int i = 0; i < 30; i++) {
+                for (org.apache.kafka.clients.consumer.ConsumerRecord<String, T> record
+                        : consumer.poll(Duration.ofSeconds(1))) {
+                    return record.value();
+                }
+            }
+        }
+        throw new AssertionError("nothing to read on " + topic);
     }
 
     private static void roundTrip(Properties client, String topic, String value) throws Exception {

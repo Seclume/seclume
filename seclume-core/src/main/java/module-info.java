@@ -30,6 +30,7 @@ module seclume.core {
     exports space.seclume.field;
     // What cryptography the process uses, as a CycloneDX CBOM.
     exports space.seclume.inventory;
+    exports space.seclume.audit;
 
     // Internal building blocks the driver modules need (randomness, encoding,
     // off-heap I/O). Not a stable contract for applications.

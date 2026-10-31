@@ -134,6 +134,43 @@ class LocalLettuceTest {
         NoSecretInHeap.assertAbsent(password);
     }
 
+    /** Values through the encrypting codec: the server holds ciphertext, the codec reads the value. */
+    @Test
+    void anEncryptedCodecStoresCiphertextInRedis() throws Exception {
+        assumeTrue(!Boolean.getBoolean("seclume.redis.control"), "the control runs instead");
+        String key = "seclume-encrypted-" + UUID.randomUUID();
+        space.seclume.secret.SecretProvider ringKey = new space.seclume.secret.SecretProvider() {
+            @Override
+            public int writeSecret(java.lang.foreign.MemorySegment target) {
+                for (int i = 0; i < 32; i++) {
+                    target.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, (byte) (i * 11 + 3));
+                }
+                return 32;
+            }
+
+            @Override
+            public int maxSecretLength() {
+                return 32;
+            }
+        };
+        RedisClient client = SeclumeLettuce.client(url("redis", plain, password, ""));
+        try (space.seclume.field.FieldKeys keys = space.seclume.field.FieldKeys.builder().key(1, ringKey).build();
+             StatefulRedisConnection<String, String> encrypted = client.connect(
+                     EncryptedCodec.of(io.lettuce.core.codec.StringCodec.UTF8, keys, "sessions"));
+             StatefulRedisConnection<String, byte[]> raw = client.connect(io.lettuce.core.codec.RedisCodec.of(
+                     io.lettuce.core.codec.StringCodec.UTF8, io.lettuce.core.codec.ByteArrayCodec.INSTANCE))) {
+            assertEquals("OK", encrypted.sync().set(key, "token=zl-lettuce-canary"));
+            byte[] stored = raw.sync().get(key);
+            assertTrue(stored != null && stored.length > 0);
+            assertTrue(!new String(stored, java.nio.charset.StandardCharsets.ISO_8859_1).contains("zl-lettuce-canary"),
+                    "Redis holds the value in the clear");
+            assertEquals("token=zl-lettuce-canary", encrypted.sync().get(key));
+            encrypted.sync().del(key);
+        } finally {
+            client.shutdown();
+        }
+    }
+
     /** The password written into Lettuce's AUTH on a real connection: one SecretUse event. */
     @Test
     void thePasswordWrittenInIsRecorded() throws Exception {

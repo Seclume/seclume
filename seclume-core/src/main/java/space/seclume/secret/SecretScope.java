@@ -156,6 +156,7 @@ public final class SecretScope implements AutoCloseable {
             scope = read(provider);
         } catch (Throwable failure) {
             endRecording(event, provider, false, failure);
+            space.seclume.audit.AccessLog.secretRead(provider, failure);
             throw failure;
         }
         try {
@@ -171,6 +172,8 @@ public final class SecretScope implements AutoCloseable {
         // swallows its own exceptions; an Error closes the scope, as above.
         try {
             space.seclume.inventory.CryptoInventory.secretRead(provider);
+            // And the access log, when one is installed: who read it, when.
+            space.seclume.audit.AccessLog.secretRead(provider, null);
         } catch (Error error) {
             closeQuietly(scope, error);
             throw error;
