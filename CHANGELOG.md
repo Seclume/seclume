@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Helidon** (`seclume-helidon`, new). `SeclumeHelidon` for SE (from `Config`) and
+  `SeclumeCdiExtension` for MP (from MicroProfile Config): a `SeclumePool` per
+  `seclume.datasources.<name>` - named beans in MP, `default` the default one - and the field
+  encryption key ring, built, installed and wiped with the application; a password in the
+  configuration stops the start. Tested with a stub driver, inside a Helidon MP container and
+  against CI's PostgreSQL with a heap dump.
 - **Micronaut** (`seclume-micronaut`, new). Named `SeclumePool` data sources from
   `seclume.datasources.<name>.*` and the field encryption key ring from
   `seclume.field-encryption.*`, from `application.yml` alone; a password in the configuration -
