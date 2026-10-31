@@ -194,7 +194,7 @@ class SeclumeMicronautTest {
                     .encrypt(java.lang.foreign.MemorySegment.ofArray("123".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             assertEquals(1, keys.column("patient.ssn", Mode.DETERMINISTIC).keyId(stored));
         }
-        assertNull(FieldKeys.installed(), "uninstalled when the context closed");
+        assertThrows(IllegalStateException.class, FieldKeys::installed, "uninstalled when the context closed");
         assertThrows(IllegalStateException.class, () -> keys.column("x", Mode.RANDOMIZED), "and wiped");
     }
 
