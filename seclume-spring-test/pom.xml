@@ -19,6 +19,11 @@
 
   <properties>
     <spring.boot.version>4.1.2</spring.boot.version>
+    <!-- The Hibernate that Spring Boot ${spring.boot.version} brings; its
+         annotation processor writes the Jakarta Data repositories of the
+         tests and has to be the same release. -->
+    <hibernate.version>7.4.13.Final</hibernate.version>
+    <jakarta.data.version>1.0.1</jakarta.data.version>
     <!-- Spring Boot 4 brings its own JUnit version and it has to win
          here: the parent project's is older, and the difference shows as a
          NoSuchMethodError in the middle of a test run. -->
@@ -60,6 +65,14 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-data-jpa</artifactId>
       <version>${spring.boot.version}</version>
+    </dependency>
+    <!-- Jakarta Data: the repositories in the tests are implemented by
+         Hibernate's processor (below) over a stateless session. -->
+    <dependency>
+      <groupId>jakarta.data</groupId>
+      <artifactId>jakarta.data-api</artifactId>
+      <version>${jakarta.data.version}</version>
+      <scope>test</scope>
     </dependency>
     <!-- Spring Boot 4 moved the Flyway auto-configuration into a module
          of its own; flyway-core on the class path is no longer enough. -->
@@ -172,6 +185,21 @@
             <arg>-Xlint:none</arg>
           </compilerArgs>
         </configuration>
+        <executions>
+          <!-- Only the tests have Jakarta Data repositories to generate. -->
+          <execution>
+            <id>default-testCompile</id>
+            <configuration>
+              <annotationProcessorPaths>
+                <path>
+                  <groupId>org.hibernate.orm</groupId>
+                  <artifactId>hibernate-processor</artifactId>
+                  <version>${hibernate.version}</version>
+                </path>
+              </annotationProcessorPaths>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>
