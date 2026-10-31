@@ -16,6 +16,13 @@ All notable changes to seclume are recorded here. Versions follow
   encryption key ring, built, installed and wiped with the application; a password in the
   configuration stops the start. Tested with a stub driver, inside a Helidon MP container and
   against CI's PostgreSQL with a heap dump.
+- **Log lines masked with Log4j 2 and java.util.logging too.** Besides Logback's converters,
+  `seclume-logging` has `%redact{...}` for Log4j 2 - what the inner pattern writes, message and
+  stack trace, masked, the stack trace written once - and `RedactingFormatter` for
+  java.util.logging and `System.Logger`, around any formatter or named in `logging.properties`.
+  Both use the installed `SecretMasker`, so `seclume.logging.redact=true` in the Spring Boot
+  starter covers them as it does Logback. Tested with a real Log4j 2 configured from XML and with
+  JUL handlers, the XML formatter, the logging configuration and `System.Logger`.
 - **Jakarta Data, and blind indexes for JPA.** `StringBlindIndex` (seclume-jpa) is the index
   value an entity stores next to a randomized `String` attribute and the search through any
   repository: `find(value, repository::byNameIndex, Patient::name)` asks for every search term of
