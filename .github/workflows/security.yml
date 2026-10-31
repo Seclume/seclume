@@ -63,10 +63,22 @@ jobs:
           java-version: '25'
           cache: maven
       - name: SBOM of everything the build uses
-        run: >
-          ./mvnw -B -DskipTests install &&
-          ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
-          -DincludeTestScope=true -DoutputFormat=json
+        run: |
+          set -o pipefail
+          ./mvnw -B -DskipTests install 2>&1 | tee build.log
+          ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
+            -DincludeTestScope=true -DoutputFormat=json
+      # A build that fails here says why on the check: the compiler's warnings
+      # (-Werror makes them errors without a location) and Maven's errors.
+      - if: failure()
+        run: |
+          [ -f build.log ] || exit 0
+          # What the compiler said before it stopped, and Maven's errors - not
+          # the shade plugin's overlapping-resource warnings.
+          text=$( (grep -B12 "COMPILATION ERROR" build.log | grep -v "overlapping\|^\[WARNING\]   - "; grep -E "^\[ERROR\]" build.log) \
+            | grep -v "Re-run Maven\|full stack trace\|\[Help \|^\[ERROR\] *$\|To see the full\|For more information" \
+            | head -30 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3800)
+          echo "::error title=build::$text"
       # Each finding also becomes an annotation on the check - package, version,
       # advisory and the version that fixes it - so a red run says what to bump
       # without anyone having to open the log.

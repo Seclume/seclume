@@ -786,6 +786,33 @@ setting, a wrong one, the key ring built, installed and wiped, an unreadable key
 refusals (`SeclumeMicronautTest`) - and against CI's PostgreSQL: the application logs in, and a
 heap dump afterwards holds no byte of the password (`LocalMicronautPostgresTest`).
 
+## Helidon
+
+`seclume-helidon` reads the same keys as `seclume-micronaut`, for Helidon SE and MP:
+
+```properties
+seclume.datasources.default.url=jdbc:seclume:postgresql://db/app?user=app&provider=file&path=/run/secrets/db
+seclume.datasources.default.pool.maximum-pool-size=10
+seclume.datasources.orders.url=jdbc:seclume:oracle://ora:1521/ORDERS?user=orders&provider=vault&...
+seclume.field-encryption.keys.1.uri=vault-transit?address=https://vault:8200&key-name=field-data&...
+```
+
+- **Helidon SE:** `SeclumeHelidon.create(Config.create())` makes a `SeclumePool` per data
+  source and builds and installs the key ring; `close()` closes the pools and wipes the ring.
+- **Helidon MP:** `SeclumeCdiExtension` - registered as a CDI extension, so on the class path is
+  enough - makes each data source a `DataSource` bean `@Named("<name>")` and
+  `@SeclumeDataSource("<name>")`, only `default` also `@Default` (CDI would give a bean with
+  nothing but `@Named` the default qualifier as well), and the ring a `FieldKeys` bean, built and installed when the container starts and
+  wiped when it stops. MicroProfile Config is read, so `application.yaml`,
+  `microprofile-config.properties` and the environment all work.
+
+A password stops the start on both: `seclume.datasources.<name>.password`, Helidon's own
+`javax.sql.DataSource.<name>.dataSource.password` beside a seclume URL, or `password=` in the
+URL - a deployment error in MP. Tested with a stub driver on both, the CDI extension inside a real
+Helidon MP container (`SeclumeSettingsTest`, `SeclumeHelidonTest`, `SeclumeCdiExtensionTest`,
+`SeclumeCdiExtensionOnceTest`),
+and against CI's PostgreSQL with a heap dump afterwards (`LocalHelidonPostgresTest`).
+
 ## Kafka
 
 `seclume-kafka` is SASL/SCRAM for the Kafka client with the password off the heap. The JAAS

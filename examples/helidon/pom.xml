@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Helidon MP: an injected DataSource whose database password comes from
+     Vault and never lands on the Java heap, from microprofile-config.properties
+     alone. Not part of seclume's own build: it uses seclume as an application
+     does - with -Dseclume.version=<snapshot> from a local build. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>example</groupId>
+  <artifactId>seclume-helidon-example</artifactId>
+  <version>1.0</version>
+
+  <properties>
+    <maven.compiler.release>25</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- seclume-helidon is new in 0.14.0. -->
+    <seclume.version>0.14.0</seclume.version>
+    <helidon.version>4.5.5</helidon.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.helidon</groupId>
+        <artifactId>helidon-dependencies</artifactId>
+        <version>${helidon.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- Helidon MP's CDI container and MicroProfile Config. -->
+    <dependency>
+      <groupId>io.helidon.microprofile.cdi</groupId>
+      <artifactId>helidon-microprofile-cdi</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.helidon.microprofile.config</groupId>
+      <artifactId>helidon-microprofile-config</artifactId>
+    </dependency>
+    <!-- The two dependencies that are the whole integration: the CDI
+         extension in seclume-helidon is found on the class path. -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-helidon</artifactId>
+      <version>${seclume.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-postgresql</artifactId>
+      <version>${seclume.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.16.0</version>
+      </plugin>
+      <!-- target/lib, for java -cp "target/classes:target/lib/*". -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>3.8.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>copy-dependencies</goal>
+            </goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

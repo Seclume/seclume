@@ -96,7 +96,7 @@ TLS 1.3 by default, and Kerberos and OAuth logins with no secret in the process 
 measured against the vendor drivers with the same settings on both sides, including the rows
 where it is behind ([Speed](#speed)). See [Features at a glance](#features-at-a-glance).
 
-Java 25, Spring Boot 4.x / Spring Framework 7.x. No runtime dependency beyond the JDK.
+Java 25, Spring Boot 4.x / Spring Framework 7.x, Quarkus 3, Micronaut 4, Helidon 4 ([framework versions](SUPPORTED-VERSIONS.md#application-frameworks)). No runtime dependency beyond the JDK.
 
 **Contents:** [Quick start](#quick-start) · [What you get without configuring anything](#what-you-get-without-configuring-anything) ·
 [Features at a glance](#features-at-a-glance) · [Not yet](#what-it-does-not-do-yet) ·
@@ -134,7 +134,9 @@ and Flyway work on it as they would on any other.
 
 **Five minutes, end to end:** [examples/getting-started](examples/getting-started) runs this
 with PostgreSQL and Vault in Docker. It then shows with a heap dump of each that the usual
-way leaves the password in the heap and seclume does not.
+way leaves the password in the heap and seclume does not. The same with Micronaut and with
+Helidon MP, from their configuration files alone: [examples/micronaut](examples/micronaut),
+[examples/helidon](examples/helidon).
 
 Releases are on **Maven Central** from 0.13.1 on: no repository entry and no token are needed.
 Every file is signed with the release key in [SECURITY.md](SECURITY.md#verifying-a-release).
@@ -267,6 +269,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
 | | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build: `seclume-quarkus` | [FEATURES.md](FEATURES.md#quarkus) |
 | | Micronaut: named pools and the field encryption key ring from `application.yml`, a password in the configuration refused at start-up: `seclume-micronaut` | [FEATURES.md](FEATURES.md#micronaut) |
+| | Helidon SE (from `Config`) and MP (a CDI extension, from MicroProfile Config): the same pools and key ring, a password in the configuration refused: `seclume-helidon` | [FEATURES.md](FEATURES.md#helidon) |
 | | CRaC / Lambda SnapStart with `seclume-crac`: the checkpoint image holds no password | [FEATURES.md](FEATURES.md#the-pool) |
 
 ### Supported database versions

@@ -1,0 +1,18 @@
+# The database password is in Vault, at secret/app (../getting-started/setup.sh
+# put it there). seclume reads Vault's answer into native memory, logs in with it
+# and wipes it: no String, no byte[], nothing a heap dump could show. The URL
+# names where the secret comes from; there is no password anywhere, and a
+# password here would stop the start.
+seclume:
+  datasources:
+    default:
+      url: "jdbc:seclume:postgresql://localhost:5432/app?user=app&tls=off\
+        &provider=vault&address=https://127.0.0.1:8200&path=secret/data/app\
+        &token-provider=file&token-path=../getting-started/secrets/vault-token"
+      pool:
+        maximum-pool-size: 4
+        connection-timeout: 10s
+        warmup: true
+# Vault's certificate is checked against the trust store setup.sh made from its
+# dev CA (-Djavax.net.ssl.trustStore=...). tls=off for the database only because
+# it runs on this machine; in production: ...?tls=verify-full&tlsRootCert=/etc/ssl/db-ca.pem
