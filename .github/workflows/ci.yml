@@ -1186,7 +1186,7 @@ jobs:
       - name: Micronaut and Helidon against this server
         run: >-
           ./mvnw -B -pl seclume-micronaut,seclume-helidon -am test
-          -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest,SeclumeSettingsTest,SeclumeHelidonTest,SeclumeCdiExtensionTest,LocalHelidonPostgresTest'
+          -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest,SeclumeSettingsTest,SeclumeHelidonTest,SeclumeCdiExtensionTest,SeclumeCdiExtensionOnceTest,LocalHelidonPostgresTest'
           -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed Micronaut and Helidon tests
         if: always()
