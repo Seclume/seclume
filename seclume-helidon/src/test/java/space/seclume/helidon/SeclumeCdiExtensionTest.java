@@ -141,6 +141,17 @@ class SeclumeCdiExtensionTest {
         Files.deleteIfExists(keyFile);
     }
 
+    /** Each data source is one bean - and if not, where the others came from. */
+    @Test
+    void eachDataSourceIsOneBean() {
+        var beans = container.getBeanManager().getBeans(DataSource.class, Any.Literal.INSTANCE);
+        String seen = beans.stream().map(bean -> bean.getQualifiers() + " from " + bean.getBeanClass().getName()
+                + " in " + bean.getBeanClass().getClassLoader() + " (" + System.identityHashCode(bean) + ")")
+                .collect(Collectors.joining("; "));
+        assertEquals(2, beans.size(), "this extension's loader " + SeclumeCdiExtension.class.getClassLoader()
+                + ", active " + SeclumeCdiExtension.active() + ": " + seen);
+    }
+
     @Test
     void theBeansAreThere() throws Exception {
         DataSource primary = container.select(DataSource.class).get();
@@ -169,6 +180,10 @@ class SeclumeCdiExtensionTest {
         assertEquals(Set.of("default", "orders"), every.stream()
                 .map(source -> ((SeclumePool) source).settings().getName()).collect(Collectors.toSet()));
         assertTrue(container.select(DataSource.class, NamedLiteral.of("billing")).isUnsatisfied());
+        assertSame(container.select(DataSource.class, NamedLiteral.of("orders")).get(),
+                container.select(DataSource.class, SeclumeDataSource.Literal.of("orders")).get(),
+                "@SeclumeDataSource(\"orders\") and @Named(\"orders\") are one bean");
+        assertTrue(container.select(DataSource.class, SeclumeDataSource.Literal.of("billing")).isUnsatisfied());
     }
 
     @Test
