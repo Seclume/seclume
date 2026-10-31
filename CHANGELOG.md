@@ -11,6 +11,14 @@ All notable changes to seclume are recorded here. Versions follow
   `field` and `inventory` packages are initialised at run time in a native image, like the rest.
   CI's brokers job runs `provider=kms-decrypt&kms=aws-kms` against moto: a data key made by
   `Encrypt`, opened by a signed `Decrypt`, an altered ciphertext refused.
+- **A cryptography bill of materials** (`space.seclume.inventory`, `/actuator/cbom`,
+  `seclume-verify --cbom`). `CryptoInventory` records, where seclume does the work, every secret
+  a provider read, every field encryption ring, every private key opened in OpenSSL, CNG or a
+  KMS, every TLS session on either stack with its key exchange, and every server certificate -
+  facts, never values. `CycloneDxCbom` writes it as CycloneDX 1.6, each algorithm with its
+  classical and NIST quantum security level and `seclume:quantum-vulnerable` counting what a
+  quantum computer would break. CI checks the CBOMs the tests write against CycloneDX's JSON
+  schema (ajv, pinned in `.github/ci-tools`).
 
 - **Field encryption in JPA entities** (`seclume-jpa`, new). `EncryptedStringConverter` and
   `EncryptedBytesConverter` - one small subclass per column, which names it and its mode -

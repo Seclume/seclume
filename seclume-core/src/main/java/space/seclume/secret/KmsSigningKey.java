@@ -138,6 +138,8 @@ public final class KmsSigningKey implements PrivateSigningKey {
         try {
             KmsSigningKey key = new KmsSigningKey(service, service.publicKey());
             key.selfTest();
+            space.seclume.inventory.CryptoInventory.privateKey(key, key.publicKey,
+                    service.describe());
             return key;
         } catch (IOException e) {
             service.close();

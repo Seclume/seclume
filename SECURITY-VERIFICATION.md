@@ -73,6 +73,13 @@ PASS into anything else fails before it can merge.
 | A `Sealed` JPA attribute is never plaintext on the heap; a `String` one is kept from the database | A1, A8 | `JpaFieldEncryptionCase` (Hibernate, four databases), `ConvertersTest` | a child JVM loads the entity with Hibernate, opens the sealed token into native memory and dumps its heap: the token and the key are not found, the `String` attribute is (control); the server's bytes are searched for every plaintext | PASS | `String` and `byte[]` attributes are on the heap by design | linux-x64 |
 | The Spring Boot ring is wiped when the context closes, and a bad configuration leaves nothing | A1 | `FieldEncryptionAutoConfigurationTest` | open `SecretScope`s counted before and after; six misconfigurations refused at start | PASS | - | linux-x64 |
 
+## Inventory
+
+| Security property | Attacker | Test | Methodology | Result | Limitations | Platform |
+|---|---|---|---|---|---|---|
+| The CBOM holds no secret | A2 | `CryptoInventoryTest`, `InventoryEndToEndTest`, `CbomEndpointTest` | secrets read through providers - a canary, a Vault token, a data key opened over TLS - and the inventory and the CBOM searched for each | PASS | a provider's own description is in it: providers describe locations, never values | all three (core); linux-x64 (endpoint) |
+| The CBOM is valid CycloneDX 1.6 | - | `CycloneDxCbomTest`, `InventoryEndToEndTest`, `validate-cbom.mjs` | an asset of every kind and an application's real inventory, checked against the official JSON schema | PASS | - | linux-x64 |
+
 ## Hostile input
 
 | Security property | Attacker | Test | Methodology | Result | Limitations | Platform |

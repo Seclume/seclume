@@ -167,6 +167,14 @@ public final class SecretScope implements AutoCloseable {
             closeQuietly(scope, error);
             throw error;
         }
+        // The inventory: that a provider of this kind was read, and when - it
+        // swallows its own exceptions; an Error closes the scope, as above.
+        try {
+            space.seclume.inventory.CryptoInventory.secretRead(provider);
+        } catch (Error error) {
+            closeQuietly(scope, error);
+            throw error;
+        }
         return scope;
     }
 

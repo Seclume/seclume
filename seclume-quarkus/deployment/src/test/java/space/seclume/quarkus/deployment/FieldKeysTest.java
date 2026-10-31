@@ -38,7 +38,9 @@ class FieldKeysTest {
     private static Path keyFile(int n) {
         try {
             byte[] key = new byte[32];
-            new java.util.Random(n).nextBytes(key);
+            for (int i = 0; i < key.length; i++) {
+                key[i] = (byte) (n * 31 + i * 7);
+            }
             Path file = Files.createTempFile("seclume-field-key-" + n, ".b64");
             file.toFile().deleteOnExit();
             return Files.writeString(file, Base64.getEncoder().encodeToString(key));

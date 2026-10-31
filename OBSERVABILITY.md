@@ -325,6 +325,48 @@ copy goes. A credential neither named nor of a known shape stays. Find those wit
 `seclume-heapcheck --secret-file` or `NoSecretInHeap`, and keep them off the heap. Redaction reads the dump a few times, at about
 40 MB a second for discovery, so a large heap takes a while to come back.
 
+## `/actuator/cbom`: the cryptography the application uses
+
+A CycloneDX 1.6 cryptography bill of materials (CBOM) of what the application actually used,
+recorded where seclume does the work - nothing has to be declared:
+
+| Asset | Recorded when | What is in the CBOM |
+|---|---|---|
+| A secret | a provider is read (`SecretScope.fromProvider`) | the provider's kind and its own description (a path, a URL), how often and when, its expiry - `credential` or `token` |
+| A field encryption key | a `FieldKeys` ring is built | AES-256-GCM-SIV, 256 bits, its number, whether primary, the provider it came from; gone when the ring is closed |
+| A private key | OpenSSL, CNG or a KMS key is opened | its algorithm and size from the public half, and what holds it (`OpenSSL`, `CNG`, `AWS KMS key ...`) |
+| A TLS session | a handshake finishes, on seclume's stack or JSSE | the peer, the version, the cipher suite and the key exchange - `X25519MLKEM768` or a classical group |
+| A server certificate | the same handshake | subject, issuer, validity, signature algorithm, public key |
+| An algorithm | used by any of the above | primitive, mode, parameters, classical security level and **NIST quantum security level** |
+
+The quantum level is the point: 0 for RSA, ECDSA, ECDH and X25519, which a quantum computer
+breaks; 1, 3 or 5 for AES-128, AES-192 and AES-256; 3 for ML-KEM-768 and the hybrid
+X25519MLKEM768. `metadata.properties` carries `seclume:quantum-vulnerable`, the number of
+keys, certificates and TLS key exchanges at level 0 - where a migration to post-quantum
+cryptography starts.
+
+```properties
+management.endpoints.web.exposure.include=cbom
+```
+
+```bash
+curl -s localhost:8080/actuator/cbom          # application/vnd.cyclonedx+json
+java -jar seclume-verify.jar --cbom "jdbc:seclume:postgresql://db/app?provider=file&path=..."
+```
+
+Without Spring, `CycloneDxCbom.write("orders")` returns the same document and
+`CryptoInventory.snapshot()` the assets themselves.
+
+**Facts, never values.** A secret is in the CBOM as where it came from and when - never its
+value, its length, a fingerprint or a hash. Providers and keys are held weakly: what the
+application lets go of drops out. TLS sessions are kept per peer and suite, at most 512.
+
+**Checked.** CI writes one CBOM with an asset of every kind and one from an application that
+opened a field encryption key through Vault over TLS, and checks both against CycloneDX's own
+JSON schema (`.github/ci-tools/validate-cbom.mjs`); the tests search both for the secrets the
+application read (`CryptoInventoryTest`, `CycloneDxCbomTest`, `InventoryEndToEndTest`,
+`CbomEndpointTest`).
+
 ## Diagnostics for specific defects
 
 - **`Flight`**: the last messages a connection sent and received, in order, attached to the

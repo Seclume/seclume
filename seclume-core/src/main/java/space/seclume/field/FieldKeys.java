@@ -291,7 +291,13 @@ public final class FieldKeys implements AutoCloseable {
             if (!failures.isEmpty()) {
                 throw failures.get(0);
             }
-            return new FieldKeys(Collections.unmodifiableSortedMap(read), chosen);
+            FieldKeys keys = new FieldKeys(Collections.unmodifiableSortedMap(read), chosen);
+            Map<Integer, String> sources = new TreeMap<>();
+            providers.forEach((id, provider) -> sources.put(id,
+                    space.seclume.inventory.CryptoInventory.kindOf(provider)));
+            space.seclume.inventory.CryptoInventory.ring(keys, () -> keys.closed, sources, chosen,
+                    "AES-256-GCM-SIV");
+            return keys;
         }
 
         /** 32 bytes as they are, or their Base64 - decoded off the heap. */
