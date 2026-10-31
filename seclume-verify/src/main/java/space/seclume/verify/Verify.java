@@ -55,6 +55,11 @@ public final class Verify {
                     System.out, System.err));
             return;
         }
+        if (arguments.length > 0 && arguments[0].strip().equals("--audit-verify")) {
+            System.exit(AuditVerify.run(java.util.Arrays.stream(arguments).skip(1).map(String::strip)
+                    .toList(), System.out, System.err));
+            return;
+        }
         if (arguments.length == 2 && arguments[0].strip().equals("--migrate")) {
             System.exit(Migrate.run(arguments[1].strip(), System.out, System.err));
             return;
@@ -86,6 +91,7 @@ public final class Verify {
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
                            java -jar seclume-verify.jar --split "<secret uri>" <k> <n> <directory>
+                           java -jar seclume-verify.jar --audit-verify <access-log.jsonl> [public-key]
 
                     The URL is the one the application uses, password included -
                     which is to say: not included. It names where the secret comes
@@ -113,7 +119,11 @@ public final class Verify {
 
                     --split reads a secret through its provider (file:/path, vault?...)
                     and writes n Shamir shares into the directory, any k of which give
-                    it back - for provider=shamir. A share is never printed.""");
+                    it back - for provider=shamir. A share is never printed.
+
+                    --audit-verify checks an access log: its hash chain and, with the
+                    public key (PEM or DER), the signed checkpoints. Exit code 1 when an
+                    entry was changed, removed, slipped in, or a signature fails.""");
             System.exit(2);
             return;
         }

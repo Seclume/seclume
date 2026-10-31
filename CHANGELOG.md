@@ -123,6 +123,14 @@ All notable changes to seclume are recorded here. Versions follow
   and a heap dump test shows no copy is left. Logback converters for `%msg` and `%xEx`; the
   starter looks for every data source's password and `seclume.heapdump.secrets`, read again
   every `seclume.logging.refresh-interval`.
+- **An access log nobody can quietly rewrite** (`space.seclume.audit`). Every secret a provider
+  is asked for, every field encryption ring and every private key opened is an entry - facts,
+  never values - in a JSON-lines file whose entries are chained by SHA-256 and whose head is
+  signed at intervals with a KMS or local key (`seclume.audit.file`, `.checkpoint-interval`,
+  `.signing-key.*`). `seclume-verify --audit-verify` finds changed, removed, swapped and
+  slipped-in entries and re-hashed chains; `SeclumeAccessLogExporter` copies every entry to
+  OpenTelemetry, where a cut-off tail shows. CI checks a signed log with an independent
+  implementation (hashlib and openssl) and that it refuses forgeries.
 - **Keys in AWS KMS, Google Cloud KMS and Azure Key Vault** (`kms=aws-kms`, `gcp-kms`,
   `azure-key-vault`), next to Vault transit and everywhere it goes: JDBC client certificates,
   key managers, Spring SSL bundles, Tomcat. The hash is made here and signed there - AWS with
