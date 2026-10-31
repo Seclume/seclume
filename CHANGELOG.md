@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A secret nobody holds alone: `provider=shamir`.** `seclume-verify --split "<secret uri>" k n
+  <directory>` splits a secret into `n` Shamir shares (GF(2^8), table- and branch-free), any `k`
+  of which give it back; each is a line `seclume-share-1.<split>.<k>.<x>.<value>.<crc>` in an
+  owner-only file. `provider=shamir` reads `share.1.*` … `share.n.*`, each through a provider
+  of its own, until it has `k`, passing over the ones that cannot be read and refusing the ones
+  that are wrong - a typo (CRC-32), another split, a duplicate, or a combination whose shared
+  SHA-256 check does not match. All of it in native memory. Tests: a known answer from an
+  independent implementation, every `k`-of-`n` choice, perfect secrecy below the threshold
+  shown exhaustively, every single-character change refused, a fuzz target on the format.
+
 - **A cryptography bill of materials** (`space.seclume.inventory`, `/actuator/cbom`,
   `seclume-verify --cbom`). `CryptoInventory` records, where seclume does the work, every secret
   a provider read, every field encryption ring, every private key opened in OpenSSL, CNG or a
