@@ -389,9 +389,9 @@ public abstract class EncryptedColumnContract {
     /** The blind index test's table. */
     private static final String BLIND = "zl_blind";
 
-    private static void dropBlind(Statement statement, String table) {
+    private static void dropBlind(Statement statement) {
         try {
-            statement.execute("drop table " + table);
+            statement.execute("drop table " + BLIND);
         } catch (SQLException itWasNotThere) {
             // the first run, or the last one tidied up
         }
@@ -410,7 +410,7 @@ public abstract class EncryptedColumnContract {
             "Weber", "Wagner", "Becker", "Schulz", "Hoffmann", "Müllheim", "Mülhaupt", "Koch", "Bauer",
             "Richter", "Klein", "Wolf", "Schröder", "Neumann", "Schwarz", "Zimmermann", "Braun"};
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            dropBlind(statement, BLIND);
+            dropBlind(statement);
             statement.execute("create table " + BLIND + " (id int primary key, name " + binary(300)
                     + ", name_prefix numeric(20))");
         }
@@ -442,7 +442,7 @@ public abstract class EncryptedColumnContract {
             }
         } finally {
             try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-                dropBlind(statement, BLIND);
+                dropBlind(statement);
             }
         }
     }
