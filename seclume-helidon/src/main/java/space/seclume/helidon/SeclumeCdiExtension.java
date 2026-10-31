@@ -1,7 +1,9 @@
 package space.seclume.helidon;
 
 import java.lang.annotation.Annotation;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import javax.sql.DataSource;
@@ -17,6 +19,7 @@ import jakarta.inject.Singleton;
 
 import org.eclipse.microprofile.config.Config;
 import org.eclipse.microprofile.config.ConfigProvider;
+import org.eclipse.microprofile.config.spi.ConfigSource;
 
 import space.seclume.field.FieldKeys;
 import space.seclume.pool.SeclumePool;
@@ -77,12 +80,41 @@ public class SeclumeCdiExtension implements Extension {
         }
     }
 
-    /** Every property MicroProfile Config knows, as flat keys. */
+    /**
+     * Every {@code seclume.*} and {@code javax.sql.DataSource.*} property, as
+     * flat keys. The names come from the config sources themselves as well as
+     * from {@link Config#getPropertyNames()}: Helidon's MP config builds a tree
+     * of its sources, and a name with a number in it -
+     * {@code seclume.field-encryption.keys.1.uri} - can come out of that tree
+     * as a list element under another name, or not at all. The value is the
+     * config's where it has one, else that of the source of highest ordinal.
+     */
     static Map<String, String> flat(Config config) {
-        Map<String, String> all = new LinkedHashMap<>();
-        for (String name : config.getPropertyNames()) {
-            if (name.startsWith("seclume.") || name.toLowerCase(java.util.Locale.ROOT).startsWith("javax.sql.datasource.")) {
-                config.getOptionalValue(name, String.class).ifPresent(value -> all.put(name, value));
+        java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        config.getPropertyNames().forEach(names::add);
+        List<ConfigSource> sources = new ArrayList<>();
+        config.getConfigSources().forEach(sources::add);
+        sources.sort(java.util.Comparator.comparingInt(ConfigSource::getOrdinal).reversed());
+        for (ConfigSource source : sources) {
+            names.addAll(source.getPropertyNames());
+        }
+        Map<String, String> all = new java.util.TreeMap<>();
+        for (String name : names) {
+            if (!name.startsWith("seclume.")
+                    && !name.toLowerCase(java.util.Locale.ROOT).startsWith("javax.sql.datasource.")) {
+                continue;
+            }
+            String value = null;
+            try {
+                value = config.getOptionalValue(name, String.class).orElse(null);
+            } catch (RuntimeException notInTheTree) {
+                // read from the sources below
+            }
+            for (int i = 0; value == null && i < sources.size(); i++) {
+                value = sources.get(i).getValue(name);
+            }
+            if (value != null) {
+                all.put(name, value);
             }
         }
         return all;
