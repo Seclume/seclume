@@ -45,6 +45,8 @@ public class SeclumeFieldKeys {
 
     /** Builds the ring at start-up, so that a wrong key stops it there and converters find it. */
     void onStart(@Observes StartupEvent start, Instance<FieldKeys> keys) {
+        // The event is only the moment; Quarkus hands one over, never null.
+        java.util.Objects.requireNonNull(start, "the start-up event");
         if (!keys(ConfigProvider.getConfig()).isEmpty()) {
             keys.get().primary();
         }
