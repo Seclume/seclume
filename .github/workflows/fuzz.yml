@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   corpus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,7 +81,7 @@ jobs:
   # written-down state. A finding fails the job; the input that caused it is kept as an
   # artefact and belongs in src/test/resources as a regression case.
   coverage-guided:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
