@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Isolated;
+import org.springframework.beans.factory.support.StaticListableBeanFactory;
 
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.persistence.PersistenceConfiguration;
@@ -131,12 +132,19 @@ abstract class JakartaDataCase {
         }
     }
 
-    /** The repository in a transaction of its own, as an application uses it. */
+    /**
+     * The repository in a transaction of its own, as an application uses it.
+     * With Spring on the class path, Hibernate's processor writes a repository
+     * that takes its session from an {@code ObjectProvider} - here one that
+     * holds this transaction's session and nothing else.
+     */
     private <R> R inTransaction(Function<Patients, R> work) {
         try (StatelessSession session = sessions.openStatelessSession()) {
             Transaction transaction = session.beginTransaction();
             try {
-                R result = work.apply(new Patients_(session));
+                StaticListableBeanFactory beans = new StaticListableBeanFactory();
+                beans.addBean("session", session);
+                R result = work.apply(new Patients_(beans.getBeanProvider(StatelessSession.class)));
                 transaction.commit();
                 return result;
             } catch (RuntimeException e) {
