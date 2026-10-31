@@ -46,11 +46,18 @@ public class SeclumeCdiExtension implements Extension {
 
     private final Map<String, SeclumePool> pools = new LinkedHashMap<>();
     private FieldKeys keys;
+    private boolean madeBeans;
 
     void afterBeanDiscovery(@Observes AfterBeanDiscovery discovery) {
         if (!ACTIVE.compareAndSet(null, this) && ACTIVE.get() != this) {
             return;
         }
+        // And once per instance: Weld can call an extension's observer once
+        // for each deployment archive that sees it, with the one event.
+        if (madeBeans) {
+            return;
+        }
+        madeBeans = true;
         SeclumeSettings settings = SeclumeSettings.of(flat(ConfigProvider.getConfig()));
         try {
             settings.refusePasswords();
@@ -59,6 +66,7 @@ public class SeclumeCdiExtension implements Extension {
         } catch (java.sql.SQLException | RuntimeException e) {
             // The container does not start, and no BeforeShutdown follows.
             ACTIVE.compareAndSet(this, null);
+            madeBeans = false;
             discovery.addDefinitionError(e);
             return;
         }
@@ -98,6 +106,7 @@ public class SeclumeCdiExtension implements Extension {
 
     void beforeShutdown(@Observes BeforeShutdown shutdown) {
         ACTIVE.compareAndSet(this, null);
+        madeBeans = false;
         pools.values().forEach(SeclumePool::close);
         pools.clear();
         if (keys != null) {
