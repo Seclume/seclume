@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **`PoolConfiguration` refuses every inline secret, and repeats none.** Besides `password=`,
+  a URL with `secret=` or `value=` (the keys the drivers refuse at the first login) or a password
+  in its user information (`//user:password@host`) is refused when the pool is made, not when
+  it first connects. A URL that is not seclume's is named by its scheme alone - before, the
+  first 30 characters were quoted, which for `jdbc:mysql://root:<password>@...` was the
+  password. `UrlDataSource.toString()` leaves out SQL Server's `;` settings as it did the query.
 - **Micronaut** (`seclume-micronaut`, new). Named `SeclumePool` data sources from
   `seclume.datasources.<name>.*` and the field encryption key ring from
   `seclume.field-encryption.*`, from `application.yml` alone; a password in the configuration -
