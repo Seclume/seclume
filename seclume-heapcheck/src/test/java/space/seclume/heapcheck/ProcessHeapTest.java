@@ -45,15 +45,17 @@ class ProcessHeapTest {
         command.addAll(List.of(options));
         command.addAll(List.of("-cp", System.getProperty("java.class.path"), Target.class.getName(), canary));
         Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        BufferedReader output = new BufferedReader(new InputStreamReader(process.getInputStream(),
-                StandardCharsets.UTF_8));
         // Lines before it - "Picked up JAVA_TOOL_OPTIONS" and the like - are the JVM's.
+        // The target writes nothing after "ready", so its output can be closed then.
         List<String> before = new ArrayList<>();
-        for (String line = output.readLine(); line != null; line = output.readLine()) {
-            if (line.startsWith("ready")) {
-                return process;
+        try (BufferedReader output = new BufferedReader(new InputStreamReader(process.getInputStream(),
+                StandardCharsets.UTF_8))) {
+            for (String line = output.readLine(); line != null; line = output.readLine()) {
+                if (line.startsWith("ready")) {
+                    return process;
+                }
+                before.add(line);
             }
-            before.add(line);
         }
         process.destroyForcibly();
         throw new IllegalStateException("the target did not start: " + before);
