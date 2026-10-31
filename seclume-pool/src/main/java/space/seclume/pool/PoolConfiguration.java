@@ -244,14 +244,10 @@ public final class PoolConfiguration {
         @Override
         public String toString() {
             // ? for most drivers, ; for SQL Server's settings - neither is shown.
-            int query = url.length();
-            for (char separator : new char[] {'?', ';'}) {
-                int at = url.indexOf(separator);
-                if (at >= 0 && at < query) {
-                    query = at;
-                }
-            }
-            return "UrlDataSource[" + url.substring(0, query) + "]";
+            int question = url.indexOf('?');
+            int semicolon = url.indexOf(';');
+            int query = question < 0 ? semicolon : semicolon < 0 ? question : Math.min(question, semicolon);
+            return "UrlDataSource[" + (query < 0 ? url : url.substring(0, query)) + "]";
         }
     }
 }
