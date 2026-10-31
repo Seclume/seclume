@@ -950,8 +950,15 @@ jobs:
       # SigV4-signed Decrypt, and an altered ciphertext refused by the service.
       - name: AWS KMS emulator
         run: |
-          docker run -d --name slm-moto -p 4443:4443 motoserver/moto:5.1.22 -p 4443 -s
-          python3 .github/scripts/kms_fixture.py https://127.0.0.1:4443
+          # moto behind a one-day certificate of the job's own, which the fixture trusts.
+          mkdir -p "$RUNNER_TEMP/moto"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
+            -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 \
+            -keyout "$RUNNER_TEMP/moto/key.pem" -out "$RUNNER_TEMP/moto/cert.pem" 2>/dev/null
+          chmod 644 "$RUNNER_TEMP/moto/key.pem"
+          docker run -d --name slm-moto -p 4443:4443 -v "$RUNNER_TEMP/moto:/certs:ro" \
+            motoserver/moto:5.1.22 -p 4443 -c /certs/cert.pem -k /certs/key.pem
+          python3 .github/scripts/kms_fixture.py https://127.0.0.1:4443 "$RUNNER_TEMP/moto/cert.pem"
           ./mvnw -B -pl seclume-core -am test -Dtest=LocalAwsKmsDecryptTest \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-core' 'AWS KMS emulator'

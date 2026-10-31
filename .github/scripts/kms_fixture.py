@@ -9,7 +9,7 @@ real. Writes into the working directory:
     .local-kms-ciphertext    Encrypt's CiphertextBlob (Base64) of a random 32-byte key
     .local-kms-expected      that key (Base64) - the test's control, never a production file
 
-usage: kms_fixture.py https://127.0.0.1:4443
+usage: kms_fixture.py https://127.0.0.1:4443 <moto's certificate, PEM>
 """
 import base64
 import json
@@ -22,10 +22,9 @@ import urllib.request
 REGION = "eu-central-1"
 
 
-def call(endpoint, target, body):
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE        # moto's own throwaway certificate
+def call(endpoint, certificate, target, body):
+    # moto serves the job's own one-day certificate for 127.0.0.1, and only that is trusted.
+    context = ssl.create_default_context(cafile=certificate)
     day = time.strftime("%Y%m%d", time.gmtime())
     request = urllib.request.Request(endpoint + "/", data=json.dumps(body).encode(), headers={
         "Content-Type": "application/x-amz-json-1.1",
@@ -38,19 +37,21 @@ def call(endpoint, target, body):
         return json.loads(answer.read())
 
 
-def main(endpoint):
+def main(endpoint, certificate):
     for _ in range(60):
         try:
-            key = call(endpoint, "CreateKey", {"Description": "seclume field data",
+            key = call(endpoint, certificate, "CreateKey", {"Description": "seclume field data",
                                                "KeyUsage": "ENCRYPT_DECRYPT"})
             break
+        except ssl.SSLCertVerificationError:
+            raise
         except OSError:
             time.sleep(1)
     else:
         raise SystemExit("moto did not answer at " + endpoint)
     arn = key["KeyMetadata"]["Arn"]
     data_key = os.urandom(32)
-    encrypted = call(endpoint, "Encrypt", {"KeyId": arn,
+    encrypted = call(endpoint, certificate, "Encrypt", {"KeyId": arn,
                                            "Plaintext": base64.b64encode(data_key).decode()})
     with open(".local-kms-key-arn", "w") as f:
         f.write(arn)
@@ -62,4 +63,4 @@ def main(endpoint):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2])

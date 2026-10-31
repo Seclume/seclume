@@ -53,11 +53,6 @@ class SeclumeProcessor {
     private static final Pattern PASSWORD = Pattern.compile(
             "quarkus\\.datasource(?:\\.(\"[^\"]+\"|[^.\"]+))?\\.password");
 
-    /**
-     * The feature, and the check that comes with it: Quarkus runs only build
-     * steps that produce something, so the check rides on the one that
-     * always does.
-     */
     /** The field encryption key ring, built at start-up when keys are configured. */
     @BuildStep
     io.quarkus.arc.deployment.AdditionalBeanBuildItem fieldKeys() {
@@ -65,6 +60,11 @@ class SeclumeProcessor {
                 space.seclume.quarkus.SeclumeFieldKeys.class);
     }
 
+    /**
+     * The feature, and the check that comes with it: Quarkus runs only build
+     * steps that produce something, so the check rides on the one that
+     * always does.
+     */
     @BuildStep
     FeatureBuildItem feature() {
         noPasswordInTheConfiguration();
