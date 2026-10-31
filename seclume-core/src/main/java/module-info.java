@@ -28,6 +28,8 @@ module seclume.core {
     exports space.seclume.secret;
     // Field encryption: values encrypted in the application, keys off the heap.
     exports space.seclume.field;
+    // What cryptography the process uses, as a CycloneDX CBOM.
+    exports space.seclume.inventory;
 
     // Internal building blocks the driver modules need (randomness, encoding,
     // off-heap I/O). Not a stable contract for applications.

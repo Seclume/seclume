@@ -12,6 +12,14 @@ All notable changes to seclume are recorded here. Versions follow
   no job at all; they run in the four database jobs. `require_servers.py` fails a database job
   in which any test skipped because it did not find that job's own server or its password
   file. The README's version table says what CI runs on every pull request.
+- **A cryptography bill of materials** (`space.seclume.inventory`, `/actuator/cbom`,
+  `seclume-verify --cbom`). `CryptoInventory` records, where seclume does the work, every secret
+  a provider read, every field encryption ring, every private key opened in OpenSSL, CNG or a
+  KMS, every TLS session on either stack with its key exchange, and every server certificate -
+  facts, never values. `CycloneDxCbom` writes it as CycloneDX 1.6, each algorithm with its
+  classical and NIST quantum security level and `seclume:quantum-vulnerable` counting what a
+  quantum computer would break. CI checks the CBOMs the tests write against CycloneDX's JSON
+  schema (ajv, pinned in `.github/ci-tools`).
 
 - **Field encryption in JPA entities** (`seclume-jpa`, new). `EncryptedStringConverter` and
   `EncryptedBytesConverter` - one small subclass per column, which names it and its mode -
