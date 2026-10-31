@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import space.seclume.field.ColumnRotation;
 import space.seclume.field.EncryptedColumn;
 import space.seclume.field.EncryptedColumn.Mode;
 import space.seclume.field.FieldKeys;
@@ -329,6 +330,59 @@ public abstract class EncryptedColumnContract {
                 }
             }
         }
+    }
+
+    /**
+     * The same move with {@link ColumnRotation}: in batches of five, stopped
+     * after the first and continued from its last id, while the application
+     * writes a row under the new key; a census before and after, and a second
+     * run that finds nothing to do.
+     */
+    @Test
+    void theRotationJobMovesTheTableInBatchesAndResumes() throws Exception {
+        try (Connection connection = connect()) {
+            try (FieldKeys before = ring1()) {
+                for (int id = 1; id <= 23; id++) {
+                    insert(connection, before.column("zl.secret", Mode.RANDOMIZED),
+                            before.column("zl.ssn", Mode.DETERMINISTIC), id,
+                            id % 4 == 0 ? null : "secret " + id, "ssn " + id);
+                }
+            }
+            try (FieldKeys during = ring12()) {
+                ColumnRotation first = rotation(during, null);
+                assertEquals(18 + 23, first.census(connection).remaining());
+                ColumnRotation.Progress one = first.step(connection, null);
+                assertEquals(5, one.rows());
+                assertEquals(4 + 5, one.rotated());
+                // The application, meanwhile: a new row, under key 2 already.
+                insert(connection, during.column("zl.secret", Mode.RANDOMIZED),
+                        during.column("zl.ssn", Mode.DETERMINISTIC), 100, "secret 100", "ssn 100");
+                ColumnRotation.Progress rest = rotation(during, one.lastId()).run(connection);
+                assertTrue(rest.done());
+                assertEquals(19, rest.rows());
+                assertEquals(14 + 18, rest.rotated());
+                assertEquals(2, rest.current(), "row 100, written under key 2");
+                assertEquals(0, rest.conflicts());
+                assertEquals(0, rotation(during, null).census(connection).remaining());
+                ColumnRotation.Progress again = rotation(during, null).run(connection);
+                assertEquals(0, again.rotated());
+            }
+            try (FieldKeys after = ring2()) {
+                EncryptedColumn secret = after.column("zl.secret", Mode.RANDOMIZED);
+                EncryptedColumn ssn = after.column("zl.ssn", Mode.DETERMINISTIC);
+                for (int id = 1; id <= 23; id++) {
+                    assertEquals(id % 4 == 0 ? null : "secret " + id, readSecret(connection, secret, id));
+                    assertEquals(List.of(id), find(connection, ssn, "ssn " + id));
+                }
+            }
+        }
+    }
+
+    private static ColumnRotation rotation(FieldKeys keys, Object after) {
+        return ColumnRotation.builder(keys).table(TABLE).id("id")
+                .column("secret", "zl.secret", Mode.RANDOMIZED, ColumnRotation.Context.ROW_ID)
+                .column("ssn", "zl.ssn", Mode.DETERMINISTIC, ColumnRotation.Context.NONE)
+                .batchSize(5).after(after).build();
     }
 
     @Test

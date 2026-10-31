@@ -528,7 +528,12 @@ jobs:
               for case in ET.parse(path).getroot().iter('testcase'):
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
-                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
+                      if causes:
+                          text = causes[-1] + ' | ' + text
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
                       found += 1
           print('failing tests:', found)
@@ -631,6 +636,7 @@ jobs:
           - KmsAnswerFuzzTest#aRawSignatureBecomesDerOrAnIoException
           - EncryptedValueFuzzTest#anyStoredValueDecryptsOnlyIfItWasWritten
           - EncryptedValueFuzzTest#aesGcmSivRoundTripsAndRefusesAnyChange
+          - ShamirShareFuzzTest#anyShareIsReadOrRefused
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -964,6 +970,23 @@ jobs:
           ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultPkiTest' -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-keys' 'OpenBao PKI'
+      # AWS KMS's API, emulated by moto behind its own throwaway certificate: a
+      # data key Encrypt made under a real key ARN, opened by kms-decrypt with a
+      # SigV4-signed Decrypt, and an altered ciphertext refused by the service.
+      - name: AWS KMS emulator
+        run: |
+          # moto behind a one-day certificate of the job's own, which the fixture trusts.
+          mkdir -p "$RUNNER_TEMP/moto"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
+            -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 \
+            -keyout "$RUNNER_TEMP/moto/key.pem" -out "$RUNNER_TEMP/moto/cert.pem" 2>/dev/null
+          chmod 644 "$RUNNER_TEMP/moto/key.pem"
+          docker run -d --name slm-moto -p 4443:4443 -v "$RUNNER_TEMP/moto:/certs:ro" \
+            motoserver/moto:5.1.22 -p 4443 -c /certs/cert.pem -k /certs/key.pem
+          python3 .github/scripts/kms_fixture.py https://127.0.0.1:4443 "$RUNNER_TEMP/moto/cert.pem"
+          ./mvnw -B -pl seclume-core -am test -Dtest=LocalAwsKmsDecryptTest \
+            -Dsurefire.failIfNoSpecifiedTests=false
+          python3 .github/scripts/require_mongo_tests.py 'seclume-core' 'AWS KMS emulator'
       - name: Require executed Redis and Kafka tests
         if: always()
         run: python3 .github/scripts/require_mongo_tests.py 'seclume-redis,seclume-kafka' 'Redis and Kafka'
@@ -976,8 +999,8 @@ jobs:
           -Dsurefire.failIfNoSpecifiedTests=false
       - if: always()
         run: |
-          rm -f .local-redis-* .local-kafka-* .local-vault-*
-          docker rm -f slm-vault slm-vault-pg || true
+          rm -f .local-redis-* .local-kafka-* .local-vault-* .local-kms-*
+          docker rm -f slm-vault slm-vault-pg slm-moto || true
           bash seclume-redis/proof/redis.sh down || true
           bash seclume-kafka/proof/broker.sh down || true
 
@@ -1066,10 +1089,13 @@ jobs:
           rm -f .local-pgtls-password
           docker rm -f pgtls || true
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest,SpringDataOnPostgresTest,EntityShapesOnPostgresTest,HibernateEdgesOnPostgresTest,SpringJdbcOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Postgres
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py postgresql seclume-postgresql,seclume-spring-test
       - name: Verify pool isolation against PostgreSQL
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest,PoolHandOnSeamTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests
@@ -1084,7 +1110,12 @@ jobs:
               for case in ET.parse(path).getroot().iter('testcase'):
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
-                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:400]
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
+                      if causes:
+                          text = causes[-1] + ' | ' + text
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
                       found += 1
           print('failing tests:', found)
@@ -1215,22 +1246,53 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
-      - run: ./mvnw -B -pl seclume-mysql -am test
+      # What the driver's tests need of the server, set as a DBA would: functions
+      # created with binary logging on (MySQL), and the right to list prepared XA
+      # transactions (MySQL 8's XA_RECOVER_ADMIN). MariaDB needs neither.
+      - name: Server settings for the function and XA tests
+        env:
+          MYSQL_PWD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+        run: |
+          if mysql -h 127.0.0.1 -P 3306 -u root -N -e 'select version()' | grep -qi mariadb; then
+            echo "MariaDB: nothing to set"
+          else
+            mysql -h 127.0.0.1 -P 3306 -u root -e "SET PERSIST log_bin_trust_function_creators = 1; GRANT XA_RECOVER_ADMIN ON *.* TO 'seclume_test'@'%'"
+          fi
+          # The Spring application's Flyway wants an empty schema, not the one
+          # the driver tests have filled.
+          mysql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS seclume_spring; GRANT ALL ON seclume_spring.* TO 'seclume_test'@'%'"
       # The module's Local* tests default to port 3307, a developer's second
-      # server; this job's is on 3306. Field encryption's contract is in the
-      # gate, so it runs here against this job's server.
-      - name: Field encryption against this server
-        run: >-
-          ./mvnw -B -pl seclume-mysql -am test -Dtest=LocalEncryptedColumnTest
-          -Dseclume.mysql.port=3306 -Dsurefire.failIfNoSpecifiedTests=false
+      # server; this job's is on 3306. Without saying so they skipped here -
+      # eighteen of them - and require_servers.py now fails a job where that
+      # happens again.
+      - run: ./mvnw -B -pl seclume-mysql -am test -Dseclume.mysql.port=3306
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py MySql
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py mysql seclume-mysql,seclume-spring-test
+      - if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
+                      if causes:
+                          text = causes[-1] + ' | ' + text
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+          PY
       - name: Verify pool isolation against MySQL
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
       - name: Require executed database regression tests
@@ -1279,7 +1341,8 @@ jobs:
         run: |
           id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:${{ matrix.version }}-latest" | head -1)
           if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server ${{ matrix.version }} container found"; exit 1; fi
-          sql="if db_id('seclume_test') is null create database seclume_test"
+          # seclume_spring: the Spring application's, whose Flyway wants it empty.
+          sql="if db_id('seclume_test') is null create database seclume_test; if db_id('seclume_spring') is null create database seclume_spring"
           pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
           for i in $(seq 1 40); do
             if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" -Q "$sql"; then
@@ -1295,10 +1358,29 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group sqlserver --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest,SpringDataOnSqlServerTest,EntityShapesOnSqlServerTest,HibernateEdgesOnSqlServerTest,SpringJdbcOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py SqlServer
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py sqlserver seclume-sqlserver,seclume-spring-test
+      - if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
+                      if causes:
+                          text = causes[-1] + ' | ' + text
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+          PY
       - name: Verify pool isolation against SQL Server
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests
@@ -1359,16 +1441,43 @@ jobs:
           echo 'alter session set container=FREEPDB1;
           grant create any context to seclume_test;
           exit' | docker exec -i oracle sqlplus -s / as sysdba
+      # The Spring application's own schema: its Flyway wants an empty one,
+      # not the one the driver tests have filled.
+      - name: A schema for the Spring application
+        run: |
+          printf '%s\n' 'alter session set container=FREEPDB1;' \
+            "create user seclume_spring identified by \"$ORA_PASSWORD\" quota unlimited on users;" \
+            'grant create session, create table, create sequence, create view, create procedure, create trigger to seclume_spring;' \
+            'exit' | docker exec -i oracle sqlplus -s / as sysdba
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
       - run: ./mvnw -B -pl seclume-oracle -am test
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Oracle
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py oracle seclume-oracle,seclume-spring-test
+      - if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
+                      if causes:
+                          text = causes[-1] + ' | ' + text
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+          PY
       - name: Verify pool isolation against Oracle
         run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests

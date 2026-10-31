@@ -22,6 +22,12 @@ All notable changes to seclume are recorded here. Versions follow
   quantum computer would break. CI checks the CBOMs the tests write against CycloneDX's JSON
   schema (ajv, pinned in `.github/ci-tools`).
 
+- **Field encryption in Quarkus, and against an AWS KMS emulator.** `seclume-quarkus` builds the
+  key ring from `seclume.field-encryption.keys.<n>.*` and `.primary` at start-up, as a
+  `@Singleton` `FieldKeys`, installed for the JPA converters and wiped at shutdown; the library's
+  `field` and `inventory` packages are initialised at run time in a native image, like the rest.
+  CI's brokers job runs `provider=kms-decrypt&kms=aws-kms` against moto: a data key made by
+  `Encrypt`, opened by a signed `Decrypt`, an altered ciphertext refused.
 - **Field encryption in JPA entities** (`seclume-jpa`, new). `EncryptedStringConverter` and
   `EncryptedBytesConverter` - one small subclass per column, which names it and its mode -
   encrypt a `String` or `byte[]` attribute; JPQL `=`/`in` and derived queries on a
@@ -30,6 +36,12 @@ All notable changes to seclume are recorded here. Versions follow
   `column.seal(...)` from native memory, `column.open(sealed, target)` into it, and
   `SealedConverter` maps it (`@Convert`, or `autoApply` when listed with the entities). Converters take
   the ring `FieldKeys.install` made available, at their first value.
+- **Key rotation for encrypted columns, as a job.** `ColumnRotation` moves a table's encrypted
+  columns onto the ring's primary key in batches, one transaction each, resumable from the last
+  id, writing a value back only if it is still the one it read - a row the application changed
+  meanwhile stays as written and is counted as a conflict. `census()` says how many values are
+  under each key; a listener gets the progress after every batch. Run against all four
+  databases in `EncryptedColumnContract`.
 - **The key ring from `application.properties`**: `seclume.field-encryption.keys.<n>.*` - a
   provider's settings under each key's number, or one `uri` - and
   `seclume.field-encryption.primary`. The starter builds the ring, installs it and wipes it
@@ -71,6 +83,13 @@ All notable changes to seclume are recorded here. Versions follow
   (`LocalEncryptedColumnTest`, from the TCK's `EncryptedColumnContract`); Vault and OpenBao
   with a token that may open one key and no other (`LocalVaultTransitFieldKeyTest`).
 
+- **Tests that skipped in CI without anybody noticing now run.** Eighteen of the MySQL driver's
+  tests looked for the server on port 3307, a developer's second server, and skipped in the
+  mysql job, whose server is on 3306; they run there now. The Spring Data, Spring JDBC,
+  entity-shape and Hibernate-edge suites of seclume-spring-test - four databases each - ran in
+  no job at all; they run in the four database jobs. `require_servers.py` fails a database job
+  in which any test skipped because it did not find that job's own server or its password
+  file. The README's version table says what CI runs on every pull request.
 - **Flight Recorder recordings redacted like heap dumps.** `heapcheck --dump app.jfr` checks a
   recording and `--redact app-redacted.jfr` writes a copy without its credentials; `--redact-dir`,
   `--watch` and the starter's folder watch take `.jfr` files as well (`.redacted.jfr`). A
@@ -79,6 +98,15 @@ All notable changes to seclume are recorded here. Versions follow
   reported by name only. Occurrences are masked in place, so chunks and offsets stay as they
   were, and the copy is walked chunk by chunk and parsed by `jdk.jfr.consumer.RecordingFile`
   before it is let out. `Recordings` in seclume-heapdump; tested with recordings of real JVMs.
+- **A secret nobody holds alone: `provider=shamir`.** `seclume-verify --split "<secret uri>" k n
+  <directory>` splits a secret into `n` Shamir shares (GF(2^8), table- and branch-free), any `k`
+  of which give it back; each is a line `seclume-share-1.<split>.<k>.<x>.<value>.<crc>` in an
+  owner-only file. `provider=shamir` reads `share.1.*` … `share.n.*`, each through a provider
+  of its own, until it has `k`, passing over the ones that cannot be read and refusing the ones
+  that are wrong - a typo (CRC-32), another split, a duplicate, or a combination whose shared
+  SHA-256 check does not match. All of it in native memory. Tests: a known answer from an
+  independent implementation, every `k`-of-`n` choice, perfect secrecy below the threshold
+  shown exhaustively, every single-character change refused, a fuzz target on the format.
 - **SPIFFE rotations as they happen, and federation.** seclume-keys' SPIFFE key manager keeps
   the Workload API's `FetchX509SVID` stream open (`SpiffeWorkloadApi.watchX509Svids`): an SVID
   or bundle the agent pushes is taken at once, the stream reopened when it breaks, the HTTP/2

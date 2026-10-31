@@ -25,6 +25,11 @@
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-agroal</artifactId>
     </dependency>
+    <!-- The field encryption key ring as a bean. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-arc</artifactId>
+    </dependency>
     <dependency>
       <groupId>space.seclume</groupId>
       <artifactId>seclume-postgresql</artifactId>

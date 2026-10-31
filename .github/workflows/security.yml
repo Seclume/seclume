@@ -34,7 +34,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: >
           semgrep scan --config p/java --config p/security-audit --config p/secrets
-          --config p/github-actions --metrics=off --error
+          --config p/github-actions --metrics=off --error --json-output=semgrep.json
+      # Each finding as an annotation - rule, file and line - so that a red run
+      # says what it found without anyone opening the log.
+      - if: failure()
+        run: |
+          python3 - <<'PY'
+          import json
+          try:
+              results = json.load(open('semgrep.json')).get('results', [])
+          except (OSError, ValueError):
+              results = []
+          for r in results[:50]:
+              message = (r.get('check_id', '') + ': ' + r.get('extra', {}).get('message', ''))
+              message = message.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:600]
+              print(f"::error file={r.get('path')},line={r.get('start', {}).get('line', 1)}::{message}")
+          print('semgrep findings:', len(results))
+          PY
 
   dependencies:
     runs-on: ubuntu-latest
