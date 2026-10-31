@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Jakarta Data, and blind indexes for JPA.** `StringBlindIndex` (seclume-jpa) is the index
+  value an entity stores next to a randomized `String` attribute and the search through any
+  repository: `find(value, repository::byNameIndex, Patient::name)` asks for every search term of
+  the ring and keeps the rows whose attribute matches. `BlindIndex.matches` compares two values
+  after the transform, in native memory and without an early exit. `JakartaDataCase` runs
+  Hibernate 7.4's Jakarta Data repositories against the four databases; `FrameworkMatrix` has a
+  row for them.
 - **Field encryption: a key commitment in every value, and R2DBC and MongoDB.** The format
   (unreleased until now, so changed in place) carries HMAC-SHA-256 of header and nonce under a
   second key derived with the column key, checked first: a value opens under the key it was made

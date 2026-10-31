@@ -185,4 +185,67 @@ class BlindIndexTest {
         assertThrows(IllegalArgumentException.class, () -> new Transform("exact", 3, false));
         assertEquals("BlindIndex[n, exact, 16 bits]", index.toString());
     }
+
+    @Test
+    void matchesIsEqualityAfterTheTransform() {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, KEY)) {
+            BlindIndex email = keys.blindIndex("customer.email", 24, Transform.CASE_INSENSITIVE);
+            assertTrue(email.matches(text("Alice@Example.ORG"), text("alice@example.org")));
+            assertTrue(!email.matches(text("alice@example.org"), text("alice@example.com")));
+            assertTrue(!email.matches(text("alice@example.org"), text("alice@example.or")),
+                    "a prefix is not the value");
+
+            BlindIndex card = keys.blindIndex("card.number", 16, Transform.suffix(4));
+            assertTrue(card.matches(text("4111222233331234"), text("1234")));
+            assertTrue(card.matches(text("5500000000001234"), text("4111222233331234")));
+            assertTrue(!card.matches(text("4111222233331235"), text("1234")));
+
+            BlindIndex name = keys.blindIndex("customer.name", 20, Transform.prefix(3).caseInsensitive());
+            assertTrue(name.matches(text("Müller"), text("MÜLLER-Lüdenscheidt")) == false,
+                    "case folding is ASCII's: ü and Ü differ");
+            assertTrue(name.matches(text("Müller"), text("müllerin")));
+            assertTrue(name.matches(text("MÜller"), text("mÜ")) == false, "mÜ is two characters, not three");
+            assertTrue(name.matches(text("MÜ"), text("mÜ")), "shorter than the prefix: the whole value");
+
+            BlindIndex phone = keys.blindIndex("customer.phone", 20, Transform.DIGITS);
+            assertTrue(phone.matches(text("+49 (30) 1234-567"), text("4930 1234567")));
+            assertTrue(!phone.matches(text("+49 30 1234 568"), text("4930 1234567")));
+
+            BlindIndex exact = keys.blindIndex("ssn", 32, Transform.EXACT);
+            assertTrue(exact.matches(text(""), text("")));
+            assertTrue(!exact.matches(text(""), text("x")));
+            assertTrue(!exact.matches(null, text("x")));
+            assertTrue(!exact.matches(text("x"), null));
+            assertTrue(!exact.matches(null, null), "NULL matches nothing");
+        }
+    }
+
+    /**
+     * What a search does: every value that shares the index value is a
+     * candidate, and matches keeps exactly those that are the value searched
+     * for - with few bits, many share it.
+     */
+    @Test
+    void matchesKeepsExactlyTheRightCandidates() {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, KEY)) {
+            BlindIndex index = keys.blindIndex("customer.email", 3, Transform.CASE_INSENSITIVE);
+            String wanted = "Bob@Example.org";
+            long term = index.term(text(wanted));
+            int candidates = 0;
+            int kept = 0;
+            for (int i = 0; i < 400; i++) {
+                String value = i % 50 == 0 ? (i % 100 == 0 ? "bob@example.ORG" : "BOB@EXAMPLE.ORG")
+                        : "user" + i + "@example.org";
+                if (index.term(text(value)) == term) {
+                    candidates++;
+                    if (index.matches(text(value), text(wanted))) {
+                        kept++;
+                        assertTrue(value.equalsIgnoreCase(wanted), value);
+                    }
+                }
+            }
+            assertEquals(8, kept, "every spelling of the address, and nothing else");
+            assertTrue(candidates > 20, "three bits: about one in eight shares the value, " + candidates);
+        }
+    }
 }
