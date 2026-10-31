@@ -25,7 +25,6 @@ rm -rf "$logs" && mkdir -p "$logs"
 pid=""
 cleanup() {
   [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
-  rm -f "$logs/check.txt"
 }
 trap cleanup EXIT
 run() { # run <log> <extra JVM options...>
