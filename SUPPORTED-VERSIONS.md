@@ -116,6 +116,25 @@ What older servers needed, all of it found by running the suite against them:
 - **23ai**: the whole suite (292 tests) still passes with these changes, over TCP and TCPS, and
   still logs in with `FAST_AUTH`.
 
+## Application frameworks
+
+Which framework versions the integrations are built and tested against. "CI" means on every
+pull request, against a real server where the row says so; the examples are run from their
+configuration files with a heap dump searched for the password.
+
+| Framework | Module | Built against | In CI | Example |
+|---|---|---|---|---|
+| Spring Boot | `seclume-spring-boot-starter` | 4.1 | the starter's tests; Spring Data, Hibernate, Flyway, Liquibase, jOOQ, MyBatis against the four databases ([FRAMEWORKS.md](FRAMEWORKS.md)) | [getting-started](examples/getting-started) |
+| Quarkus | `seclume-quarkus` | 3.40 | JVM and native | - |
+| Micronaut | `seclume-micronaut` | 4.10 | an application context with a stub driver; a pool against PostgreSQL 15, 18 and 19 RC with a heap dump | [micronaut](examples/micronaut) |
+| Helidon SE and MP | `seclume-helidon` | 4.5 | SE from `Config`; MP in a Helidon CDI container; a pool against PostgreSQL 15, 18 and 19 RC with a heap dump | [helidon](examples/helidon) (MP) |
+| Jakarta Data | `seclume-jpa` | Jakarta Data 1.0, Hibernate 7.4 | repositories from Hibernate's processor against the four databases, blind index searches included | - |
+| Jakarta Persistence | `seclume-jpa` | 3.2 (Hibernate 7.4) | the converters against the four databases | - |
+
+Beside these, the `framework-compat` job builds and tests the integrations against the next major
+releases: Micronaut 5.2 on JDK 25, and Helidon 27 SE on JDK 27 (Helidon 27 has no MicroProfile;
+its MP moved to a project of its own, so the CDI extension stays on Helidon 4.5).
+
 ## Repeating it
 
 Each version was brought up the way [TESTING.md](TESTING.md) brings up the fixtures, on another
