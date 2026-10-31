@@ -71,6 +71,11 @@ public class SeclumeCdiExtension implements Extension {
         }
     }
 
+    /** The data sources this extension made beans of, by name - for a look from outside. */
+    java.util.Set<String> dataSourceNames() {
+        return java.util.Set.copyOf(pools.keySet());
+    }
+
     void beforeShutdown(@Observes BeforeShutdown shutdown) {
         pools.values().forEach(SeclumePool::close);
         pools.clear();

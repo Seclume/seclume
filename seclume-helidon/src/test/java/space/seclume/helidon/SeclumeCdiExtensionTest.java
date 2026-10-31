@@ -55,8 +55,6 @@ import space.seclume.pool.SeclumePool;
 class SeclumeCdiExtensionTest {
 
     private static Path keyFile;
-    private static Config original;
-    private static Config config;
     private static SeContainer container;
 
     /** A config source of a map, as an application's properties file is one. */
@@ -104,13 +102,12 @@ class SeclumeCdiExtensionTest {
         StubDriver.INSTANCE.urls.size();
         keyFile = Files.createTempFile("seclume-helidon-cdi", ".key");
         Files.writeString(keyFile, Base64.getEncoder().encodeToString(new byte[32]));
-        ClassLoader loader = Thread.currentThread().getContextClassLoader();
+        // System properties: a source every MicroProfile Config has, and the
+        // one Helidon's container still reads after it has built its own
+        // configuration on start - a config registered here would be replaced.
+        settings().forEach(System::setProperty);
         ConfigProviderResolver resolver = ConfigProviderResolver.instance();
-        original = resolver.getConfig(loader);
-        resolver.releaseConfig(original);
-        config = resolver.getBuilder().addDefaultSources()
-                .withSources(new MapSource("test", 1000, settings())).build();
-        resolver.registerConfig(config, loader);
+        resolver.releaseConfig(resolver.getConfig(Thread.currentThread().getContextClassLoader()));
 
         // What the extension will read, before the container is there to fail.
         Map<String, String> flat = SeclumeCdiExtension.flat(ConfigProvider.getConfig());
@@ -121,18 +118,21 @@ class SeclumeCdiExtensionTest {
         container = SeContainerInitializer.newInstance().disableDiscovery().initialize();
     }
 
+    @Test
+    void theExtensionRanInTheContainerWithTheConfiguration() {
+        SeclumeCdiExtension extension = container.getBeanManager().getExtension(SeclumeCdiExtension.class);
+        assertEquals(Set.of("default", "orders"), extension.dataSourceNames(),
+                "the data sources the extension found in the container's configuration");
+    }
+
     @AfterAll
     static void stopTheContainer() throws Exception {
         if (container != null) {
             container.close();
         }
+        settings().keySet().forEach(System::clearProperty);
         ConfigProviderResolver resolver = ConfigProviderResolver.instance();
-        if (config != null) {
-            resolver.releaseConfig(config);
-        }
-        if (original != null) {
-            resolver.registerConfig(original, Thread.currentThread().getContextClassLoader());
-        }
+        resolver.releaseConfig(resolver.getConfig(Thread.currentThread().getContextClassLoader()));
         Files.deleteIfExists(keyFile);
     }
 
