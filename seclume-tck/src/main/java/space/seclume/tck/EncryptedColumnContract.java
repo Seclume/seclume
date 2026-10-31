@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import space.seclume.field.ColumnRotation;
 import space.seclume.field.BlindIndex;
 import space.seclume.field.EncryptedColumn;
 import space.seclume.field.EncryptedColumn.Mode;
@@ -332,7 +333,63 @@ public abstract class EncryptedColumnContract {
         }
     }
 
-    private static void drop(Statement statement, String table) {
+    /**
+     * The same move with {@link ColumnRotation}: in batches of five, stopped
+     * after the first and continued from its last id, while the application
+     * writes a row under the new key; a census before and after, and a second
+     * run that finds nothing to do.
+     */
+    @Test
+    void theRotationJobMovesTheTableInBatchesAndResumes() throws Exception {
+        try (Connection connection = connect()) {
+            try (FieldKeys before = ring1()) {
+                for (int id = 1; id <= 23; id++) {
+                    insert(connection, before.column("zl.secret", Mode.RANDOMIZED),
+                            before.column("zl.ssn", Mode.DETERMINISTIC), id,
+                            id % 4 == 0 ? null : "secret " + id, "ssn " + id);
+                }
+            }
+            try (FieldKeys during = ring12()) {
+                ColumnRotation first = rotation(during, null);
+                assertEquals(18 + 23, first.census(connection).remaining());
+                ColumnRotation.Progress one = first.step(connection, null);
+                assertEquals(5, one.rows());
+                assertEquals(4 + 5, one.rotated());
+                // The application, meanwhile: a new row, under key 2 already.
+                insert(connection, during.column("zl.secret", Mode.RANDOMIZED),
+                        during.column("zl.ssn", Mode.DETERMINISTIC), 100, "secret 100", "ssn 100");
+                ColumnRotation.Progress rest = rotation(during, one.lastId()).run(connection);
+                assertTrue(rest.done());
+                assertEquals(19, rest.rows());
+                assertEquals(14 + 18, rest.rotated());
+                assertEquals(2, rest.current(), "row 100, written under key 2");
+                assertEquals(0, rest.conflicts());
+                assertEquals(0, rotation(during, null).census(connection).remaining());
+                ColumnRotation.Progress again = rotation(during, null).run(connection);
+                assertEquals(0, again.rotated());
+            }
+            try (FieldKeys after = ring2()) {
+                EncryptedColumn secret = after.column("zl.secret", Mode.RANDOMIZED);
+                EncryptedColumn ssn = after.column("zl.ssn", Mode.DETERMINISTIC);
+                for (int id = 1; id <= 23; id++) {
+                    assertEquals(id % 4 == 0 ? null : "secret " + id, readSecret(connection, secret, id));
+                    assertEquals(List.of(id), find(connection, ssn, "ssn " + id));
+                }
+            }
+        }
+    }
+
+    private static ColumnRotation rotation(FieldKeys keys, Object after) {
+        return ColumnRotation.builder(keys).table(TABLE).id("id")
+                .column("secret", "zl.secret", Mode.RANDOMIZED, ColumnRotation.Context.ROW_ID)
+                .column("ssn", "zl.ssn", Mode.DETERMINISTIC, ColumnRotation.Context.NONE)
+                .batchSize(5).after(after).build();
+    }
+
+    /** The blind index test's table. */
+    private static final String BLIND = "zl_blind";
+
+    private static void dropBlind(Statement statement, String table) {
         try {
             statement.execute("drop table " + table);
         } catch (SQLException itWasNotThere) {
@@ -349,13 +406,12 @@ public abstract class EncryptedColumnContract {
      */
     @Test
     void aBlindIndexFindsCandidatesAndTheRightOnesAmongThem() throws Exception {
-        String table = "zl_blind";
         String[] names = {"Müller", "Mueller", "Meier", "Mayer", "Schmidt", "Schneider", "Fischer",
             "Weber", "Wagner", "Becker", "Schulz", "Hoffmann", "Müllheim", "Mülhaupt", "Koch", "Bauer",
             "Richter", "Klein", "Wolf", "Schröder", "Neumann", "Schwarz", "Zimmermann", "Braun"};
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            drop(statement, table);
-            statement.execute("create table " + table + " (id int primary key, name " + binary(300)
+            dropBlind(statement, BLIND);
+            statement.execute("create table " + BLIND + " (id int primary key, name " + binary(300)
                     + ", name_prefix numeric(20))");
         }
         try (Connection connection = connect()) {
@@ -364,7 +420,7 @@ public abstract class EncryptedColumnContract {
                 BlindIndex prefix = one.blindIndex("zl.name", 1, BlindIndex.Transform.prefix(3).caseInsensitive());
                 for (int i = 0; i < names.length; i++) {
                     try (PreparedStatement insert = connection.prepareStatement(
-                            "insert into " + table + " (id, name, name_prefix) values (?, ?, ?)")) {
+                            "insert into " + BLIND + " (id, name, name_prefix) values (?, ?, ?)")) {
                         insert.setInt(1, i + 1);
                         name.set(insert, 2, bytes(names[i]));
                         prefix.set(insert, 3, bytes(names[i]));
@@ -372,7 +428,7 @@ public abstract class EncryptedColumnContract {
                     }
                 }
                 List<String> candidates = new ArrayList<>();
-                List<String> found = blindSearch(connection, table, name, prefix, "mül", candidates);
+                List<String> found = blindSearch(connection, name, prefix, "mül", candidates);
                 assertEquals(List.of("Müller", "Müllheim", "Mülhaupt"), found);
                 assertTrue(candidates.size() > found.size(), "1 bit: other names share the index value "
                         + candidates);
@@ -381,26 +437,27 @@ public abstract class EncryptedColumnContract {
                 EncryptedColumn name = both.column("zl.name", Mode.RANDOMIZED);
                 BlindIndex prefix = both.blindIndex("zl.name", 1, BlindIndex.Transform.prefix(3).caseInsensitive());
                 assertEquals(List.of("Schmidt", "Schneider", "Schulz", "Schröder", "Schwarz"),
-                        blindSearch(connection, table, name, prefix, "SCH", new ArrayList<>()),
+                        blindSearch(connection, name, prefix, "SCH", new ArrayList<>()),
                         "rows indexed under key 1, searched with the ring of keys 1 and 2");
             }
         } finally {
             try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-                drop(statement, table);
+                dropBlind(statement, BLIND);
             }
         }
     }
 
     /** {@code where name_prefix in (...)}, then the decrypted candidates that really start so. */
-    private static List<String> blindSearch(Connection connection, String table, EncryptedColumn name,
+    private static List<String> blindSearch(Connection connection, EncryptedColumn name,
             BlindIndex prefix, String query, List<String> candidates) throws SQLException {
         List<Long> terms = prefix.searchTerms(bytes(query));
-        StringBuilder sql = new StringBuilder("select id, name from " + table + " where name_prefix in (");
+        StringBuilder sql = new StringBuilder("select id, name from " + BLIND + " where name_prefix in (");
         for (int i = 0; i < terms.size(); i++) {
             sql.append(i == 0 ? "?" : ", ?");
         }
         List<String> found = new ArrayList<>();
-        try (PreparedStatement select = connection.prepareStatement(sql + ") order by id")) {
+        sql.append(") order by id");
+        try (PreparedStatement select = connection.prepareStatement(sql.toString())) {
             for (int i = 0; i < terms.size(); i++) {
                 select.setLong(i + 1, terms.get(i));
             }

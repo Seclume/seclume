@@ -2,7 +2,8 @@
 -- both spellings, the collection mappings, a shared key and a second table.
 -- As with V3 the DDL is Hibernate's own for this dialect, taken from its
 -- schema generator rather than written here, so that ddl-auto=validate
--- compares like with like.
+-- compares like with like. The payment sequence is MySQL's or MariaDB's
+-- own, V4_1 in db/migration/mysql-flavour/<flavour>.
 create table zl_book (id bigint not null auto_increment, isbn varchar(20) not null, title varchar(120) not null, primary key (id)) engine=InnoDB;
 create table zl_book_detail (book_id bigint not null, summary varchar(500), primary key (book_id)) engine=InnoDB;
 create table zl_invoice (issued_on date not null, net decimal(12,2), id bigint not null, doc_no varchar(40) not null, primary key (id)) engine=InnoDB;
@@ -11,8 +12,6 @@ insert into zl_keys(key_name, next_value) values ('zl_doc',0);
 create table zl_payment (amount decimal(12,2) not null, id bigint not null, paid_at datetime(6) not null, primary key (id)) engine=InnoDB;
 create table zl_payment_bank (payment_id bigint not null, iban varchar(34), primary key (payment_id)) engine=InnoDB;
 create table zl_payment_card (last_four varchar(4), payment_id bigint not null, primary key (payment_id)) engine=InnoDB;
-create table zl_payment_seq (next_val bigint) engine=InnoDB;
-insert into zl_payment_seq ( next_val ) values ( 1 );
 create table zl_player (id bigint not null auto_increment, team_id bigint, label varchar(60) not null, primary key (id)) engine=InnoDB;
 create table zl_player_profile (player_id bigint not null, bio varchar(200), primary key (player_id)) engine=InnoDB;
 create table zl_player_skill (player_id bigint not null, skill_id bigint not null, primary key (player_id, skill_id)) engine=InnoDB;
