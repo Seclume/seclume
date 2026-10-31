@@ -97,6 +97,11 @@ public final class FrameworkMatrix {
             new Framework("Hibernate, the edges", "HibernateEdgesOn",
                     "a JSON column, LOBs as values and as streams, @Formula, bulk HQL - "
                     + "the skipped cases are open gaps, named in the CHANGELOG"),
+            new Framework("Jakarta Data (Hibernate)", "JakartaDataOn",
+                    "a repository Hibernate's processor implements, over a stateless "
+                    + "session: @Insert, @Update, @Delete, @Find on a deterministic attribute, "
+                    + "in, and blind index searches through StringBlindIndex - candidates kept "
+                    + "exactly where they match, during a rotation too"),
             new Framework("Spring JDBC and transactions", "SpringJdbcOn",
                     "REQUIRES_NEW, NESTED, readOnly, isolation, a timeout; batchUpdate, "
                     + "named parameters, generated keys, scripts, JDBC escapes"),

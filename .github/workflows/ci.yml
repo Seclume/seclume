@@ -1152,7 +1152,7 @@ jobs:
         if: always()
         run: python3 .github/scripts/require_mongo_tests.py 'seclume-micronaut' 'Micronaut'
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest,SpringDataOnPostgresTest,EntityShapesOnPostgresTest,HibernateEdgesOnPostgresTest,SpringJdbcOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest,JakartaDataOnPostgresTest,SpringDataOnPostgresTest,EntityShapesOnPostgresTest,HibernateEdgesOnPostgresTest,SpringJdbcOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Postgres
@@ -1333,7 +1333,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,JakartaDataOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py MySql
@@ -1421,7 +1421,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group sqlserver --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest,SpringDataOnSqlServerTest,EntityShapesOnSqlServerTest,HibernateEdgesOnSqlServerTest,SpringJdbcOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest,JakartaDataOnSqlServerTest,SpringDataOnSqlServerTest,EntityShapesOnSqlServerTest,HibernateEdgesOnSqlServerTest,SpringJdbcOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py SqlServer
@@ -1518,7 +1518,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
+        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,JakartaDataOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Oracle
