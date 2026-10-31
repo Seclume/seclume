@@ -164,6 +164,13 @@ EncryptedColumn token = keys.column("tenant.api_token", Mode.RANDOMIZED);
 A key that cannot be read - a wrong number, a key that is not 32 bytes, a provider Vault
 refuses - stops the start, with the reason; nothing half-built is left in memory.
 
+## Quarkus
+
+The same properties in `application.properties` of a Quarkus application with
+`seclume-quarkus`: the ring is a `@Singleton` `FieldKeys` to inject, built at start-up -
+a key that cannot be read stops it - installed for the JPA converters, and wiped when the
+application stops.
+
 ## JPA entities
 
 `seclume-jpa` has the converters, for Hibernate, EclipseLink or any Jakarta Persistence 3
@@ -319,6 +326,11 @@ always be read; a later format will have another version byte.
 - **Spring Boot:** the ring from the properties, its primary, the `uri` form, installed while
   the context lives, wiped when it closes, every misconfiguration refused at start with
   nothing left in memory (`FieldEncryptionAutoConfigurationTest`).
+- **Quarkus:** the ring from the configuration, injected and installed; an unreadable key stops
+  the start (`FieldKeysTest`, `FieldKeyRefusedTest`).
+- **An AWS KMS emulator:** moto, in CI's brokers job - a data key `Encrypt` made under a real
+  key ARN, opened by a SigV4-signed `Decrypt`, keying a ring; an altered ciphertext refused by
+  the service (`LocalAwsKmsDecryptTest`).
 - **Cloud KMS:** AWS KMS, Cloud KMS and Key Vault against stand-ins - the request each
   service is sent, the plaintext decoded from its answer (Key Vault's Base64url too), every
   refusal and malformed answer (`KmsDecryptSecretProviderTest`). A live run needs the cloud

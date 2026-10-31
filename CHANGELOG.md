@@ -22,6 +22,12 @@ All notable changes to seclume are recorded here. Versions follow
   quantum computer would break. CI checks the CBOMs the tests write against CycloneDX's JSON
   schema (ajv, pinned in `.github/ci-tools`).
 
+- **Field encryption in Quarkus, and against an AWS KMS emulator.** `seclume-quarkus` builds the
+  key ring from `seclume.field-encryption.keys.<n>.*` and `.primary` at start-up, as a
+  `@Singleton` `FieldKeys`, installed for the JPA converters and wiped at shutdown; the library's
+  `field` and `inventory` packages are initialised at run time in a native image, like the rest.
+  CI's brokers job runs `provider=kms-decrypt&kms=aws-kms` against moto: a data key made by
+  `Encrypt`, opened by a signed `Decrypt`, an altered ciphertext refused.
 - **Field encryption in JPA entities** (`seclume-jpa`, new). `EncryptedStringConverter` and
   `EncryptedBytesConverter` - one small subclass per column, which names it and its mode -
   encrypt a `String` or `byte[]` attribute; JPQL `=`/`in` and derived queries on a
