@@ -266,6 +266,7 @@ Everything below works on all four databases unless the row says otherwise.
 | **Rotation** | Passwords, TLS server keys and certificates rotated at their source, taken up without a restart; a JFR event and a metric for each rotation | [FEATURES.md](FEATURES.md#rotation-without-a-restart) |
 | **Runtime** | GraalVM native image, no flags needed | [FEATURES.md](FEATURES.md#graalvm-native-image) |
 | | Quarkus, JVM and native: the four drivers as datasource kinds; a password in the configuration fails the build: `seclume-quarkus` | [FEATURES.md](FEATURES.md#quarkus) |
+| | Micronaut: named pools and the field encryption key ring from `application.yml`, a password in the configuration refused at start-up: `seclume-micronaut` | [FEATURES.md](FEATURES.md#micronaut) |
 | | CRaC / Lambda SnapStart with `seclume-crac`: the checkpoint image holds no password | [FEATURES.md](FEATURES.md#the-pool) |
 
 ### Supported database versions
