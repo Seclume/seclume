@@ -47,7 +47,7 @@ through PostgreSQL decrypts after a move to SQL Server.
 | SQL Server | `varbinary(n)` or `varbinary(max)` |
 | Oracle | `raw(n)` or `blob` |
 
-A value takes 34 bytes more than its plaintext, so `n` is the longest plaintext plus 34.
+A value takes 66 bytes more than its plaintext, so `n` is the longest plaintext plus 66.
 
 ## Randomized or deterministic
 
@@ -208,7 +208,29 @@ em.createQuery("from Patient where ssn = :ssn", Patient.class)
   `column.searchSealed(value)` with `in` on a `Sealed` attribute, or re-encrypt first.
 
 Hibernate generates the schema for these attributes as it does for any `byte[]`: `bytea`,
-`varbinary(n)`, `raw(n)` - with `length` the plaintext's longest plus 34.
+`varbinary(n)`, `raw(n)` - with `length` the plaintext's longest plus 66.
+
+## R2DBC and MongoDB
+
+The same columns, in the same format, from the reactive API and from documents:
+
+```java
+// R2DBC (seclume-r2dbc): a ByteBuffer any R2DBC driver binds and reads
+EncryptedValues.bind(statement, 1, token, issued.secret());
+row -> EncryptedValues.readInto(row, "api_token", token, value.segment());
+
+// MongoDB (seclume-mongodb-driver, also with the official driver): BSON binary, subtype 0x80
+patients.insertOne(new Document("_id", 7).append("ssn", EncryptedFields.encrypt(ssn, number)));
+Document found = patients.find(EncryptedFields.eq("ssn", ssn, number)).first();
+value.length(EncryptedFields.readInto(found, "ssn", ssn, value.segment()));
+```
+
+`EncryptedFields.eq` searches with `$in` over the value under every key of the ring, so a
+document not yet moved to the primary key is found during a rotation. It is not MongoDB's own
+client-side field level encryption: that needs libmongocrypt, keeps its keys in a key vault
+collection and holds them as Java objects; this keeps them in locked native memory and needs
+nothing on the server. A value written through JDBC and one written through R2DBC are the same
+bytes.
 
 ## Context: a value bound to its row
 
@@ -249,18 +271,25 @@ must be found.
 ## The format
 
 ```
-[ 1 version = 1 ][ 1 flags ][ 4 key number, big endian ][ 12 nonce ][ ciphertext ][ 16 tag ]
+[ 1 version = 1 ][ 1 flags ][ 4 key number, big endian ][ 12 nonce ][ 32 commitment ][ ciphertext ][ 16 tag ]
 ```
 
 - **Flags:** bit 0 set for deterministic. No other bit is defined; a value with one set is
   refused.
 - **Associated data:** the first six bytes, followed by the context if there is one.
-- **Column key:** `HKDF-SHA-256(salt = "seclume field encryption v1", IKM = data key,
-  info = flag byte || 0x00 || UTF-8 column name)`, 32 bytes.
+- **Column keys:** `HKDF-SHA-256(salt = "seclume field encryption v1", IKM = data key,
+  info = flag byte || 0x00 || UTF-8 column name)`, 64 bytes: the first 32 are the AES-GCM-SIV
+  key, the last 32 the commitment key.
+- **Commitment:** `HMAC-SHA-256(commitment key, version || flags || key number || nonce)`,
+  checked in constant time before anything is decrypted. AES-GCM-SIV, like every AEAD built on
+  a polynomial MAC, does not bind a ciphertext to one key: someone who knows two keys can make
+  one value that opens under both. With the commitment a value opens under the key it was made
+  with and no other - which matters as soon as a ring holds two keys, or a key is not chosen by
+  the operator.
 - **Deterministic nonce:** twelve zero bytes.
 
 This is pinned by `FieldEncryptionTest` against vectors made by a separate implementation in
-Python (`cryptography`'s HKDF and AES-GCM-SIV): one writes, the other reads. Version 1 will
+Python (`cryptography`'s HKDF, HMAC and AES-GCM-SIV): one writes, the other reads. Version 1 will
 always be read; a later format will have another version byte.
 
 ## How it is tested
@@ -297,5 +326,9 @@ always be read; a later format will have another version byte.
 - **Vault and OpenBao:** a data key made by transit, opened by `vault-transit` with a token
   that may decrypt that key and no other (`LocalVaultTransitFieldKeyTest`); every answer that
   is not a plaintext refused (`VaultTransitSecretProviderTest`).
+- **R2DBC and MongoDB:** values bound and read through `EncryptedValues` against stand-ins and,
+  in CI, PostgreSQL over TLS (`EncryptedValuesTest`, `LocalEncryptedR2dbcTest`); documents with
+  ciphertext fields of subtype 0x80, found by `EncryptedFields.eq` also during a rotation, on
+  MongoDB 8.0 and 9.0 (`LocalEncryptedFieldsTest`).
 - **The release gate:** these tests are in [`.github/security-gate.json`](.github/security-gate.json),
   so a build in which one did not run, or skipped, does not pass.
