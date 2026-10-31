@@ -399,7 +399,7 @@ public abstract class EncryptedColumnContract {
     @Test
     void aShreddedSubjectsValuesStayAndOpenNothing() throws Exception {
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            dropTable(statement, SUBJECT_KEYS);
+            dropSubjectKeys(statement);
             statement.execute("create table " + SUBJECT_KEYS + " (subject varchar(200) primary key, wrapped "
                     + binary(128) + ")");
         }
@@ -426,21 +426,22 @@ public abstract class EncryptedColumnContract {
             assertEquals("secret of customer-even 4", readSecret(connection, even, 4));
             // The odd rows are still there - as noise, under a key nobody has.
             EncryptedColumn newOdd = subjects.column("customer-odd", "zl.secret", Mode.RANDOMIZED);
-            assertThrows(space.seclume.field.FieldEncryptionException.class,
-                    () -> readSecret(connection, newOdd, 1));
+            SQLException noise = assertThrows(SQLException.class, () -> readSecret(connection, newOdd, 1));
+            assertTrue(noise.getCause() instanceof space.seclume.field.FieldEncryptionException,
+                    "refused by the field encryption: " + noise);
             // A second key for a subject that has one: the table's primary key refuses it.
             assertFalse(SubjectKeyStore.jdbc(dataSource(), SUBJECT_KEYS).insert("customer-even",
                     new byte[] {1, 2, 3}));
         } finally {
             try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-                dropTable(statement, SUBJECT_KEYS);
+                dropSubjectKeys(statement);
             }
         }
     }
 
-    private static void dropTable(Statement statement, String table) {
+    private static void dropSubjectKeys(Statement statement) {
         try {
-            statement.execute("drop table " + table);
+            statement.execute("drop table " + SUBJECT_KEYS);
         } catch (SQLException itWasNotThere) {
             // the first run, or the last one tidied up
         }

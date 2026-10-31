@@ -79,6 +79,7 @@ public interface SubjectKeyStore {
                      PreparedStatement select = connection.prepareStatement( // nosemgrep - the table name is checked above to be a plain identifier
                              "select wrapped from " + table + " where subject = ?")) {
                     select.setString(1, subject);
+                    // nosemgrep - the table name is checked above to be a plain identifier
                     try (ResultSet rows = select.executeQuery()) {
                         return rows.next() ? rows.getBytes(1) : null; // seclume-allow: a wrapped key, ciphertext
                     }
@@ -95,6 +96,7 @@ public interface SubjectKeyStore {
                              "insert into " + table + " (subject, wrapped) values (?, ?)")) {
                     insert.setString(1, subject);
                     insert.setBytes(2, wrapped);
+                    // nosemgrep - the table name is checked above to be a plain identifier
                     return insert.executeUpdate() == 1;
                 } catch (SQLException e) {
                     // Someone else was first, and the primary key said so - by SQLSTATE 23xxx,
@@ -114,6 +116,7 @@ public interface SubjectKeyStore {
                      PreparedStatement delete = connection.prepareStatement( // nosemgrep - the table name is checked above to be a plain identifier
                              "delete from " + table + " where subject = ?")) {
                     delete.setString(1, subject);
+                    // nosemgrep - the table name is checked above to be a plain identifier
                     return delete.executeUpdate() > 0;
                 } catch (SQLException e) {
                     throw new FieldEncryptionException("the subject key table " + table
