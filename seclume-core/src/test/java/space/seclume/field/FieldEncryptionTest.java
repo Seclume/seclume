@@ -59,21 +59,55 @@ class FieldEncryptionTest {
     void theFormatIsTheOneAnotherImplementationWrites() {
         try (FieldKeys keys = ring(1, KEY)) {
             EncryptedColumn ssn = keys.column("patient.ssn", Mode.DETERMINISTIC);
-            assertEquals("01010000000100000000000000000000000056f4639a25ffbcbb64a3f553771d7b18"
-                    + "c80019d978e4804e0bc35d", HEX.formatHex(ssn.encrypt(text("123-45-6789"))));
-            assertEquals("01010000000100000000000000000000000053d999a2d40fe015822b823b899c74cc",
+            String header = "010100000001" + "000000000000000000000000"
+                    + "b324e9be09b67eb26bf9a0808d1c53e5be7608ec48daca41aa8e57a813cffff1";
+            assertEquals(header + "56f4639a25ffbcbb64a3f553771d7b18c80019d978e4804e0bc35d",
+                    HEX.formatHex(ssn.encrypt(text("123-45-6789"))));
+            assertEquals(header + "53d999a2d40fe015822b823b899c74cc",
                     HEX.formatHex(ssn.encrypt(MemorySegment.ofArray(new byte[0]))));
         }
         try (FieldKeys keys = ring(7, KEY)) {
             EncryptedColumn token = keys.column("tenant.api_token", Mode.RANDOMIZED);
-            byte[] written = HEX.parseHex("010000000007101112131415161718191a1b2197c548a93057f2c4"
-                    + "3aca6cbec96de5748bed5c0e9eee095be206");
+            byte[] written = HEX.parseHex("010000000007101112131415161718191a1b"
+                    + "52852d35503cfcc77e4e8970e9398d9cee926e5a6d15f59b0f84c57fc899f80e"
+                    + "2197c548a93057f2c43aca6cbec96de5748bed5c0e9eee095be206");
             try (SecretScope back = SecretScope.allocate(64)) {
                 back.length(token.decrypt(written, "row-7".getBytes(StandardCharsets.US_ASCII),
                         back.segment()));
                 assertEquals("tök-ĸ€y", new String(back.secret().toArray(ValueLayout.JAVA_BYTE),
                         StandardCharsets.UTF_8));
             }
+        }
+    }
+
+    /**
+     * The commitment: a value whose ciphertext and tag are another key's but
+     * whose commitment is not is refused before AES-GCM-SIV is asked - and a
+     * changed commitment alone is refused too.
+     */
+    @Test
+    void theCommitmentBindsAValueToItsKey() {
+        byte[] other = KEY.clone();
+        other[31] ^= 1;
+        try (FieldKeys mine = ring(1, KEY);
+             FieldKeys theirs = ring(1, other);
+             SecretScope out = SecretScope.allocate(32)) {
+            EncryptedColumn column = mine.column("t.c", Mode.DETERMINISTIC);
+            byte[] value = column.encrypt(text("committed"));
+            byte[] foreign = theirs.column("t.c", Mode.DETERMINISTIC).encrypt(text("committed"));
+            assertFalse(Arrays.equals(Arrays.copyOfRange(value, 18, 50),
+                    Arrays.copyOfRange(foreign, 18, 50)), "two keys, one commitment");
+            // Their ciphertext and tag with my header, nonce and commitment.
+            byte[] spliced = value.clone();
+            System.arraycopy(foreign, 50, spliced, 50, foreign.length - 50);
+            assertThrows(FieldEncryptionException.class, () -> column.decrypt(spliced,
+                    out.segment()));
+            byte[] commitmentChanged = value.clone();
+            commitmentChanged[30] ^= 0x40;
+            FieldEncryptionException e = assertThrows(FieldEncryptionException.class,
+                    () -> column.decrypt(commitmentChanged, out.segment()));
+            assertTrue(e.getMessage().contains("did not authenticate"), e.getMessage());
+            assertEquals(66, EncryptedColumn.OVERHEAD);
         }
     }
 
@@ -165,7 +199,7 @@ class FieldEncryptionTest {
         try (FieldKeys keys = ring(1, KEY);
              SecretScope out = SecretScope.allocate(64)) {
             EncryptedColumn column = keys.column("t.c", Mode.RANDOMIZED);
-            byte[] plain = "an old, unencrypted value of this column".getBytes(
+            byte[] plain = "an old, unencrypted value of this column, long enough to be taken for one".getBytes(
                     StandardCharsets.US_ASCII);
             FieldEncryptionException e = assertThrows(FieldEncryptionException.class,
                     () -> column.decrypt(plain, out.segment()));
