@@ -37,6 +37,11 @@ All notable changes to seclume are recorded here. Versions follow
   after the transform, in native memory and without an early exit. `JakartaDataCase` runs
   Hibernate 7.4's Jakarta Data repositories against the four databases; `FrameworkMatrix` has a
   row for them.
+- **Ranges over a blind index, as buckets.** `StringBlindIndex.findAny(values, query,
+  attribute)` searches for several values in one query - every value's search terms, the rows
+  kept that match one - so a range is the buckets it covers: a `prefix(7)` index over ISO dates
+  and `findAny(List.of("2026-01", "2026-02", "2026-03"), ...)` for a quarter. There is no
+  order-revealing index on purpose; ENCRYPTION.md says why.
 - **`PoolConfiguration` refuses every inline secret, and repeats none.** Besides `password=`,
   a URL with `secret=` or `value=` (the keys the drivers refuse at the first login) or a password
   in its user information (`//user:password@host`) is refused when the pool is made, not when
@@ -49,6 +54,11 @@ All notable changes to seclume are recorded here. Versions follow
   beside a seclume URL, under `seclume.datasources`, or in the URL - stops the start.
   `PoolConfiguration` (seclume-pool) reads pool settings by the same keys for every framework.
   Tested in a context with a stub driver and against CI's PostgreSQL with a heap dump.
+- **Micronaut 5 and Helidon 27, tested beside the versions built against.** The
+  `framework-compat` job runs seclume-micronaut's tests on Micronaut 5.2 and seclume-helidon's
+  SE tests on Helidon 27 (JDK 27; Helidon 27 has no MicroProfile, so `-Dhelidon.se` leaves the MP
+  test out). `microprofile-config-api` has its own version now, as Helidon 27's BOM no longer
+  manages it.
 - **Field encryption: a key commitment in every value, and R2DBC and MongoDB.** The format
   (unreleased until now, so changed in place) carries HMAC-SHA-256 of header and nonce under a
   second key derived with the column key, checked first: a value opens under the key it was made

@@ -19,6 +19,9 @@
 
   <properties>
     <helidon.version>4.5.5</helidon.version>
+    <!-- Helidon 4.5's; named here because Helidon 27's BOM has no
+         MicroProfile left to manage it. -->
+    <microprofile.config.version>3.1</microprofile.config.version>
   </properties>
 
   <dependencyManagement>
@@ -59,19 +62,10 @@
     <dependency>
       <groupId>org.eclipse.microprofile.config</groupId>
       <artifactId>microprofile-config-api</artifactId>
+      <version>${microprofile.config.version}</version>
       <scope>provided</scope>
     </dependency>
 
-    <dependency>
-      <groupId>io.helidon.microprofile.cdi</groupId>
-      <artifactId>helidon-microprofile-cdi</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>io.helidon.microprofile.config</groupId>
-      <artifactId>helidon-microprofile-config</artifactId>
-      <scope>test</scope>
-    </dependency>
     <dependency>
       <groupId>space.seclume</groupId>
       <artifactId>seclume-postgresql</artifactId>
@@ -117,4 +111,52 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- The MP container for SeclumeCdiExtensionTest: Helidon 4.5. -->
+    <profile>
+      <id>helidon-mp</id>
+      <activation>
+        <property>
+          <name>!helidon.se</name>
+        </property>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>io.helidon.microprofile.cdi</groupId>
+          <artifactId>helidon-microprofile-cdi</artifactId>
+          <scope>test</scope>
+        </dependency>
+        <dependency>
+          <groupId>io.helidon.microprofile.config</groupId>
+          <artifactId>helidon-microprofile-config</artifactId>
+          <scope>test</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+    <!-- -Dhelidon.se: Helidon SE alone, for Helidon 27, which has no MP
+         (MicroProfile lives on in a project of its own) and needs JDK 27.
+         The CI job framework-compat builds this with -Dhelidon.version=27... -->
+    <profile>
+      <id>helidon-se</id>
+      <activation>
+        <property>
+          <name>helidon.se</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <configuration>
+              <testExcludes>
+                <testExclude>**/SeclumeCdiExtensionTest.java</testExclude>
+              </testExcludes>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
