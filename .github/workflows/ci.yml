@@ -322,6 +322,19 @@ jobs:
           set -euo pipefail
           kubectl create namespace shop
           kubectl label namespace shop seclume.space/inject=enabled
+          # Rolled out is not yet answering: until the service has the new pods
+          # as endpoints, failurePolicy=Ignore lets a pod through unchanged.
+          # Ask with a dry run until the webhook mutates one, for a minute.
+          for i in $(seq 1 30); do
+            kubectl -n shop create --dry-run=server -o json \
+              -f seclume-admission/ci/spiffe-pod.yaml > answering.json
+            python3 -c "import json, sys; p = json.load(open('answering.json')); \
+              sys.exit(0 if p['metadata'].get('annotations', {}).get('seclume.space/injected') else 1)" \
+              && break
+            [ "$i" = 30 ] && { echo "::error title=admission-webhook::the webhook never answered"; exit 1; }
+            sleep 2
+          done
+          rm -f answering.json
           kubectl -n shop create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
           kubectl -n shop create configmap oom --from-file=seclume-admission/ci/Oom.java
           kubectl -n shop apply -f seclume-admission/ci/oom-pod.yaml
@@ -772,6 +785,49 @@ jobs:
       - if: always()
         run: cd examples/getting-started && docker compose down -v || true
 
+  # The integrations against the frameworks' newer major releases, beside
+  # the ones they are built against: Micronaut 5 (Java 25, like this
+  # project) and Helidon 27, which has SE only - its MicroProfile moved to a
+  # project of its own - and is compiled for JDK 27.
+  framework-compat:
+    name: framework-compat (${{ matrix.name }})
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Micronaut 5.2
+            java: '25'
+            module: seclume-micronaut
+            args: -Dmicronaut.version=5.2.4
+            tests: SeclumeMicronautTest
+          - name: Helidon 27 SE
+            java: '27'
+            module: seclume-helidon
+            args: -Dhelidon.version=27.0.1 -Dhelidon.se
+            tests: SeclumeSettingsTest,SeclumeHelidonTest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: temurin
+          cache: maven
+      - name: ${{ matrix.name }}
+        run: |
+          set -o pipefail
+          ./mvnw -B -pl ${{ matrix.module }} -am test ${{ matrix.args }} \
+            -Dtest='${{ matrix.tests }}' -Dsurefire.failIfNoSpecifiedTests=false 2>&1 | tee build.log
+      - name: Require executed tests
+        if: always()
+        run: python3 .github/scripts/require_mongo_tests.py '${{ matrix.module }}' '${{ matrix.name }}'
+      # The compiler's and the tests' errors, on the pull request.
+      - if: failure()
+        run: |
+          text=$(grep -E "^\[ERROR\]|Caused by|Exception" build.log | grep -v "^\[ERROR\] *$\|-> \[Help\|Re-run Maven\|full stack trace\|^\[ERROR\] To see\|^\[ERROR\] For more" \
+            | head -30 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3500)
+          echo "::error title=${{ matrix.name }}::$text"
+
   # The post-quantum key exchange, end to end. The own TLS stack offers
   # X25519MLKEM768 wherever OpenSSL 3.5 is there - and ubuntu-26.04 has 3.0,
   # so every other job runs with the hybrid off and would not notice it
@@ -1142,15 +1198,16 @@ jobs:
         run: |
           rm -f .local-pgtls-password
           docker rm -f pgtls || true
-      # Micronaut from properties alone: the pool logs in to this server, and the
+      # Micronaut and Helidon from properties alone: the pool logs in to this server, and the
       # password is not on the heap afterwards.
-      - name: Micronaut against this server
+      - name: Micronaut and Helidon against this server
         run: >-
-          ./mvnw -B -pl seclume-micronaut -am test
-          -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest' -Dsurefire.failIfNoSpecifiedTests=false
-      - name: Require executed Micronaut tests
+          ./mvnw -B -pl seclume-micronaut,seclume-helidon -am test
+          -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest,SeclumeSettingsTest,SeclumeHelidonTest,SeclumeCdiExtensionTest,SeclumeCdiExtensionOnceTest,LocalHelidonPostgresTest'
+          -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Require executed Micronaut and Helidon tests
         if: always()
-        run: python3 .github/scripts/require_mongo_tests.py 'seclume-micronaut' 'Micronaut'
+        run: python3 .github/scripts/require_mongo_tests.py 'seclume-micronaut,seclume-helidon' 'Micronaut and Helidon'
       - name: Verify framework edge cases
         run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest,JakartaDataOnPostgresTest,SpringDataOnPostgresTest,EntityShapesOnPostgresTest,HibernateEdgesOnPostgresTest,SpringJdbcOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests

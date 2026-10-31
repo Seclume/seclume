@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>space.seclume</groupId>
+    <artifactId>seclume-parent</artifactId>
+    <version>0.14.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>seclume-helidon</artifactId>
+  <name>seclume for Helidon</name>
+  <description>
+    seclume's pool, drivers and field encryption key ring for Helidon SE (from Config)
+    and Helidon MP (a CDI extension, from MicroProfile Config) - the secret named where
+    it comes from, never a password in the configuration.</description>
+
+  <properties>
+    <helidon.version>4.5.5</helidon.version>
+    <!-- Helidon 4.5's; named here because Helidon 27's BOM has no
+         MicroProfile left to manage it. -->
+    <microprofile.config.version>3.1</microprofile.config.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.helidon</groupId>
+        <artifactId>helidon-dependencies</artifactId>
+        <version>${helidon.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-pool</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!-- Helidon SE: Config. -->
+    <dependency>
+      <groupId>io.helidon.config</groupId>
+      <artifactId>helidon-config</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- Helidon MP: CDI and MicroProfile Config, both APIs only. -->
+    <dependency>
+      <groupId>jakarta.enterprise</groupId>
+      <artifactId>jakarta.enterprise.cdi-api</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.microprofile.config</groupId>
+      <artifactId>microprofile-config-api</artifactId>
+      <version>${microprofile.config.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-postgresql</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-tck</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.platform</groupId>
+      <artifactId>junit-platform-launcher</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <!-- Helidon's jars bring annotation processors this module does
+               not use; run, they claim nothing and -Xlint:processing turns
+               that into an error. -->
+          <proc>none</proc>
+          <!-- MicroProfile Config's ConfigProviderResolver carries bnd's
+               @ServiceConsumer, an OSGi annotation that is not on the class
+               path: "classfile" warns about it. Everything else stays an error. -->
+          <compilerArgs combine.self="override">
+            <arg>-Xlint:all,-restricted,-classfile</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <!-- The MP container for SeclumeCdiExtensionTest: Helidon 4.5. -->
+    <profile>
+      <id>helidon-mp</id>
+      <activation>
+        <property>
+          <name>!helidon.se</name>
+        </property>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>io.helidon.microprofile.cdi</groupId>
+          <artifactId>helidon-microprofile-cdi</artifactId>
+          <scope>test</scope>
+        </dependency>
+        <dependency>
+          <groupId>io.helidon.microprofile.config</groupId>
+          <artifactId>helidon-microprofile-config</artifactId>
+          <scope>test</scope>
+        </dependency>
+      </dependencies>
+    </profile>
+    <!-- -Dhelidon.se: Helidon SE alone, for Helidon 27, which has no MP
+         (MicroProfile lives on in a project of its own) and needs JDK 27.
+         The CI job framework-compat builds this with -Dhelidon.version=27... -->
+    <profile>
+      <id>helidon-se</id>
+      <activation>
+        <property>
+          <name>helidon.se</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <configuration>
+              <testExcludes>
+                <testExclude>**/SeclumeCdiExtensionTest.java</testExclude>
+              </testExcludes>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

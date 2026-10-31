@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Micronaut 5 and Helidon 27, tested beside the versions built against.** The
+  `framework-compat` job runs seclume-micronaut's tests on Micronaut 5.2 and seclume-helidon's
+  SE tests on Helidon 27 (JDK 27; Helidon 27 has no MicroProfile, so `-Dhelidon.se` leaves the MP
+  test out). `microprofile-config-api` has its own version now, as Helidon 27's BOM no longer
+  manages it.
+- **Helidon** (`seclume-helidon`, new). `SeclumeHelidon` for SE (from `Config`) and
+  `SeclumeCdiExtension` for MP (from MicroProfile Config): a `SeclumePool` per
+  `seclume.datasources.<name>` - named beans in MP, `default` the default one - and the field
+  encryption key ring, built, installed and wiped with the application; a password in the
+  configuration stops the start. Tested with a stub driver, inside a Helidon MP container and
+  against CI's PostgreSQL with a heap dump.
 - **Log lines masked with Log4j 2 and java.util.logging too.** Besides Logback's converters,
   `seclume-logging` has `%redact{...}` for Log4j 2 - what the inner pattern writes, message and
   stack trace, masked, the stack trace written once - and `RedactingFormatter` for
