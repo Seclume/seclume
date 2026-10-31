@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **An access log nobody can quietly rewrite** (`space.seclume.audit`). Every secret a provider
+  is asked for, every field encryption ring and every private key opened is an entry - facts,
+  never values - in a JSON-lines file whose entries are chained by SHA-256 and whose head is
+  signed at intervals with a KMS or local key (`seclume.audit.file`, `.checkpoint-interval`,
+  `.signing-key.*`). `seclume-verify --audit-verify` finds changed, removed, swapped and
+  slipped-in entries and re-hashed chains; `SeclumeAccessLogExporter` copies every entry to
+  OpenTelemetry, where a cut-off tail shows. CI checks a signed log with an independent
+  implementation (hashlib and openssl) and that it refuses forgeries.
+
 - **A cryptography bill of materials** (`space.seclume.inventory`, `/actuator/cbom`,
   `seclume-verify --cbom`). `CryptoInventory` records, where seclume does the work, every secret
   a provider read, every field encryption ring, every private key opened in OpenSSL, CNG or a

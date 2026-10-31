@@ -50,6 +50,11 @@ public final class Verify {
             System.exit(Doctor.mainRun(arguments, System.out, System.err));
             return;
         }
+        if (arguments.length > 0 && arguments[0].strip().equals("--audit-verify")) {
+            System.exit(AuditVerify.run(java.util.Arrays.stream(arguments).skip(1).map(String::strip)
+                    .toList(), System.out, System.err));
+            return;
+        }
         if (arguments.length == 2 && arguments[0].strip().equals("--migrate")) {
             System.exit(Migrate.run(arguments[1].strip(), System.out, System.err));
             return;
@@ -80,6 +85,7 @@ public final class Verify {
                            java -jar seclume-verify.jar --cbom "<jdbc url>"
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
+                           java -jar seclume-verify.jar --audit-verify <access-log.jsonl> [public-key]
 
                     The URL is the one the application uses, password included -
                     which is to say: not included. It names where the secret comes
@@ -103,7 +109,11 @@ public final class Verify {
                     --migrate translates a pgjdbc, Connector/J, MariaDB, mssql-jdbc,
                     Oracle thin or HikariCP configuration into seclume's, and names
                     every unsafe setting in it. Password values are never read.
-                    Exit code 1 means unsafe settings were found.""");
+                    Exit code 1 means unsafe settings were found.
+
+                    --audit-verify checks an access log: its hash chain and, with the
+                    public key (PEM or DER), the signed checkpoints. Exit code 1 when an
+                    entry was changed, removed, slipped in, or a signature fails.""");
             System.exit(2);
             return;
         }

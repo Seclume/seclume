@@ -117,6 +117,11 @@ public final class CryptoInventory {
         try {
             RINGS.put(ring, new Ring(Instant.now(), closed, Map.copyOf(sources), primary,
                     algorithm));
+            Map<String, String> fields = new LinkedHashMap<>();
+            fields.put("algorithm", algorithm);
+            fields.put("primary", Integer.toString(primary));
+            fields.put("keys", new java.util.TreeMap<>(sources).toString());
+            space.seclume.audit.AccessLog.event("data-key.ring", fields);
         } catch (RuntimeException ignored) {
             // best effort
         }
@@ -137,6 +142,10 @@ public final class CryptoInventory {
             String[] algorithm = algorithmOf(publicKey);
             KEYS.put(key, new Key(Instant.now(), algorithm[0], number(algorithm[1]),
                     where));
+            Map<String, String> fields = new LinkedHashMap<>();
+            fields.put("algorithm", algorithm[0] + (number(algorithm[1]) > 0 ? " " + algorithm[1] : ""));
+            fields.put("held", where);
+            space.seclume.audit.AccessLog.event("private-key.opened", fields);
         } catch (RuntimeException ignored) {
             // best effort
         }
