@@ -73,9 +73,9 @@ jobs:
       - if: failure()
         run: |
           [ -f build.log ] || exit 0
-          # The compiler's own lines (with a .java path) and Maven's errors -
-          # not the shade plugin's overlapping-resource warnings.
-          text=$( (grep -E "^\[WARNING\] .*\.java" build.log; grep -E "^\[ERROR\]" build.log) \
+          # What the compiler said before it stopped, and Maven's errors - not
+          # the shade plugin's overlapping-resource warnings.
+          text=$( (grep -B12 "COMPILATION ERROR" build.log | grep -v "overlapping\|^\[WARNING\]   - "; grep -E "^\[ERROR\]" build.log) \
             | grep -v "Re-run Maven\|full stack trace\|\[Help \|^\[ERROR\] *$\|To see the full\|For more information" \
             | head -30 | sed 's/%/%25/g' | tr '\n' ' ' | cut -c1-3800)
           echo "::error title=build::$text"
