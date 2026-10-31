@@ -139,6 +139,38 @@ database does not need renaming it here.
 
 `LocalEncryptedColumnTest` does exactly this against all four databases, with the table in use.
 
+#### The rotation job
+
+```java
+ColumnRotation rotation = ColumnRotation.builder(keys)
+        .table("patient").id("id")
+        .column("ssn", "patient.ssn", Mode.DETERMINISTIC, Context.NONE)
+        .column("diagnosis", "patient.diagnosis", Mode.RANDOMIZED, Context.ROW_ID)
+        .batchSize(500)
+        .listener(p -> log.info("{} rows, {} moved, {} conflicts", p.rows(), p.rotated(), p.conflicts()))
+        .build();
+
+ColumnRotation.Census before = rotation.census(connection);   // per column: values per key
+ColumnRotation.Progress done = rotation.run(connection);       // to the end
+rotation.census(connection).remaining();                        // 0: the old key can go
+```
+
+Rows are read in the order of `id` - unique, best the primary key - a batch at a time after the
+last id of the one before (`where id > ?`, the same SQL on all four databases, no offsets), one
+transaction per batch. A value is written back only `where id = ? and column = <its old value>`:
+a row the application changed in the meantime is left as the application wrote it - under the
+primary key, since it writes with the same ring - and counted as a conflict. A value already
+under the primary key is not touched, so a second run writes nothing, and a stopped one continues
+from `Progress.lastId()` with `.after(lastId)`. `Context.ROW_ID` is for columns whose values are
+bound to their row's id ([Context](#context-a-value-bound-to-its-row)). The columns must compare
+by value in a `where` - `bytea`, `varbinary`, `raw`, not an Oracle `BLOB`.
+
+Tested against the four databases - batches of five, stopped after the first and continued
+while the application writes, a census before and after, a second run with nothing to do
+(`EncryptedColumnContract`) - and against a table in memory that changes a row behind the
+job's back, fails a batch, ends exactly on a batch boundary and refuses what cannot be an SQL
+identifier (`ColumnRotationTest`).
+
 ## Crypto-shredding: a key per subject
 
 ```java
@@ -172,38 +204,6 @@ them is. Tested in memory (`SubjectKeysTest`: isolation between subjects, shredd
 to another subject, a second instance, another ring, rewrapping, the backup case, the cache, two
 writers making a key at once) and against the four databases (`EncryptedColumnContract`: two
 subjects in one table, one shredded, a duplicate key refused by the table's primary key).
-
-#### The rotation job
-
-```java
-ColumnRotation rotation = ColumnRotation.builder(keys)
-        .table("patient").id("id")
-        .column("ssn", "patient.ssn", Mode.DETERMINISTIC, Context.NONE)
-        .column("diagnosis", "patient.diagnosis", Mode.RANDOMIZED, Context.ROW_ID)
-        .batchSize(500)
-        .listener(p -> log.info("{} rows, {} moved, {} conflicts", p.rows(), p.rotated(), p.conflicts()))
-        .build();
-
-ColumnRotation.Census before = rotation.census(connection);   // per column: values per key
-ColumnRotation.Progress done = rotation.run(connection);       // to the end
-rotation.census(connection).remaining();                        // 0: the old key can go
-```
-
-Rows are read in the order of `id` - unique, best the primary key - a batch at a time after the
-last id of the one before (`where id > ?`, the same SQL on all four databases, no offsets), one
-transaction per batch. A value is written back only `where id = ? and column = <its old value>`:
-a row the application changed in the meantime is left as the application wrote it - under the
-primary key, since it writes with the same ring - and counted as a conflict. A value already
-under the primary key is not touched, so a second run writes nothing, and a stopped one continues
-from `Progress.lastId()` with `.after(lastId)`. `Context.ROW_ID` is for columns whose values are
-bound to their row's id ([Context](#context-a-value-bound-to-its-row)). The columns must compare
-by value in a `where` - `bytea`, `varbinary`, `raw`, not an Oracle `BLOB`.
-
-Tested against the four databases - batches of five, stopped after the first and continued
-while the application writes, a census before and after, a second run with nothing to do
-(`EncryptedColumnContract`) - and against a table in memory that changes a row behind the
-job's back, fails a batch, ends exactly on a batch boundary and refuses what cannot be an SQL
-identifier (`ColumnRotationTest`).
 
 ## Spring Boot
 
