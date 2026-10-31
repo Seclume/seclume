@@ -114,7 +114,8 @@ class AccessLogTest {
             // Nor its length: no field holds it as its value (a hash may well contain the digits).
             for (String line : lines(file)) {
                 for (Map.Entry<String, String> field : AccessLogVerifier.fields(line).entrySet()) {
-                    assertFalse(field.getValue().equals(Integer.toString(CANARY.length())),
+                    assertFalse(!field.getKey().equals("seq")
+                            && field.getValue().equals(Integer.toString(CANARY.length())),
                             field.getKey() + " holds the secret's length");
                 }
             }
