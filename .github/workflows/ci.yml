@@ -510,8 +510,10 @@ jobs:
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
                       causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
                       if causes:
-                          text += ' | ' + causes[-1]
+                          text = causes[-1] + ' | ' + text
                       text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
                       found += 1
@@ -1069,8 +1071,10 @@ jobs:
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
                       causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
                       if causes:
-                          text += ' | ' + causes[-1]
+                          text = causes[-1] + ' | ' + text
                       text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
                       found += 1
@@ -1239,8 +1243,10 @@ jobs:
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
                       causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
                       if causes:
-                          text += ' | ' + causes[-1]
+                          text = causes[-1] + ' | ' + text
                       text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
@@ -1324,8 +1330,10 @@ jobs:
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
                       causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
                       if causes:
-                          text += ' | ' + causes[-1]
+                          text = causes[-1] + ' | ' + text
                       text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
@@ -1411,8 +1419,10 @@ jobs:
                   for bad in case.findall('failure') + case.findall('error'):
                       text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
                       causes = [l.strip() for l in (bad.text or '').splitlines() if l.strip().startswith('Caused by:')]
+                      if 'failure threshold' in text:
+                          continue
                       if causes:
-                          text += ' | ' + causes[-1]
+                          text = causes[-1] + ' | ' + text
                       text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:700]
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
