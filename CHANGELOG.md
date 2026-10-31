@@ -146,6 +146,12 @@ All notable changes to seclume are recorded here. Versions follow
   namespaces, and a non-root pod with a read-only root file system. CI lints the chart,
   renders it in each mode and installs it on kind. There it switches from the chart's CA to
   cert-manager and checks after each step that pods are still mutated.
+- **Field encryption for Kafka, Redis and Elasticsearch.** `EncryptingSerializer` and
+  `DecryptingDeserializer` (seclume-kafka) encrypt record keys and values per topic, bound to it;
+  `EncryptedCodec` (seclume-redis) encrypts Lettuce values, and keys if asked; `EncryptedDocument`
+  (seclume-elasticsearch) encrypts chosen fields of a document, deterministic ones searchable by a
+  terms query through a rotation. The same ring and format as the database columns; tested
+  against a real broker, Redis and Elasticsearch in CI.
 - **Certificate gauges through OpenTelemetry.** `seclume.certificate.expiry` (seconds) and
   `seclume.certificate.renewal.failing`, attributed `bundle`, as OpenTelemetry gauges -
   `SeclumeCertificateInstruments` in seclume-opentelemetry, and in the starter with
