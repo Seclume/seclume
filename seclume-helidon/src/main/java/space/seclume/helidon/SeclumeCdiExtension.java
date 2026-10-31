@@ -34,16 +34,31 @@ import space.seclume.pool.SeclumePool;
  */
 public class SeclumeCdiExtension implements Extension {
 
+    /**
+     * The instance that made the beans of the running container. A container
+     * can find this extension twice - Weld with discovery on, through the
+     * service loader and again through the class path entry it scans - and
+     * two instances would make every bean twice, and every injection
+     * ambiguous; the second one stands aside.
+     */
+    private static final java.util.concurrent.atomic.AtomicReference<SeclumeCdiExtension> ACTIVE =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
     private final Map<String, SeclumePool> pools = new LinkedHashMap<>();
     private FieldKeys keys;
 
     void afterBeanDiscovery(@Observes AfterBeanDiscovery discovery) {
+        if (!ACTIVE.compareAndSet(null, this) && ACTIVE.get() != this) {
+            return;
+        }
         SeclumeSettings settings = SeclumeSettings.of(flat(ConfigProvider.getConfig()));
         try {
             settings.refusePasswords();
             keys = settings.fieldKeys();
             pools.putAll(settings.pools());
         } catch (java.sql.SQLException | RuntimeException e) {
+            // The container does not start, and no BeforeShutdown follows.
+            ACTIVE.compareAndSet(this, null);
             discovery.addDefinitionError(e);
             return;
         }
@@ -71,12 +86,18 @@ public class SeclumeCdiExtension implements Extension {
         }
     }
 
+    /** The instance whose beans the running container has, or {@code null}. */
+    static SeclumeCdiExtension active() {
+        return ACTIVE.get();
+    }
+
     /** The data sources this extension made beans of, by name - for a look from outside. */
     java.util.Set<String> dataSourceNames() {
         return java.util.Set.copyOf(pools.keySet());
     }
 
     void beforeShutdown(@Observes BeforeShutdown shutdown) {
+        ACTIVE.compareAndSet(this, null);
         pools.values().forEach(SeclumePool::close);
         pools.clear();
         if (keys != null) {
