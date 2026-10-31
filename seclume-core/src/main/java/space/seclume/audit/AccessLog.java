@@ -86,6 +86,7 @@ public final class AccessLog implements AutoCloseable {
 
     private final Path file;
     private final FileChannel channel;
+    private final FileChannel lockChannel;
     private final FileLock lock;
     private final PrivateSigningKey signer;
     private final String signerAlgorithm;
@@ -107,31 +108,45 @@ public final class AccessLog implements AutoCloseable {
         if (parent != null) {
             Files.createDirectories(parent);
         }
-        String[] last = lastEntry(file);
-        this.seq = last == null ? 0 : Long.parseLong(last[0]);
-        this.head = last == null ? ZERO : last[1];
-        this.channel = FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-                StandardOpenOption.APPEND);
+        // The lock is on a file of its own, <log>.lock: on Windows a lock on the log
+        // itself would keep everyone else - the verifier, a shipper - from reading it.
+        // Taken before the log's last entry is read, so two writers cannot both continue it.
+        Path lockFile = file.resolveSibling(file.getFileName() + ".lock");
+        this.lockChannel = FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         FileLock taken;
         try {
-            taken = channel.tryLock();
+            taken = lockChannel.tryLock();
         } catch (java.nio.channels.OverlappingFileLockException e) {
-            channel.close();
+            lockChannel.close();
             throw new IOException(file + " is already open for writing in this process - one log, "
                     + "one writer", e);
         } catch (IOException | RuntimeException e) {
-            channel.close();
+            lockChannel.close();
             throw e;
         }
         if (taken == null) {
-            channel.close();
+            lockChannel.close();
             throw new IOException(file + " is being written by another process - one log, one writer");
         }
         this.lock = taken;
-        Map<String, String> opened = new LinkedHashMap<>();
-        opened.put("pid", Long.toString(ProcessHandle.current().pid()));
-        opened.put("signing", signer == null ? "none" : signerAlgorithm + " " + signerKey);
-        append("log.opened", opened);
+        FileChannel opened;
+        String[] last;
+        try {
+            last = lastEntry(file);
+            opened = FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                    StandardOpenOption.APPEND);
+        } catch (IOException | RuntimeException e) {
+            lock.release();
+            lockChannel.close();
+            throw e;
+        }
+        this.channel = opened;
+        this.seq = last == null ? 0 : Long.parseLong(last[0]);
+        this.head = last == null ? ZERO : last[1];
+        Map<String, String> start = new LinkedHashMap<>();
+        start.put("pid", Long.toString(ProcessHandle.current().pid()));
+        start.put("signing", signer == null ? "none" : signerAlgorithm + " " + signerKey);
+        append("log.opened", start);
         if (signer != null && checkpointEvery != null && !checkpointEvery.isZero()
                 && !checkpointEvery.isNegative()) {
             timer = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -298,9 +313,13 @@ public final class AccessLog implements AutoCloseable {
         } finally {
             closed = true;
             try {
-                lock.release();
-            } finally {
                 channel.close();
+            } finally {
+                try {
+                    lock.release();
+                } finally {
+                    lockChannel.close();
+                }
             }
         }
     }

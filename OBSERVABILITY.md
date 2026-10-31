@@ -386,8 +386,8 @@ seclume.audit.signing-key.credentials=web-identity
 One JSON object per line, ASCII only. Each entry carries `prev`, the hash of the one before,
 and `hash`, SHA-256 of itself without that field; every `checkpoint-interval` and at shutdown a
 `checkpoint` entry signs `"seclume-access-log-1" || seq || head` with the signing key - best a
-KMS key, so that whoever can write the file cannot sign for it. One process writes a file (it
-is locked); a restart continues the chain.
+KMS key, so that whoever can write the file cannot sign for it. One process writes a file (a
+`.lock` file beside it says which); a restart continues the chain.
 
 ```bash
 java -jar seclume-verify.jar --audit-verify seclume-access.jsonl audit-key.pem
