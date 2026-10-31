@@ -34,6 +34,8 @@ import org.junit.jupiter.api.io.TempDir;
 import space.seclume.field.EncryptedColumn;
 import space.seclume.field.EncryptedColumn.Mode;
 import space.seclume.field.FieldKeys;
+import space.seclume.field.SubjectKeyStore;
+import space.seclume.field.SubjectKeys;
 import space.seclume.secret.FileSecretProvider;
 import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
@@ -329,6 +331,111 @@ public abstract class EncryptedColumnContract {
                 }
             }
         }
+    }
+
+    /**
+     * Crypto-shredding against this database: subject keys in a table of their
+     * own, two subjects' values in the same table, one subject shredded - their
+     * values stay in the table and open nothing, the other's read as before; a
+     * second writer of the same subject's key loses to the primary key.
+     */
+    @Test
+    void aShreddedSubjectsValuesStayAndOpenNothing() throws Exception {
+        String keys = "zl_subject_keys";
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            drop(statement, keys);
+            statement.execute("create table " + keys + " (subject varchar(200) primary key, wrapped "
+                    + binary(128) + ")");
+        }
+        try (FieldKeys master = ring1();
+             SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.jdbc(dataSource(), keys));
+             Connection connection = connect()) {
+            for (int id = 1; id <= 4; id++) {
+                String subject = id % 2 == 0 ? "customer-even" : "customer-odd";
+                try (PreparedStatement insert = connection.prepareStatement(
+                        "insert into " + TABLE + " (id, secret) values (?, ?)")) {
+                    insert.setInt(1, id);
+                    subjects.column(subject, "zl.secret", Mode.RANDOMIZED).set(insert, 2,
+                            bytes("secret of " + subject + " " + id), context(id));
+                    assertEquals(1, insert.executeUpdate());
+                }
+            }
+            assertTrue(subjects.shred("customer-odd"));
+            assertThrows(space.seclume.field.FieldEncryptionException.class,
+                    () -> subjects.existingColumn("customer-odd", "zl.secret", Mode.RANDOMIZED));
+            EncryptedColumn even = subjects.existingColumn("customer-even", "zl.secret", Mode.RANDOMIZED);
+            assertEquals("secret of customer-even 2", readSecret(connection, even, 2));
+            assertEquals("secret of customer-even 4", readSecret(connection, even, 4));
+            // The odd rows are still there - as noise, under a key nobody has.
+            EncryptedColumn newOdd = subjects.column("customer-odd", "zl.secret", Mode.RANDOMIZED);
+            assertThrows(space.seclume.field.FieldEncryptionException.class,
+                    () -> readSecret(connection, newOdd, 1));
+            // A second key for a subject that has one: the table's primary key refuses it.
+            SubjectKeyStore store = SubjectKeyStore.jdbc(dataSource(), keys);
+            assertFalse(store.insert("customer-even", new byte[] {1, 2, 3}));
+        } finally {
+            try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+                drop(statement, keys);
+            }
+        }
+    }
+
+    private static void drop(Statement statement, String table) {
+        try {
+            statement.execute("drop table " + table);
+        } catch (SQLException itWasNotThere) {
+            // the first run, or the last one tidied up
+        }
+    }
+
+    /** {@link #connect()} as a {@code DataSource}, for the subject key store. */
+    private javax.sql.DataSource dataSource() {
+        return new javax.sql.DataSource() {
+            @Override
+            public Connection getConnection() throws SQLException {
+                return connect();
+            }
+
+            @Override
+            public Connection getConnection(String user, String password) {
+                throw new UnsupportedOperationException("the URL has the login");
+            }
+
+            @Override
+            public java.io.PrintWriter getLogWriter() {
+                return null;
+            }
+
+            @Override
+            public void setLogWriter(java.io.PrintWriter out) {
+                // not used
+            }
+
+            @Override
+            public void setLoginTimeout(int seconds) {
+                // not used
+            }
+
+            @Override
+            public int getLoginTimeout() {
+                return 0;
+            }
+
+            @Override
+            public java.util.logging.Logger getParentLogger() {
+                return java.util.logging.Logger.getLogger("seclume.tck");
+            }
+
+            @Override
+            public <T> T unwrap(Class<T> type) throws SQLException {
+                throw new SQLException("nothing to unwrap");
+            }
+
+            @Override
+            public boolean isWrapperFor(Class<?> type) {
+                return false;
+            }
+        };
     }
 
     @Test
