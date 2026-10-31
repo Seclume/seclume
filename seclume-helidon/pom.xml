@@ -90,6 +90,21 @@
     </dependency>
   </dependencies>
 
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <!-- Helidon's jars bring annotation processors this module does
+               not use; run, they claim nothing and -Xlint:processing turns
+               that into an error. -->
+          <proc>none</proc>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+
   <profiles>
     <!-- The MP container for SeclumeCdiExtensionTest: Helidon 4.5. -->
     <profile>
@@ -100,11 +115,6 @@
         </property>
       </activation>
       <dependencies>
-        <dependency>
-          <groupId>io.helidon.microprofile.testing</groupId>
-          <artifactId>helidon-microprofile-testing-junit5</artifactId>
-          <scope>test</scope>
-        </dependency>
         <dependency>
           <groupId>io.helidon.microprofile.cdi</groupId>
           <artifactId>helidon-microprofile-cdi</artifactId>
