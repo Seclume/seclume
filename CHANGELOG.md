@@ -12,6 +12,12 @@ All notable changes to seclume are recorded here. Versions follow
   after the transform, in native memory and without an early exit. `JakartaDataCase` runs
   Hibernate 7.4's Jakarta Data repositories against the four databases; `FrameworkMatrix` has a
   row for them.
+- **Micronaut** (`seclume-micronaut`, new). Named `SeclumePool` data sources from
+  `seclume.datasources.<name>.*` and the field encryption key ring from
+  `seclume.field-encryption.*`, from `application.yml` alone; a password in the configuration -
+  beside a seclume URL, under `seclume.datasources`, or in the URL - stops the start.
+  `PoolConfiguration` (seclume-pool) reads pool settings by the same keys for every framework.
+  Tested in a context with a stub driver and against CI's PostgreSQL with a heap dump.
 - **Field encryption: a key commitment in every value, and R2DBC and MongoDB.** The format
   (unreleased until now, so changed in place) carries HMAC-SHA-256 of header and nonce under a
   second key derived with the column key, checked first: a value opens under the key it was made
