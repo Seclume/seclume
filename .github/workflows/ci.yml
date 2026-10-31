@@ -945,6 +945,16 @@ jobs:
           ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultPkiTest' -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-keys' 'OpenBao PKI'
+      # AWS KMS's API, emulated by moto behind its own throwaway certificate: a
+      # data key Encrypt made under a real key ARN, opened by kms-decrypt with a
+      # SigV4-signed Decrypt, and an altered ciphertext refused by the service.
+      - name: AWS KMS emulator
+        run: |
+          docker run -d --name slm-moto -p 4443:4443 motoserver/moto:5.1.22 -p 4443 -s
+          python3 .github/scripts/kms_fixture.py https://127.0.0.1:4443
+          ./mvnw -B -pl seclume-core -am test -Dtest=LocalAwsKmsDecryptTest \
+            -Dsurefire.failIfNoSpecifiedTests=false
+          python3 .github/scripts/require_mongo_tests.py 'seclume-core' 'AWS KMS emulator'
       - name: Require executed Redis and Kafka tests
         if: always()
         run: python3 .github/scripts/require_mongo_tests.py 'seclume-redis,seclume-kafka' 'Redis and Kafka'
@@ -957,8 +967,8 @@ jobs:
           -Dsurefire.failIfNoSpecifiedTests=false
       - if: always()
         run: |
-          rm -f .local-redis-* .local-kafka-* .local-vault-*
-          docker rm -f slm-vault slm-vault-pg || true
+          rm -f .local-redis-* .local-kafka-* .local-vault-* .local-kms-*
+          docker rm -f slm-vault slm-vault-pg slm-moto || true
           bash seclume-redis/proof/redis.sh down || true
           bash seclume-kafka/proof/broker.sh down || true
 
