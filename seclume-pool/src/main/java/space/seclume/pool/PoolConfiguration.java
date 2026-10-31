@@ -89,15 +89,54 @@ public final class PoolConfiguration {
         if (url == null || !url.startsWith("jdbc:seclume:")) {
             throw new IllegalArgumentException("data source " + name + ": a seclume URL "
                     + "(jdbc:seclume:postgresql://..., mysql, sqlserver, oracle) is needed, not "
-                    + (url == null ? "none" : url.substring(0, Math.min(url.length(), 30)) + "..."));
+                    + (url == null ? "none" : scheme(url) + "..."));
         }
-        if (url.toLowerCase(Locale.ROOT).matches(".*[?&;]password=.*")) {
-            throw new IllegalArgumentException("data source " + name + ": the URL carries a password - "
-                    + "it would stay a String in the configuration for the life of the application. "
-                    + "Name where it comes from instead: provider=file&path=/run/secrets/db, "
+        String inline = inlineSecret(url);
+        if (inline != null) {
+            throw new IllegalArgumentException("data source " + name + ": the URL carries a "
+                    + inline + " - it would stay a String in the configuration for the life of the "
+                    + "application. Name where it comes from instead: provider=file&path=/run/secrets/db, "
                     + "provider=vault&..., provider=kms-decrypt&...");
         }
         return new SeclumePool(new UrlDataSource(url), settings(name, pool));
+    }
+
+    /**
+     * What of a secret the URL holds itself, or {@code null}: a {@code password},
+     * {@code secret} or {@code value} parameter - the keys the drivers refuse
+     * at the first login, refused here at the start - or a password in its user
+     * information ({@code //user:password@host}).
+     */
+    static String inlineSecret(String url) {
+        String lower = url.toLowerCase(Locale.ROOT);
+        java.util.regex.Matcher parameter = java.util.regex.Pattern
+                .compile("[?&;]\\s*(password|secret|value)\\s*=").matcher(lower);
+        if (parameter.find()) {
+            return parameter.group(1).equals("password") ? "password" : parameter.group(1) + " parameter";
+        }
+        int authority = url.indexOf("//");
+        if (authority >= 0) {
+            int end = authority + 2;
+            while (end < url.length() && "/?;".indexOf(url.charAt(end)) < 0) {
+                end++;
+            }
+            String hosts = url.substring(authority + 2, end);
+            int at = hosts.lastIndexOf('@');
+            if (at >= 0 && hosts.substring(0, at).indexOf(':') >= 0) {
+                return "password in its user information (user:password@)";
+            }
+        }
+        return null;
+    }
+
+    /** {@code jdbc:mysql:} of {@code jdbc:mysql://root:secret@db/app} - never more of a URL that is refused. */
+    static String scheme(String url) {
+        int first = url.indexOf(':');
+        int second = first < 0 ? -1 : url.indexOf(':', first + 1);
+        if (first < 0 || second < 0 || second - first > 32) {
+            return "something that is no JDBC URL";
+        }
+        return url.substring(0, second + 1);
     }
 
     static int number(String key, String value) {
@@ -204,7 +243,10 @@ public final class PoolConfiguration {
 
         @Override
         public String toString() {
-            int query = url.indexOf('?');
+            // ? for most drivers, ; for SQL Server's settings - neither is shown.
+            int question = url.indexOf('?');
+            int semicolon = url.indexOf(';');
+            int query = question < 0 ? semicolon : semicolon < 0 ? question : Math.min(question, semicolon);
             return "UrlDataSource[" + (query < 0 ? url : url.substring(0, query)) + "]";
         }
     }
