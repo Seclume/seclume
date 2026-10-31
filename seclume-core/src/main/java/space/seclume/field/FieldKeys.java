@@ -106,7 +106,8 @@ public final class FieldKeys implements AutoCloseable {
         FieldKeys keys = installed;
         if (keys == null) {
             throw new IllegalStateException("no field encryption keys are installed: configure "
-                    + "seclume.field-encryption.keys.<n>.* with the Spring Boot starter, or call "
+                    + "seclume.field-encryption.keys.<n>.* with the Spring Boot, Quarkus, Micronaut or "
+                    + "Helidon integration, or call "
                     + "FieldKeys.install(keys) before the first value is encrypted");
         }
         return keys;
