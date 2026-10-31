@@ -367,6 +367,46 @@ JSON schema (`.github/ci-tools/validate-cbom.mjs`); the tests search both for th
 application read (`CryptoInventoryTest`, `CycloneDxCbomTest`, `InventoryEndToEndTest`,
 `CbomEndpointTest`).
 
+## The access log: who read which secret, and proof that nobody changed it
+
+`space.seclume.audit.AccessLog` writes an entry for every secret a provider is asked for
+(`secret.read`: the provider's kind and description, the thread, `ok` or `failed` with the
+exception's type), every field encryption key ring built (`data-key.ring`) and every private
+key opened (`private-key.opened`) - facts, never the secret, its length or a hash of it.
+
+```properties
+seclume.audit.file=/var/log/orders/seclume-access.jsonl
+seclume.audit.checkpoint-interval=1m
+seclume.audit.signing-key.kms=aws-kms            # or vault-transit, gcp-kms, azure-key-vault
+seclume.audit.signing-key.key=alias/orders-audit
+seclume.audit.signing-key.region=eu-central-1
+seclume.audit.signing-key.credentials=web-identity
+```
+
+One JSON object per line, ASCII only. Each entry carries `prev`, the hash of the one before,
+and `hash`, SHA-256 of itself without that field; every `checkpoint-interval` and at shutdown a
+`checkpoint` entry signs `"seclume-access-log-1" || seq || head` with the signing key - best a
+KMS key, so that whoever can write the file cannot sign for it. One process writes a file (a
+`.lock` file beside it says which); a restart continues the chain.
+
+```bash
+java -jar seclume-verify.jar --audit-verify seclume-access.jsonl audit-key.pem
+```
+
+finds an entry changed, removed, swapped or slipped in, and a chain re-hashed by someone without
+the key - at its next checkpoint. **What it cannot find on its own** is entries cut off at the
+end together with their checkpoints: the shorter log is valid. That is what a copy elsewhere is
+for - `SeclumeAccessLogExporter` (`seclume-opentelemetry`, wired by the starter when there is an
+`OpenTelemetry` bean) sends every entry as a log record whose body is the line itself, so the
+copy verifies with the same tool, and its last head tells a cut log from a short one.
+
+Tested by changing, removing, swapping and re-hashing entries, another key, a torn last line,
+a cut tail (which holds, as documented), a reopened and a rotated log, a second writer, sinks
+that fail, the timer, non-ASCII descriptions, a strict entry parser (`AccessLogTest`,
+`AccessLogAutoConfigurationTest`, `SeclumeAccessLogExporterTest`, `AuditVerifyTest`); CI checks
+a signed log with a second implementation - hashlib and the openssl command line,
+`.github/scripts/verify_access_log.py` - and that it refuses a changed and a re-hashed copy.
+
 ## A crypto policy, checked at start-up, in the health check and in the pipeline
 
 The inventory judged against rules - `space.seclume.inventory.CryptoPolicy`:

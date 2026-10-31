@@ -552,6 +552,19 @@ jobs:
       # skipped, none missing (.github/security-gate.json).
       # The CBOMs the core tests wrote - one of every kind of asset, one from an
       # application that read a key over TLS - against CycloneDX's own schema.
+      # The access log a test signed, checked by a second implementation
+      # (hashlib and the openssl command line) - and two forgeries it refuses.
+      - name: The access log, checked independently
+        run: |
+          set -euo pipefail
+          cd seclume-core/target
+          python3 ../../.github/scripts/verify_access_log.py access-log-sample.jsonl access-log-key.der
+          for forged in changed rewritten; do
+            if python3 ../../.github/scripts/verify_access_log.py "access-log-$forged.jsonl" access-log-key.der; then
+              echo "::error title=access log::the $forged log passed the independent check"
+              exit 1
+            fi
+          done
       - name: CBOMs are valid CycloneDX 1.6
         run: >-
           node .github/ci-tools/validate-cbom.mjs

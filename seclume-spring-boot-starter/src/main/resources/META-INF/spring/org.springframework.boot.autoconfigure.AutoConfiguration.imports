@@ -16,4 +16,5 @@ space.seclume.spring.SeclumeOomDumpAutoConfiguration
 space.seclume.spring.SeclumeLogRedactionAutoConfiguration
 space.seclume.spring.SeclumeFieldEncryptionAutoConfiguration
 space.seclume.spring.SeclumeCbomAutoConfiguration
+space.seclume.spring.SeclumeAccessLogAutoConfiguration
 space.seclume.spring.SeclumeCryptoPolicyAutoConfiguration

@@ -74,6 +74,11 @@ public final class Verify {
                 }
             }
         }
+        if (arguments.length > 0 && arguments[0].strip().equals("--audit-verify")) {
+            System.exit(AuditVerify.run(java.util.Arrays.stream(arguments).skip(1).map(String::strip)
+                    .toList(), System.out, System.err));
+            return;
+        }
         if (arguments.length == 2 && arguments[0].strip().equals("--migrate")) {
             System.exit(Migrate.run(arguments[1].strip(), System.out, System.err));
             return;
@@ -105,6 +110,7 @@ public final class Verify {
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
                            java -jar seclume-verify.jar --split "<secret uri>" <k> <n> <directory>
+                           java -jar seclume-verify.jar --audit-verify <access-log.jsonl> [public-key]
                            java -jar seclume-verify.jar --policy <policy.properties> <cbom.json | "<jdbc url>"> [--json]
                            java -jar seclume-verify.jar --quantum <cbom.json | "<jdbc url>"> [--json]
                            java -jar seclume-verify.jar --cbom-diff <before.json> <after.json>
@@ -136,6 +142,10 @@ public final class Verify {
                     --split reads a secret through its provider (file:/path, vault?...)
                     and writes n Shamir shares into the directory, any k of which give
                     it back - for provider=shamir. A share is never printed.
+
+                    --audit-verify checks an access log: its hash chain and, with the
+                    public key (PEM or DER), the signed checkpoints. Exit code 1 when an
+                    entry was changed, removed, slipped in, or a signature fails.
 
                     --policy checks a CBOM (or the inventory of one connection) against
                     a crypto policy - key sizes, TLS version and forward secrecy, the

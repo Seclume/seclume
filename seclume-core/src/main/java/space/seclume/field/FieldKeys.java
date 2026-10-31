@@ -69,6 +69,7 @@ public final class FieldKeys implements AutoCloseable {
     private final SortedMap<Integer, SecretScope> keys;
     private final int primary;
     private final Map<String, EncryptedColumn> columns = new HashMap<>();
+    private final Map<String, BlindIndex> indexes = new HashMap<>();
     /** Values are encrypted under the read lock; {@link #close} wipes under the write lock. */
     private final ReentrantReadWriteLock use = new ReentrantReadWriteLock();
     private volatile boolean closed;
@@ -145,26 +146,58 @@ public final class FieldKeys implements AutoCloseable {
     }
 
     /**
+     * A blind index of this name, size and transform, made once and then shared.
+     *
+     * @param name      usually the column's, {@code table.column}; part of the key
+     * @param bits      1 to 64 - fewer bits, more rows per index value, less said
+     *                  about which values are equal ({@link BlindIndex#bitsFor})
+     * @param transform what of the value is indexed
+     */
+    public synchronized BlindIndex blindIndex(String name, int bits, BlindIndex.Transform transform) {
+        checkOpen();
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("a blind index needs a name: it is part of its key");
+        }
+        if (bits < 1 || bits > 64) {
+            throw new IllegalArgumentException("a blind index has 1 to 64 bits, not " + bits);
+        }
+        if (transform == null) {
+            throw new IllegalArgumentException("a blind index needs a transform");
+        }
+        String info = "blind-index\u0000" + transform.code() + "\u0000" + bits + "\u0000" + name;
+        return indexes.computeIfAbsent(info, ignored -> new BlindIndex(this, name, bits, transform,
+                derive(BLIND_INDEX, info, KEY_LENGTH)));
+    }
+
+    /** The flag byte of a blind index's key derivation - neither column mode's. */
+    static final byte BLIND_INDEX = 0x42;
+
+    private Map<Integer, SecretScope> derive(String name, EncryptedColumn.Mode mode) {
+        return derive(mode.flag(), name, 2 * KEY_LENGTH);
+    }
+
+    /**
      * HKDF-SHA-256 of each data key: salt {@code "seclume field encryption v1"},
      * info the mode's flag byte, a zero, and the column's name in UTF-8.
      */
-    private Map<Integer, SecretScope> derive(String name, EncryptedColumn.Mode mode) {
+    private Map<Integer, SecretScope> derive(byte flag, String name, int length) {
         Map<Integer, SecretScope> derived = new LinkedHashMap<>();
         try (Arena arena = Arena.ofConfined()) {
             byte[] label = utf8Bytes(name);
             MemorySegment info = arena.allocate(2L + label.length);
-            info.set(ValueLayout.JAVA_BYTE, 0, mode.flag());
+            info.set(ValueLayout.JAVA_BYTE, 0, flag);
             info.set(ValueLayout.JAVA_BYTE, 1, (byte) 0);
             MemorySegment.copy(label, 0, info, ValueLayout.JAVA_BYTE, 2, label.length);
             for (Map.Entry<Integer, SecretScope> key : keys.entrySet()) {
-                // 64 bytes: the column's encryption key, then its commitment key.
-                SecretScope columnKey = SecretScope.allocate(2 * KEY_LENGTH);
+                // A column: 64 bytes, its encryption key then its commitment key.
+                // A blind index: 32 bytes, its HMAC key.
+                SecretScope columnKey = SecretScope.allocate(length);
                 try (SecretScope prk = SecretScope.in(arena, KEY_LENGTH)) {
                     Hkdf.extract(HashAlgorithm.SHA_256, SALT, key.getValue().secret(),
                             prk.segment(), 0);
                     Hkdf.expand(HashAlgorithm.SHA_256, prk.segment(), info,
-                            columnKey.segment(), 0, 2 * KEY_LENGTH);
-                    columnKey.length(2 * KEY_LENGTH);
+                            columnKey.segment(), 0, length);
+                    columnKey.length(length);
                 } catch (RuntimeException e) {
                     columnKey.close();
                     derived.values().forEach(SecretScope::close);
@@ -202,6 +235,10 @@ public final class FieldKeys implements AutoCloseable {
                 column.wipe();
             }
             columns.clear();
+            for (BlindIndex index : indexes.values()) {
+                index.wipe();
+            }
+            indexes.clear();
             keys.values().forEach(SecretScope::close);
         } finally {
             use.writeLock().unlock();

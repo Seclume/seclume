@@ -134,6 +134,14 @@ All notable changes to seclume are recorded here. Versions follow
   and a heap dump test shows no copy is left. Logback converters for `%msg` and `%xEx`; the
   starter looks for every data source's password and `seclume.heapdump.secrets`, read again
   every `seclume.logging.refresh-interval`.
+- **An access log nobody can quietly rewrite** (`space.seclume.audit`). Every secret a provider
+  is asked for, every field encryption ring and every private key opened is an entry - facts,
+  never values - in a JSON-lines file whose entries are chained by SHA-256 and whose head is
+  signed at intervals with a KMS or local key (`seclume.audit.file`, `.checkpoint-interval`,
+  `.signing-key.*`). `seclume-verify --audit-verify` finds changed, removed, swapped and
+  slipped-in entries and re-hashed chains; `SeclumeAccessLogExporter` copies every entry to
+  OpenTelemetry, where a cut-off tail shows. CI checks a signed log with an independent
+  implementation (hashlib and openssl) and that it refuses forgeries.
 - **Keys in AWS KMS, Google Cloud KMS and Azure Key Vault** (`kms=aws-kms`, `gcp-kms`,
   `azure-key-vault`), next to Vault transit and everywhere it goes: JDBC client certificates,
   key managers, Spring SSL bundles, Tomcat. The hash is made here and signed there - AWS with
@@ -166,6 +174,12 @@ All notable changes to seclume are recorded here. Versions follow
   version is pinned. Each signature is a `space.seclume.RemoteSignature` event. Tested against
   `FakeKms` (seclume-tck) and, in CI, by a PostgreSQL login with a transit key certified by
   Vault's and OpenBao's PKI.
+- **Blind indexes: searching encrypted columns with less said** (`FieldKeys.blindIndex`).
+  HMAC-SHA-256 of the value - or its digits, its first or last characters, case folded - under a
+  key of its own, cut to a chosen number of bits, stored in a numeric column: a search returns
+  candidates that share the index value, the application keeps the matches. `bitsFor` sizes it
+  for a table, `searchTerms` covers a rotation. Known answers from an independent implementation;
+  run against the four databases.
 - **A Kubernetes admission webhook** (`seclume-admission`). Pods annotated
   `seclume.space/redact-dumps: "true"` get an `emptyDir` for heap dumps, the JVM options that write
   there (as `JAVA_TOOL_OPTIONS`, or `JDK_JAVA_OPTIONS` when the pod sets the first), and a sidecar
@@ -185,6 +199,12 @@ All notable changes to seclume are recorded here. Versions follow
   namespaces, and a non-root pod with a read-only root file system. CI lints the chart,
   renders it in each mode and installs it on kind. There it switches from the chart's CA to
   cert-manager and checks after each step that pods are still mutated.
+- **Field encryption for Kafka, Redis and Elasticsearch.** `EncryptingSerializer` and
+  `DecryptingDeserializer` (seclume-kafka) encrypt record keys and values per topic, bound to it;
+  `EncryptedCodec` (seclume-redis) encrypts Lettuce values, and keys if asked; `EncryptedDocument`
+  (seclume-elasticsearch) encrypts chosen fields of a document, deterministic ones searchable by a
+  terms query through a rotation. The same ring and format as the database columns; tested
+  against a real broker, Redis and Elasticsearch in CI.
 - **Certificate gauges through OpenTelemetry.** `seclume.certificate.expiry` (seconds) and
   `seclume.certificate.renewal.failing`, attributed `bundle`, as OpenTelemetry gauges -
   `SeclumeCertificateInstruments` in seclume-opentelemetry, and in the starter with
