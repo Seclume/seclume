@@ -5,11 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **Micronaut 5 and Helidon 27, tested beside the versions built against.** The
-  `framework-compat` job runs seclume-micronaut's tests on Micronaut 5.2 and seclume-helidon's
-  SE tests on Helidon 27 (JDK 27; Helidon 27 has no MicroProfile, so `-Dhelidon.se` leaves the MP
-  test out). `microprofile-config-api` has its own version now, as Helidon 27's BOM no longer
-  manages it.
 - **Helidon** (`seclume-helidon`, new). `SeclumeHelidon` for SE (from `Config`) and
   `SeclumeCdiExtension` for MP (from MicroProfile Config): a `SeclumePool` per
   `seclume.datasources.<name>` - named beans in MP, `default` the default one - and the field
@@ -42,6 +37,11 @@ All notable changes to seclume are recorded here. Versions follow
   beside a seclume URL, under `seclume.datasources`, or in the URL - stops the start.
   `PoolConfiguration` (seclume-pool) reads pool settings by the same keys for every framework.
   Tested in a context with a stub driver and against CI's PostgreSQL with a heap dump.
+- **Micronaut 5 and Helidon 27, tested beside the versions built against.** The
+  `framework-compat` job runs seclume-micronaut's tests on Micronaut 5.2 and seclume-helidon's
+  SE tests on Helidon 27 (JDK 27; Helidon 27 has no MicroProfile, so `-Dhelidon.se` leaves the MP
+  test out). `microprofile-config-api` has its own version now, as Helidon 27's BOM no longer
+  manages it.
 - **Field encryption: a key commitment in every value, and R2DBC and MongoDB.** The format
   (unreleased until now, so changed in place) carries HMAC-SHA-256 of header and nonce under a
   second key derived with the column key, checked first: a value opens under the key it was made
