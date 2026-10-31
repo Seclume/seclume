@@ -407,6 +407,84 @@ that fail, the timer, non-ASCII descriptions, a strict entry parser (`AccessLogT
 a signed log with a second implementation - hashlib and the openssl command line,
 `.github/scripts/verify_access_log.py` - and that it refuses a changed and a re-hashed copy.
 
+## A crypto policy, checked at start-up, in the health check and in the pipeline
+
+The inventory judged against rules - `space.seclume.inventory.CryptoPolicy`:
+
+| Rule | Default | Fails |
+|---|---|---|
+| `rsa.min-bits` | 2048 | an RSA key, the server's or our own, below it |
+| `ec.min-bits` | 256 | an elliptic curve key below it |
+| `tls.min-version` | 1.2 | a session below it (`1.2` or `1.3`) |
+| `tls.forward-secrecy` | true | a TLS 1.2 suite without (EC)DHE |
+| `tls.require-hybrid` | false | a key exchange that is not the ML-KEM hybrid |
+| `certificate.min-days` | 14 | a server certificate this close to its end, or past it |
+| `signature.forbidden` | `SHA1,MD5` | a certificate signed with one of them |
+| `algorithm.forbidden` | - | a key, cipher suite or key exchange that names one |
+| `secret.forbidden-providers` | - | a secret from one of them, say `file,env-file` in production |
+| `data-key.require-kms` | false | a field encryption key not from `kms-decrypt`, `vault-transit` or `shamir` |
+| `data-key.forbidden-providers` | - | a field encryption key from one of them |
+| `quantum` | `warn` | (`fail`) anything a quantum computer breaks; `off` says nothing |
+| `warn-only` | - | nothing: the rules named only warn |
+
+```properties
+seclume.crypto-policy.rules.rsa.min-bits=3072
+seclume.crypto-policy.rules.tls.require-hybrid=true
+seclume.crypto-policy.rules.secret.forbidden-providers=file
+seclume.crypto-policy.on-start=fail          # off, warn (default) or fail
+```
+
+At start-up, when the pools have made their first connections, `warn` logs every finding and
+`fail` stops the application on a failing one. The `cryptoPolicy` health contributor is `DOWN`
+while the policy fails - a session that fell back to a classical key exchange, a certificate
+about to lapse - with the findings as details; warnings never decide it.
+`seclume.crypto-policy.enabled=false` turns all of it off.
+
+In a pipeline, against a CBOM the build kept, or the inventory of one connection:
+
+```bash
+java -jar seclume-verify.jar --policy policy.properties cbom.json           # exit 1: it fails
+java -jar seclume-verify.jar --cbom-diff last-release.json cbom.json       # exit 1: a step back
+java -jar seclume-verify.jar --quantum cbom.json                           # the readiness report
+```
+
+`--cbom-diff` matches assets by what they are, not by their `bom-ref`, and calls a step back a
+new asset a quantum computer breaks, or one that changed to a lower TLS version, a smaller key,
+fewer AES bits or lost its post-quantum level. As a GitHub Action, the report in the job
+summary:
+
+```yaml
+- uses: Seclume/seclume/.github/actions/crypto-policy@main
+  with:
+    jar: seclume-verify.jar
+    cbom: target/cbom.json
+    policy: crypto-policy.properties
+    baseline: cbom-of-the-last-release.json
+```
+
+CI runs the action on two releases of a fixture: the first meets a strict policy, the second -
+the hybrid lost, an RSA-2048 key, a data key from a file - fails it and is a step back
+(`crypto-policy-action`; `CryptoPolicyTest`, `CbomDiffTest`, `CbomReaderTest`, `PolicyTest`,
+`CryptoPolicyAutoConfigurationTest`).
+
+## `/actuator/quantum`: what a quantum computer would break, and in which order
+
+`QuantumReadiness` reads the inventory, or a CBOM, and sorts by the threat:
+
+- **High** - a TLS key exchange that is not post-quantum: traffic recorded today is opened the
+  day it falls ("harvest now, decrypt later"). Instead: X25519MLKEM768, which seclume's own TLS
+  stack offers where OpenSSL 3.5 or CNG has ML-KEM ([TLS.md](TLS.md)) - the report says whether
+  the session ran on JSSE (`tlsStack=seclume`), on TLS 1.2 (the hybrid needs 1.3) or on a
+  server that did not take it.
+- **Medium** - signatures: server certificates and our own signing keys (RSA, ECDSA, Ed25519).
+  Forged only while a quantum computer exists, but certificates and the keys behind tokens live
+  for years. Instead: ML-DSA-65 (FIPS 204), ML-DSA-87 where CNSA 2.0 applies.
+- **Low** - AES-128: Grover's search leaves about 64 bits, a margin, not a break. Instead:
+  AES-256 (the field encryption already is).
+
+With the share of assets that are ready. `management.endpoints.web.exposure.include=quantum`
+serves it as JSON; `seclume-verify --quantum` as Markdown or `--json`.
+
 ## Diagnostics for specific defects
 
 - **`Flight`**: the last messages a connection sent and received, in order, attached to the

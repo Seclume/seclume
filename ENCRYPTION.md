@@ -68,6 +68,51 @@ one. GCM-SIV is built to survive a repeated nonce: it then reveals that two mess
 equal and nothing else - which is exactly the deterministic mode's contract, so both modes
 are the same construction and the same code. A sixteen-byte tag authenticates every value.
 
+## Searching with less said: blind indexes
+
+A deterministic column is searchable because equal values have equal ciphertexts - which also
+tells anyone with the table which rows are equal. A **blind index** says less: HMAC-SHA-256 of
+the value under a key of its own, cut down to a few bits, stored in a numeric column next to the
+encrypted one. With `bits` bits and `n` rows every index value is shared by about `n / 2^bits`
+rows: a search returns those candidates, the application decrypts them and keeps the ones that
+match.
+
+```java
+BlindIndex last4 = keys.blindIndex("card.number", BlindIndex.bitsFor(rows, 50),
+        BlindIndex.Transform.suffix(4));
+last4.set(insert, 4, cardNumber);                         // numeric column card_last4
+
+// where card_last4 in (?, ?) - one value per key in the ring, the primary's first
+List<Long> terms = last4.searchTerms(query);
+```
+
+| Transform | Indexes | For |
+|---|---|---|
+| `EXACT` | the value | an ID |
+| `CASE_INSENSITIVE` | the value, ASCII case folded | an e-mail address |
+| `DIGITS` | its digits | a phone number however it was written |
+| `prefix(n)` | the first `n` characters (code points), the whole value if shorter | names starting with "Mül" |
+| `suffix(n)` | the last `n` characters | the last four digits of a card |
+
+`prefix(n)` and `suffix(n)` take `.caseInsensitive()`. Each name, transform and size has its own
+key, derived from the ring like a column's: one index says nothing about another, and an index
+says nothing about the encrypted column next to it. `bitsFor(rows, candidates)` picks the size
+for a table and the number of candidates a search may return - rounded towards more candidates.
+The leakage is the bucket: which rows share an index value. A prefix index of 3 characters
+says more than a suffix of 4 digits only if it has more bits; the bits decide.
+
+With JPA, a deterministic attribute is queried as it is (`where p.ssn = :ssn` - the converter
+encrypts the parameter, `aDeterministicAttributeIsQueriedAndUnique`); a blind index is a numeric
+attribute set from the value, and a derived query like `findByNamePrefixIn(List<Long> terms)`
+returns the candidates.
+
+Tested with known answers from an independent implementation (Python's `hmac` and `hashlib`),
+every transform including multi-byte characters, the bit masks and an even spread of buckets
+(chi-square over 25600 values), separate keys per name, transform, size and ring key, and a
+rotation (`BlindIndexTest`); against the four databases a 1-bit prefix index returns candidates
+of which exactly the right names are kept, and rows indexed under the old key are found during a
+rotation (`EncryptedColumnContract`).
+
 ## Keys
 
 A **ring** of 256-bit data keys, each under a number; the highest is primary unless another
