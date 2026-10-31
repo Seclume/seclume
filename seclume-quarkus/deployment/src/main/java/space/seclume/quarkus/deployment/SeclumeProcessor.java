@@ -53,6 +53,13 @@ class SeclumeProcessor {
     private static final Pattern PASSWORD = Pattern.compile(
             "quarkus\\.datasource(?:\\.(\"[^\"]+\"|[^.\"]+))?\\.password");
 
+    /** The field encryption key ring, built at start-up when keys are configured. */
+    @BuildStep
+    io.quarkus.arc.deployment.AdditionalBeanBuildItem fieldKeys() {
+        return io.quarkus.arc.deployment.AdditionalBeanBuildItem.unremovableOf(
+                space.seclume.quarkus.SeclumeFieldKeys.class);
+    }
+
     /**
      * The feature, and the check that comes with it: Quarkus runs only build
      * steps that produce something, so the check rides on the one that
@@ -87,7 +94,7 @@ class SeclumeProcessor {
         // The library's packages, not "space.seclume" as a whole: that prefix
         // would take in the extension's own beans, which Quarkus builds in.
         for (String name : List.of("crypto", "internal", "secret", "tls", "jfr", "pool",
-                "postgresql", "mysql", "sqlserver", "oracle")) {
+                "field", "inventory", "postgresql", "mysql", "sqlserver", "oracle")) {
             late.produce(new io.quarkus.deployment.builditem.nativeimage
                     .RuntimeInitializedPackageBuildItem("space.seclume." + name));
         }

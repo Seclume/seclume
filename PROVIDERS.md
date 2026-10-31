@@ -37,6 +37,7 @@ nested provider rather than a value.
 | `vault` | HashiCorp Vault or OpenBao over HTTPS | **yes**, with its lease | `token-`, or a login: `jwt-` / `secret-id-` / `aws-` / the cloud's metadata | one HTTPS request |
 | `vault-transit` | a ciphertext Vault's transit engine decrypts — a [field encryption](ENCRYPTION.md) data key | no | `token-`, or a login as for `vault` | one HTTPS request |
 | `kms-decrypt` | a ciphertext AWS KMS, Cloud KMS or Azure Key Vault decrypts (`kms=`) — a [field encryption](ENCRYPTION.md) data key | no | the service's credentials: `key-` / `credentials=` (AWS), `token-` (Google, Azure) | one HTTPS request |
+| `shamir` | `k` of `n` Shamir shares, each from a provider of its own — a secret nobody holds alone | no | **one per share**: `share.1.*` … `share.n.*` | one read per share until `k` |
 | `aws-secrets-manager` | AWS Secrets Manager | no | `key-`, optional `session-token-` | one HTTPS request |
 | `azure-key-vault` | Azure Key Vault | **yes**, when the secret has `exp` | `token-` | one HTTPS request |
 | `gcp-secret-manager` | Google Secret Manager | no | `token-` | one HTTPS request |
@@ -321,6 +322,49 @@ Tested against stand-ins for the three services: the request each is sent, the p
 decoded from each answer, every refusal with what the principal needs, every malformed answer
 (`KmsDecryptSecretProviderTest`). A live run needs the cloud and is not part of CI.
 
+### Shamir: a secret nobody holds alone
+
+```properties
+provider=shamir
+threshold=3                       # optional: refuses shares of a split that needs fewer
+share.1.provider=file
+share.1.path=/run/secrets/share-alice
+share.2.provider=keychain
+share.2.service=seclume-share
+share.3.provider=vault
+share.3.address=https://vault:8200
+share.3.path=secret/data/shares/carol
+share.3.token-provider=file
+share.3.token-path=/run/secrets/vault-token
+share.4.provider=file
+share.4.path=/mnt/usb/share-dave
+share.5.provider=file
+share.5.path=/run/secrets/share-erin
+```
+
+The secret - a master key, the field encryption ring's data key, a database password - is
+split once into `n` shares, any `k` of which give it back and any `k - 1` of which say nothing
+about it (Shamir's scheme over GF(2^8), byte by byte):
+
+```
+java -jar seclume-verify.jar --split "file:/root/master.key" 3 5 /root/shares
+```
+
+Each share is one line in an owner-only file, `seclume-share-1.<split>.<k>.<x>.<value>.<crc>`.
+Each holder keeps theirs where only they can reach it; the application reads shares in the
+order configured until it has `k`, passing over the ones that cannot be read - that a holder is
+away is the point - and fails, naming which shares were missing and why, when fewer than `k`
+are there. A share that is there but wrong is refused outright rather than passed over: a
+mistyped digit (the CRC-32), a share of another split, the same share twice, or a combination
+that does not give back what was split (16 bytes of SHA-256 over the secret are shared with
+it and checked in constant time).
+
+Shares are read, parsed and combined in native memory; the field arithmetic has no tables and
+no branches on data. Tested with a known answer from an independent implementation, every
+choice of `k` of `n`, perfect secrecy below the threshold shown exhaustively for one byte,
+every single-character change to a share refused, and a fuzz target on the share format
+(`ShamirTest`, `ShamirSharesTest`, `ShamirShareFuzzTest`).
+
 ### The three cloud vaults
 
 ```properties
@@ -514,6 +558,7 @@ Everywhere else:
 - **Windows, no orchestration** — `dpapi` or `credential-manager`.
 - **A password that may not stand in the configuration, and no store** — `encrypted`, having
   read the paragraph about what it does not buy.
+- **A master key that no one person may hold, and no KMS** — `shamir`, `k` of `n` holders.
 - **Something else entirely** — `callback`, and write the twenty lines yourself.
 
 ## Writing one

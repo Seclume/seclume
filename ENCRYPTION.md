@@ -129,15 +129,47 @@ database does not need renaming it here.
 
 1. Add the new key under a new number; it becomes primary. New values are written under it,
    old ones still read.
-2. Move the rows over, at your pace: `needsReencryption(value)` says which, and
-   `reencrypt(value)` returns the value under the primary key - the plaintext only in locked
-   native memory on the way.
+2. Move the rows over, at your pace - with `ColumnRotation` (below), or by hand:
+   `needsReencryption(value)` says which, and `reencrypt(value)` returns the value under the
+   primary key - the plaintext only in locked native memory on the way.
 3. While rows are under both keys, look up deterministic columns with
    `where col in (?, ?, ...)` and `searchTerms(value)`: one ciphertext per key, the primary's
    first. A unique index holds within a key, not across two, until the move is done.
 4. Drop the old key from the ring when nothing is under it.
 
 `LocalEncryptedColumnTest` does exactly this against all four databases, with the table in use.
+
+#### The rotation job
+
+```java
+ColumnRotation rotation = ColumnRotation.builder(keys)
+        .table("patient").id("id")
+        .column("ssn", "patient.ssn", Mode.DETERMINISTIC, Context.NONE)
+        .column("diagnosis", "patient.diagnosis", Mode.RANDOMIZED, Context.ROW_ID)
+        .batchSize(500)
+        .listener(p -> log.info("{} rows, {} moved, {} conflicts", p.rows(), p.rotated(), p.conflicts()))
+        .build();
+
+ColumnRotation.Census before = rotation.census(connection);   // per column: values per key
+ColumnRotation.Progress done = rotation.run(connection);       // to the end
+rotation.census(connection).remaining();                        // 0: the old key can go
+```
+
+Rows are read in the order of `id` - unique, best the primary key - a batch at a time after the
+last id of the one before (`where id > ?`, the same SQL on all four databases, no offsets), one
+transaction per batch. A value is written back only `where id = ? and column = <its old value>`:
+a row the application changed in the meantime is left as the application wrote it - under the
+primary key, since it writes with the same ring - and counted as a conflict. A value already
+under the primary key is not touched, so a second run writes nothing, and a stopped one continues
+from `Progress.lastId()` with `.after(lastId)`. `Context.ROW_ID` is for columns whose values are
+bound to their row's id ([Context](#context-a-value-bound-to-its-row)). The columns must compare
+by value in a `where` - `bytea`, `varbinary`, `raw`, not an Oracle `BLOB`.
+
+Tested against the four databases - batches of five, stopped after the first and continued
+while the application writes, a census before and after, a second run with nothing to do
+(`EncryptedColumnContract`) - and against a table in memory that changes a row behind the
+job's back, fails a batch, ends exactly on a batch boundary and refuses what cannot be an SQL
+identifier (`ColumnRotationTest`).
 
 ## Spring Boot
 
@@ -163,6 +195,13 @@ EncryptedColumn token = keys.column("tenant.api_token", Mode.RANDOMIZED);
 
 A key that cannot be read - a wrong number, a key that is not 32 bytes, a provider Vault
 refuses - stops the start, with the reason; nothing half-built is left in memory.
+
+## Quarkus
+
+The same properties in `application.properties` of a Quarkus application with
+`seclume-quarkus`: the ring is a `@Singleton` `FieldKeys` to inject, built at start-up -
+a key that cannot be read stops it - installed for the JPA converters, and wiped when the
+application stops.
 
 ## JPA entities
 
@@ -319,6 +358,11 @@ always be read; a later format will have another version byte.
 - **Spring Boot:** the ring from the properties, its primary, the `uri` form, installed while
   the context lives, wiped when it closes, every misconfiguration refused at start with
   nothing left in memory (`FieldEncryptionAutoConfigurationTest`).
+- **Quarkus:** the ring from the configuration, injected and installed; an unreadable key stops
+  the start (`FieldKeysTest`, `FieldKeyRefusedTest`).
+- **An AWS KMS emulator:** moto, in CI's brokers job - a data key `Encrypt` made under a real
+  key ARN, opened by a SigV4-signed `Decrypt`, keying a ring; an altered ciphertext refused by
+  the service (`LocalAwsKmsDecryptTest`).
 - **Cloud KMS:** AWS KMS, Cloud KMS and Key Vault against stand-ins - the request each
   service is sent, the plaintext decoded from its answer (Key Vault's Base64url too), every
   refusal and malformed answer (`KmsDecryptSecretProviderTest`). A live run needs the cloud

@@ -66,6 +66,10 @@ public final class Verify {
                     System.exit(Policy.diff(rest, System.out, System.err));
                     return;
                 }
+                case "--split" -> {
+                    System.exit(Split.run(rest, System.out, System.err));
+                    return;
+                }
                 default -> {
                 }
             }
@@ -100,6 +104,7 @@ public final class Verify {
                            java -jar seclume-verify.jar --cbom "<jdbc url>"
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
+                           java -jar seclume-verify.jar --split "<secret uri>" <k> <n> <directory>
                            java -jar seclume-verify.jar --policy <policy.properties> <cbom.json | "<jdbc url>"> [--json]
                            java -jar seclume-verify.jar --quantum <cbom.json | "<jdbc url>"> [--json]
                            java -jar seclume-verify.jar --cbom-diff <before.json> <after.json>
@@ -127,6 +132,10 @@ public final class Verify {
                     Oracle thin or HikariCP configuration into seclume's, and names
                     every unsafe setting in it. Password values are never read.
                     Exit code 1 means unsafe settings were found.
+
+                    --split reads a secret through its provider (file:/path, vault?...)
+                    and writes n Shamir shares into the directory, any k of which give
+                    it back - for provider=shamir. A share is never printed.
 
                     --policy checks a CBOM (or the inventory of one connection) against
                     a crypto policy - key sizes, TLS version and forward secrecy, the
