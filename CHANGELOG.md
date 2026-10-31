@@ -71,6 +71,13 @@ All notable changes to seclume are recorded here. Versions follow
   (`LocalEncryptedColumnTest`, from the TCK's `EncryptedColumnContract`); Vault and OpenBao
   with a token that may open one key and no other (`LocalVaultTransitFieldKeyTest`).
 
+- **Tests that skipped in CI without anybody noticing now run.** Eighteen of the MySQL driver's
+  tests looked for the server on port 3307, a developer's second server, and skipped in the
+  mysql job, whose server is on 3306; they run there now. The Spring Data, Spring JDBC,
+  entity-shape and Hibernate-edge suites of seclume-spring-test - four databases each - ran in
+  no job at all; they run in the four database jobs. `require_servers.py` fails a database job
+  in which any test skipped because it did not find that job's own server or its password
+  file. The README's version table says what CI runs on every pull request.
 - **Flight Recorder recordings redacted like heap dumps.** `heapcheck --dump app.jfr` checks a
   recording and `--redact app-redacted.jfr` writes a copy without its credentials; `--redact-dir`,
   `--watch` and the starter's folder watch take `.jfr` files as well (`.redacted.jfr`). A
