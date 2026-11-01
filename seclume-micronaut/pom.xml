@@ -105,8 +105,10 @@
               <artifactId>micronaut-data-processor</artifactId>
             </path>
           </annotationProcessorPaths>
+          <!-- "classfile": Micronaut Data's classes carry Jackson annotations
+               that are not on the class path, and javac says so for each. -->
           <compilerArgs combine.self="override">
-            <arg>-Xlint:all,-restricted,-processing</arg>
+            <arg>-Xlint:all,-restricted,-processing,-classfile</arg>
             <arg>-Werror</arg>
           </compilerArgs>
         </configuration>
