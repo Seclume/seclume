@@ -39,6 +39,7 @@
     <jackson3.version>3.2.4</jackson3.version>
     <amqp-client.version>5.37.0</amqp-client.version>
     <netty.version>4.2.19.Final</netty.version>
+    <log4j.version>2.25.5</log4j.version>
   </properties>
 
   <!-- The optional clients bring what has known holes: Jackson 2.22.2
@@ -465,6 +466,14 @@
     </dependency>
   
     <!-- Only for TestHosts: where the live PostgreSQL is stands in one place. -->
+    <!-- A Log4j 2 of the test's own, configured with seclume-logging's
+         %redact (LogRedactionTest). -->
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>${log4j.version}</version>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>space.seclume</groupId>
       <artifactId>seclume-tck</artifactId>

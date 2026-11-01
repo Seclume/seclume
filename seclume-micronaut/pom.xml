@@ -53,6 +53,12 @@
       <artifactId>micronaut-context</artifactId>
     </dependency>
 
+    <!-- Micronaut Data JDBC over the pool (LocalMicronautDataPostgresTest). -->
+    <dependency>
+      <groupId>io.micronaut.data</groupId>
+      <artifactId>micronaut-data-jdbc</artifactId>
+      <scope>test</scope>
+    </dependency>
     <!-- A real server in CI's PostgreSQL job (LocalMicronautPostgresTest). -->
     <dependency>
       <groupId>space.seclume</groupId>
@@ -93,9 +99,16 @@
               <groupId>io.micronaut</groupId>
               <artifactId>micronaut-inject-java</artifactId>
             </path>
+            <!-- For the tests' Micronaut Data repository. -->
+            <path>
+              <groupId>io.micronaut.data</groupId>
+              <artifactId>micronaut-data-processor</artifactId>
+            </path>
           </annotationProcessorPaths>
+          <!-- "classfile": Micronaut Data's classes carry Jackson annotations
+               that are not on the class path, and javac says so for each. -->
           <compilerArgs combine.self="override">
-            <arg>-Xlint:all,-restricted,-processing</arg>
+            <arg>-Xlint:all,-restricted,-processing,-classfile</arg>
             <arg>-Werror</arg>
           </compilerArgs>
         </configuration>

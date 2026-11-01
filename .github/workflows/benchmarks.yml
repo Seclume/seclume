@@ -84,3 +84,53 @@ jobs:
           java -cp seclume-bench/target/seclume-bench.jar
           space.seclume.bench.BenchRegression
           seclume-bench/baseline.properties seclume-bench/target/jmh.json
+
+  # R2DBC on PostgreSQL: a statement on one connection, a borrow from a pool
+  # of 16 from eight threads, and batches of 64 and 512 requests at once on
+  # that pool - seclume, a JDBC driver on a virtual thread per connection,
+  # beside r2dbc-postgresql and r2dbc-pool on Netty. The results are notices
+  # on the run, each with the ratio, as well as the artefact.
+  r2dbc:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: seclume_test
+          POSTGRES_DB: seclume_test
+          POSTGRES_PASSWORD: seclume-CI-password-1
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -h 127.0.0.1 -U seclume_test"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - run: printf '%s' 'seclume-CI-password-1' > .local-pg-password
+      - run: ./mvnw -B -pl seclume-bench -am -DskipTests package
+      - name: Measure
+        run: >
+          java -Dbench.db=postgresql -Dbench.host=127.0.0.1 -Dbench.port=5432
+          -Dbench.database=seclume_test -Dbench.user=seclume_test
+          -Dbench.password.file=.local-pg-password -Dbench.tls=off
+          -jar seclume-bench/target/seclume-bench.jar
+          'R2dbcBenchmark|R2dbcPoolBenchmark|R2dbcContentionBenchmark'
+          -rf json -rff seclume-bench/target/jmh-r2dbc.json -wi 3 -i 5 -f 1
+      - name: The results, seclume beside the vendor
+        if: always()
+        run: python3 .github/scripts/jmh_notices.py seclume-bench/target/jmh-r2dbc.json r2dbc
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: benchmarks-r2dbc
+          path: seclume-bench/target/jmh-r2dbc.json
+          retention-days: 90
+      - if: always()
+        run: rm -f .local-pg-password

@@ -769,9 +769,15 @@ seclume:
     primary: 1
 ```
 
-Each `seclume.datasources.<name>` is a `SeclumePool` - a `javax.sql.DataSource` - qualified by
-its name, closed with the context; the `pool` keys are `PoolConfiguration`'s, the same for
-every framework. The URL names where the secret comes from and the driver reads it into native
+Each `seclume.datasources.<name>` is a `SeclumePool` bean and a `javax.sql.DataSource` bean,
+qualified by its name, closed with the context. With Micronaut Data on the class path the
+`DataSource` bean is Micronaut's proxy of the pool, whose connections are those of Micronaut's
+transactions; Micronaut Data wraps every bean that is a `DataSource` by its class, and a listener
+takes the pool back out of the `SeclumePool` bean, so that one stays the pool
+(`dataSource.unwrap(SeclumePool.class)` gives it too). Micronaut Data's own settings for the pool
+stay where Micronaut Data reads them: `datasources.default.dialect: POSTGRES` for the pool named
+`default`. The `pool` keys are `PoolConfiguration`'s,
+the same for every framework. The URL names where the secret comes from and the driver reads it into native
 memory at each login. The key ring is built when the application starts - a key that cannot be
 read stops it - installed for the JPA converters, injectable as `FieldKeys`, and wiped when the
 context closes.
@@ -784,7 +790,9 @@ property and what to write instead, never the value.
 Tested in an application context with a stub driver - named and primary pools, every pool
 setting, a wrong one, the key ring built, installed and wiped, an unreadable key, the password
 refusals (`SeclumeMicronautTest`) - and against CI's PostgreSQL: the application logs in, and a
-heap dump afterwards holds no byte of the password (`LocalMicronautPostgresTest`).
+heap dump afterwards holds no byte of the password (`LocalMicronautPostgresTest`), and a
+Micronaut Data JDBC repository saves, queries and runs transactions on the pool
+(`LocalMicronautDataPostgresTest`).
 
 ## Helidon
 
