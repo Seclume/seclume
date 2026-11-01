@@ -57,7 +57,10 @@ All notable changes to seclume are recorded here. Versions follow
 - **Micronaut Data, Helidon MP on a real server, Log4j 2 through the starter, R2DBC under
   contention.** `LocalMicronautDataPostgresTest`: a Micronaut Data JDBC repository saves, finds,
   counts and deletes on seclume's pool against CI's PostgreSQL, and Micronaut's transaction
-  manager commits and rolls back on its connection. `LocalHelidonMpPostgresTest`: an injected
+  manager commits and rolls back on its connection. Micronaut Data wraps every bean that is a
+  `DataSource`, the `SeclumePool` bean included, which then failed whoever injected a
+  `SeclumePool` with a `ClassCastException`: a listener running after every other hands back the
+  pool, and the `DataSource` bean stays Micronaut's proxy. `LocalHelidonMpPostgresTest`: an injected
   `DataSource` logs in, a second named pool keeps its own URL, and the heap holds no password.
   `Log4j2RedactionStarterTest`: `seclume.logging.redact=true` masks Log4j 2 lines through
   `%redact{...}` while the context runs, and stops when it closes. `R2dbcContentionBenchmark`:

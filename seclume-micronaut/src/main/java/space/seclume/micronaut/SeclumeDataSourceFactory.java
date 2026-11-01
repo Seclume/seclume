@@ -18,10 +18,11 @@ import space.seclume.pool.SeclumePool;
  *
  * <p>Two beans, the pool and the data source, of one instance: a library may
  * wrap every {@code DataSource} bean it finds - Micronaut Data does, in a proxy
- * of its own - and a pool exposed as a {@code DataSource} would then be that
- * proxy for whoever asks for a {@code SeclumePool}, which it is not. The
- * {@code SeclumePool} bean is typed as nothing else and stays the pool; the
- * {@code DataSource} bean is free to be wrapped.
+ * that joins its transactions - and the {@code DataSource} bean is free to be
+ * wrapped. The {@code SeclumePool} bean is typed as nothing else and stays the
+ * pool: a library that decides by the bean's class wraps it too, and
+ * {@link SeclumePoolStaysThePool} takes the pool back out. Behind a wrapping
+ * {@code DataSource} the pool is also {@code dataSource.unwrap(SeclumePool.class)}.
  */
 @Factory
 public class SeclumeDataSourceFactory {

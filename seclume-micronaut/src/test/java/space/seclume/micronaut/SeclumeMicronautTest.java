@@ -155,16 +155,22 @@ class SeclumeMicronautTest {
             assertEquals(3, primary.settings().getMaximumPoolSize());
             orders = context.getBean(SeclumePool.class, Qualifiers.byName("orders"));
             assertEquals(java.time.Duration.ofSeconds(2), orders.settings().getConnectionTimeout());
-            // The DataSource bean is the default pool - or, with Micronaut Data on
-            // the class path as here, Micronaut's proxy of it: it connects through
-            // the default URL, while the SeclumePool bean stays the pool.
+            // With Micronaut Data on the class path, as here, the DataSource bean is
+            // Micronaut's proxy of the default pool - its connections are those of
+            // Micronaut's transactions - while the SeclumePool bean stays the pool.
+            DataSource dataSource = context.getBean(DataSource.class);
+            assertFalse(dataSource instanceof SeclumePool, "Micronaut Data wrapped the DataSource bean");
+            assertTrue(dataSource.isWrapperFor(SeclumePool.class));
+            assertSame(primary, dataSource.unwrap(SeclumePool.class), "the unqualified DataSource is the default pool");
+            assertSame(orders, context.getBean(DataSource.class, Qualifiers.byName("orders")).unwrap(SeclumePool.class));
+            assertSame(primary, context.getBean(SeclumePool.class, Qualifiers.byName("default")));
             int before = DRIVER.urls.size();
-            try (Connection connection = context.getBean(DataSource.class).getConnection()) {
+            try (Connection connection = primary.getConnection()) {
                 assertFalse(connection.isClosed());
             }
             assertTrue(DRIVER.urls.size() > before);
             assertEquals("jdbc:seclume:stub://db/app?user=app&provider=file&path=/x",
-                    DRIVER.urls.get(DRIVER.urls.size() - 1), "the unqualified DataSource is the default pool");
+                    DRIVER.urls.get(DRIVER.urls.size() - 1));
             assertEquals(2, context.getBeansOfType(DataSource.class).size(), "one DataSource per pool");
             assertEquals(2, context.getBeansOfType(SeclumePool.class).size(), "and one SeclumePool");
             try (Connection connection = orders.getConnection()) {
@@ -173,6 +179,74 @@ class SeclumeMicronautTest {
             assertTrue(DRIVER.urls.contains("jdbc:seclume:stub://db/orders?user=o&provider=file&path=/y"));
         }
         assertThrows(SQLException.class, orders::getConnection, "closed with the context");
+    }
+
+    /** A DataSource that wraps another, as Micronaut Data's proxy does, unwrapping as told. */
+    private static DataSource wrapper(Object unwrapsTo) {
+        return (DataSource) Proxy.newProxyInstance(DataSource.class.getClassLoader(), new Class<?>[] {DataSource.class},
+                (proxy, method, arguments) -> switch (method.getName()) {
+                    case "unwrap" -> {
+                        if (unwrapsTo instanceof Exception e) {
+                            throw e;
+                        }
+                        yield unwrapsTo;
+                    }
+                    case "toString" -> "wrapper";
+                    default -> throw new UnsupportedOperationException(method.getName());
+                });
+    }
+
+    @Test
+    void theListenerHandsBackThePoolWhateverWrappedIt() throws Exception {
+        try (SeclumePool pool = space.seclume.pool.PoolConfiguration.pool("p",
+                "jdbc:seclume:stub://db/app?user=app&provider=file&path=/x", Map.of())) {
+            assertSame(pool, SeclumePoolStaysThePool.pool(pool, "p"), "the pool, untouched");
+            assertSame(pool, SeclumePoolStaysThePool.pool(wrapper(pool), "p"), "the pool the proxy holds");
+        }
+        IllegalStateException failed = assertThrows(IllegalStateException.class,
+                () -> SeclumePoolStaysThePool.pool(wrapper(new SQLException("not a wrapper for it")), "orders"));
+        assertTrue(failed.getMessage().contains("'orders'"), failed.getMessage());
+        assertTrue(failed.getMessage().contains("does not unwrap to the pool"), failed.getMessage());
+        assertEquals("not a wrapper for it", failed.getCause().getMessage());
+        IllegalStateException broken = assertThrows(IllegalStateException.class,
+                () -> SeclumePoolStaysThePool.pool(wrapper(new IllegalArgumentException("broken")), "orders"));
+        assertEquals("broken", broken.getCause().getMessage());
+        IllegalStateException other = assertThrows(IllegalStateException.class,
+                () -> SeclumePoolStaysThePool.pool("a string", "default"));
+        assertEquals("the SeclumePool bean 'default' was replaced by a java.lang.String", other.getMessage());
+        IllegalStateException none = assertThrows(IllegalStateException.class,
+                () -> SeclumePoolStaysThePool.pool(null, "default"));
+        assertEquals("the SeclumePool bean 'default' was replaced by null", none.getMessage());
+    }
+
+    @Test
+    void theListenerRunsAfterEveryOther() {
+        SeclumePoolStaysThePool listener = new SeclumePoolStaysThePool();
+        assertEquals(io.micronaut.core.order.Ordered.LOWEST_PRECEDENCE, listener.getOrder());
+        assertEquals(io.micronaut.core.order.Ordered.LOWEST_PRECEDENCE, SeclumePoolStaysThePool.class
+                .getAnnotation(io.micronaut.core.annotation.Order.class).value());
+        assertEquals("SeclumePoolStaysThePool", listener.toString());
+    }
+
+    @Test
+    void theSeclumePoolBeanIsThePoolForEveryName() throws Exception {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        for (String name : List.of("default", "orders", "reports")) {
+            properties.put("seclume.datasources." + name + ".url",
+                    "jdbc:seclume:stub://db/" + name + "?user=u&provider=file&path=/x");
+        }
+        try (ApplicationContext context = ApplicationContext.run(properties)) {
+            assertEquals(3, context.getBeansOfType(SeclumePool.class).size());
+            for (String name : List.of("default", "orders", "reports")) {
+                SeclumePool pool = context.getBean(SeclumePool.class, Qualifiers.byName(name));
+                assertEquals(name, pool.settings().getName());
+                assertSame(pool, context.getBean(DataSource.class, Qualifiers.byName(name)).unwrap(SeclumePool.class),
+                        "the DataSource '" + name + "' wraps the pool of its name");
+            }
+            for (SeclumePool pool : context.getBeansOfType(SeclumePool.class)) {
+                assertSame(SeclumePool.class, pool.getClass(), "no proxy among them");
+            }
+        }
     }
 
     @Test

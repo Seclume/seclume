@@ -1,6 +1,7 @@
 package space.seclume.micronaut;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -11,9 +12,13 @@ import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Map;
+
+import javax.sql.DataSource;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
@@ -96,6 +101,26 @@ class LocalMicronautDataPostgresTest {
                     throw new IllegalStateException("the work failed");
                 }));
                 assertTrue(patients.findById(6L).isEmpty(), "an exception rolls back");
+
+                // The DataSource bean is Micronaut's proxy of the pool: inside a
+                // transaction its connection is the transaction's, which sees the
+                // transaction's own uncommitted row.
+                DataSource dataSource = context.getBean(DataSource.class);
+                assertSame(pool, dataSource.unwrap(SeclumePool.class));
+                long seen = transactions.executeWrite(status -> {
+                    patients.save(new DataPatient(7L, "Gale", "west"));
+                    try (Statement statement = dataSource.getConnection().createStatement();
+                         ResultSet rows = statement.executeQuery("select count(*) from zl_mn_patient where id = 7")) {
+                        rows.next();
+                        long count = rows.getLong(1);
+                        status.setRollbackOnly();
+                        return count;
+                    } catch (SQLException e) {
+                        throw new IllegalStateException("the query in the transaction failed: " + e.getMessage(), e);
+                    }
+                });
+                assertEquals(1L, seen, "the DataSource's connection is the transaction's");
+                assertTrue(patients.findById(7L).isEmpty(), "and rolled back with it");
 
                 patients.deleteById(1L);
                 assertEquals(3, patients.count());
