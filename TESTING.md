@@ -1020,8 +1020,10 @@ pauses grow and carry a random part, so that the three copies of a job the flake
 once do not ask Maven Central again in the same second. A failure after the build has started is
 passed on the first time. The wrapper's jar, which setup-java's cache does not hold, is kept in
 `~/.m2/repository`, which it does, and taken from there when its SHA-256 is the one
-`maven-wrapper.properties` names: the first flake hunt failed three jobs only because Maven
-Central would not hand out the jar three times in a row.
+`maven-wrapper.properties` names; a jar that is not kept is fetched by the script itself, from
+Maven Central and then from Google's mirror of it, under the same check. The first flake hunt
+failed three jobs only because Maven Central would not hand one runner the jar three times in a
+row.
 
 ## Required pool isolation and migration coverage
 

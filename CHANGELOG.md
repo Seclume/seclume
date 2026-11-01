@@ -9,7 +9,8 @@ All notable changes to seclume are recorded here. Versions follow
   at once - found no flaky test; its three failures were jobs whose runner could not download
   `maven-wrapper.jar` from Maven Central in three attempts. `mvnw-retry.sh` now keeps the jar in
   `~/.m2/repository`, which setup-java caches, takes it from there when its SHA-256 matches
-  `maven-wrapper.properties`, and retries a failure before the build up to three more times with
+  `maven-wrapper.properties`, otherwise fetches it from Maven Central or Google's mirror of it
+  under the same check, and retries a failure before the build up to three more times with
   growing, jittered pauses.
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64

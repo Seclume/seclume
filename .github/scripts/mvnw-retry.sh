@@ -37,6 +37,33 @@ if [ -n "$version" ] && [ ! -s "$jar" ] && genuine "$kept"; then
   cp "$kept" "$jar" && echo "mvnw-retry: the wrapper jar ${version} from the local repository"
 fi
 
+# Not kept: fetched here, from Maven Central and then from Google's mirror of
+# it - the same path, the same bytes, checked against the same SHA-256 - with
+# each answer's status in the warning when neither gives it. The wrapper's own
+# download tries Central alone, three times within seconds; four such rounds
+# in a row came back empty on a runner while other jobs got the jar.
+fetch_jar() {
+  local path="org/apache/maven/wrapper/maven-wrapper/${version}/maven-wrapper-${version}.jar"
+  local statuses="" base status
+  for base in ${MVNW_JAR_SOURCES:-https://repo.maven.apache.org/maven2 https://maven-central.storage-download.googleapis.com/maven2}; do
+    status=$(curl -sS --retry 2 --retry-delay 3 --connect-timeout 20 -o "$jar.part" -w '%{http_code}' -L \
+      "$base/$path" 2>&1 | tail -1)
+    if [ "$status" = 200 ] && genuine "$jar.part"; then
+      mv "$jar.part" "$jar"
+      echo "mvnw-retry: the wrapper jar ${version} from ${base}"
+      return 0
+    fi
+    rm -f "$jar.part"
+    statuses="${statuses} ${base}: ${status}${status:+;}"
+  done
+  echo "::warning title=mvnw wrapper jar::not fetched -${statuses} the wrapper tries itself"
+  return 1
+}
+
+if [ -n "$version" ] && [ -n "$sum" ] && [ ! -s "$jar" ] && [ -z "${MVNW_NO_FETCH:-}" ]; then
+  fetch_jar || true
+fi
+
 keep_jar() {
   if [ -n "$version" ] && [ ! -s "$kept" ] && genuine "$jar"; then
     mkdir -p "$(dirname "$kept")" && cp "$jar" "$kept"
@@ -47,6 +74,9 @@ pause=${MVNW_RETRY_PAUSE:-20}
 attempts=${MVNW_RETRY_ATTEMPTS:-4}
 code=1
 for attempt in $(seq 1 "$attempts"); do
+  if [ "$attempt" -gt 1 ] && [ -n "$version" ] && [ -n "$sum" ] && [ ! -s "$jar" ] && [ -z "${MVNW_NO_FETCH:-}" ]; then
+    fetch_jar || true
+  fi
   log=$(mktemp)
   start=$(date +%s)
   ./mvnw "$@" 2>&1 | tee "$log"
