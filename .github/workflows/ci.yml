@@ -28,13 +28,21 @@ on:
     paths-ignore: ['**.md', 'docs/**', 'test-reports/**', 'LICENSE', 'NOTICE']
   pull_request:
     # Required checks must also exist for documentation-only pull requests.
+  # The flake hunt (flake-hunt.yml) runs this whole file several times at
+  # once on one commit; "run" keeps those runs apart.
+  workflow_call:
+    inputs:
+      run:
+        description: which of the repeated runs this is
+        type: string
+        default: ''
 
 # The free plan runs 20 jobs at a time across the whole account. A newer push
 # to the same pull request replaces the older run instead of queueing behind
 # it. On main every commit keeps its own run.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ci-${{ github.ref }}${{ inputs.run && format('-hunt-{0}', inputs.run) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !inputs.run }}
 
 jobs:
   # The crypto policy action as a user's pipeline runs it: the first release
@@ -50,7 +58,7 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
-      - run: ./mvnw -B -pl seclume-verify -am package -DskipTests
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-verify -am package -DskipTests
       - name: The policy and the jar
         shell: bash
         run: |
@@ -101,7 +109,7 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
-      - run: ./mvnw -B -pl seclume-heapcheck -am package -DskipTests
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-heapcheck -am package -DskipTests
       - name: Create clean and leaking test dumps
         shell: bash
         run: |
@@ -223,7 +231,7 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
-      - run: ./mvnw -B -pl seclume-heapcheck -am package -DskipTests
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-heapcheck -am package -DskipTests
       - name: A cluster with a leaking, a clean and a token-holding application
         run: |
           set -euo pipefail
@@ -302,7 +310,7 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
-      - run: ./mvnw -B -pl seclume-admission,seclume-heapcheck -am package -DskipTests
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-admission,seclume-heapcheck -am package -DskipTests
       - name: A cluster with the webhook
         run: |
           set -euo pipefail
@@ -434,7 +442,7 @@ jobs:
           # What must not render: no image, an unknown mode.
           ! helm template t "$chart" > /dev/null 2>&1
           ! helm template t "$chart" --set image.repository=x --set tls.mode=none > /dev/null 2>&1
-      - run: ./mvnw -B -pl seclume-admission,seclume-heapcheck -am package -DskipTests
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-admission,seclume-heapcheck -am package -DskipTests
       - name: Installed on kind with the chart's own CA
         run: |
           set -euo pipefail
@@ -555,7 +563,7 @@ jobs:
           echo "SOFTHSM2_CONF=$RUNNER_TEMP/softhsm/softhsm2.conf" >> "$GITHUB_ENV"
       # seclume-mail brings its own SMTP server (a JDK one, in a JVM of its
       # own for the heap proof), so it needs nothing started beside it.
-      - run: ./mvnw -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-jpa,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-jpa,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # Every test that carries a security claim ran and passed - none
@@ -632,7 +640,7 @@ jobs:
       - name: The security tests
         run: |
           tests=$("$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --tests)
-          ./mvnw -B -pl seclume-core,seclume-tck,seclume-heapdump,seclume-heapcheck,seclume-jpa -am test \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core,seclume-tck,seclume-heapdump,seclume-heapcheck,seclume-jpa -am test \
             -Dtest="$tests" -Dsurefire.failIfNoSpecifiedTests=false
       - name: Security gate
         if: success() || failure()
@@ -673,7 +681,7 @@ jobs:
         env:
           JAZZER_FUZZ: '1'
         run: >
-          ./mvnw -B -pl seclume-core -am test
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test
           -Dtest='JsonOffFuzzTest#${{ matrix.method }}'
           -Djazzer.max_duration=60s -Dsurefire.failIfNoSpecifiedTests=false
       - if: failure()
@@ -720,7 +728,7 @@ jobs:
           JAZZER_FUZZ: '1'
           TARGET: ${{ matrix.target }}
         run: >
-          ./mvnw -B -pl seclume-core -am test -Dtest="$TARGET"
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest="$TARGET"
           -Djazzer.max_duration=60s -Dsurefire.failIfNoSpecifiedTests=false
       # The finding on the pull request itself: the failure and the input, as
       # Base64, so that it can be turned into a regression test without
@@ -760,7 +768,7 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
-      - run: ./mvnw -B -pl seclume-spring-boot-starter,seclume-postgresql,seclume-heapcheck -am install -DskipTests
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-boot-starter,seclume-postgresql,seclume-heapcheck -am install -DskipTests
       - name: The example, five minutes' worth
         run: |
           set -euo pipefail
@@ -800,7 +808,7 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
-      - run: ./mvnw -B -pl seclume-micronaut,seclume-helidon,seclume-postgresql,seclume-heapcheck -am install -DskipTests
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-micronaut,seclume-helidon,seclume-postgresql,seclume-heapcheck -am install -DskipTests
       - name: Micronaut and Helidon MP, from their configuration files
         run: |
           set -euo pipefail
@@ -808,7 +816,7 @@ jobs:
           heapcheck="$PWD/seclume-heapcheck/target/seclume-heapcheck-$version.jar"
           examples/getting-started/setup.sh
           for example in micronaut helidon; do
-            ./mvnw -B -q -f "examples/$example/pom.xml" package -DskipTests -Dseclume.version="$version"
+            .github/scripts/mvnw-retry.sh -B -q -f "examples/$example/pom.xml" package -DskipTests -Dseclume.version="$version"
           done
           examples/check-example.sh micronaut example.Application "$heapcheck"
           examples/check-example.sh helidon example.Main "$heapcheck"
@@ -855,7 +863,7 @@ jobs:
       - name: ${{ matrix.name }}
         run: |
           set -o pipefail
-          ./mvnw -B -pl ${{ matrix.module }} -am test ${{ matrix.args }} \
+          .github/scripts/mvnw-retry.sh -B -pl ${{ matrix.module }} -am test ${{ matrix.args }} \
             -Dtest='${{ matrix.tests }}' -Dsurefire.failIfNoSpecifiedTests=false 2>&1 | tee build.log
       - name: Require executed tests
         if: always()
@@ -912,7 +920,7 @@ jobs:
           export SECLUME_OPENSSL35="$HOME/openssl35/bin/openssl"
           export LD_LIBRARY_PATH="$HOME/openssl35/lib"
           "$SECLUME_OPENSSL35" version
-          ./mvnw -B -pl seclume-core -am test -Dtest=HybridHandshakeTest -Dsurefire.failIfNoSpecifiedTests=false
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=HybridHandshakeTest -Dsurefire.failIfNoSpecifiedTests=false
 
   # RabbitMQ with a TLS 1.3 listener: the official client and Spring AMQP log in
   # through seclume, a dropped connection recovers, and the password is not on
@@ -962,7 +970,7 @@ jobs:
             < "$RUNNER_TEMP/rabbit-password"
           docker exec -u rabbitmq rabbit rabbitmqctl set_permissions -p / seclume '.*' '.*' '.*'
           cp cert.pem "$RUNNER_TEMP/rabbit-cert.pem"
-      - run: ./mvnw -B -pl seclume-rabbitmq -am test
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-rabbitmq -am test
         env:
           SECLUME_RABBITMQ_PORT: '5671'
           SECLUME_RABBITMQ_CERT: ${{ runner.temp }}/rabbit-cert.pem
@@ -1013,7 +1021,7 @@ jobs:
       - name: MongoDB behind a load balancer
         run: bash .github/scripts/mongo_lb_fixtures.sh "$RUNNER_TEMP/mongo-lb"
       - run: >-
-          ./mvnw -B -pl seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-reactive,seclume-mongodb-spring-test -am
+          .github/scripts/mvnw-retry.sh -B -pl seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-reactive,seclume-mongodb-spring-test -am
           test -Dseclume.mongo.host=127.0.0.1
       # Skipped is not passed: a test that found no server proves nothing.
       - name: Require executed MongoDB tests
@@ -1021,7 +1029,7 @@ jobs:
         run: python3 .github/scripts/require_mongo_tests.py
       - name: Control - the official driver's own login leaves the password on the heap
         run: >-
-          ./mvnw -B -pl seclume-mongodb-driver -am test -Dseclume.mongo.host=127.0.0.1
+          .github/scripts/mvnw-retry.sh -B -pl seclume-mongodb-driver -am test -Dseclume.mongo.host=127.0.0.1
           -Dseclume.mongo.control=true -Dtest='ApmAgentHeapDumpTest#control*'
           -Dsurefire.failIfNoSpecifiedTests=false
       - if: always()
@@ -1046,7 +1054,7 @@ jobs:
       - name: Elasticsearch and OpenSearch with TLS
         run: bash .github/scripts/search_fixtures.sh "$RUNNER_TEMP/search"
       - run: >-
-          ./mvnw -B -pl seclume-elasticsearch -am test -Dseclume.search.host=127.0.0.1
+          .github/scripts/mvnw-retry.sh -B -pl seclume-elasticsearch -am test -Dseclume.search.host=127.0.0.1
           -Dtest='space.seclume.elasticsearch.**' -Dsurefire.failIfNoSpecifiedTests=false
       # Skipped is not passed here either.
       - name: Require executed search tests
@@ -1086,7 +1094,7 @@ jobs:
           cp /tmp/seclume-kafka/token .local-kafka-token
           cp /tmp/seclume-kafka/ca.pem .local-kafka-ca.pem
       - run: >-
-          ./mvnw -B -pl seclume-redis,seclume-kafka -am test
+          .github/scripts/mvnw-retry.sh -B -pl seclume-redis,seclume-kafka -am test
           -Dseclume.redis.host=127.0.0.1 -Dseclume.kafka.host=127.0.0.1
           -Dtest='space.seclume.redis.**,space.seclume.kafka.**' -Dsurefire.failIfNoSpecifiedTests=false
       # Vault's database engine: the driver logs in as Vault's user, renews the
@@ -1095,11 +1103,11 @@ jobs:
       - name: Vault with dynamic PostgreSQL credentials
         run: |
           bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/vault"
-          ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest,LocalVaultTransitFieldKeyTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'Vault'
-          ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultPkiTest' -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-keys' 'Vault PKI'
       # The same against OpenBao, the open-source fork: the same API, so the
@@ -1112,11 +1120,11 @@ jobs:
           docker rm -f slm-vault slm-vault-pg || true
           VAULT_IMAGE=quay.io/openbao/openbao:2.7.2 VAULT_CLI=bao \
             bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/openbao"
-          ./mvnw -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest,LocalVaultTransitFieldKeyTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-postgresql' 'OpenBao'
-          ./mvnw -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-keys -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultPkiTest' -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-keys' 'OpenBao PKI'
       # AWS KMS's API, emulated by moto behind its own throwaway certificate: a
@@ -1133,7 +1141,7 @@ jobs:
           docker run -d --name slm-moto -p 4443:4443 -v "$RUNNER_TEMP/moto:/certs:ro" \
             motoserver/moto:5.1.22 -p 4443 -c /certs/cert.pem -k /certs/key.pem
           python3 .github/scripts/kms_fixture.py https://127.0.0.1:4443 "$RUNNER_TEMP/moto/cert.pem"
-          ./mvnw -B -pl seclume-core -am test -Dtest=LocalAwsKmsDecryptTest \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=LocalAwsKmsDecryptTest \
             -Dsurefire.failIfNoSpecifiedTests=false
           python3 .github/scripts/require_mongo_tests.py 'seclume-core' 'AWS KMS emulator'
       - name: Require executed Redis and Kafka tests
@@ -1141,7 +1149,7 @@ jobs:
         run: python3 .github/scripts/require_mongo_tests.py 'seclume-redis,seclume-kafka' 'Redis and Kafka'
       - name: Controls - the vendors' clients leave the secret on the heap
         run: >-
-          ./mvnw -B -pl seclume-redis,seclume-kafka -am test
+          .github/scripts/mvnw-retry.sh -B -pl seclume-redis,seclume-kafka -am test
           -Dseclume.redis.host=127.0.0.1 -Dseclume.kafka.host=127.0.0.1
           -Dseclume.redis.control=true -Dseclume.kafka.control=true
           -Dtest='LocalLettuceTest#control*,LocalKafkaSaslSslTest#control*'
@@ -1193,7 +1201,7 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
-      - run: ./mvnw -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
       # The password is nowhere in the process after a TLS login - searched in
       # all of its memory, not only the heap (ProcessMemoryTest). It needs a
       # server with TLS, which the service above is not: a second one, here.
@@ -1217,7 +1225,7 @@ jobs:
           # Out of the environment before Maven: the probe would inherit it,
           # and a process's environment lies at the top of its stack.
           unset PG_PASSWORD
-          ./mvnw -B -pl seclume-postgresql -am test -Dtest=ProcessMemoryTest \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dtest=ProcessMemoryTest \
             -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.pgtls.host=127.0.0.1
           # Skipped is not passed: a missing server must not look like a proof.
           grep -q 'Tests run: 3, Failures: 0, Errors: 0, Skipped: 0' \
@@ -1225,7 +1233,7 @@ jobs:
           # R2DBC's heap against the same server; the other three databases
           # are not in this job and skip. Case [1] is PostgreSQL, and it must
           # have run and passed - a self-closed testcase has no <skipped/>.
-          ./mvnw -B -pl seclume-r2dbc -am test \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-r2dbc -am test \
             -Dtest='LocalR2dbcFourDatabasesTest#thePasswordIsNotOnTheHeap,LocalEncryptedR2dbcTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
           grep -qE 'name="thePasswordIsNotOnTheHeap\(Db\)\[1\]"[^>]*/>' \
@@ -1241,14 +1249,14 @@ jobs:
       # password is not on the heap afterwards.
       - name: Micronaut and Helidon against this server
         run: >-
-          ./mvnw -B -pl seclume-micronaut,seclume-helidon -am test
+          .github/scripts/mvnw-retry.sh -B -pl seclume-micronaut,seclume-helidon -am test
           -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest,LocalMicronautDataPostgresTest,SeclumeSettingsTest,SeclumeHelidonTest,SeclumeCdiExtensionTest,SeclumeCdiExtensionOnceTest,LocalHelidonPostgresTest,LocalHelidonMpPostgresTest'
           -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed Micronaut and Helidon tests
         if: always()
         run: python3 .github/scripts/require_mongo_tests.py 'seclume-micronaut,seclume-helidon' 'Micronaut and Helidon'
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest,JakartaDataOnPostgresTest,SpringDataOnPostgresTest,EntityShapesOnPostgresTest,HibernateEdgesOnPostgresTest,SpringJdbcOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnPostgresTest,MyBatisOnPostgresTest,LiquibaseOnPostgresTest,JpaFieldEncryptionOnPostgresTest,JakartaDataOnPostgresTest,SpringDataOnPostgresTest,EntityShapesOnPostgresTest,HibernateEdgesOnPostgresTest,SpringJdbcOnPostgresTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Postgres
@@ -1256,7 +1264,7 @@ jobs:
         if: success() || failure()
         run: python3 .github/scripts/require_servers.py postgresql seclume-postgresql,seclume-spring-test
       - name: Verify pool isolation against PostgreSQL
-        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest,PoolHandOnSeamTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest,PoolHandOnSeamTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests
         if: always()
         run: python3 .github/scripts/require_pool_tests.py "PostgreSQL"
@@ -1346,7 +1354,7 @@ jobs:
           for i in $(seq 1 20); do (echo > /dev/tcp/127.0.0.1/6432) 2>/dev/null && break; sleep 1; done
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pgtls-password
       - run: >-
-          ./mvnw -B -pl seclume-diff -am test -Dtest=PgBouncerTest
+          .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test -Dtest=PgBouncerTest
           -Dsurefire.failIfNoSpecifiedTests=false
           -Dseclume.pgbouncer.host=127.0.0.1 -Dseclume.pgbouncer.port=6432
       - if: always()
@@ -1424,12 +1432,12 @@ jobs:
       # server; this job's is on 3306. Without saying so they skipped here -
       # eighteen of them - and require_servers.py now fails a job where that
       # happens again.
-      - run: ./mvnw -B -pl seclume-mysql -am test -Dseclume.mysql.port=3306
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-mysql -am test -Dseclume.mysql.port=3306
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,JakartaDataOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,JakartaDataOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py MySql
@@ -1453,7 +1461,7 @@ jobs:
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against MySQL
-        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
       - name: Require executed database regression tests
         if: always()
         run: python3 .github/scripts/require_pool_tests.py "MySQL"
@@ -1512,12 +1520,12 @@ jobs:
           echo "::error title=sqlserver::SQL Server ${{ matrix.version }} never accepted a login: $(docker logs "$id" 2>&1 | tail -15 | tr '\n' ' ' | cut -c1-2500)"
           exit 1
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
-      - run: ./mvnw -B -pl seclume-sqlserver -am test
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-sqlserver -am test
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group sqlserver --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest,JakartaDataOnSqlServerTest,SpringDataOnSqlServerTest,EntityShapesOnSqlServerTest,HibernateEdgesOnSqlServerTest,SpringJdbcOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest,JakartaDataOnSqlServerTest,SpringDataOnSqlServerTest,EntityShapesOnSqlServerTest,HibernateEdgesOnSqlServerTest,SpringJdbcOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py SqlServer
@@ -1541,7 +1549,7 @@ jobs:
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against SQL Server
-        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests
         if: always()
         run: python3 .github/scripts/require_pool_tests.py "SQL Server"
@@ -1609,12 +1617,12 @@ jobs:
             'grant create session, create table, create sequence, create view, create procedure, create trigger to seclume_spring;' \
             'exit' | docker exec -i oracle sqlplus -s / as sysdba
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
-      - run: ./mvnw -B -pl seclume-oracle -am test
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-oracle -am test
       - name: Security gate
         if: success() || failure()
         run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
       - name: Verify framework edge cases
-        run: ./mvnw -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,JakartaDataOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,JakartaDataOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
       - name: Require executed framework tests
         if: always()
         run: python3 .github/scripts/require_framework_tests.py Oracle
@@ -1638,7 +1646,7 @@ jobs:
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against Oracle
-        run: ./mvnw -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed database regression tests
         if: always()
         run: python3 .github/scripts/require_pool_tests.py "Oracle"
@@ -1692,7 +1700,7 @@ jobs:
           done
           docker exec crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257 -e "create user seclume_test with password '$pw'; create database seclume_test; grant all on database seclume_test to seclume_test;"
       - run: printf '%s' "${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-crdb-password
-      - run: ./mvnw -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Cockroach' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.crdb.host=127.0.0.1
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Cockroach' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.crdb.host=127.0.0.1
       - if: always()
         run: rm -f .local-crdb-password; docker rm -f crdb || true
 
@@ -1733,7 +1741,7 @@ jobs:
           echo "YugabyteDB never accepted a login" >&2
           exit 1
       - run: printf '%s' "${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-yb-password
-      - run: ./mvnw -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Yugabyte' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.yb.host=127.0.0.1
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Yugabyte' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.yb.host=127.0.0.1
       # Why, on the pull request: the server's last words and the failed tests.
       - if: failure()
         run: |
