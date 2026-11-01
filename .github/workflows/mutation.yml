@@ -49,7 +49,7 @@ jobs:
           cache: maven
       - name: Mutants in space.seclume.${{ matrix.package }}
         run: >-
-          ./mvnw -B -Pmutation -pl seclume-core test-compile
+          .github/scripts/mvnw-retry.sh -B -Pmutation -pl seclume-core test-compile
           org.pitest:pitest-maven:mutationCoverage
           -DtargetClasses='space.seclume.${{ matrix.package }}.*'
           -DtargetTests='space.seclume.*'

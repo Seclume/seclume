@@ -1006,6 +1006,18 @@ quietly stopped asking would fail the job rather than pass it.
 If a run of yours has no server, it stays green and proves less. That is deliberate: a suite
 that fails on a laptop teaches people to ignore it.
 
+**Flaky is a finding, not a re-run.** `flake-hunt.yml` runs the whole of `ci.yml` three times at
+once on one commit - by hand, and on Saturday night. A job that fails in one run and passes in
+the others depends on timing, ordering or a server's mood; `summarize_flakes.py` writes each
+such job as a warning, with the runs and the steps that failed, and a job that failed in every
+run as an error. The list is worked through: the cause is found and fixed, the test is not
+retried until it passes.
+
+The one thing that is retried is the runner, not the code: `mvnw-retry.sh` runs Maven again,
+up to twice, when it fails before it has built anything - a wrapper or plugin download that
+did not come through - and says so in a warning with Maven's last lines. A failure after the
+build has started is passed on the first time.
+
 ## Mutation testing of the security core
 
 Line coverage says a test ran a line; it does not say a test checked what the line does. PIT
