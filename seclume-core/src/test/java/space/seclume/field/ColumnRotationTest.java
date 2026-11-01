@@ -59,6 +59,13 @@ class ColumnRotationTest {
         /** Called with the ids a select returned, before the job updates any of them. */
         Consumer<List<Integer>> afterSelect = ids -> { };
         RuntimeException failUpdate;
+        /** Auto-commit as it was at each commit. */
+        final List<Boolean> autoCommitAtCommit = new ArrayList<>();
+        /** What each select was told: its maximum rows and its fetch size. */
+        final List<Integer> maxRows = new ArrayList<>();
+        final List<Integer> fetchSizes = new ArrayList<>();
+        /** A driver that takes no notice of setMaxRows and returns every row. */
+        boolean ignoreMaxRows;
     }
 
     private static FieldKeys ring(int primary, byte[]... keys) {
@@ -239,6 +246,75 @@ class ColumnRotationTest {
     }
 
     @Test
+    void eachBatchCommitsWithAutoCommitOffAndRestoresIt() throws SQLException {
+        Table table = table(7);
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            rotation(both, 3, null, null).run(connection(table));
+            assertEquals(List.of(false, false, false), table.autoCommitAtCommit,
+                    "3, 3 and 1 rows: three transactions, none of them in auto-commit");
+            assertTrue(table.autoCommit, "auto-commit as it was before");
+            table.autoCommit = false;
+            table.autoCommitAtCommit.clear();
+            rotation(both, 3, null, null).step(connection(table), null);
+            assertEquals(List.of(false), table.autoCommitAtCommit);
+            assertFalse(table.autoCommit, "a connection that was not in auto-commit stays so");
+        }
+    }
+
+    @Test
+    void eachSelectAsksForOneBatchOfRows() throws SQLException {
+        Table table = table(7);
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            rotation(both, 3, null, null).run(connection(table));
+            assertEquals(List.of(3, 3, 3), table.maxRows, "at most a batch of rows from the database");
+            assertEquals(List.of(3, 3, 3), table.fetchSizes, "and fetched in one round trip");
+        }
+    }
+
+    @Test
+    void aDriverThatReturnsMoreRowsThanAskedStillGetsBatchesOfTheSize() throws SQLException {
+        Table table = table(10);
+        table.ignoreMaxRows = true;
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            List<Progress> seen = new ArrayList<>();
+            Progress done = rotation(both, 3, null, seen::add).run(connection(table));
+            assertEquals(List.of(3L, 6L, 9L, 10L), seen.stream().map(Progress::rows).toList(),
+                    "the rows past the batch are left for the next one");
+            assertEquals(List.of(3, 6, 9, 10), seen.stream().map(Progress::lastId).toList());
+            assertTrue(done.done());
+            assertEquals(4, table.commits);
+        }
+    }
+
+    @Test
+    void aBatchIsOneToOneHundredThousandRows() {
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            ColumnRotation.builder(both).batchSize(1);
+            ColumnRotation.builder(both).batchSize(100_000);
+            for (int wrong : new int[] {0, -1, 100_001, Integer.MIN_VALUE, Integer.MAX_VALUE}) {
+                IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                        () -> ColumnRotation.builder(both).batchSize(wrong));
+                assertEquals("a batch is 1 to 100000 rows, not " + wrong, e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void aBatchOfOneRowRotatesRowByRow() throws SQLException {
+        Table table = table(4);
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            List<Progress> seen = new ArrayList<>();
+            rotation(both, 1, null, seen::add).run(connection(table));
+            assertEquals(List.of(1L, 2L, 3L, 4L, 4L), seen.stream().map(Progress::rows).toList(),
+                    "a row per transaction, and an empty one that says it is done");
+            assertTrue(seen.get(4).done());
+            for (Map.Entry<Integer, byte[][]> row : table.rows.entrySet()) {
+                assertEquals(2, Sealed.of(row.getValue()[0]).keyId(), "row " + row.getKey());
+            }
+        }
+    }
+
+    @Test
     void whatCannotBeSqlIsRefused() {
         try (FieldKeys both = ring(2, KEY1, KEY2)) {
             for (String wrong : List.of("", "1table", "t; drop table x", "t--", "a.b.c", "t x")) {
@@ -278,6 +354,7 @@ class ColumnRotationTest {
                         yield null;
                     }
                     case "commit" -> {
+                        table.autoCommitAtCommit.add(table.autoCommit);
                         table.commits++;
                         yield null;
                     }
@@ -298,10 +375,17 @@ class ColumnRotationTest {
         return (PreparedStatement) Proxy.newProxyInstance(ColumnRotationTest.class.getClassLoader(),
                 new Class<?>[] {PreparedStatement.class}, (proxy, method, args) -> switch (method.getName()) {
                     case "setMaxRows" -> {
-                        maxRows[0] = (Integer) args[0];
+                        table.maxRows.add((Integer) args[0]);
+                        if (!table.ignoreMaxRows) {
+                            maxRows[0] = (Integer) args[0];
+                        }
                         yield null;
                     }
-                    case "setFetchSize", "close" -> null;
+                    case "setFetchSize" -> {
+                        table.fetchSizes.add((Integer) args[0]);
+                        yield null;
+                    }
+                    case "close" -> null;
                     case "setObject", "setBytes" -> {
                         parameters[(Integer) args[0]] = args[1];
                         yield null;

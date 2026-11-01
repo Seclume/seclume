@@ -289,4 +289,69 @@ class SubjectKeysTest {
         }
         assertNotEquals(0, MASTER1[1]);
     }
+
+    /**
+     * Shredding wipes the subject's ring in memory, not only its key in the
+     * store: a column taken before the shred refuses after it - and so do the
+     * cached rings when the whole thing closes. Every scope they held is wiped.
+     */
+    @Test
+    void shreddingAndClosingWipeTheRingsInMemory() {
+        long before = space.seclume.secret.SecretScope.open();
+        try (FieldKeys master = ring(1, MASTER1)) {
+            SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.inMemory());
+            EncryptedColumn alice = subjects.column("alice", "customer.email", Mode.RANDOMIZED);
+            EncryptedColumn bob = subjects.column("bob", "customer.email", Mode.RANDOMIZED);
+            byte[] bobs = bob.encrypt(text("bob@example.org"));
+            long withBoth = space.seclume.secret.SecretScope.open();
+            assertTrue(subjects.shred("alice"));
+            assertTrue(space.seclume.secret.SecretScope.open() < withBoth,
+                    "the shredded subject's ring is wiped in memory, not only deleted from the store");
+            IllegalStateException shredded = assertThrows(IllegalStateException.class,
+                    () -> alice.encrypt(text("x")), "the shredded subject's column still worked");
+            assertTrue(shredded.getMessage().contains("closed"), shredded.getMessage());
+            assertEquals("bob@example.org", read(bob, bobs), "the others are untouched");
+            long withBob = space.seclume.secret.SecretScope.open();
+            subjects.close();
+            assertTrue(space.seclume.secret.SecretScope.open() < withBob, "the cached rings are wiped on close");
+            assertThrows(IllegalStateException.class, () -> read(bob, bobs),
+                    "a cached ring outlived the close");
+        }
+        assertEquals(before, space.seclume.secret.SecretScope.open(),
+                "nothing of the subjects or the ring is left in memory");
+    }
+
+    @Test
+    void existsSaysNoForWhoNeverHadAKeyAndChecksTheName() {
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.inMemory())) {
+            assertFalse(subjects.exists("never-written"));
+            subjects.column("written", "c", Mode.RANDOMIZED);
+            assertTrue(subjects.exists("written"), "cached");
+            try (SubjectKeys fresh = SubjectKeys.of(master, SubjectKeyStore.inMemory())) {
+                assertFalse(fresh.exists("written"), "another store, another subject");
+            }
+            for (String wrong : new String[] {null, "", "x".repeat(201)}) {
+                assertThrows(IllegalArgumentException.class, () -> subjects.exists(wrong), String.valueOf(wrong));
+                assertThrows(IllegalArgumentException.class, () -> subjects.shred(wrong));
+                assertThrows(IllegalArgumentException.class, () -> subjects.column(wrong, "c", Mode.RANDOMIZED));
+            }
+            String longest = "x".repeat(200);
+            subjects.column(longest, "c", Mode.RANDOMIZED);
+            assertTrue(subjects.exists(longest), "200 characters are a name");
+        }
+    }
+
+    @Test
+    void aCacheOfOneRingIsEnough() {
+        try (FieldKeys master = ring(1, MASTER1)) {
+            assertThrows(IllegalArgumentException.class, () -> SubjectKeys.of(master, SubjectKeyStore.inMemory(), 0));
+            try (SubjectKeys one = SubjectKeys.of(master, SubjectKeyStore.inMemory(), 1)) {
+                byte[] a = one.column("a", "c", Mode.RANDOMIZED).encrypt(text("first"));
+                one.column("b", "c", Mode.RANDOMIZED);
+                assertEquals("first", read(one.existingColumn("a", "c", Mode.RANDOMIZED), a),
+                        "a ring that left the cache is made again from its key in the store");
+            }
+        }
+    }
 }
