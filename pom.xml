@@ -322,9 +322,16 @@
             <configuration>
               <jvmArgs>
                 <value>--enable-native-access=ALL-UNNAMED</value>
+                <!-- As surefire's argLine: the test certificates are made by
+                     the JDK's keytool inside the test JVM. -->
+                <value>--add-exports</value>
+                <value>java.base/sun.security.tools.keytool=ALL-UNNAMED</value>
               </jvmArgs>
               <excludedTestClasses>
                 <param>*Local*</param>
+                <!-- Fuzz harnesses replay their corpus: minutes per mutant,
+                     and the unit tests are what is being measured. -->
+                <param>*Fuzz*</param>
               </excludedTestClasses>
               <timestampedReports>false</timestampedReports>
               <outputFormats>
