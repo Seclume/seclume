@@ -54,6 +54,15 @@ All notable changes to seclume are recorded here. Versions follow
   beside a seclume URL, under `seclume.datasources`, or in the URL - stops the start.
   `PoolConfiguration` (seclume-pool) reads pool settings by the same keys for every framework.
   Tested in a context with a stub driver and against CI's PostgreSQL with a heap dump.
+- **Micronaut Data, Helidon MP on a real server, Log4j 2 through the starter, R2DBC under
+  contention.** `LocalMicronautDataPostgresTest`: a Micronaut Data JDBC repository saves, finds,
+  counts and deletes on seclume's pool against CI's PostgreSQL, and Micronaut's transaction
+  manager commits and rolls back on its connection. `LocalHelidonMpPostgresTest`: an injected
+  `DataSource` logs in, a second named pool keeps its own URL, and the heap holds no password.
+  `Log4j2RedactionStarterTest`: `seclume.logging.redact=true` masks Log4j 2 lines through
+  `%redact{...}` while the context runs, and stops when it closes. `R2dbcContentionBenchmark`:
+  batches of 64 and 512 requests on a pool of 16, seclume beside r2dbc-pool, in a new nightly
+  PostgreSQL job that writes every result with its ratio as a notice.
 - **Micronaut 5 and Helidon 27, tested beside the versions built against.** The
   `framework-compat` job runs seclume-micronaut's tests on Micronaut 5.2 and seclume-helidon's
   SE tests on Helidon 27 (JDK 27; Helidon 27 has no MicroProfile, so `-Dhelidon.se` leaves the MP

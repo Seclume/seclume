@@ -53,6 +53,12 @@
       <artifactId>micronaut-context</artifactId>
     </dependency>
 
+    <!-- Micronaut Data JDBC over the pool (LocalMicronautDataPostgresTest). -->
+    <dependency>
+      <groupId>io.micronaut.data</groupId>
+      <artifactId>micronaut-data-jdbc</artifactId>
+      <scope>test</scope>
+    </dependency>
     <!-- A real server in CI's PostgreSQL job (LocalMicronautPostgresTest). -->
     <dependency>
       <groupId>space.seclume</groupId>
@@ -92,6 +98,11 @@
             <path>
               <groupId>io.micronaut</groupId>
               <artifactId>micronaut-inject-java</artifactId>
+            </path>
+            <!-- For the tests' Micronaut Data repository. -->
+            <path>
+              <groupId>io.micronaut.data</groupId>
+              <artifactId>micronaut-data-processor</artifactId>
             </path>
           </annotationProcessorPaths>
           <compilerArgs combine.self="override">
