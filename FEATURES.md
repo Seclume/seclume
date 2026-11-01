@@ -774,7 +774,9 @@ qualified by its name, closed with the context. With Micronaut Data on the class
 `DataSource` bean is Micronaut's proxy of the pool, whose connections are those of Micronaut's
 transactions; Micronaut Data wraps every bean that is a `DataSource` by its class, and a listener
 takes the pool back out of the `SeclumePool` bean, so that one stays the pool
-(`dataSource.unwrap(SeclumePool.class)` gives it too). The `pool` keys are `PoolConfiguration`'s,
+(`dataSource.unwrap(SeclumePool.class)` gives it too). Micronaut Data's own settings for the pool
+stay where Micronaut Data reads them: `datasources.default.dialect: POSTGRES` for the pool named
+`default`. The `pool` keys are `PoolConfiguration`'s,
 the same for every framework. The URL names where the secret comes from and the driver reads it into native
 memory at each login. The key ring is built when the application starts - a key that cannot be
 read stops it - installed for the JPA converters, injectable as `FieldKeys`, and wiped when the

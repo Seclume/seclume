@@ -66,9 +66,12 @@ class LocalMicronautDataPostgresTest {
         String url = "jdbc:seclume:postgresql://" + TestHosts.postgres() + ":" + TestHosts.postgresPort()
                 + "/seclume_test?user=seclume_test&tls=off&provider=file&path="
                 + password.toString().replace('\\', '/');
+        // datasources.default.dialect is Micronaut Data's own setting for the data source
+        // named default - the one seclume's pool is - as for any pool.
         try (ApplicationContext context = ApplicationContext.run(Map.of(
                 "seclume.datasources.default.url", url,
-                "seclume.datasources.default.pool.maximum-pool-size", "3"))) {
+                "seclume.datasources.default.pool.maximum-pool-size", "3",
+                "datasources.default.dialect", "POSTGRES"))) {
             SeclumePool pool = context.getBean(SeclumePool.class);
             try (Connection connection = pool.getConnection(); Statement statement = connection.createStatement()) {
                 statement.execute("drop table if exists zl_mn_patient");
