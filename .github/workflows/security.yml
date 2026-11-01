@@ -65,8 +65,8 @@ jobs:
       - name: SBOM of everything the build uses
         run: |
           set -o pipefail
-          ./mvnw -B -DskipTests install 2>&1 | tee build.log
-          ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
+          .github/scripts/mvnw-retry.sh -B -DskipTests install 2>&1 | tee build.log
+          .github/scripts/mvnw-retry.sh -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
             -DincludeTestScope=true -DoutputFormat=json
       # A build that fails here says why on the check: the compiler's warnings
       # (-Werror makes them errors without a location) and Maven's errors.
