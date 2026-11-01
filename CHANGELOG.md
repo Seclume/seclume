@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
+  wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
+  keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a
+  key id using every header byte, an unknown flags byte; prefixes of 1 and 64 characters, the
+  characters just outside the digits and the capitals; a rotation that commits with auto-commit
+  off, asks for one batch of rows, and keeps to it when the driver returns more.
 - **seclume-heapcheck dumps a process that refuses JMX.** `--pid` asks for the dump through
   JMX, which runs over RMI; a process whose serialization filter rejects what RMI sends -
   Helidon sets `!*` - refused it (`InvalidClassException: filter status: REJECTED`). The same dump
