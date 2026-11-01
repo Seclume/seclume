@@ -24,7 +24,8 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       run: ${{ matrix.run }}
-    secrets: inherit
+    # No secrets: every one ci.yml reads is a throwaway container password
+    # with a literal fallback, and the hunt runs on those.
 
   summary:
     needs: ci
