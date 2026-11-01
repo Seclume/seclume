@@ -155,7 +155,18 @@ class SeclumeMicronautTest {
             assertEquals(3, primary.settings().getMaximumPoolSize());
             orders = context.getBean(SeclumePool.class, Qualifiers.byName("orders"));
             assertEquals(java.time.Duration.ofSeconds(2), orders.settings().getConnectionTimeout());
-            assertSame(primary, context.getBean(DataSource.class));
+            // The DataSource bean is the default pool - or, with Micronaut Data on
+            // the class path as here, Micronaut's proxy of it: it connects through
+            // the default URL, while the SeclumePool bean stays the pool.
+            int before = DRIVER.urls.size();
+            try (Connection connection = context.getBean(DataSource.class).getConnection()) {
+                assertFalse(connection.isClosed());
+            }
+            assertTrue(DRIVER.urls.size() > before);
+            assertEquals("jdbc:seclume:stub://db/app?user=app&provider=file&path=/x",
+                    DRIVER.urls.get(DRIVER.urls.size() - 1), "the unqualified DataSource is the default pool");
+            assertEquals(2, context.getBeansOfType(DataSource.class).size(), "one DataSource per pool");
+            assertEquals(2, context.getBeansOfType(SeclumePool.class).size(), "and one SeclumePool");
             try (Connection connection = orders.getConnection()) {
                 assertFalse(connection.isClosed());
             }
