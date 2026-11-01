@@ -1,0 +1,60 @@
+name: mutation
+
+permissions:
+  contents: read
+
+# Mutation testing of the security core with PIT: small faults are put into
+# the code one at a time - a comparison flipped, a call skipped, a constant
+# changed - and the tests have to notice each. Line coverage says a test ran
+# a line; a surviving mutant says no test checked what the line does. For the
+# code that keeps secrets off the heap and encrypts columns that is the
+# difference that matters.
+#
+# One package per job. pit_report.py writes the score as a notice and the
+# survivors, class by class with line, mutator and what was changed, as
+# warnings - so a pull request shows which lines its tests leave unchecked.
+on:
+  pull_request:
+    paths:
+      - 'seclume-core/src/main/java/space/seclume/crypto/**'
+      - 'seclume-core/src/main/java/space/seclume/secret/**'
+      - 'seclume-core/src/main/java/space/seclume/field/**'
+      - 'seclume-core/src/main/java/space/seclume/audit/**'
+      - 'seclume-core/src/test/**'
+      - '.github/workflows/mutation.yml'
+      - '.github/scripts/pit_report.py'
+  workflow_dispatch:
+  schedule:
+    - cron: '41 20 * * 6'
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  pit:
+    name: mutation (${{ matrix.package }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [crypto, secret, field, audit]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - name: Mutants in space.seclume.${{ matrix.package }}
+        run: >-
+          .github/scripts/mvnw-retry.sh -B -Pmutation -pl seclume-core test-compile
+          org.pitest:pitest-maven:mutationCoverage
+          -DtargetClasses='space.seclume.${{ matrix.package }}.*'
+          -DtargetTests='space.seclume.*'
+      - name: The score, and the survivors
+        if: always()
+        run: >-
+          python3 .github/scripts/pit_report.py seclume-core/target/pit-reports/mutations.xml
+          seclume-core/src/main/java '${{ matrix.package }}'
