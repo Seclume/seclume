@@ -1250,7 +1250,7 @@ jobs:
       - name: Micronaut and Helidon against this server
         run: >-
           .github/scripts/mvnw-retry.sh -B -pl seclume-micronaut,seclume-helidon -am test
-          -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest,SeclumeSettingsTest,SeclumeHelidonTest,SeclumeCdiExtensionTest,SeclumeCdiExtensionOnceTest,LocalHelidonPostgresTest'
+          -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest,LocalMicronautDataPostgresTest,SeclumeSettingsTest,SeclumeHelidonTest,SeclumeCdiExtensionTest,SeclumeCdiExtensionOnceTest,LocalHelidonPostgresTest,LocalHelidonMpPostgresTest'
           -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed Micronaut and Helidon tests
         if: always()
