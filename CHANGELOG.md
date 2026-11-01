@@ -22,7 +22,10 @@ All notable changes to seclume are recorded here. Versions follow
   inside and outside their range, the shortest and longest values, hex in either case, a target
   of exactly the secret's length (`ShamirSharesEdgesTest`); secret names, URIs that start with
   `?` or `:`, inline secrets, a scope of one byte filled exactly, a closed scope, a watch whose
-  source is unreadable when it starts and one that wipes its scopes on close (`SecretEdgesTest`).
+  source is unreadable when it starts and one that wipes its scopes on close (`SecretEdgesTest`);
+  a Vault renewal of exactly half the TTL kept and one second less replaced, a refused renewal,
+  an empty namespace, the token scope wiped when forgotten, replaced or closed
+  (`VaultLoginEdgesTest`).
 - **Helidon** (`seclume-helidon`, new). `SeclumeHelidon` for SE (from `Config`) and
   `SeclumeCdiExtension` for MP (from MicroProfile Config): a `SeclumePool` per
   `seclume.datasources.<name>` - named beans in MP, `default` the default one - and the field
