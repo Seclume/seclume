@@ -17,6 +17,12 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **Tests against the mutants PIT left alive in the secret package.** Shamir shares at the edges
+  of their format - the longest line, numbers of one to three digits, thresholds and numbers just
+  inside and outside their range, the shortest and longest values, hex in either case, a target
+  of exactly the secret's length (`ShamirSharesEdgesTest`); secret names, URIs that start with
+  `?` or `:`, inline secrets, a scope of one byte filled exactly, a closed scope, a watch whose
+  source is unreadable when it starts and one that wipes its scopes on close (`SecretEdgesTest`).
 - **Helidon** (`seclume-helidon`, new). `SeclumeHelidon` for SE (from `Config`) and
   `SeclumeCdiExtension` for MP (from MicroProfile Config): a `SeclumePool` per
   `seclume.datasources.<name>` - named beans in MP, `default` the default one - and the field
