@@ -11,6 +11,12 @@ All notable changes to seclume are recorded here. Versions follow
   is then asked for with this JDK's `jcmd <pid> GC.heap_dump -all`, through the attach mechanism
   alone. `ProcessHeapTest` dumps a JVM started with `-Djdk.serialFilter=!*` and finds in the dump
   the text that JVM holds.
+- **Tests against the mutants PIT left alive in the access log.** The entry parser character
+  by character and number by number (19 characters, the ends of printable ASCII, escapes), the
+  bytes a checkpoint signs, a signature of 4096 hex digits read and one of 4098 not, an Ed25519
+  key, an existing empty file and one longer than the 64 KiB window the writer continues from,
+  sources described up to 200 characters, the checkpoint timer only with a key and a positive
+  interval, on a daemon thread (`AccessLogEdgesTest`).
 - **Examples for Micronaut and Helidon MP** (`examples/micronaut`, `examples/helidon`): an
   application with no seclume code, the pool from `application.yml` or
   `microprofile-config.properties`, the password from Vault. `examples/check-example.sh` starts
