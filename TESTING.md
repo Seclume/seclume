@@ -1025,6 +1025,21 @@ Maven Central and then from Google's mirror of it, under the same check. The fir
 failed three jobs only because Maven Central would not hand one runner the jar three times in a
 row.
 
+## Mutation testing of the security core
+
+Line coverage says a test ran a line; it does not say a test checked what the line does. PIT
+puts small faults into the code one at a time - a comparison flipped, a call to `fill` removed,
+a constant changed - and the tests have to notice each. `mutation.yml` runs it on the packages
+that keep secrets off the heap and encrypt columns - `crypto`, `secret`, `field`, `audit` - on
+pull requests that touch them, by hand and on Saturday night. `pit_report.py` writes the score
+as a notice and every surviving mutant, class by class with line, method and what was changed,
+as warnings on the pull request.
+
+Mutants on lines no test runs are counted apart: those are mostly paths that need a server, a
+KMS or Windows, which run in their own CI jobs and not under PIT. The survivors are the list:
+each is a line whose effect no test checks, and the answer is a test that would fail without
+it - not a lower bar.
+
 ## Required pool isolation and migration coverage
 
 The PostgreSQL, MySQL/MariaDB, SQL Server and Oracle CI jobs run
