@@ -277,7 +277,9 @@ A `SecretScope` is native memory that is:
 
 - **locked**, so it is never swapped out;
 - **excluded from crash dumps** (`MADV_DONTDUMP` on Linux, `WerRegisterExcludedMemoryBlock`
-  on Windows), so a core file or a crash report does not carry the secret to a disk;
+  on Windows), so a core file or a crash report does not carry the secret to a disk. macOS
+  has no way to leave single pages out of a core dump; there, keep core dumps off (the
+  default, `ulimit -c 0`);
 - **wiped** when it closes.
 
 Locking and dump exclusion are operating system service, and a limit (`RLIMIT_MEMLOCK`,

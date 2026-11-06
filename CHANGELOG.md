@@ -13,7 +13,11 @@ All notable changes to seclume are recorded here. Versions follow
   must report OpenSSL 3 or later, and macOS's `/usr/lib/libcrypto.dylib` - a LibreSSL stub
   that ends the process loading it - is never tried. Where none is found, every backend says
   what it needs and what was tried. The security gate's core group runs on macOS ARM64 too,
-  next to Linux x64 and ARM64 and Windows x64 (`LibCryptoTest`).
+  next to Linux x64 and ARM64 and Windows x64 (`LibCryptoTest`), followed on all three by the
+  whole of seclume-core's tests. `HeapCheckTest`'s probe secret is made up per run instead of
+  being a constant: on macOS the probe JVMs loaded the test class, and with its class file
+  held the "secret" they were never given. macOS has no per-page exclusion from core dumps;
+  the gate says so instead of passing quietly.
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
