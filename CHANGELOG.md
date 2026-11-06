@@ -5,13 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **What the server sent is wiped once it is read.** The TLS record layer opened every record
-  into one buffer of its own, and the caller copied the plaintext out - but the buffer kept it:
-  the tail of a longer record behind every shorter one, the last record until the memory was
-  reused, after close too. A password from Vault or a data key from a KMS travels exactly this
-  way, while `SecretFetch` wiped its own copies carefully. The plaintext is now zeroed once the
-  caller has taken all of it, before the next record is opened, and on close
-  (`OpenedRecordWipeTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
@@ -95,6 +88,13 @@ All notable changes to seclume are recorded here. Versions follow
   a Vault renewal of exactly half the TTL kept and one second less replaced, a refused renewal,
   an empty namespace, the token scope wiped when forgotten, replaced or closed
   (`VaultLoginEdgesTest`).
+- **What the server sent is wiped once it is read.** The TLS record layer opened every record
+  into one buffer of its own, and the caller copied the plaintext out - but the buffer kept it:
+  the tail of a longer record behind every shorter one, the last record until the memory was
+  reused, after close too. A password from Vault or a data key from a KMS travels exactly this
+  way, while `SecretFetch` wiped its own copies carefully. The plaintext is now zeroed once the
+  caller has taken all of it, before the next record is opened, and on close
+  (`OpenedRecordWipeTest`).
 - **Helidon** (`seclume-helidon`, new). `SeclumeHelidon` for SE (from `Config`) and
   `SeclumeCdiExtension` for MP (from MicroProfile Config): a `SeclumePool` per
   `seclume.datasources.<name>` - named beans in MP, `default` the default one - and the field
