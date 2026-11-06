@@ -62,6 +62,11 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **The README starts with the check.** Its first screen now says in two paragraphs what the
+  problem is and what seclume is, then gives the one-minute check for any JVM application:
+  download `seclume-heapcheck` from Maven Central and run it against a process. The heapcheck
+  JAR declares `Enable-Native-Access: ALL-UNNAMED`, so `java -jar` needs no flag and prints no
+  warning; `DocumentationTest` keeps the download's version at the latest release.
 - **SecretFetch reads responses to the letter.** The HTTP client every secret manager and
   metadata endpoint is reached through skipped the two bytes after a chunk's data without
   looking at them, so a chunk longer or shorter than its size was read from the middle of its
