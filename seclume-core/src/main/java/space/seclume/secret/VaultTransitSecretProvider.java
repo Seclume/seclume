@@ -140,7 +140,12 @@ public final class VaultTransitSecretProvider implements SecretProvider {
                         + " holds no data.plaintext: " + e.getMessage(), e);
             }
             encoded.length(length);
-            if (Base64Off.decodedUpperBound(length) > target.byteSize() + 2) {
+            // The least that many Base64 characters decode to - two padding
+            // characters at most. Refused here only what cannot fit whatever
+            // the padding; the decoded length is checked exactly below. The
+            // upper bound this compared before is three bytes above the
+            // truth, and refused a secret of exactly max-length.
+            if ((long) (length / 4) * 3 - 2 > target.byteSize()) {
                 throw new SecretUnavailableException("the decrypted secret does not fit into the "
                         + target.byteSize() + " bytes provided - raise max-length");
             }
