@@ -58,6 +58,9 @@
                   <mainClass>space.seclume.heapcheck.HeapCheck</mainClass>
                   <manifestEntries>
                     <Implementation-Version>${project.version}</Implementation-Version>
+                    <!-- So that java -jar needs no enable-native-access flag and prints
+                         no warning about restricted methods (JDK 22 and later). -->
+                    <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
                   </manifestEntries>
                 </transformer>
               </transformers>

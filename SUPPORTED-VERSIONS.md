@@ -8,7 +8,8 @@ removed. Nothing in the tables is taken from a vendor's documentation.
 Run on 2026-10-07 with the code that becomes 0.11.1; Oracle 11g, 18c and 21c again on
 2026-10-09, after the fixes described below. The newest versions are tested on every push by
 CI and are not repeated here: PostgreSQL 15 and 18 and the release candidate of 19, SQL Server
-2022 and 2025, Oracle Free 23ai, MySQL 8.4, 9.7 LTS and 26.10, MariaDB 11.4, 12.3 LTS and 13.0,
+2022 and 2025, Oracle Free 23ai, MySQL 8.4, 9.7 LTS and 26.10, MariaDB 11.4, 12.3 LTS and 13.0 and the release candidate
+of 13.1,
 CockroachDB 26.2, YugabyteDB 2026.1, MongoDB 8.0 and 9.0, RabbitMQ 4.4, Kafka 4.4 and Vault 2.0
 with OpenBao 2.7 (since 2026-10-30; before, CockroachDB 24.1, YugabyteDB 2024.1, MySQL 8.4 and
 MariaDB 11.4 only). See
