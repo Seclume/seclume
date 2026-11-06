@@ -59,39 +59,16 @@ public final class MyRow implements ValueCells {
                 // as a SQLException instead of as an unchecked exception from
                 // inside a decoder. The wording was already right; the type
                 // was not. Found by the decoder fuzz sweep on 23.09.2026.
-                throw space.seclume.internal.WireBuffer.Truncated.because(
+                throw WireBuffer.Truncated.because(
                         "the row ended after " + column + " of " + fields.size() + " columns");
             }
-            int first = buffer.getByte(at) & 0xff;
-            int valueLength;
-            int header;
-            switch (first) {
-                case 0xfb -> {
-                    cells[column * 2] = at;
-                    cells[column * 2 + 1] = -1;
-                    at++;
-                    continue;
-                }
-                case 0xfc -> {
-                    header = 3;
-                    valueLength = (int) unsigned(at + 1, 2);
-                }
-                case 0xfd -> {
-                    header = 4;
-                    valueLength = (int) unsigned(at + 1, 3);
-                }
-                case 0xfe -> {
-                    header = 9;
-                    valueLength = (int) unsigned(at + 1, 8);
-                }
-                default -> {
-                    header = 1;
-                    valueLength = first;
-                }
+            if ((buffer.getByte(at) & 0xff) == 0xfb) {
+                cells[column * 2] = at;
+                cells[column * 2 + 1] = -1;
+                at++;
+                continue;
             }
-            cells[column * 2] = at + header;
-            cells[column * 2 + 1] = valueLength;
-            at += header + valueLength;
+            at = lengthEncoded(column, at, end);
         }
     }
 
@@ -101,6 +78,11 @@ public final class MyRow implements ValueCells {
         int bitmapLength = (columns + 9) / 8;
         int at = nullBitmap + bitmapLength;
         int end = offset + length;
+        if (at > end) {
+            throw WireBuffer.Truncated.because("a binary row of " + length + " bytes, where "
+                    + "its header and NULL bitmap for " + columns + " columns take "
+                    + (1 + bitmapLength));
+        }
         for (int column = 0; column < columns; column++) {
             // The two bits of lead-in: column 0 sits on bit 2 of the first byte.
             int bit = column + 2;
@@ -113,48 +95,65 @@ public final class MyRow implements ValueCells {
             int type = fields.get(column).type();
             int fixed = MyTypes.binaryFixedLength(type);
             if (fixed > 0) {
-                cells[column * 2] = at;
-                cells[column * 2 + 1] = fixed;
+                cell(column, at, fixed, end);
                 at += fixed;
             } else if (type == MyTypes.DATE || type == MyTypes.NEWDATE
                     || type == MyTypes.DATETIME || type == MyTypes.TIMESTAMP
                     || type == MyTypes.TIME) {
                 // Time values carry their length in a byte in front.
+                if (at >= end) {
+                    throw beyond(column, 1, end - at);
+                }
                 int valueLength = buffer.getByte(at) & 0xff;
-                cells[column * 2] = at + 1;
-                cells[column * 2 + 1] = valueLength;
+                cell(column, at + 1, valueLength, end);
                 at += 1 + valueLength;
             } else {
-                int first = buffer.getByte(at) & 0xff;
-                int header;
-                int valueLength;
-                switch (first) {
-                    case 0xfc -> {
-                        header = 3;
-                        valueLength = (int) unsigned(at + 1, 2);
-                    }
-                    case 0xfd -> {
-                        header = 4;
-                        valueLength = (int) unsigned(at + 1, 3);
-                    }
-                    case 0xfe -> {
-                        header = 9;
-                        valueLength = (int) unsigned(at + 1, 8);
-                    }
-                    default -> {
-                        header = 1;
-                        valueLength = first;
-                    }
-                }
-                cells[column * 2] = at + header;
-                cells[column * 2 + 1] = valueLength;
-                at += header + valueLength;
-            }
-            if (at > end) {
-                throw new IllegalStateException(
-                        "column " + column + " runs past the end of the row");
+                at = lengthEncoded(column, at, end);
             }
         }
+    }
+
+    /**
+     * Reads the length-encoded cell at {@code at} - one byte under 0xfb, or
+     * 0xfc, 0xfd, 0xfe and two, three or eight bytes of length - and returns
+     * where the next one starts. A length that does not fit in what is left of
+     * the row is refused: the bytes after the row belong to the next packet,
+     * and an eight-byte length cut down to an int could come out negative and
+     * read as NULL, or small and read as a value.
+     */
+    private int lengthEncoded(int column, int at, int end) {
+        int first = buffer.getByte(at) & 0xff;
+        int header = switch (first) {
+            case 0xfc -> 3;
+            case 0xfd -> 4;
+            case 0xfe -> 9;
+            default -> 1;
+        };
+        if (end - at < header) {
+            throw beyond(column, header, end - at);
+        }
+        long valueLength = header == 1 ? first : unsigned(at + 1, header - 1);
+        if (valueLength < 0 || valueLength > end - at - header) {
+            throw WireBuffer.Truncated.because("column " + (column + 1) + " of "
+                    + fields.size() + " says " + Long.toUnsignedString(valueLength)
+                    + " bytes, and the row has " + (end - at - header) + " left");
+        }
+        cells[column * 2] = at + header;
+        cells[column * 2 + 1] = (int) valueLength;
+        return at + header + (int) valueLength;
+    }
+
+    private void cell(int column, int at, int valueLength, int end) {
+        if (valueLength > end - at) {
+            throw beyond(column, valueLength, end - at);
+        }
+        cells[column * 2] = at;
+        cells[column * 2 + 1] = valueLength;
+    }
+
+    private WireBuffer.Truncated beyond(int column, int needed, int left) {
+        return WireBuffer.Truncated.because("column " + (column + 1) + " of " + fields.size()
+                + " needs " + needed + " bytes, and the row has " + left + " left");
     }
 
     private long unsigned(int at, int length) {
