@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A MySQL row's cells stay inside the row.** A row is a window onto the receive buffer, and
+  the length in front of a cell was believed as it came: the last cell of a text row could run
+  into the next packet and come back as its value with the next row's first bytes in it; an
+  eight-byte length was cut down to an int and came out negative - which is what NULL looks
+  like - or small, which is what a value looks like; a binary row's fixed-length and time cells,
+  and its NULL bitmap, were read before anything checked they were there. Every cell is now
+  held to what is left of the row, and anything that does not fit is a `Truncated` - a
+  connection failure, as the session maps it, not a value (`MyRowBoundsTest`).
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
