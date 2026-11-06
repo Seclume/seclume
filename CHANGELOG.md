@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **What the server sent is wiped once it is read.** The TLS record layer opened every record
+  into one buffer of its own, and the caller copied the plaintext out - but the buffer kept it:
+  the tail of a longer record behind every shorter one, the last record until the memory was
+  reused, after close too. A password from Vault or a data key from a KMS travels exactly this
+  way, while `SecretFetch` wiped its own copies carefully. The plaintext is now zeroed once the
+  caller has taken all of it, before the next record is opened, and on close
+  (`OpenedRecordWipeTest`).
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);

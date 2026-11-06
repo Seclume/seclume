@@ -70,6 +70,14 @@ final class RecordStream implements AutoCloseable {
     private boolean firstRecord = true;
     private boolean established;
     private int changeCipherSpecs;
+    /**
+     * How much of {@link #opened} the last record's plaintext took. What a
+     * server sends back can be a secret - a fetched password, a data key - so
+     * it is wiped once read ({@link #wipeOpened}), before the next record is
+     * opened over it, and on close; otherwise a shorter record leaves the tail
+     * of a longer one behind, and the last one stays until the memory is reused.
+     */
+    private int openedLength;
 
     RecordStream(Transport transport) {
         this.transport = transport;
@@ -143,6 +151,7 @@ final class RecordStream implements AutoCloseable {
      * and forgotten without a copy.
      */
     Incoming next() throws IOException {
+        wipeOpened();
         while (true) {
             readFully(RecordProtection.HEADER, 0);
             int type = byteAt(incoming, 0);
@@ -217,6 +226,7 @@ final class RecordStream implements AutoCloseable {
                         "a record did not authenticate - the key, the sequence number or the "
                                 + "bytes themselves are wrong");
             }
+            openedLength = result.length();
             if (result.contentType() == 21) {
                 throw alert(opened, 0, result.length());
             }
@@ -253,6 +263,7 @@ final class RecordStream implements AutoCloseable {
                     "a record did not authenticate - the key, the sequence number or the "
                             + "bytes themselves are wrong");
         }
+        openedLength = result.length();
         if (result.contentType() == 21) {
             throw alert(opened, 0, result.length());
         }
@@ -261,6 +272,18 @@ final class RecordStream implements AutoCloseable {
                     "an empty record of type " + result.contentType());
         }
         return new Incoming(result.contentType(), opened, 0, result.length());
+    }
+
+    /**
+     * Zeroes the plaintext of the last record opened - for the caller that has
+     * taken all of it, and before the next one. The {@link Incoming} it was
+     * returned in is not to be read afterwards.
+     */
+    void wipeOpened() {
+        if (openedLength > 0) {
+            opened.asSlice(0, openedLength).fill((byte) 0);
+            openedLength = 0;
+        }
     }
 
     /** Writes one record, protected if keys are in force, split by the caller if too long. */
@@ -364,6 +387,7 @@ final class RecordStream implements AutoCloseable {
             writing.close();
             writing = null;
         }
+        wipeOpened();
         arena.close();
     }
 }

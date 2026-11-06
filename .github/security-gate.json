@@ -41,6 +41,8 @@
        "property": "host names match as RFC 6125 says, wildcards and public suffixes included"},
       {"test": "space.seclume.tls.TlsVersionRefusedTest", "module": "seclume-core",
        "property": "a server below the configured TLS version is refused"},
+      {"test": "space.seclume.tls.OpenedRecordWipeTest", "module": "seclume-core",
+       "property": "a decrypted record is wiped once the caller has taken it, before the next and when it fails to authenticate"},
       {"test": "space.seclume.tls.Tls12RefusedCertificateTest", "module": "seclume-core",
        "property": "a TLS 1.2 server with an untrusted certificate is refused"},
       {"test": "space.seclume.tls.TrustChoiceTest", "module": "seclume-core",

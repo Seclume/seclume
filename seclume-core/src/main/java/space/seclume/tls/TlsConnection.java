@@ -199,6 +199,11 @@ public final class TlsConnection implements Transport {
         into.position(into.position() + taken);
         pendingOffset += taken;
         pendingLength -= taken;
+        if (pendingLength == 0) {
+            // All of it is the caller's now: the copy here goes, so that what
+            // the server sent - a secret, as often as not - is in one place only.
+            records.wipeOpened();
+        }
         return taken;
     }
 
