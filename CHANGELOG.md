@@ -19,6 +19,12 @@ All notable changes to seclume are recorded here. Versions follow
   decoded length exactly as before. Found by the tests written against PIT's survivors in the
   secret package (`VaultTransitEdgesTest`, `AwsCredentialsParserTest`: STS's XML and the
   container endpoint's JSON read at their edges).
+- **The certificate's address check never asks DNS.** `HostnameMatch` compared an IPv6 host
+  with a certificate's iPAddress entries through `InetAddress.getByName`, which parses a
+  literal - and sends anything else with a colon in it, such as a host with its port left on
+  (`db.example.com:5432`), to the resolver: the name of the host being checked went out in a
+  DNS query, against the class's own rule that nothing is looked up. It now parses with
+  `InetAddress.ofLiteral`, which takes a literal or refuses (`HostnameAddressTest`).
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
   keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a

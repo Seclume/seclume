@@ -1,7 +1,6 @@
 package space.seclume.tls;
 
 import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
 import java.util.Collection;
@@ -162,10 +161,13 @@ public final class HostnameMatch {
     }
 
     /**
-     * Two addresses, compared as addresses. IPv4 is exact text; IPv6 goes
-     * through {@link InetAddress} so that {@code ::1} and {@code 0:0:0:0:0:0:0:1}
-     * are recognised as one address. Only strings already known to be
-     * literals reach this, so nothing is resolved.
+     * Two addresses, compared as addresses. IPv4 is exact text; IPv6 is parsed
+     * so that {@code ::1} and {@code 0:0:0:0:0:0:0:1} are recognised as one
+     * address. Parsed with {@link InetAddress#ofLiteral}, which takes a literal
+     * or refuses: {@code getByName} did that for a literal too, but anything
+     * else with a colon in it - {@code db.example.com:5432}, a port left in
+     * the host - it sent to DNS, and the name of the host this connection is
+     * checking went out in a query to whoever answers them.
      */
     private static boolean addressesEqual(String host, String fromCertificate) {
         String other = fromCertificate.trim();
@@ -175,10 +177,18 @@ public final class HostnameMatch {
         if (host.indexOf(':') < 0 && other.indexOf(':') < 0) {
             return false;                 // two IPv4 literals that differ as text differ
         }
+        InetAddress mine = literal(host);
+        return mine != null && mine.equals(literal(other));
+    }
+
+    /** The address a literal names - brackets allowed around IPv6 - or null for anything else. */
+    static InetAddress literal(String text) {
+        String bare = text.length() > 2 && text.charAt(0) == '[' && text.charAt(text.length() - 1) == ']'
+                ? text.substring(1, text.length() - 1) : text;
         try {
-            return InetAddress.getByName(host).equals(InetAddress.getByName(other));
-        } catch (UnknownHostException e) {
-            return false;
+            return InetAddress.ofLiteral(bare);
+        } catch (IllegalArgumentException notALiteral) {
+            return null;
         }
     }
 }
