@@ -639,6 +639,14 @@ jobs:
       - name: Security gate
         if: success() || failure()
         run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --platform ${{ matrix.platform }}'
+      # Then everything else in seclume-core on this platform, not only what
+      # the gate names: the platform's own code (DPAPI, CNG and the certificate
+      # store on Windows, the Keychain and Homebrew's OpenSSL on macOS) has its
+      # tests here. Tests that need a Linux kernel or a container are skipped by
+      # their own conditions, as on a developer's machine.
+      - name: All of seclume-core
+        if: success() || failure()
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-core test
       - if: failure()
         run: |
           "$(command -v python3 || command -v python)" - <<'PY'
