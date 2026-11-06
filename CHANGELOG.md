@@ -84,6 +84,10 @@ All notable changes to seclume are recorded here. Versions follow
   encryption key ring, built, installed and wiped with the application; a password in the
   configuration stops the start. Tested with a stub driver, inside a Helidon MP container and
   against CI's PostgreSQL with a heap dump.
+- **A SCRAM iteration count that wraps is refused.** The count in the server's first message
+  was read into an `int` without a bound on its digits: `i=4294971392` came out as 4096 and was
+  taken. At most eight digits are read now - more is above the 10 000 000 the count is checked
+  against anyway (`ScramIterationTest`).
 - **Log lines masked with Log4j 2 and java.util.logging too.** Besides Logback's converters,
   `seclume-logging` has `%redact{...}` for Log4j 2 - what the inner pattern writes, message and
   stack trace, masked, the stack trace written once - and `RedactingFormatter` for
