@@ -5,13 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **Tests against the mutants PIT left alive in the crypto package**, each checked against the
-  JDK's own implementation where there is one: DER ECDSA signatures in every length form and at
-  every bound, PBKDF2 past 255 output blocks in the Java code, RSA PKCS#1 and OAEP with the
-  longest message each padding takes, decrypted by the JDK; DER read at its bounds, EC private
-  keys in PKCS#8, SEC1 and PEM of both curves, Shamir's bounds, the Java AES-GCM past 255 counter
-  blocks; OpenSSH Ed25519 keys built field by field; and 300 Ed25519 signatures byte for byte
-  against the JDK's.
+- **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
+  four nights with nothing on the run's page but an exit code. Failing tests are now error
+  annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
+  the constant-time measurements take up to three rounds and call code leaky only when every
+  round says so, the negative control seen when one does; and the nightly, benchmark and TLS
+  workflows run Maven through `mvnw-retry.sh` too.
 - **The Maven wrapper's jar from the cache.** The first full flake hunt - `ci.yml` three times
   at once - found no flaky test; its three failures were jobs whose runner could not download
   `maven-wrapper.jar` from Maven Central in three attempts. `mvnw-retry.sh` now keeps the jar in
@@ -19,6 +18,12 @@ All notable changes to seclume are recorded here. Versions follow
   `maven-wrapper.properties`, otherwise fetches it from Maven Central or Google's mirror of it
   under the same check, and retries a failure before the build up to three more times with
   growing, jittered pauses.
+- **The certificate's address check never asks DNS.** `HostnameMatch` compared an IPv6 host
+  with a certificate's iPAddress entries through `InetAddress.getByName`, which parses a
+  literal - and sends anything else with a colon in it, such as a host with its port left on
+  (`db.example.com:5432`), to the resolver: the name of the host being checked went out in a
+  DNS query, against the class's own rule that nothing is looked up. It now parses with
+  `InetAddress.ofLiteral`, which takes a literal or refuses (`HostnameAddressTest`).
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
   keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a
@@ -31,6 +36,13 @@ All notable changes to seclume are recorded here. Versions follow
   is then asked for with this JDK's `jcmd <pid> GC.heap_dump -all`, through the attach mechanism
   alone. `ProcessHeapTest` dumps a JVM started with `-Djdk.serialFilter=!*` and finds in the dump
   the text that JVM holds.
+- **Tests against the mutants PIT left alive in the crypto package**, each checked against the
+  JDK's own implementation where there is one: DER ECDSA signatures in every length form and at
+  every bound, PBKDF2 past 255 output blocks in the Java code, RSA PKCS#1 and OAEP with the
+  longest message each padding takes, decrypted by the JDK; DER read at its bounds, EC private
+  keys in PKCS#8, SEC1 and PEM of both curves, Shamir's bounds, the Java AES-GCM past 255 counter
+  blocks; OpenSSH Ed25519 keys built field by field; and 300 Ed25519 signatures byte for byte
+  against the JDK's.
 - **Tests against the mutants PIT left alive in the access log.** The entry parser character
   by character and number by number (19 characters, the ends of printable ASCII, escapes), the
   bytes a checkpoint signs, a signature of 4096 hex digits read and one of 4098 not, an Ed25519

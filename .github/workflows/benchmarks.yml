@@ -48,7 +48,7 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' 'seclume-CI-password-1' > .local-mysql-password
-      - run: ./mvnw -B -DskipTests package
+      - run: .github/scripts/mvnw-retry.sh -B -DskipTests package
       - name: Measure
         run: >
           java -Dbench.db=mysql -Dbench.host=127.0.0.1 -Dbench.port=3306
@@ -114,7 +114,7 @@ jobs:
           java-version: '25'
           cache: maven
       - run: printf '%s' 'seclume-CI-password-1' > .local-pg-password
-      - run: ./mvnw -B -pl seclume-bench -am -DskipTests package
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-bench -am -DskipTests package
       - name: Measure
         run: >
           java -Dbench.db=postgresql -Dbench.host=127.0.0.1 -Dbench.port=5432

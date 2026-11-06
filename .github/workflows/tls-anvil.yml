@@ -73,7 +73,7 @@ jobs:
         # -T 1: every module writes the class path file; the last one - the
         # client module - has to be the one that stays.
         run: >
-          ./mvnw -B -T 1 -pl seclume-tls-anvil -am -DskipTests package
+          .github/scripts/mvnw-retry.sh -B -T 1 -pl seclume-tls-anvil -am -DskipTests package
           dependency:build-classpath -Dmdep.outputFile="$PWD/anvil-classpath.txt"
 
       - name: Start the client
