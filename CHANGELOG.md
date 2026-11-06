@@ -12,13 +12,6 @@ All notable changes to seclume are recorded here. Versions follow
   `maven-wrapper.properties`, otherwise fetches it from Maven Central or Google's mirror of it
   under the same check, and retries a failure before the build up to three more times with
   growing, jittered pauses.
-- **A Vault transit secret of exactly `max-length` bytes is read.** `provider=vault-transit`
-  refused before decoding whatever Base64 decoded to an upper bound above the target plus two -
-  and that bound is three bytes above the truth, so a 32-byte data key with `max-length=32` was
-  "does not fit". It now refuses early only what cannot fit whatever the padding, and checks the
-  decoded length exactly as before. Found by the tests written against PIT's survivors in the
-  secret package (`VaultTransitEdgesTest`, `AwsCredentialsParserTest`: STS's XML and the
-  container endpoint's JSON read at their edges).
 - **The certificate's address check never asks DNS.** `HostnameMatch` compared an IPv6 host
   with a certificate's iPAddress entries through `InetAddress.getByName`, which parses a
   literal - and sends anything else with a colon in it, such as a host with its port left on
@@ -37,6 +30,13 @@ All notable changes to seclume are recorded here. Versions follow
   is then asked for with this JDK's `jcmd <pid> GC.heap_dump -all`, through the attach mechanism
   alone. `ProcessHeapTest` dumps a JVM started with `-Djdk.serialFilter=!*` and finds in the dump
   the text that JVM holds.
+- **A Vault transit secret of exactly `max-length` bytes is read.** `provider=vault-transit`
+  refused before decoding whatever Base64 decoded to an upper bound above the target plus two -
+  and that bound is three bytes above the truth, so a 32-byte data key with `max-length=32` was
+  "does not fit". It now refuses early only what cannot fit whatever the padding, and checks the
+  decoded length exactly as before. Found by the tests written against PIT's survivors in the
+  secret package (`VaultTransitEdgesTest`, `AwsCredentialsParserTest`: STS's XML and the
+  container endpoint's JSON read at their edges).
 - **Tests against the mutants PIT left alive in the access log.** The entry parser character
   by character and number by number (19 characters, the ends of printable ASCII, escapes), the
   bytes a checkpoint signs, a signature of 4096 hex digits read and one of 4098 not, an Ed25519
