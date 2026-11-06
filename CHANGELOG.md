@@ -5,16 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **Redis: the password goes into AUTH and nowhere else.** The Lettuce integration replaced
-  its placeholder with the password wherever the placeholder stood as a RESP bulk string of its
-  own - in `SET session:42 <placeholder>` as much as in `AUTH`. The placeholder is the client's
-  "password", on the heap, and a heap dump gives it away: whoever had it and could make the
-  application store a string of their choosing would have had the real password written into
-  Redis in its place, to read back. The rewriter now follows the commands from the
-  connection's first byte, across writes split anywhere, and replaces only the password
-  argument of `AUTH [user] password` and `HELLO protover AUTH user password`; on anything it
-  cannot follow it stops replacing, and the login fails rather than the password going
-  elsewhere (`RespPasswordSlotTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
@@ -51,6 +41,16 @@ All notable changes to seclume are recorded here. Versions follow
   is then asked for with this JDK's `jcmd <pid> GC.heap_dump -all`, through the attach mechanism
   alone. `ProcessHeapTest` dumps a JVM started with `-Djdk.serialFilter=!*` and finds in the dump
   the text that JVM holds.
+- **Redis: the password goes into AUTH and nowhere else.** The Lettuce integration replaced
+  its placeholder with the password wherever the placeholder stood as a RESP bulk string of its
+  own - in `SET session:42 <placeholder>` as much as in `AUTH`. The placeholder is the client's
+  "password", on the heap, and a heap dump gives it away: whoever had it and could make the
+  application store a string of their choosing would have had the real password written into
+  Redis in its place, to read back. The rewriter now follows the commands from the
+  connection's first byte, across writes split anywhere, and replaces only the password
+  argument of `AUTH [user] password` and `HELLO protover AUTH user password`; on anything it
+  cannot follow it stops replacing, and the login fails rather than the password going
+  elsewhere (`RespPasswordSlotTest`).
 - **A Vault transit secret of exactly `max-length` bytes is read.** `provider=vault-transit`
   refused before decoding whatever Base64 decoded to an upper bound above the target plus two -
   and that bound is three bytes above the truth, so a 32-byte data key with `max-length=32` was
