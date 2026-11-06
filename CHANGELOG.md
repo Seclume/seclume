@@ -5,15 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **A TLS 1.3 CertificateRequest is read like the rest of the flight.** The client took only
-  the request context from it, by the context's own length byte, and checked nothing else: a
-  context reaching past the message, an extensions block of the wrong length, bytes after it
-  and a request without `signature_algorithms` were all accepted - the TLS 1.2 path read its
-  CertificateRequest strictly, this one did not. RFC 8446 section 4.3.2 now holds: an empty
-  context during the handshake (`illegal_parameter` otherwise), one extensions block filling
-  the message (`decode_error`), a well-formed, non-empty `signature_algorithms`
-  (`missing_extension` without one); unknown extensions are ignored, as the RFC asks
-  (`CertificateRequestStrictnessTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
@@ -38,6 +29,15 @@ All notable changes to seclume are recorded here. Versions follow
   (`db.example.com:5432`), to the resolver: the name of the host being checked went out in a
   DNS query, against the class's own rule that nothing is looked up. It now parses with
   `InetAddress.ofLiteral`, which takes a literal or refuses (`HostnameAddressTest`).
+- **A TLS 1.3 CertificateRequest is read like the rest of the flight.** The client took only
+  the request context from it, by the context's own length byte, and checked nothing else: a
+  context reaching past the message, an extensions block of the wrong length, bytes after it
+  and a request without `signature_algorithms` were all accepted - the TLS 1.2 path read its
+  CertificateRequest strictly, this one did not. RFC 8446 section 4.3.2 now holds: an empty
+  context during the handshake (`illegal_parameter` otherwise), one extensions block filling
+  the message (`decode_error`), a well-formed, non-empty `signature_algorithms`
+  (`missing_extension` without one); unknown extensions are ignored, as the RFC asks
+  (`CertificateRequestStrictnessTest`).
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
   keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a
