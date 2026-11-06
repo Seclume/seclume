@@ -12,7 +12,8 @@ skipped: the test that caused it is reported on its own.
 import glob
 import os
 import sys
-import xml.etree.ElementTree as ET
+# The reports are this build's own surefire output, not documents from outside.
+import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 
 LIMIT = 700
 
