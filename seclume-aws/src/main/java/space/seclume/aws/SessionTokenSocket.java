@@ -187,40 +187,82 @@ final class SessionTokenSocket extends SSLSocket {
         } else {
             state = State.HEAD;
         }
-        int found = indexOf(bytes, PREFIX, 0);
-        if (found < 0) {
-            tls.write(ByteBuffer.wrap(bytes));
-            return;
-        }
-        space.seclume.jfr.Observed.secretUse("aws", host + ":" + port, "session-token");
-        int placeholderEnd = found;
-        while (placeholderEnd < bytes.length && bytes[placeholderEnd] != '\r') {
-            placeholderEnd++;
-        }
-        // seclume-allow: the placeholder - no secret
-        String placeholder = new String(bytes, found, placeholderEnd - found,
-                StandardCharsets.US_ASCII).trim();
-        TemporaryCredentials.Generation generation =
-                TemporaryCredentials.byPlaceholder(placeholder);
-        if (generation == null) {
-            throw new IOException("a session token placeholder whose credentials are gone - the "
-                    + "request was signed too long ago");
-        }
-        SecretScope token = generation.token;
-        int tail = bytes.length - placeholderEnd;
-        try (SecretScope rewritten = SecretScope.allocate(found + token.length() + tail)) {
-            MemorySegment w = rewritten.segment();
-            MemorySegment.copy(bytes, 0, w, ValueLayout.JAVA_BYTE, 0, found);
-            MemorySegment.copy(token.segment(), 0, w, found, token.length());
-            MemorySegment.copy(bytes, placeholderEnd, w, ValueLayout.JAVA_BYTE,
-                    found + token.length(), tail);
-            ByteBuffer buffer = w.asSlice(0, found + token.length() + tail).asByteBuffer();
+        try (SecretScope rewritten = withToken(bytes, text, placeholder -> {
+            TemporaryCredentials.Generation generation =
+                    TemporaryCredentials.byPlaceholder(placeholder);
+            return generation == null ? null : generation.token;
+        })) {
+            if (rewritten == null) {
+                tls.write(ByteBuffer.wrap(bytes));
+                return;
+            }
+            space.seclume.jfr.Observed.secretUse("aws", host + ":" + port, "session-token");
+            ByteBuffer buffer = rewritten.segment().asSlice(0, rewritten.length()).asByteBuffer();
             while (buffer.hasRemaining()) {
                 tls.write(buffer);
             }
         }
-        if (indexOf(bytes, PREFIX, placeholderEnd) >= 0) {
-            throw new IOException("two session token placeholders in one request");
+    }
+
+    private static final String TOKEN_HEADER = "\r\nx-amz-security-token:";
+
+    /**
+     * The head with the session token written into its
+     * {@code X-Amz-Security-Token} header, in native memory - or null when
+     * that header is not there or holds no placeholder of ours.
+     *
+     * <p>Only that header's value. The placeholder is not a secret - the SDK
+     * holds it, on the heap - and found anywhere in the head, as it once was,
+     * one in the request target or in another header (an {@code x-amz-meta-}
+     * value an application took from its user, say) would have had the token
+     * written there: signed as the placeholder, refused by AWS, and the token
+     * sent back in the error's canonical request. Anywhere else it stays what
+     * it is. Two token headers are refused before anything is written.
+     *
+     * @param text  the head in lower case, byte for byte (ISO-8859-1)
+     * @param token the token for a placeholder, or null for one whose credentials are gone
+     */
+    static SecretScope withToken(byte[] bytes, String text,
+            java.util.function.Function<String, SecretScope> token) throws IOException {
+        int header = text.indexOf(TOKEN_HEADER);
+        if (header < 0) {
+            return null;
+        }
+        if (text.indexOf(TOKEN_HEADER, header + 2) >= 0) {
+            throw new IOException("two X-Amz-Security-Token headers in one request");
+        }
+        int lineEnd = text.indexOf("\r\n", header + TOKEN_HEADER.length());
+        int from = header + TOKEN_HEADER.length();
+        while (from < lineEnd && (bytes[from] == ' ' || bytes[from] == '\t')) {
+            from++;
+        }
+        int to = lineEnd;
+        while (to > from && (bytes[to - 1] == ' ' || bytes[to - 1] == '\t')) {
+            to--;
+        }
+        if (to - from <= PREFIX.length || indexOf(bytes, PREFIX, from) != from) {
+            return null;
+        }
+        // seclume-allow: the placeholder - no secret
+        String placeholder = new String(bytes, from, to - from, StandardCharsets.US_ASCII);
+        SecretScope secret = token.apply(placeholder);
+        if (secret == null) {
+            throw new IOException("a session token placeholder whose credentials are gone - the "
+                    + "request was signed too long ago");
+        }
+        int tail = bytes.length - to;
+        int total = from + secret.length() + tail;
+        SecretScope rewritten = SecretScope.allocate(total);
+        try {
+            MemorySegment w = rewritten.segment();
+            MemorySegment.copy(bytes, 0, w, ValueLayout.JAVA_BYTE, 0, from);
+            MemorySegment.copy(secret.segment(), 0, w, from, secret.length());
+            MemorySegment.copy(bytes, to, w, ValueLayout.JAVA_BYTE, from + secret.length(), tail);
+            rewritten.length(total);
+            return rewritten;
+        } catch (RuntimeException e) {
+            rewritten.close();
+            throw e;
         }
     }
 

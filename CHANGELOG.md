@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **AWS: the session token goes into its header and nowhere else.** With temporary
+  credentials the TLS socket wrote the session token where it first found the placeholder's
+  prefix in a request head - the request target or any header, an `x-amz-meta-` value an
+  application took from its user as much as `X-Amz-Security-Token` - and checked for a second
+  one only after it had written the head. The placeholder is on the SDK's heap; whoever had it
+  could have had the token written into a header of their choosing, signed as the placeholder,
+  refused by AWS and sent back in the error's canonical request. Now only the value of the
+  `X-Amz-Security-Token` header is replaced, two such headers are refused before anything is
+  written, and the placeholder anywhere else stays as it is (`SessionTokenHeadTest`).
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
