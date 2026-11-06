@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
+  four nights with nothing on the run's page but an exit code. Failing tests are now error
+  annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
+  the constant-time measurements take up to three rounds and call code leaky only when every
+  round says so, the negative control seen when one does; and the nightly, benchmark and TLS
+  workflows run Maven through `mvnw-retry.sh` too.
 - **The Maven wrapper's jar from the cache.** The first full flake hunt - `ci.yml` three times
   at once - found no flaky test; its three failures were jobs whose runner could not download
   `maven-wrapper.jar` from Maven Central in three attempts. `mvnw-retry.sh` now keeps the jar in

@@ -801,7 +801,13 @@ byte, and the Java AES on a fixed against random blocks. Control: a comparison t
 at the first difference reaches |t| around 1 500. Too noisy for every build, so it runs with
 `-Dseclume.constantTime=true` and in the nightly fuzz job. Its first versions found three
 leaks, all of them in the test: random input made while the clock ran, two buffers at two
-addresses, and a store to one cache line or another just before the measurement.
+addresses, and a store to one cache line or another just before the measurement. On a shared
+runner a neighbour's burst is a t beyond 4.5 too - the nightly job failed on two of four nights
+in its first week - so each measurement takes up to three rounds, each with its own order of
+the classes: code leaks when every round says so, the control has to be seen in one; every
+round's t is in the message (`ConstantTimeVerdictTest` checks the rule without timing
+anything). A failing test of any nightly job is an annotation on the run
+(`surefire_errors.py`), so the message is readable without the log.
 
 **A fresh Oracle session on the same connection.** `LocalLogInAgainTest` sets every kind of
 state an Oracle session carries - client identifier, application context, package variable,

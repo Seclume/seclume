@@ -57,7 +57,7 @@ jobs:
       - name: seclume against each of them
         run: |
           . "$RUNNER_TEMP/interop/env"
-          ./mvnw -B -pl seclume-core -am test -Dtest=TlsInteropTest \
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=TlsInteropTest \
             -Dsurefire.failIfNoSpecifiedTests=false
           grep -q 'Skipped: 0' seclume-core/target/surefire-reports/*TlsInteropTest.txt
       - name: The servers' side of it
@@ -88,7 +88,7 @@ jobs:
       - name: seclume against it
         run: |
           . "$RUNNER_TEMP/interop/env"
-          ./mvnw -B -pl seclume-core -am test -Dtest=TlsInteropTest             -Dsurefire.failIfNoSpecifiedTests=false
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=TlsInteropTest             -Dsurefire.failIfNoSpecifiedTests=false
           grep -q 'Skipped: 0' seclume-core/target/surefire-reports/*TlsInteropTest.txt
       - name: The servers' side of it
         if: failure()
