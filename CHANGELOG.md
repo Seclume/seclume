@@ -12,13 +12,6 @@ All notable changes to seclume are recorded here. Versions follow
   `maven-wrapper.properties`, otherwise fetches it from Maven Central or Google's mirror of it
   under the same check, and retries a failure before the build up to three more times with
   growing, jittered pauses.
-- **SecretFetch reads responses to the letter.** The HTTP client every secret manager and
-  metadata endpoint is reached through skipped the two bytes after a chunk's data without
-  looking at them, so a chunk longer or shorter than its size was read from the middle of its
-  data on; it now refuses it. A `Transfer-Encoding` other than `chunked` (gzip, or gzip under
-  chunked) was read as if chunked, and is refused. And the end of the headers was searched
-  from the first byte again after every read: a head sent a byte at a time cost a scan of the
-  whole buffer per byte; the search goes on from where it stopped (`SecretFetchStrictnessTest`).
 - **The certificate's address check never asks DNS.** `HostnameMatch` compared an IPv6 host
   with a certificate's iPAddress entries through `InetAddress.getByName`, which parses a
   literal - and sends anything else with a colon in it, such as a host with its port left on
@@ -49,6 +42,13 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **SecretFetch reads responses to the letter.** The HTTP client every secret manager and
+  metadata endpoint is reached through skipped the two bytes after a chunk's data without
+  looking at them, so a chunk longer or shorter than its size was read from the middle of its
+  data on; it now refuses it. A `Transfer-Encoding` other than `chunked` (gzip, or gzip under
+  chunked) was read as if chunked, and is refused. And the end of the headers was searched
+  from the first byte again after every read: a head sent a byte at a time cost a scan of the
+  whole buffer per byte; the search goes on from where it stopped (`SecretFetchStrictnessTest`).
 - **Tests against the mutants PIT left alive in the secret package.** Shamir shares at the edges
   of their format - the longest line, numbers of one to three digits, thresholds and numbers just
   inside and outside their range, the shortest and longest values, hex in either case, a target
