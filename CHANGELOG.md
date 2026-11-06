@@ -5,15 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **AWS: the session token goes into its header and nowhere else.** With temporary
-  credentials the TLS socket wrote the session token where it first found the placeholder's
-  prefix in a request head - the request target or any header, an `x-amz-meta-` value an
-  application took from its user as much as `X-Amz-Security-Token` - and checked for a second
-  one only after it had written the head. The placeholder is on the SDK's heap; whoever had it
-  could have had the token written into a header of their choosing, signed as the placeholder,
-  refused by AWS and sent back in the error's canonical request. Now only the value of the
-  `X-Amz-Security-Token` header is replaced, two such headers are refused before anything is
-  written, and the placeholder anywhere else stays as it is (`SessionTokenHeadTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
@@ -63,6 +54,15 @@ All notable changes to seclume are recorded here. Versions follow
   key, an existing empty file and one longer than the 64 KiB window the writer continues from,
   sources described up to 200 characters, the checkpoint timer only with a key and a positive
   interval, on a daemon thread (`AccessLogEdgesTest`).
+- **AWS: the session token goes into its header and nowhere else.** With temporary
+  credentials the TLS socket wrote the session token where it first found the placeholder's
+  prefix in a request head - the request target or any header, an `x-amz-meta-` value an
+  application took from its user as much as `X-Amz-Security-Token` - and checked for a second
+  one only after it had written the head. The placeholder is on the SDK's heap; whoever had it
+  could have had the token written into a header of their choosing, signed as the placeholder,
+  refused by AWS and sent back in the error's canonical request. Now only the value of the
+  `X-Amz-Security-Token` header is replaced, two such headers are refused before anything is
+  written, and the placeholder anywhere else stays as it is (`SessionTokenHeadTest`).
 - **Tests against the mutants PIT left alive in the crypto package**, each checked against the
   JDK's own implementation where there is one: DER ECDSA signatures in every length form and at
   every bound, PBKDF2 past 255 output blocks in the Java code, RSA PKCS#1 and OAEP with the
