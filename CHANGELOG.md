@@ -49,6 +49,13 @@ All notable changes to seclume are recorded here. Versions follow
   key, an existing empty file and one longer than the 64 KiB window the writer continues from,
   sources described up to 200 characters, the checkpoint timer only with a key and a positive
   interval, on a daemon thread (`AccessLogEdgesTest`).
+- **Tests against the mutants PIT left alive in the crypto package**, each checked against the
+  JDK's own implementation where there is one: DER ECDSA signatures in every length form and at
+  every bound, PBKDF2 past 255 output blocks in the Java code, RSA PKCS#1 and OAEP with the
+  longest message each padding takes, decrypted by the JDK; DER read at its bounds, EC private
+  keys in PKCS#8, SEC1 and PEM of both curves, Shamir's bounds, the Java AES-GCM past 255 counter
+  blocks; OpenSSH Ed25519 keys built field by field; and 300 Ed25519 signatures byte for byte
+  against the JDK's.
 - **Examples for Micronaut and Helidon MP** (`examples/micronaut`, `examples/helidon`): an
   application with no seclume code, the pool from `application.yml` or
   `microprofile-config.properties`, the password from Vault. `examples/check-example.sh` starts
