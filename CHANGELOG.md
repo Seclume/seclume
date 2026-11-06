@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **macOS: native cryptography, and a third platform in CI.** seclume-core looked for OpenSSL
+  only as `libcrypto.so.3`, the Linux name, so on macOS the TLS key exchange, signing with a
+  private key and native AES-GCM and PBKDF2 were not there at all. One lookup (`LibCrypto`)
+  now serves every OpenSSL backend: `libcrypto.so.3` on 64-bit Linux, Homebrew's or MacPorts'
+  `openssl@3` on macOS, or the absolute path in `-Dseclume.crypto.libcrypto`; what it loads
+  must report OpenSSL 3 or later, and macOS's `/usr/lib/libcrypto.dylib` - a LibreSSL stub
+  that ends the process loading it - is never tried. Where none is found, every backend says
+  what it needs and what was tried. The security gate's core group runs on macOS ARM64 too,
+  next to Linux x64 and ARM64 and Windows x64 (`LibCryptoTest`).
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);

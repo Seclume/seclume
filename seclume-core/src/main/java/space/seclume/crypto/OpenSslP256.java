@@ -19,7 +19,7 @@ import space.seclume.secret.SecretScope;
 
 /** OpenSSL 3 provider API; deliberately no deprecated EC_KEY functions or JCA fallback. */
 final class OpenSslP256 implements NativeP256.Backend {
-    private static final SymbolLookup LIB = SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+    private static final SymbolLookup LIB = LibCrypto.lookup();
     private static final MethodHandle NEW = bind("EVP_PKEY_CTX_new_from_name", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
     private static final MethodHandle NEW_KEY = bind("EVP_PKEY_CTX_new_from_pkey", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
     private static final MethodHandle KEYGEN_INIT = bind("EVP_PKEY_keygen_init", JAVA_INT, ADDRESS);

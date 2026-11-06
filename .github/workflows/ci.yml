@@ -621,6 +621,16 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
+      # macOS has no OpenSSL 3 of its own; seclume-core looks for Homebrew's
+      # (LibCrypto), which the runner image normally has already.
+      - name: OpenSSL 3 from Homebrew
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew list --versions openssl@3 || brew install openssl@3
+          ls -l "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib"
       - name: The security tests
         run: |
           tests=$("$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --tests)

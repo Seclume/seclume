@@ -1,14 +1,11 @@
 package space.seclume.crypto;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
-
-import space.seclume.internal.Platform;
 
 /**
  * Fresh entropy for OpenSSL's random generator after a restore.
@@ -38,9 +35,9 @@ public final class OpenSslRandom {
         MethodHandle publicDrbg = null;
         MethodHandle privateDrbg = null;
         MethodHandle reseed = null;
-        if (Platform.isLinux() && ValueLayout.ADDRESS.byteSize() == 8) {
+        if (LibCrypto.available()) {
             try {
-                SymbolLookup lib = SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+                SymbolLookup lib = LibCrypto.lookup();
                 Linker linker = Linker.nativeLinker();
                 // EVP_RAND_CTX *RAND_get0_primary(OSSL_LIB_CTX *ctx); likewise _public, _private
                 FunctionDescriptor get = FunctionDescriptor.of(ValueLayout.ADDRESS,

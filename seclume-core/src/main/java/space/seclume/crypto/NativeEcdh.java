@@ -8,7 +8,7 @@ import space.seclume.secret.SecretScope;
 
 /**
  * An ephemeral key for one of the TLS key exchange groups this project speaks:
- * P-256, P-384 and X25519 - owned by CNG (Windows) or OpenSSL 3 (64-bit Linux),
+ * P-256, P-384 and X25519 - owned by CNG (Windows) or OpenSSL 3 (64-bit Linux and macOS, see {@code LibCrypto}),
  * like {@link NativeP256}, which carries P-256 here. No private key and no
  * shared secret passes through a Java array or a JCA key.
  *
@@ -112,11 +112,11 @@ public final class NativeEcdh implements AutoCloseable {
         if (Platform.isWindows()) {
             return new NativeEcdh(group, new CngEcdh(group));
         }
-        if (Platform.isLinux() && ValueLayout.ADDRESS.byteSize() == 8) {
+        if (LibCrypto.available()) {
             return new NativeEcdh(group, new OpenSslEcdh(group));
         }
-        throw new UnsupportedOperationException("native " + group
-                + " requires Windows or 64-bit Linux with libcrypto.so.3");
+        throw new UnsupportedOperationException("native " + group + " requires "
+                + LibCrypto.REQUIRES + ": " + LibCrypto.missing());
     }
 
     public Group group() {

@@ -7,7 +7,7 @@ import space.seclume.internal.Platform;
 import space.seclume.secret.SecretScope;
 
 /**
- * An ephemeral P-256 key owned by CNG (Windows) or OpenSSL 3 (64-bit Linux).
+ * An ephemeral P-256 key owned by CNG (Windows) or OpenSSL 3 (64-bit Linux and macOS).
  * No private scalar, shared secret, or intermediate field arithmetic is passed
  * through a Java array or JCA key. There is no heap-based fallback.
  *
@@ -47,10 +47,11 @@ public final class NativeP256 implements AutoCloseable {
         if (Platform.isWindows()) {
             return new CngP256(point, scalar);
         }
-        if (Platform.isLinux() && ValueLayout.ADDRESS.byteSize() == 8) {
+        if (LibCrypto.available()) {
             return new OpenSslP256(point, scalar);
         }
-        throw new UnsupportedOperationException("native P-256 requires Windows or 64-bit Linux with libcrypto.so.3");
+        throw new UnsupportedOperationException("native P-256 requires " + LibCrypto.REQUIRES
+                + ": " + LibCrypto.missing());
     }
 
     /** Writes 0x04 || x || y, two 32-byte big-endian coordinates. */

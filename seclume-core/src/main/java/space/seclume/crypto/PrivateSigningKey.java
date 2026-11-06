@@ -2,10 +2,8 @@ package space.seclume.crypto;
 
 import java.lang.foreign.MemorySegment;
 
-import space.seclume.internal.Platform;
-
 /**
- * A private key that signs where it lives - in OpenSSL 3 on Linux
+ * A private key that signs where it lives - in OpenSSL 3 on Linux and macOS
  * ({@link OpenSslSigningKey}), in CNG on Windows ({@link CngSigningKey}) - and
  * never becomes a Java object. What seclume-keys, seclume-jwt and SigV4a sign
  * with.
@@ -37,9 +35,8 @@ public interface PrivateSigningKey extends AutoCloseable {
         if (CngSigningKey.available()) {
             return recorded(CngSigningKey.decode(encoded, length), "CNG");
         }
-        throw new IllegalStateException("signing with a private key needs OpenSSL 3 on 64-bit "
-                + "Linux or CNG on Windows, and this is " + (Platform.isMac() ? "macOS"
-                        : System.getProperty("os.name")));
+        throw new IllegalStateException("signing with a private key needs "
+                + LibCrypto.REQUIRES + ", and " + OpenSslSigningKey.why());
     }
 
     /**

@@ -35,7 +35,7 @@ import space.seclume.secret.SecretScope;
 final class OpenSslEcdsaSigner implements EcdsaSigner.Backend {
 
     private static final SymbolLookup LIB =
-            SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+            LibCrypto.lookup();
     private static final MethodHandle NEW =
             bind("EVP_PKEY_CTX_new_from_name", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
     private static final MethodHandle NEW_KEY =

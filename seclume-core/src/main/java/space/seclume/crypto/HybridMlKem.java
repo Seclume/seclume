@@ -13,15 +13,13 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
-import space.seclume.internal.Platform;
-
 /**
  * The hybrid post-quantum key exchange TLS calls {@code X25519MLKEM768}
  * (group 0x11EC): ML-KEM-768 and X25519 together, so that the session keys
  * hold as long as either of the two does - against "harvest now, decrypt
  * later", where recorded traffic waits for a quantum computer.
  *
- * <p>Through the operating system, like P-256: OpenSSL 3.5 or later on Linux,
+ * <p>Through the operating system, like P-256: OpenSSL 3.5 or later on Linux and macOS,
  * CNG on Windows 11 with the post-quantum update ({@link CngMlKem}). The
  * private keys belong to the library and never become Java objects, and the
  * shared secret is written into the caller's native memory. Where neither is
@@ -64,8 +62,8 @@ public final class HybridMlKem implements AutoCloseable {
     }
 
     /**
-     * Whether this platform has what it takes: 64-bit Linux with OpenSSL 3.5
-     * or later, or Windows with ML-KEM in CNG.
+     * Whether this platform has what it takes: 64-bit Linux or macOS with
+     * OpenSSL 3.5 or later, or Windows with ML-KEM in CNG.
      */
     public static boolean available() {
         return Native.AVAILABLE || CngMlKem.AVAILABLE;
@@ -80,7 +78,7 @@ public final class HybridMlKem implements AutoCloseable {
             return new HybridMlKem(new CngMlKem());
         }
         throw new IllegalStateException("X25519MLKEM768 needs OpenSSL 3.5 on 64-bit Linux "
-                + "or ML-KEM in Windows CNG");
+                + "or macOS, or ML-KEM in Windows CNG");
     }
 
     /** The client's key share, {@link #CLIENT_SHARE} bytes. */
@@ -169,9 +167,9 @@ public final class HybridMlKem implements AutoCloseable {
         static {
             MethodHandle[] handles = new MethodHandle[13];
             boolean available = false;
-            if (Platform.isLinux() && ValueLayout.ADDRESS.byteSize() == 8) {
+            if (LibCrypto.available()) {
                 try {
-                    lookup = SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+                    lookup = LibCrypto.lookup();
                     handles[0] = bind("EVP_PKEY_CTX_new_from_name", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
                     handles[1] = bind("EVP_PKEY_CTX_new_from_pkey", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
                     handles[2] = bind("EVP_PKEY_keygen_init", JAVA_INT, ADDRESS);

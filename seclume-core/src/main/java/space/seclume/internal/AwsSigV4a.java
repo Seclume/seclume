@@ -24,7 +24,7 @@ import space.seclume.crypto.PrivateSigningKey;
  * there.
  *
  * <p>So, like seclume's other signing with a private key, OpenSSL 3 on
- * 64-bit Linux or CNG on Windows - {@link #available()}. The signature is
+ * 64-bit Linux and macOS, or CNG on Windows - {@link #available()}. The signature is
  * public.
  */
 public final class AwsSigV4a {
@@ -46,7 +46,7 @@ public final class AwsSigV4a {
     private AwsSigV4a() {
     }
 
-    /** Whether SigV4a can be signed here: OpenSSL 3 on 64-bit Linux. */
+    /** Whether SigV4a can be signed here: OpenSSL 3 or CNG, as {@link PrivateSigningKey}. */
     public static boolean available() {
         return PrivateSigningKey.available();
     }
@@ -87,7 +87,7 @@ public final class AwsSigV4a {
             String accessKeyId) {
         if (!available()) {
             throw new UnsupportedOperationException("SigV4a signs with ECDSA through OpenSSL 3 "
-                    + "(64-bit Linux) or CNG (Windows) - as seclume's other signing with a private "
+                    + "(64-bit Linux and macOS) or CNG (Windows) - as seclume's other signing with a private "
                     + "key");
         }
         MemorySegment secret = arena.allocate(MAX_KEY_BYTES);

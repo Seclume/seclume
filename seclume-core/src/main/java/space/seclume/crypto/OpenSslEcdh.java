@@ -19,7 +19,7 @@ import java.lang.invoke.MethodHandle;
  * {@link OpenSslP256} makes for P-256, and {@code HybridMlKem}'s for X25519.
  */
 final class OpenSslEcdh implements NativeEcdh.Backend {
-    private static final SymbolLookup LIB = SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+    private static final SymbolLookup LIB = LibCrypto.lookup();
     private static final MethodHandle NEW = bind("EVP_PKEY_CTX_new_from_name", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
     private static final MethodHandle NEW_KEY = bind("EVP_PKEY_CTX_new_from_pkey", ADDRESS, ADDRESS, ADDRESS, ADDRESS);
     private static final MethodHandle KEYGEN_INIT = bind("EVP_PKEY_keygen_init", JAVA_INT, ADDRESS);

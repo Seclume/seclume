@@ -91,7 +91,7 @@ handshake, which needs resumption or renegotiation, and the own stack does neith
 Every mode above works on either stack, so this is a capability setting, not a security one.
 The own stack gives up resumption. Its key exchange groups are X25519, P-256 and P-384, all
 in the operating system's crypto library, and, where the operating system has ML-KEM, the
-post-quantum hybrid **X25519MLKEM768** in front of them: OpenSSL 3.5 or later on 64-bit Linux,
+post-quantum hybrid **X25519MLKEM768** in front of them: OpenSSL 3.5 or later on 64-bit Linux and macOS,
 CNG on Windows 11 with the post-quantum update (tested on build 26200.9457), against traffic
 recorded now and decrypted later. Key shares go with the hybrid, X25519 and P-256, so nearly
 every server answers at once; a server limited to P-384 - FIPS and CNSA configurations - asks
