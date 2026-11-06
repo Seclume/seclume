@@ -55,6 +55,11 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **The README starts with the check.** Its first screen now says in two paragraphs what the
+  problem is and what seclume is, then gives the one-minute check for any JVM application:
+  download `seclume-heapcheck` from Maven Central and run it against a process. The heapcheck
+  JAR declares `Enable-Native-Access: ALL-UNNAMED`, so `java -jar` needs no flag and prints no
+  warning; `DocumentationTest` keeps the download's version at the latest release.
 - **Tests against the mutants PIT left alive in the secret package.** Shamir shares at the edges
   of their format - the longest line, numbers of one to three digits, thresholds and numbers just
   inside and outside their range, the shortest and longest values, hex in either case, a target
