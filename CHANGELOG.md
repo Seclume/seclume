@@ -12,6 +12,13 @@ All notable changes to seclume are recorded here. Versions follow
   `maven-wrapper.properties`, otherwise fetches it from Maven Central or Google's mirror of it
   under the same check, and retries a failure before the build up to three more times with
   growing, jittered pauses.
+- **SecretFetch reads responses to the letter.** The HTTP client every secret manager and
+  metadata endpoint is reached through skipped the two bytes after a chunk's data without
+  looking at them, so a chunk longer or shorter than its size was read from the middle of its
+  data on; it now refuses it. A `Transfer-Encoding` other than `chunked` (gzip, or gzip under
+  chunked) was read as if chunked, and is refused. And the end of the headers was searched
+  from the first byte again after every read: a head sent a byte at a time cost a scan of the
+  whole buffer per byte; the search goes on from where it stopped (`SecretFetchStrictnessTest`).
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
   keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a
