@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The database matrix, brought up to date (6 November 2026).** Checked against the official
+  images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
+  SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
+  does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
+  2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
