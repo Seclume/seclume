@@ -80,7 +80,7 @@ final class LibCrypto {
      * pointer size and this value of {@value #PROPERTY} (or null).
      *
      * @throws IllegalArgumentException if the property is not an absolute path,
-     *         or names Apple's LibreSSL stub
+     *         or names a file in macOS's /usr/lib, where the LibreSSL stub is
      */
     static List<String> candidates(String osName, long pointerSize, String property) {
         String os = osName == null ? "" : osName.toLowerCase(Locale.ROOT);
@@ -90,19 +90,39 @@ final class LibCrypto {
             return List.of();
         }
         if (property != null && !property.isBlank()) {
-            Path path = Path.of(property.strip());
-            if (!path.isAbsolute()) {
+            String path = property.strip();
+            if (!path.startsWith("/")) {
                 throw new IllegalArgumentException(PROPERTY + " is a file, as an absolute path, "
-                        + "not " + property.strip());
+                        + "not " + path);
             }
-            if (mac && path.normalize().startsWith("/usr/lib")) {
+            if (mac && normalize(path).startsWith("/usr/lib/")) {
                 throw new IllegalArgumentException(PROPERTY + " names " + path + ": the libcrypto "
                         + "in /usr/lib is Apple's LibreSSL stub, which ends the process that "
                         + "loads it");
             }
-            return List.of(path.toString());
+            return List.of(path);
         }
         return linux ? List.of("libcrypto.so.3") : MAC;
+    }
+
+    /**
+     * An absolute POSIX path with {@code .}, {@code ..} and repeated slashes
+     * resolved - by the string, since the systems this is for are Linux and
+     * macOS whatever system works it out (a test, say).
+     */
+    static String normalize(String path) {
+        java.util.ArrayDeque<String> parts = new java.util.ArrayDeque<>();
+        for (String part : path.split("/")) {
+            if (part.isEmpty() || part.equals(".")) {
+                continue;
+            }
+            if (part.equals("..")) {
+                parts.pollLast();
+            } else {
+                parts.addLast(part);
+            }
+        }
+        return "/" + String.join("/", parts);
     }
 
     /** The search, on first use. */

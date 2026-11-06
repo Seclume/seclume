@@ -48,8 +48,8 @@ class LibCryptoTest {
     @Test
     void macOsNeverLoadsTheSystemsLibreSslStub() {
         for (String candidate : LibCrypto.candidates(MAC, 8, null)) {
-            assertTrue(Path.of(candidate).isAbsolute(), candidate);
-            assertFalse(Path.of(candidate).normalize().startsWith("/usr/lib"), candidate);
+            assertTrue(candidate.startsWith("/"), candidate);
+            assertFalse(LibCrypto.normalize(candidate).startsWith("/usr/lib/"), candidate);
             assertTrue(candidate.endsWith("/libcrypto.3.dylib"), candidate);
         }
         for (String stub : List.of("/usr/lib/libcrypto.dylib", "/usr/lib/libcrypto.46.dylib",
@@ -71,6 +71,18 @@ class LibCryptoTest {
         // On Linux /usr/lib is where the system's OpenSSL 3 is - nothing to refuse there.
         assertEquals(List.of("/usr/lib/x86_64-linux-gnu/libcrypto.so.3"),
                 LibCrypto.candidates(LINUX, 8, "/usr/lib/x86_64-linux-gnu/libcrypto.so.3"));
+    }
+
+    @Test
+    void pathsAreNormalisedAsLinuxAndMacOsSeeThemOnEverySystem() {
+        assertEquals("/usr/lib/libcrypto.dylib", LibCrypto.normalize("/usr/local/../lib/libcrypto.dylib"));
+        assertEquals("/usr/lib/libcrypto.dylib", LibCrypto.normalize("//usr/./lib//libcrypto.dylib"));
+        assertEquals("/libcrypto.dylib", LibCrypto.normalize("/../../libcrypto.dylib"));
+        assertEquals("/opt/usr/lib/libcrypto.3.dylib",
+                LibCrypto.normalize("/opt/usr/lib/libcrypto.3.dylib"));
+        // A /usr/lib only by its name's prefix is not /usr/lib.
+        assertEquals(List.of("/usr/library/libcrypto.3.dylib"),
+                LibCrypto.candidates(MAC, 8, "/usr/library/libcrypto.3.dylib"));
     }
 
     @Test
