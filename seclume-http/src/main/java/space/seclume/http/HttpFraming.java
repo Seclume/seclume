@@ -19,7 +19,8 @@ import space.seclume.secret.SecretScope;
  * ({@link CredentialSocket}) and the engine ({@link HttpCredentialRewriter}),
  * so that they cannot come to disagree about where a secret may go.
  *
- * <p>In each <b>head</b>:
+ * <p>In each <b>head</b>, in its header lines - never in the request line,
+ * whose target is the application's data:
  *
  * <ul>
  *   <li>the secret where a placeholder stands - a bearer token, an API key
@@ -160,8 +161,19 @@ final class HttpFraming {
         SecretScope out = SecretScope.allocateShared(bytes.length * 2 + 64 * 1024);
         try {
             MemorySegment w = out.segment();
-            int at = 0;
+            // The request line as it is: its target is where an application
+            // puts what its users typed - a search, a path - and the
+            // placeholder is no secret (the client holds it on the heap).
+            // Written there, the secret would go to the server's access log
+            // and back in whatever echoes the request. Only header lines carry
+            // credentials.
             int line = 0;
+            while (line < bytes.length && bytes[line] != '\n') {
+                line++;
+            }
+            line = Math.min(line + 1, bytes.length);
+            MemorySegment.copy(bytes, 0, w, ValueLayout.JAVA_BYTE, 0, line);
+            int at = line;
             while (line < bytes.length) {
                 int end = line;
                 while (end < bytes.length && bytes[end] != '\n') {

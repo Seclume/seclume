@@ -1504,7 +1504,8 @@ OpenSearchClient os = SeclumeOpenSearch.client(
   `base64(user:password)` for Basic. A head the client writes in pieces is held until it is
   whole, so a placeholder split across two writes never goes out unreplaced.
 - **Bodies are not touched:** a document that contains a placeholder is stored with the
-  placeholder. Only request heads are rewritten - which is why the engine follows the HTTP/1.1
+  placeholder; nor is the request line (or HTTP/2's `:path`), where applications put what their
+  users typed. Only the header lines of request heads are rewritten - which is why the engine follows the HTTP/1.1
   framing (`Content-Length`, chunks) and offers no ALPN, so the clients stay on HTTP/1.1.
 - **The URL:** `auth=apikey` (the encoded key, `base64(id:key)`, as Elasticsearch hands it
   out), `auth=bearer`, or `auth=basic` with the user before the `@`; any secret provider;

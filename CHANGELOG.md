@@ -75,6 +75,13 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **HTTP: a credential goes into a header, never into the request target.** A credential
+  placeholder was replaced wherever it stood in a request head, the request line included -
+  HTTP/2's `:path` and `:authority` as well. The client holds the placeholder on the heap, a heap
+  dump gives it away, and applications put what their users typed into paths and queries:
+  whoever had the placeholder could have had the API key written into a URL, the server's access
+  log and every response that echoes the request. The request line and HTTP/2's pseudo-headers
+  now go as they are; header lines are rewritten as before (`RequestTargetTest`).
 - **The README starts with the check.** Its first screen now says in two paragraphs what the
   problem is and what seclume is, then gives the one-minute check for any JVM application:
   download `seclume-heapcheck` from Maven Central and run it against a process. The heapcheck
