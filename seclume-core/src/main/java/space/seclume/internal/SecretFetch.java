@@ -319,7 +319,12 @@ public final class SecretFetch {
     static Response readResponse(Source tls, MemorySegment body) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocateDirect(MAX_RESPONSE);
         try {
-            while (buffer.hasRemaining() && !complete(buffer)) {
+            // Where the search for the end of the headers goes on from: each
+            // read looks at what it brought, not again at everything before -
+            // a head sent a byte at a time cost a scan of the whole buffer per
+            // byte, and a quarter of a mebibyte of it took a CPU for minutes.
+            int[] scan = {0, -1};
+            while (buffer.hasRemaining() && !complete(buffer, scan)) {
                 if (tls.read(buffer) < 0) {
                     break;                      // the server closed; parse what came
                 }
@@ -349,12 +354,17 @@ public final class SecretFetch {
      * and read absolutely up to {@code limit()}. Mixing the two conventions in
      * one parser is how an off-by-one gets into a security-relevant path.
      */
-    private static boolean complete(ByteBuffer filling) {
+    private static boolean complete(ByteBuffer filling, int[] scan) throws IOException {
         ByteBuffer view = filling.duplicate();
         view.flip();
-        int headerEnd = headerEnd(view);
+        int headerEnd = scan[1];
         if (headerEnd < 0) {
-            return false;
+            headerEnd = headerEnd(view, scan[0]);
+            if (headerEnd < 0) {
+                scan[0] = Math.max(0, view.limit() - 3);
+                return false;
+            }
+            scan[1] = headerEnd;
         }
         if (chunked(view, headerEnd)) {
             return endsWithTerminalChunk(view);
@@ -422,6 +432,12 @@ public final class SecretFetch {
             if (written + size > body.byteSize() || at + size > buffer.limit()) {
                 throw new IOException("a chunked response does not fit or is truncated");
             }
+            // The chunk's data ends with CRLF, or the size did not say where it
+            // ends: the next header would be read from the middle of the data.
+            if (at + size + 2 > buffer.limit() || buffer.get(at + size) != '\r'
+                    || buffer.get(at + size + 1) != '\n') {
+                throw new IOException("a chunk is not as long as its size says");
+            }
             for (int i = 0; i < size; i++) {
                 body.set(ValueLayout.JAVA_BYTE, written + i, buffer.get(at + i));
             }
@@ -473,8 +489,22 @@ public final class SecretFetch {
                 && buffer.get(limit - 1) == '\n';
     }
 
-    private static boolean chunked(ByteBuffer buffer, int headerEnd) {
-        return headerValue(buffer, headerEnd, "transfer-encoding") != null;
+    /**
+     * Whether the body is chunked - the only transfer coding read here. Any
+     * other, or chunked under another (gzip, then chunked), is refused rather
+     * than read as if it were plain: a compressed token is not a token.
+     */
+    private static boolean chunked(ByteBuffer buffer, int headerEnd) throws IOException {
+        String value = headerValue(buffer, headerEnd, "transfer-encoding");
+        if (value == null) {
+            return false;
+        }
+        String coding = value.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!coding.equals("chunked")) {
+            throw new IOException("the response has Transfer-Encoding " + value.trim()
+                    + " - only chunked is read");
+        }
+        return true;
     }
 
     private static int contentLength(ByteBuffer buffer, int headerEnd) {
@@ -530,8 +560,12 @@ public final class SecretFetch {
 
     /** The position just after the blank line that ends the headers, in a flipped buffer. */
     private static int headerEnd(ByteBuffer buffer) {
+        return headerEnd(buffer, 0);
+    }
+
+    private static int headerEnd(ByteBuffer buffer, int from) {
         int limit = buffer.limit();
-        for (int i = 0; i + 3 < limit; i++) {
+        for (int i = from; i + 3 < limit; i++) {
             if (buffer.get(i) == '\r' && buffer.get(i + 1) == '\n'
                     && buffer.get(i + 2) == '\r' && buffer.get(i + 3) == '\n') {
                 return i + 4;
