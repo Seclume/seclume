@@ -48,10 +48,11 @@ class ScramIterationTest {
 
     @Test
     void aCountOfOneToEightDigitsInRangeIsTaken() {
-        for (String[] count : new String[][] {{"1", "1"}, {"4096", "4096"}, {"00004096", "4096"},
-                {"10000000", "10000000"}}) {
-            try (Arena arena = Arena.ofConfined(); Scram scram = withCount(arena, count[0])) {
-                assertEquals(Integer.parseInt(count[1]), scram.iterations(), count[0]);
+        String[] texts = {"1", "4096", "00004096", "10000000"};
+        int[] values = {1, 4096, 4096, 10_000_000};
+        for (int i = 0; i < texts.length; i++) {
+            try (Arena arena = Arena.ofConfined(); Scram scram = withCount(arena, texts[i])) {
+                assertEquals(values[i], scram.iterations(), texts[i]);
             }
         }
     }
