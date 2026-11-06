@@ -279,7 +279,7 @@ Everything below works on all four databases unless the row says otherwise.
 | PostgreSQL | 9.6 to 18; 19 as a release candidate | - | 15, 18, 19 RC |
 | SQL Server | 2017 to 2025 | 2016 untested (no Linux image); 2008 R2 and older (TDS 7.3) | 2022, 2025 |
 | Oracle | 18c to 23ai; 11g with `legacyVerifier=11g` | 12c and 19c untested (no public image) | Free 23 |
-| MySQL / MariaDB | MySQL 8.4, 9.7 and 26.10; MariaDB 11.4, 11.8, 12.3 and 13.0 | older versions untested | MySQL 8.4, 9.7, 26.10; MariaDB 11.4, 12.3, 13.0 |
+| MySQL / MariaDB | MySQL 8.4, 9.7 and 26.10; MariaDB 11.4, 11.8, 12.3 and 13.0 | older versions untested | MySQL 8.4, 9.7, 26.10; MariaDB 11.4, 12.3, 13.0, 13.1 RC |
 | CockroachDB, YugabyteDB | 24.1 and 26.2; 2024.1 and 2026.1 | - | 26.2; 2026.1 |
 
 Each version was run as a container against the driver's whole test suite - the protocol, what
