@@ -12,6 +12,10 @@ All notable changes to seclume are recorded here. Versions follow
   `maven-wrapper.properties`, otherwise fetches it from Maven Central or Google's mirror of it
   under the same check, and retries a failure before the build up to three more times with
   growing, jittered pauses.
+- **A SCRAM iteration count that wraps is refused.** The count in the server's first message
+  was read into an `int` without a bound on its digits: `i=4294971392` came out as 4096 and was
+  taken. At most eight digits are read now - more is above the 10 000 000 the count is checked
+  against anyway (`ScramIterationTest`).
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
   keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a
