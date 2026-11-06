@@ -33,12 +33,12 @@ class HeapCheckTest {
      * nested main class - and so the "secret" they were never given: six byte
      * arrays, each with the literal at offset 794, and the static field.
      */
-    private static final String SECRET = "hunter2-seclume-" + randomHex(15);
     private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+    private static final String SECRET = "hunter2-seclume-" + randomHex(15);
 
     private static String randomHex(int length) {
         byte[] bytes = new byte[(length + 1) / 2];
-        new java.security.SecureRandom().nextBytes(bytes);
+        RANDOM.nextBytes(bytes);
         return java.util.HexFormat.of().formatHex(bytes).substring(0, length);
     }
 
