@@ -69,6 +69,10 @@ final class ScriptedTlsServer implements Transport {
     private final boolean recordPerMessage;
     private final UnaryOperator<byte[]> tamper;
     private final List<Outgoing> afterHandshake;
+    private byte[] certificateRequest = {Handshake.CERTIFICATE_REQUEST, 0, 0, 11,
+        0,                                    // empty context
+        0, 8,                                 // extensions
+        0, 13, 0, 4, 0, 2, 4, 3};             // signature_algorithms: ecdsa_secp256r1_sha256
 
     private final Arena arena = Arena.ofShared();
     private final ByteArrayOutputStream fromClient = new ByteArrayOutputStream();
@@ -135,6 +139,16 @@ final class ScriptedTlsServer implements Transport {
 
     ScriptedTlsServer(List<Step> script, byte[] leaf, PrivateKey key) {
         this(script, leaf, key, false, null);
+    }
+
+    /**
+     * The CertificateRequest to send in its place in the script, header
+     * included, instead of the one with only signature_algorithms; it goes
+     * into the transcript as it is, so every signature and Finished stays right.
+     */
+    ScriptedTlsServer certificateRequest(byte[] message) {
+        this.certificateRequest = message.clone();
+        return this;
     }
 
     /** The alert description the client sent, or -1 if it sent none. */
@@ -362,10 +376,7 @@ final class ScriptedTlsServer implements Transport {
             MemorySegment digest) throws GeneralSecurityException {
         return switch (step) {
             case ENCRYPTED_EXTENSIONS -> new byte[] {Handshake.ENCRYPTED_EXTENSIONS, 0, 0, 2, 0, 0};
-            case CERTIFICATE_REQUEST -> new byte[] {Handshake.CERTIFICATE_REQUEST, 0, 0, 11,
-                0,                                    // empty context
-                0, 8,                                 // extensions
-                0, 13, 0, 4, 0, 2, 4, 3};             // signature_algorithms: ecdsa_secp256r1_sha256
+            case CERTIFICATE_REQUEST -> certificateRequest.clone();
             case CERTIFICATE -> {
                 try (Arena scratch = Arena.ofConfined()) {
                     List<byte[]> chain = List.of(leaf);

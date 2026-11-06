@@ -923,6 +923,7 @@ public final class ClientHandshake {
                                 // Only noted here. The answer belongs in the
                                 // client's own flight, which is written once
                                 // this one has been read to its end.
+                                CertificateMessage.checkCertificateRequest(message, at, length);
                                 certificateRequest[0] =
                                         CertificateMessage.requestContext(message, at);
                                 transcript.update(message, start, total);
