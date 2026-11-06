@@ -583,7 +583,8 @@ class VaultLoginTest {
             // registry's to say, and the message on a missing file names it.
             SecretUnavailableException missing = assertThrows(SecretUnavailableException.class,
                     () -> read(login));
-            assertTrue(missing.getMessage().contains("serviceaccount/token"),
+            // As the system writes the path: with backslashes on Windows.
+            assertTrue(missing.getMessage().replace('\\', '/').contains("serviceaccount/token"),
                     missing.getMessage());
         }
     }

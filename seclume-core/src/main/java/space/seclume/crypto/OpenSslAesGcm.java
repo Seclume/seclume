@@ -19,7 +19,7 @@ import java.lang.invoke.MethodHandle;
  */
 final class OpenSslAesGcm implements AesGcmCipher {
 
-    private static final SymbolLookup LIB = SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+    private static final SymbolLookup LIB = LibCrypto.lookup();
     private static final MethodHandle CTX_NEW = bind("EVP_CIPHER_CTX_new", ADDRESS);
     private static final MethodHandle CTX_FREE = bind("EVP_CIPHER_CTX_free", null, ADDRESS);
     private static final MethodHandle AES_128_GCM = bind("EVP_aes_128_gcm", ADDRESS);

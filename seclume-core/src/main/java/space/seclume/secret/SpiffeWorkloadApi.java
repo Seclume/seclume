@@ -191,7 +191,7 @@ public final class SpiffeWorkloadApi {
     public X509Svid fetchX509Svid() throws IOException {
         if (!PrivateSigningKey.available()) {
             throw new IllegalStateException("an SVID's key off the heap needs OpenSSL 3 on "
-                    + "64-bit Linux or CNG on Windows, which are not there");
+                    + "64-bit Linux or macOS, or CNG on Windows, which are not there");
         }
         SocketChannel channel;
         try {
@@ -236,7 +236,7 @@ public final class SpiffeWorkloadApi {
             java.util.function.Consumer<IOException> failed) {
         if (!PrivateSigningKey.available()) {
             throw new IllegalStateException("an SVID's key off the heap needs OpenSSL 3 on "
-                    + "64-bit Linux or CNG on Windows, which are not there");
+                    + "64-bit Linux or macOS, or CNG on Windows, which are not there");
         }
         Watch watch = new Watch(each, failed);
         watch.start();

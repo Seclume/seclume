@@ -21,7 +21,7 @@ import java.lang.foreign.MemorySegment;
  * does not need the password.
  *
  * <p>The key material goes straight from a {@code MemorySegment} into CNG
- * (Windows) or OpenSSL 3 (64-bit Linux), and the signing happens there. There
+ * (Windows) or OpenSSL 3 (64-bit Linux and macOS), and the signing happens there. There
  * is no heap fallback, for the same reason there is none in {@link NativeP256}:
  * a fallback that quietly gives up the guarantee is worse than a platform that
  * says no.

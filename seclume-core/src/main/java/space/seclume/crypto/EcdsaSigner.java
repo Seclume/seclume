@@ -12,7 +12,7 @@ import space.seclume.internal.Platform;
  * <p>The design of {@link P256Signer}, for both curves a client certificate
  * has in practice: P-256, and P-384 where FIPS or CNSA configurations ask for
  * it. The key material goes straight from a {@code MemorySegment} into CNG
- * (Windows) or OpenSSL 3 (64-bit Linux), and the signing happens there; there
+ * (Windows) or OpenSSL 3 (64-bit Linux and macOS), and the signing happens there; there
  * is no heap fallback.
  *
  * <p>The public point is a parameter for the reasons {@link P256Signer} gives:
@@ -161,18 +161,17 @@ public final class EcdsaSigner implements AutoCloseable {
         if (Platform.isWindows()) {
             return new EcdsaSigner(curve, new CngEcdsaSigner(curve, publicPoint, scalar), owner);
         }
-        if (Platform.isLinux() && ValueLayout.ADDRESS.byteSize() == 8) {
+        if (LibCrypto.available()) {
             return new EcdsaSigner(curve, new OpenSslEcdsaSigner(curve, publicPoint, scalar),
                     owner);
         }
         throw new UnsupportedOperationException("signing with an EC key off the heap requires "
-                + "Windows or 64-bit Linux with libcrypto.so.3");
+                + LibCrypto.REQUIRES + ": " + LibCrypto.missing());
     }
 
     /** Whether this platform can sign at all - for a caller that wants to say why not. */
     public static boolean available() {
-        return Platform.isWindows()
-                || (Platform.isLinux() && ValueLayout.ADDRESS.byteSize() == 8);
+        return Platform.isWindows() || LibCrypto.available();
     }
 
     public Curve curve() {

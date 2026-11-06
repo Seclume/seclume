@@ -16,7 +16,7 @@ import space.seclume.internal.Platform;
 
 /**
  * PBKDF2-HMAC in the operating system's crypto library: OpenSSL's
- * {@code PKCS5_PBKDF2_HMAC} on Linux, CNG's {@code BCryptDeriveKeyPBKDF2} on
+ * {@code PKCS5_PBKDF2_HMAC} on Linux and macOS, CNG's {@code BCryptDeriveKeyPBKDF2} on
  * Windows - the libraries the TLS stack already uses for its key exchange
  * and AES-GCM.
  *
@@ -51,7 +51,7 @@ final class NativePbkdf2 {
             return false;
         }
         try {
-            if (Platform.isLinux()) {
+            if (LibCrypto.available()) {
                 return OpenSsl.derive(algorithm, password, salt, iterations, out);
             }
             if (Platform.isWindows()) {
@@ -67,7 +67,7 @@ final class NativePbkdf2 {
     private static final class OpenSsl {
 
         private static final SymbolLookup LIB =
-                SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+                LibCrypto.lookup();
         private static final MethodHandle PBKDF2 = bind("PKCS5_PBKDF2_HMAC", JAVA_INT,
                 ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS);
         private static final MethodHandle SHA1 = bind("EVP_sha1", ADDRESS);

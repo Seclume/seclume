@@ -277,7 +277,9 @@ A `SecretScope` is native memory that is:
 
 - **locked**, so it is never swapped out;
 - **excluded from crash dumps** (`MADV_DONTDUMP` on Linux, `WerRegisterExcludedMemoryBlock`
-  on Windows), so a core file or a crash report does not carry the secret to a disk;
+  on Windows), so a core file or a crash report does not carry the secret to a disk. macOS
+  has no way to leave single pages out of a core dump; there, keep core dumps off (the
+  default, `ulimit -c 0`);
 - **wiped** when it closes.
 
 Locking and dump exclusion are operating system service, and a limit (`RLIMIT_MEMLOCK`,
@@ -290,6 +292,23 @@ switches both off.
 their own means, and dump exclusion is not something to rely on there. What keeps secrets
 out of a checkpoint image is `seclume-crac` (see [the pool](#the-pool)): nothing secret is
 left in the process when the image is written.
+
+## Native cryptography: which library, on which system
+
+The ephemeral TLS keys (P-256, P-384, X25519, ML-KEM), private keys that sign, native AES-GCM
+and PBKDF2 belong to the operating system's cryptography, not to the JVM:
+
+- **Windows:** CNG.
+- **64-bit Linux:** OpenSSL 3, `libcrypto.so.3`, where the dynamic loader finds it.
+- **macOS:** OpenSSL 3 from Homebrew (`brew install openssl@3`; `/opt/homebrew` on Apple
+  silicon, then `/usr/local`) or MacPorts (`/opt/local/lib`). macOS has no OpenSSL 3 of its
+  own; its `/usr/lib/libcrypto.dylib` is a LibreSSL stub that ends the process that loads it,
+  and seclume never loads it.
+
+`-Dseclume.crypto.libcrypto=/absolute/path/libcrypto...` names another OpenSSL 3, on Linux
+or macOS. Whatever is loaded must report OpenSSL 3 or later, or it is not used. Where there is
+no OpenSSL 3, AES-GCM and PBKDF2 fall back to their constant-time Java versions, and what has
+no fallback - the TLS key exchange, signing with a private key - says what it needs.
 
 ## The pool
 
@@ -1218,7 +1237,7 @@ webhooks.verifyStripe(request.getHeader("Stripe-Signature"), body, Duration.ofMi
   PKCS#1 or SEC 1) is read into native memory and decoded there by OpenSSL's own decoder. From
   then on it is an `EVP_PKEY` in OpenSSL's memory, and the JVM only ever sees signatures.
   On Windows the same key is imported into CNG (the software key storage provider) and signs
-  there. So OpenSSL 3 on 64-bit Linux or CNG on Windows; HMAC works everywhere.
+  there. So OpenSSL 3 on 64-bit Linux and macOS or CNG on Windows; HMAC works everywhere.
 - **Verifying** tokens signed with this HMAC key takes the algorithm from the key, never from
   the token (`alg: none` and a swapped algorithm are refused). It compares in constant time
   and checks `exp` and `nbf` with a leeway (`leeway=`, 60 seconds by default). Tokens signed
@@ -1290,7 +1309,7 @@ Without Spring: `SeclumeTomcat.enableHttps(connector, keyManager, trustManager, 
   is refused with a hint; an encrypted key goes through `provider=encrypted`.
 - **Signatures:** TLS 1.3 and 1.2 with RSA-PSS, RSA PKCS#1, ECDSA and Ed25519.
 - **Checks:** a certificate chain that does not belong to the key is refused.
-- **Platform:** OpenSSL 3 on 64-bit Linux, or CNG on Windows (RSA and ECDSA; Ed25519 keys sign
+- **Platform:** OpenSSL 3 on 64-bit Linux and macOS, or CNG on Windows (RSA and ECDSA; Ed25519 keys sign
   with OpenSSL only - CNG has no Ed25519).
 
 Tests run the JDK's own client against an `SSLServerSocket` and against an embedded Tomcat.
@@ -1604,7 +1623,7 @@ URL download = presigner.presignGet("reports", "2026/q3.pdf", Duration.ofMinutes
 
 **Limits:**
 - SigV4a (S3 multi-region access points) signs with ECDSA P-256 from a key derived from the
-  secret key in native memory, as AWS derives it; OpenSSL 3 on 64-bit Linux or CNG on Windows,
+  secret key in native memory, as AWS derives it; OpenSSL 3 on 64-bit Linux and macOS or CNG on Windows,
   as seclume's other signing with a private key. Checked on both against AWS's own SigV4a test
   suite (the derived public key, and signatures that verify with it).
 - An async client's body is collected in memory before it is signed. This is meant for the

@@ -13,8 +13,6 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 
-import space.seclume.internal.Platform;
-
 /**
  * A private key for signing - RSA or EC - held by OpenSSL and never by the JVM.
  *
@@ -31,7 +29,7 @@ import space.seclume.internal.Platform;
  * back as OpenSSL writes it, DER; JWS wants {@code r || s}, which
  * {@link #rawEcdsa} makes of it.
  *
- * <p>OpenSSL 3 on 64-bit Linux, where libcrypto is found; elsewhere
+ * <p>OpenSSL 3 on 64-bit Linux and macOS, where libcrypto is found; elsewhere
  * {@link #available()} says no.
  */
 public final class OpenSslSigningKey implements PrivateSigningKey {
@@ -50,7 +48,7 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
 
     /** Whether OpenSSL 3's libcrypto can be used here. */
     public static boolean available() {
-        if (!Platform.isLinux() || ValueLayout.ADDRESS.byteSize() != 8) {
+        if (!LibCrypto.available()) {
             return false;
         }
         try {
@@ -60,14 +58,21 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
         }
     }
 
+    /** Why {@link #available()} says no. */
+    static String why() {
+        return LibCrypto.available()
+                ? LibCrypto.file() + " does not have OpenSSL 3's decoder and signing functions"
+                : LibCrypto.missing();
+    }
+
     /**
      * Decodes a private key from {@code length} bytes of PEM or DER at the start
      * of {@code encoded}, which stays the caller's to wipe.
      */
     public static OpenSslSigningKey decode(MemorySegment encoded, int length) {
         if (!available()) {
-            throw new IllegalStateException("signing with a private key needs OpenSSL 3 on "
-                    + "64-bit Linux, which is not there");
+            throw new IllegalStateException("signing with a private key needs OpenSSL 3, and "
+                    + why());
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment result = arena.allocate(ADDRESS);
@@ -256,7 +261,7 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
     private static final class Native {
 
         static final SymbolLookup LIB =
-                SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
+                LibCrypto.lookup();
 
         static final MethodHandle DECODER_NEW = bind("OSSL_DECODER_CTX_new_for_pkey",
                 ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS);

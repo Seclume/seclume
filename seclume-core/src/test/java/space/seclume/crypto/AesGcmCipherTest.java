@@ -30,20 +30,10 @@ class AesGcmCipherTest {
         try (Arena arena = Arena.ofConfined(); AesGcmCipher cipher =
                 AesGcmCipher.of(arena.allocate(16), 0, 16)) {
             String expected = Platform.isWindows() ? "cng"
-                    : Platform.isLinux() ? "openssl" : "java";
-            System.out.println("  AES-GCM implementation here: " + cipher.implementation());
-            if (!Platform.isLinux() || hasLibcrypto()) {
-                assertEquals(expected, cipher.implementation());
-            }
-        }
-    }
-
-    private static boolean hasLibcrypto() {
-        try {
-            java.lang.foreign.SymbolLookup.libraryLookup("libcrypto.so.3", Arena.global());
-            return true;
-        } catch (IllegalArgumentException absent) {
-            return false;
+                    : LibCrypto.available() ? "openssl" : "java";
+            System.out.println("  AES-GCM implementation here: " + cipher.implementation()
+                    + (LibCrypto.available() ? " (" + LibCrypto.file() + ")" : ""));
+            assertEquals(expected, cipher.implementation());
         }
     }
 

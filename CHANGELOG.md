@@ -122,6 +122,19 @@ All notable changes to seclume are recorded here. Versions follow
   chunked) was read as if chunked, and is refused. And the end of the headers was searched
   from the first byte again after every read: a head sent a byte at a time cost a scan of the
   whole buffer per byte; the search goes on from where it stopped (`SecretFetchStrictnessTest`).
+- **macOS: native cryptography, and a third platform in CI.** seclume-core looked for OpenSSL
+  only as `libcrypto.so.3`, the Linux name, so on macOS the TLS key exchange, signing with a
+  private key and native AES-GCM and PBKDF2 were not there at all. One lookup (`LibCrypto`)
+  now serves every OpenSSL backend: `libcrypto.so.3` on 64-bit Linux, Homebrew's or MacPorts'
+  `openssl@3` on macOS, or the absolute path in `-Dseclume.crypto.libcrypto`; what it loads
+  must report OpenSSL 3 or later, and macOS's `/usr/lib/libcrypto.dylib` - a LibreSSL stub
+  that ends the process loading it - is never tried. Where none is found, every backend says
+  what it needs and what was tried. The security gate's core group runs on macOS ARM64 too,
+  next to Linux x64 and ARM64 and Windows x64 (`LibCryptoTest`), followed on all three by the
+  whole of seclume-core's tests. `HeapCheckTest`'s probe secret is made up per run instead of
+  being a constant: on macOS the probe JVMs loaded the test class, and with its class file
+  held the "secret" they were never given. macOS has no per-page exclusion from core dumps;
+  the gate says so instead of passing quietly.
 - **Tests against the mutants PIT left alive in the secret package.** Shamir shares at the edges
   of their format - the longest line, numbers of one to three digits, thresholds and numbers just
   inside and outside their range, the shortest and longest values, hex in either case, a target

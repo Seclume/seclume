@@ -610,6 +610,7 @@ jobs:
         include:
           - {os: ubuntu-26.04-arm, platform: linux-arm64}
           - {os: windows-latest, platform: windows-x64}
+          - {os: macos-latest, platform: macos-arm64}
     defaults:
       run:
         shell: bash
@@ -620,6 +621,16 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
+      # macOS has no OpenSSL 3 of its own; seclume-core looks for Homebrew's
+      # (LibCrypto), which the runner image normally has already.
+      - name: OpenSSL 3 from Homebrew
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew list --versions openssl@3 || brew install openssl@3
+          ls -l "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib"
       - name: The security tests
         run: |
           tests=$("$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --tests)
@@ -628,6 +639,14 @@ jobs:
       - name: Security gate
         if: success() || failure()
         run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --platform ${{ matrix.platform }}'
+      # Then everything else in seclume-core on this platform, not only what
+      # the gate names: the platform's own code (DPAPI, CNG and the certificate
+      # store on Windows, the Keychain and Homebrew's OpenSSL on macOS) has its
+      # tests here. Tests that need a Linux kernel or a container are skipped by
+      # their own conditions, as on a developer's machine.
+      - name: All of seclume-core
+        if: success() || failure()
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-core test
       - if: failure()
         run: |
           "$(command -v python3 || command -v python)" - <<'PY'
