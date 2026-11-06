@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A TLS 1.3 CertificateRequest is read like the rest of the flight.** The client took only
+  the request context from it, by the context's own length byte, and checked nothing else: a
+  context reaching past the message, an extensions block of the wrong length, bytes after it
+  and a request without `signature_algorithms` were all accepted - the TLS 1.2 path read its
+  CertificateRequest strictly, this one did not. RFC 8446 section 4.3.2 now holds: an empty
+  context during the handshake (`illegal_parameter` otherwise), one extensions block filling
+  the message (`decode_error`), a well-formed, non-empty `signature_algorithms`
+  (`missing_extension` without one); unknown extensions are ignored, as the RFC asks
+  (`CertificateRequestStrictnessTest`).
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);

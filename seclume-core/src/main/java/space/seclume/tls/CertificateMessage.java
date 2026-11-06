@@ -108,6 +108,52 @@ public final class CertificateMessage {
     }
 
     /**
+     * RFC 8446 section 4.3.2, for a CertificateRequest during the handshake: an
+     * empty request context (it "SHALL be zero length" outside post-handshake
+     * authentication, which this client does not offer), then exactly one
+     * extensions block filling the rest of the message, with a well-formed,
+     * non-empty {@code signature_algorithms} in it. Other extensions are left
+     * alone - the client "MUST ignore unrecognized extensions" here.
+     */
+    static void checkCertificateRequest(MemorySegment body, long offset, int length)
+            throws TlsProtocolException {
+        if (length < 1) {
+            throw StrictExtensions.decodeError("an empty CertificateRequest");
+        }
+        int contextLength = u8(body, offset);
+        if (contextLength + 1 > length) {
+            throw StrictExtensions.decodeError("a CertificateRequest whose context of "
+                    + contextLength + " bytes is longer than the message");
+        }
+        if (contextLength != 0) {
+            throw new TlsProtocolException(TlsAlertException.ILLEGAL_PARAMETER,
+                    "the server's CertificateRequest during the handshake has a request "
+                            + "context, which only post-handshake authentication uses");
+        }
+        boolean[] signatureAlgorithms = {false};
+        StrictExtensions.list(body, offset + 1, length - 1, "the CertificateRequest",
+                (type, at, extensionLength) -> {
+                    if (type != SIGNATURE_ALGORITHMS) {
+                        return;
+                    }
+                    int listLength = extensionLength >= 2 ? u16(body, at) : -1;
+                    if (listLength != extensionLength - 2 || listLength < 2
+                            || listLength % 2 != 0) {
+                        throw StrictExtensions.decodeError("the CertificateRequest's "
+                                + "signature_algorithms is not a list of two-byte schemes");
+                    }
+                    signatureAlgorithms[0] = true;
+                });
+        if (!signatureAlgorithms[0]) {
+            throw new TlsProtocolException(TlsAlertException.MISSING_EXTENSION,
+                    "the CertificateRequest has no signature_algorithms, which it must carry");
+        }
+    }
+
+    /** RFC 8446's extension type 13. */
+    private static final int SIGNATURE_ALGORITHMS = 13;
+
+    /**
      * Writes the client's own {@code Certificate} message, header and all.
      *
      * <p>Sent whenever the server asked, <b>including when there is nothing

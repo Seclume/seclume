@@ -28,6 +28,8 @@ public class TlsAlertException extends IOException {
     public static final int RECORD_OVERFLOW = 22;
     public static final int PROTOCOL_VERSION = 70;
     public static final int UNSUPPORTED_EXTENSION = 110;
+    /** RFC 8446: a message lacks an extension it must carry. */
+    public static final int MISSING_EXTENSION = 109;
     public static final int BAD_CERTIFICATE = 42;
     public static final int DECRYPT_ERROR = 51;
     public static final int INSUFFICIENT_SECURITY = 71;
