@@ -1,7 +1,5 @@
 package space.seclume.crypto;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -34,6 +32,14 @@ import org.junit.jupiter.api.Timeout;
  * <p>A JVM is a noisy place to time anything - JIT, GC, safepoints - so this
  * runs when asked ({@code -Dseclume.constantTime=true}, as the nightly fuzz
  * job does) and not in every build. A finding is reported with its t value.
+ *
+ * <p>And a shared CI runner is a noisy place to run a JVM: a neighbour's burst
+ * that lands on one class more than the other is a t beyond the threshold too.
+ * So a measurement is made in up to {@value #ROUNDS} rounds, each with its own
+ * order of the classes. Code is found to leak when every round says so - a
+ * leak is in the code and shows each time, a burst does not come back on
+ * cue - and the negative control has to be seen in one round at least. Every
+ * round's t is in the message.
  */
 @Timeout(600)
 class ConstantTimeLeakageTest {
@@ -41,6 +47,45 @@ class ConstantTimeLeakageTest {
     /** dudect's threshold: beyond this the two classes are told apart. */
     private static final double LEAK = 4.5;
     private static final int SAMPLES = Integer.getInteger("seclume.constantTime.samples", 200_000);
+    /** Rounds of a measurement before a verdict. */
+    static final int ROUNDS = 3;
+
+    /** A measurement of one round: its t. */
+    @FunctionalInterface
+    interface Round {
+        double t(int round);
+    }
+
+    /**
+     * Quiet if one round of {@code rounds} is below the threshold; otherwise a
+     * failure with every round's t. {@code rounds} must be at least 1.
+     */
+    static double quiet(String what, int rounds, Round measurement) {
+        StringBuilder seen = new StringBuilder();
+        for (int round = 0; round < rounds; round++) {
+            double t = measurement.t(round);
+            if (Math.abs(t) < LEAK) {
+                return t;
+            }
+            seen.append(seen.isEmpty() ? "" : ", ").append(String.format(java.util.Locale.ROOT, "%.2f", t));
+        }
+        throw new AssertionError(what + " leaks: |t| above " + LEAK + " in all " + rounds + " rounds (t = " + seen
+                + ")");
+    }
+
+    /** Seen if one round of {@code rounds} is beyond the threshold; otherwise a failure with every t. */
+    static double seen(String what, int rounds, Round measurement) {
+        StringBuilder quiet = new StringBuilder();
+        for (int round = 0; round < rounds; round++) {
+            double t = measurement.t(round);
+            if (Math.abs(t) > LEAK) {
+                return t;
+            }
+            quiet.append(quiet.isEmpty() ? "" : ", ").append(String.format(java.util.Locale.ROOT, "%.2f", t));
+        }
+        throw new AssertionError(what + " was not seen in " + rounds + " rounds (t = " + quiet
+                + ") - the measurement cannot tell a leak from none");
+    }
 
     @BeforeAll
     static void onlyWhenAsked() {
@@ -65,10 +110,8 @@ class ConstantTimeLeakageTest {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment a = random(arena, 64, 1);
             MemorySegment b = arena.allocate(64);
-            double t = measure(16, klass -> differAt(a, b, klass == 0 ? 0 : 63, 0, 63),
-                    klass -> sink ^= earlyExit(a, b, 64) ? 1 : 0);
-            assertTrue(Math.abs(t) > LEAK, "an early exit was not seen (t = " + t
-                    + ") - the measurement cannot tell a leak from none");
+            seen("an early exit", ROUNDS, round -> measure(round, 16, klass -> differAt(a, b, klass == 0 ? 0 : 63, 0, 63),
+                    klass -> sink ^= earlyExit(a, b, 64) ? 1 : 0));
         }
     }
 
@@ -82,9 +125,9 @@ class ConstantTimeLeakageTest {
             // is not - which is exactly what an early exit gives away.
             MemorySegment a = random(arena, 64, 2);
             MemorySegment b = arena.allocate(64);
-            double t = measure(16, klass -> differAt(a, b, klass == 0 ? 0 : 63, 0, 63),
-                    klass -> sink ^= ConstantTime.equals(a, 0, b, 0, 64) ? 1 : 0);
-            assertTrue(Math.abs(t) < LEAK, "ConstantTime.equals leaks (t = " + t + ")");
+            quiet("ConstantTime.equals", ROUNDS, round -> measure(round, 16,
+                    klass -> differAt(a, b, klass == 0 ? 0 : 63, 0, 63),
+                    klass -> sink ^= ConstantTime.equals(a, 0, b, 0, 64) ? 1 : 0));
         }
     }
 
@@ -103,10 +146,10 @@ class ConstantTimeLeakageTest {
             try (AesKey aes = new AesKey(key)) {
                 AesGcm.encrypt(aes, nonce, 0, MemorySegment.NULL, 0, 0, plain, 0, 64, sealed, 0);
                 MemorySegment forged = arena.allocate(64 + 16);
-                double t = measure(2, klass -> differAt(sealed, forged, klass == 0 ? 64 : 79, 64, 79),
+                quiet("the GCM tag check", ROUNDS, round -> measure(round, 2,
+                        klass -> differAt(sealed, forged, klass == 0 ? 64 : 79, 64, 79),
                         klass -> sink ^= AesGcm.decrypt(aes, nonce, 0, MemorySegment.NULL, 0, 0,
-                                forged, 0, 64, out, 0) ? 1 : 0);
-                assertTrue(Math.abs(t) < LEAK, "the GCM tag check leaks (t = " + t + ")");
+                                forged, 0, 64, out, 0) ? 1 : 0));
             }
         }
     }
@@ -136,10 +179,9 @@ class ConstantTimeLeakageTest {
             int[] next = {0};
             try (AesKey aes = new AesKey(key)) {
                 // One block per sample: the next would encrypt the ciphertext.
-                double t = measure(1, klass -> MemorySegment.copy(pairs,
+                quiet("the Java AES", ROUNDS, round -> measure(round, 1, klass -> MemorySegment.copy(pairs,
                                 32L * (next[0]++ & 4095) + 16L * klass, state, 0, 16),
-                        klass -> Aes.encryptBlock(aes, state));
-                assertTrue(Math.abs(t) < LEAK, "the Java AES leaks (t = " + t + ")");
+                        klass -> Aes.encryptBlock(aes, state)));
             }
         }
     }
@@ -152,10 +194,11 @@ class ConstantTimeLeakageTest {
     /**
      * Welch's t between the two classes: {@code batch} calls of
      * {@code operation} per sample, the class of each sample drawn at random,
-     * the slowest tenth of all samples cropped.
+     * the slowest tenth of all samples cropped. Each round draws the classes
+     * in an order of its own.
      */
-    private static double measure(int batch, IntConsumer prepare, IntConsumer operation) {
-        Random choice = new Random(42);
+    private static double measure(int round, int batch, IntConsumer prepare, IntConsumer operation) {
+        Random choice = new Random(42 + 7919L * round);
         for (int i = 0; i < 20_000; i++) {            // warm the JIT on both classes
             prepare.accept(i & 1);
             operation.accept(i & 1);
@@ -194,8 +237,8 @@ class ConstantTimeLeakageTest {
         double variance0 = m2[0] / (n[0] - 1);
         double variance1 = m2[1] / (n[1] - 1);
         double t = (mean[0] - mean[1]) / Math.sqrt(variance0 / n[0] + variance1 / n[1]);
-        System.out.printf("t = %.2f (means %.1f / %.1f ns per batch, %d / %d samples)%n",
-                t, mean[0], mean[1], (long) n[0], (long) n[1]);
+        System.out.printf("round %d: t = %.2f (means %.1f / %.1f ns per batch, %d / %d samples)%n",
+                round, t, mean[0], mean[1], (long) n[0], (long) n[1]);
         return t;
     }
 

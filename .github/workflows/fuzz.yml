@@ -38,7 +38,7 @@ jobs:
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - name: The whole corpus
         run: >
-          ./mvnw -B -Pfuzz
+          .github/scripts/mvnw-retry.sh -B -Pfuzz
           -pl seclume-core,seclume-tck,seclume-postgresql,seclume-mysql,seclume-sqlserver,seclume-oracle
           -am test -Dtest='*Fuzz*,BoundaryContractTest'
           -Dsurefire.failIfNoSpecifiedTests=false
@@ -46,7 +46,7 @@ jobs:
       # than the CI runs, and a seed of the night's own, printed on failure.
       - name: MongoDB
         run: >
-          ./mvnw -B -pl seclume-mongodb,seclume-mongodb-driver -am test
+          .github/scripts/mvnw-retry.sh -B -pl seclume-mongodb,seclume-mongodb-driver -am test
           -Dtest='OpMsgFuzzTest,MongoLoginFuzzTest,SrvFuzzTest'
           -Dseclume.mongo.fuzz.rounds=200000 -Dseclume.mongo.fuzz.seed=${{ github.run_id }}
           -Dsurefire.failIfNoSpecifiedTests=false
@@ -55,7 +55,7 @@ jobs:
       # checked after every step. The CI runs 150 sequences; this runs 20 000.
       - name: The pool's promises, many sequences
         run: >
-          ./mvnw -B -pl seclume-pool -am test
+          .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test
           -Dtest='PoolStateMachineTest,ConcurrentPoolStateMachineTest'
           -Dseclume.pool.stateMachine.seeds=20000 -Dseclume.pool.concurrent.seeds=2000
           -Dsurefire.failIfNoSpecifiedTests=false
@@ -64,8 +64,11 @@ jobs:
       # negative control that must be found). Too noisy for every build.
       - name: Constant time
         run: >
-          ./mvnw -B -pl seclume-core -am test -Dtest=ConstantTimeLeakageTest
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=ConstantTimeLeakageTest
           -Dseclume.constantTime=true -Dsurefire.failIfNoSpecifiedTests=false
+      - name: The failing tests, on the run's page
+        if: failure()
+        run: python3 .github/scripts/surefire_errors.py
       - name: What the run found
         if: failure()
         run: |
@@ -110,14 +113,17 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
-      - run: ./mvnw -B -DskipTests install -pl ${{ matrix.target.module }} -am
+      - run: .github/scripts/mvnw-retry.sh -B -DskipTests install -pl ${{ matrix.target.module }} -am
       - name: Search
         env:
           JAZZER_FUZZ: '1'
         run: >
-          ./mvnw -B test -pl ${{ matrix.target.module }}
+          .github/scripts/mvnw-retry.sh -B test -pl ${{ matrix.target.module }}
           -Dtest='${{ matrix.target.test }}#${{ matrix.target.method }}'
           -Djazzer.max_duration=15m -Dsurefire.failIfNoSpecifiedTests=false
+      - name: The failing tests, on the run's page
+        if: failure()
+        run: python3 .github/scripts/surefire_errors.py
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
