@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **HTTP: a credential goes into a header, never into the request target.** A credential
+  placeholder was replaced wherever it stood in a request head, the request line included -
+  HTTP/2's `:path` and `:authority` as well. The client holds the placeholder on the heap, a heap
+  dump gives it away, and applications put what their users typed into paths and queries:
+  whoever had the placeholder could have had the API key written into a URL, the server's access
+  log and every response that echoes the request. The request line and HTTP/2's pseudo-headers
+  now go as they are; header lines are rewritten as before (`RequestTargetTest`).
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);

@@ -256,7 +256,10 @@ final class Http2Requests {
                 length += integerLength(update, 5);
             }
             for (Field field : decoded.fields()) {
-                int found = indexOf(field.value(), PREFIX, 0);
+                // Not in a pseudo-header: :path and :authority are the
+                // request target, the application's data - see HttpFraming.
+                boolean pseudo = field.name().length > 0 && field.name()[0] == ':';
+                int found = pseudo ? -1 : indexOf(field.value(), PREFIX, 0);
                 int valueLength = field.value().length;
                 if (found >= 0) {
                     int end = placeholderEnd(field.value(), found);
