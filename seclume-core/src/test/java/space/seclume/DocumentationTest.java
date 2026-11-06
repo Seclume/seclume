@@ -125,4 +125,24 @@ class DocumentationTest {
         assertEquals(List.of(), stale, "the README's dependencies are not the latest release "
                 + latest);
     }
+
+    /**
+     * The heapcheck download on the README's first screen is the newest
+     * release too - a URL with a version that is not on Maven Central is the
+     * first thing a visitor would try and the first thing that would fail.
+     */
+    @Test
+    void theHeapcheckDownloadIsTheLatestRelease() throws IOException {
+        Path root = root();
+        Matcher release = Pattern.compile("(?m)^## \\[(\\d+\\.\\d+\\.\\d+)\\]")
+                .matcher(read(root.resolve("CHANGELOG.md")));
+        assertTrue(release.find(), "the CHANGELOG records no release");
+        String latest = release.group(1);
+        Matcher download = Pattern.compile(
+                "seclume-heapcheck/(\\d+\\.\\d+\\.\\d+)/seclume-heapcheck-(\\d+\\.\\d+\\.\\d+)\\.jar")
+                .matcher(read(root.resolve("README.md")));
+        assertTrue(download.find(), "the README no longer shows where heapcheck is downloaded");
+        assertEquals(latest, download.group(1), "the heapcheck download's directory");
+        assertEquals(latest, download.group(2), "the heapcheck download's file");
+    }
 }

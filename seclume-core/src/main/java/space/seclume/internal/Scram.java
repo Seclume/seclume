@@ -469,7 +469,15 @@ public class Scram implements AutoCloseable {
         return end - start;
     }
 
+    /**
+     * The iteration count. At most eight digits: more is above the bound
+     * {@link #serverFirst} checks anyway, and an {@code int} of eleven digits
+     * wrapped - {@code i=4294971392} came out as 4096 and was taken.
+     */
     private static int readNumber(MemorySegment data, int offset, int length) {
+        if (length < 1 || length > 8) {
+            throw new IllegalStateException("the iteration count is not a number of one to eight digits");
+        }
         int value = 0;
         for (int i = 0; i < length; i++) {
             int digit = (data.get(ValueLayout.JAVA_BYTE, offset + i) & 0xff) - '0';

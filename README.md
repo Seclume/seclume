@@ -2,17 +2,46 @@
 
 **Java heap dumps without secrets.**
 
-Every heap dump of a Java application contains the credentials it logs in with: the database
-password, the mail password or OAuth token, the API keys and signing keys, the MongoDB, Kafka and Redis logins. `jmap`,
-`-XX:+HeapDumpOnOutOfMemoryError`, the Actuator's `/heapdump`, the file attached to a support
-ticket. It does not matter that the password came from Vault. The moment the client library
-turns Vault's answer into a `String` and keeps it, it is on the heap, and the heap is what
-gets dumped.
+[![Maven Central](https://img.shields.io/maven-central/v/space.seclume/seclume-core)](https://central.sonatype.com/namespace/space.seclume)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15186/badge)](https://www.bestpractices.dev/en/projects/15186)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
-seclume is a set of clients built so that this does not happen: JDBC drivers for PostgreSQL,
-MySQL/MariaDB, SQL Server and Oracle, a MongoDB driver, and clients for Elasticsearch and
-OpenSearch, Kafka, RabbitMQ, NATS, Redis, mail (SMTP, IMAP, POP3) and HTTPS APIs. Each logs
-in from native memory, and the credential never becomes a heap object:
+Every heap dump of a Java application contains the credentials it logs in with: the database
+password, the OAuth token, the API and signing keys. `jmap`, `-XX:+HeapDumpOnOutOfMemoryError`,
+the Actuator's `/heapdump`, the file attached to a support ticket. It does not matter that the
+password came from Vault: the moment a client library turns Vault's answer into a `String`, it
+is on the heap, and the heap is what gets dumped.
+
+seclume is a set of JDBC drivers and clients that log in from native memory instead, so the
+credential never becomes a heap object - and a tool that shows you whether yours do.
+
+## Is your password in your heap? A minute to find out
+
+For any running JVM application, whatever driver it uses:
+
+```sh
+curl -LO https://repo1.maven.org/maven2/space/seclume/seclume-heapcheck/0.13.1/seclume-heapcheck-0.13.1.jar
+java -jar seclume-heapcheck-0.13.1.jar --pid <pid> --secret-file /run/secrets/db-password
+```
+
+```
+FOUND - the secret is in the heap of process 4711, 2 time(s):
+  raw file: UTF-8 match of 31 bytes at 8175627
+  byte[] 30308835136: UTF-8 match of 31 bytes at 132
+```
+
+It attaches to the JVM, takes a dump, searches it for the secret in every encoding it could be
+in, and deletes the dump again. The secret is read from a file, never from the command line,
+and never printed. The same tool audits existing dumps, finds secrets nobody named by their
+shape (`--discover`), writes a redacted copy of a dump that has to leave the house
+(`--redact`), runs inside a Kubernetes pod (`kubectl seclume heapcheck <pod>`) and reports as
+SARIF for CI - all in [DIAGNOSTICS.md](DIAGNOSTICS.md).
+
+## What seclume changes
+
+JDBC drivers for PostgreSQL, MySQL/MariaDB, SQL Server and Oracle, a MongoDB driver, and
+clients for Elasticsearch and OpenSearch, Kafka, RabbitMQ, NATS, Redis, mail (SMTP, IMAP, POP3)
+and HTTPS APIs. Each logs in from native memory, locked and wiped after use:
 
 ```
             the usual stack                          seclume
@@ -28,6 +57,12 @@ in from native memory, and the credential never becomes a heap object:
     v                                        v
   heap dump  ->  FOUND: the password       heap dump  ->  NOT FOUND
 ```
+
+With Spring Boot it is two dependencies and a URL that names where the secret is
+([Quick start](#quick-start)); Quarkus, Micronaut and Helidon have modules of their own.
+Java 25, Spring Boot 4.x / Spring Framework 7.x, Quarkus 3, Micronaut 4, Helidon 4
+([framework versions](SUPPORTED-VERSIONS.md#application-frameworks)). No runtime dependency
+beyond the JDK.
 
 **Don't take our word for it. Check it.** [`demo/heap-dump`](demo/heap-dump) runs the same
 small application twice against PostgreSQL and a Vault dev server, once with pgjdbc and
@@ -55,29 +90,9 @@ As text:
     NOT FOUND - the secret from /shared/vault-token is not in the heap of process 46.
 ```
 
-And for **your own application**, whatever driver it uses:
-
-```
-java -jar seclume-heapcheck.jar --pid <pid> --secret-file /run/secrets/db-password
-```
-
-It attaches to the running JVM, takes a dump, searches it for the secret in every encoding it
-could be in, and deletes the dump again. The secret comes from a file, never from the command
-line. For audits it also checks existing dumps and several secrets at once, and writes a
-Markdown or JSON report: `--dump`, `--secret-dir`, `--report`. And `--discover` finds what
-nobody named - private keys, JWTs, cloud and platform tokens, passwords in URLs - by their
-shape, reporting which kind, how often and where, never the value. `--redact copy.hprof`
-writes a copy of the dump with all of that overwritten and checked again, for a dump that has
-to leave the house. `kubectl seclume heapcheck <pod>` runs the check inside a pod, beside the
-JVM, and brings back only the report; `kubectl seclume redact <pod> -o copy.hprof` brings back only
-a redacted dump. `--watch <dir>` redacts the dumps `-XX:+HeapDumpOnOutOfMemoryError` leaves, as
-they are written; the Spring Boot starter does it in the application itself.
-
-For CI, `--report heapcheck.sarif` adds SARIF output. A ready-to-use GitHub Action
-and a comparison of successive JSON reports are in [DIAGNOSTICS.md](DIAGNOSTICS.md).
-`seclume-verify --doctor [--pool-size N] "<jdbc url>"` checks native memory protection,
-the actual TLS connection, certificate settings and database capacity, with advice
-for each finding; add `--json` for automation.
+`seclume-verify --doctor [--pool-size N] "<jdbc url>"` checks native memory protection, the
+actual TLS connection, certificate settings and database capacity, with advice for each
+finding; add `--json` for automation.
 
 ### How
 
@@ -96,15 +111,9 @@ TLS 1.3 by default, and Kerberos and OAuth logins with no secret in the process 
 measured against the vendor drivers with the same settings on both sides, including the rows
 where it is behind ([Speed](#speed)). See [Features at a glance](#features-at-a-glance).
 
-Java 25, Spring Boot 4.x / Spring Framework 7.x, Quarkus 3, Micronaut 4, Helidon 4 ([framework versions](SUPPORTED-VERSIONS.md#application-frameworks)). No runtime dependency beyond the JDK.
-
 **Contents:** [Quick start](#quick-start) · [What you get without configuring anything](#what-you-get-without-configuring-anything) ·
 [Features at a glance](#features-at-a-glance) · [Not yet](#what-it-does-not-do-yet) ·
 [Speed](#speed) · [Building](#building-and-testing) · [Support](#support-and-what-you-may-rely-on)
-
-OpenSSF best practices assessment:
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15186/badge)](https://www.bestpractices.dev/en/projects/15186)
-[![Maven Central](https://img.shields.io/maven-central/v/space.seclume/seclume-core)](https://central.sonatype.com/namespace/space.seclume)
 
 ---
 
@@ -279,7 +288,7 @@ Everything below works on all four databases unless the row says otherwise.
 | PostgreSQL | 9.6 to 18; 19 as a release candidate | - | 15, 18, 19 RC |
 | SQL Server | 2017 to 2025 | 2016 untested (no Linux image); 2008 R2 and older (TDS 7.3) | 2022, 2025 |
 | Oracle | 18c to 23ai; 11g with `legacyVerifier=11g` | 12c and 19c untested (no public image) | Free 23 |
-| MySQL / MariaDB | MySQL 8.4, 9.7 and 26.10; MariaDB 11.4, 11.8, 12.3 and 13.0 | older versions untested | MySQL 8.4, 9.7, 26.10; MariaDB 11.4, 12.3, 13.0 |
+| MySQL / MariaDB | MySQL 8.4, 9.7 and 26.10; MariaDB 11.4, 11.8, 12.3 and 13.0 | older versions untested | MySQL 8.4, 9.7, 26.10; MariaDB 11.4, 12.3, 13.0, 13.1 RC |
 | CockroachDB, YugabyteDB | 24.1 and 26.2; 2024.1 and 2026.1 | - | 26.2; 2026.1 |
 
 Each version was run as a container against the driver's whole test suite - the protocol, what

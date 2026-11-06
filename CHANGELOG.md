@@ -18,6 +18,11 @@ All notable changes to seclume are recorded here. Versions follow
   being a constant: on macOS the probe JVMs loaded the test class, and with its class file
   held the "secret" they were never given. macOS has no per-page exclusion from core dumps;
   the gate says so instead of passing quietly.
+- **The database matrix, brought up to date (6 November 2026).** Checked against the official
+  images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
+  SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
+  does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
+  2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
@@ -75,6 +80,11 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **The README starts with the check.** Its first screen now says in two paragraphs what the
+  problem is and what seclume is, then gives the one-minute check for any JVM application:
+  download `seclume-heapcheck` from Maven Central and run it against a process. The heapcheck
+  JAR declares `Enable-Native-Access: ALL-UNNAMED`, so `java -jar` needs no flag and prints no
+  warning; `DocumentationTest` keeps the download's version at the latest release.
 - **SecretFetch reads responses to the letter.** The HTTP client every secret manager and
   metadata endpoint is reached through skipped the two bytes after a chunk's data without
   looking at them, so a chunk longer or shorter than its size was read from the middle of its
@@ -97,6 +107,10 @@ All notable changes to seclume are recorded here. Versions follow
   encryption key ring, built, installed and wiped with the application; a password in the
   configuration stops the start. Tested with a stub driver, inside a Helidon MP container and
   against CI's PostgreSQL with a heap dump.
+- **A SCRAM iteration count that wraps is refused.** The count in the server's first message
+  was read into an `int` without a bound on its digits: `i=4294971392` came out as 4096 and was
+  taken. At most eight digits are read now - more is above the 10 000 000 the count is checked
+  against anyway (`ScramIterationTest`).
 - **Log lines masked with Log4j 2 and java.util.logging too.** Besides Logback's converters,
   `seclume-logging` has `%redact{...}` for Log4j 2 - what the inner pattern writes, message and
   stack trace, masked, the stack trace written once - and `RedactingFormatter` for
