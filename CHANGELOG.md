@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Redis: the password goes into AUTH and nowhere else.** The Lettuce integration replaced
+  its placeholder with the password wherever the placeholder stood as a RESP bulk string of its
+  own - in `SET session:42 <placeholder>` as much as in `AUTH`. The placeholder is the client's
+  "password", on the heap, and a heap dump gives it away: whoever had it and could make the
+  application store a string of their choosing would have had the real password written into
+  Redis in its place, to read back. The rewriter now follows the commands from the
+  connection's first byte, across writes split anywhere, and replaces only the password
+  argument of `AUTH [user] password` and `HELLO protover AUTH user password`; on anything it
+  cannot follow it stops replacing, and the login fails rather than the password going
+  elsewhere (`RespPasswordSlotTest`).
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);

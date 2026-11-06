@@ -36,6 +36,9 @@ final class RespPasswordHandler extends ChannelOutboundHandlerAdapter {
         }
         ByteBuffer view = buf.nioBuffer(buf.readerIndex(), buf.readableBytes());
         if (!rewriter.contains(view)) {
+            // Followed all the same: the rewriter has to know where every
+            // command starts to tell a password argument from a value.
+            rewriter.observe(view);
             ctx.write(msg, promise);
             return;
         }
