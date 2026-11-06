@@ -16,6 +16,12 @@ All notable changes to seclume are recorded here. Versions follow
   was read into an `int` without a bound on its digits: `i=4294971392` came out as 4096 and was
   taken. At most eight digits are read now - more is above the 10 000 000 the count is checked
   against anyway (`ScramIterationTest`).
+- **The certificate's address check never asks DNS.** `HostnameMatch` compared an IPv6 host
+  with a certificate's iPAddress entries through `InetAddress.getByName`, which parses a
+  literal - and sends anything else with a colon in it, such as a host with its port left on
+  (`db.example.com:5432`), to the resolver: the name of the host being checked went out in a
+  DNS query, against the class's own rule that nothing is looked up. It now parses with
+  `InetAddress.ofLiteral`, which takes a literal or refuses (`HostnameAddressTest`).
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
   keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a
