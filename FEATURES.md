@@ -970,6 +970,10 @@ written in the placeholder's place, together with its RESP length, just before i
 - over `redis://` and `redis-sentinel://`, by the first handler before the socket, which hands the
   socket a direct buffer over the native memory and wipes it once the socket has taken it.
 
+Only into the password argument of `AUTH` or `HELLO ... AUTH`: the rewriter follows the RESP
+commands from the connection's first byte, and a placeholder anywhere else - a value an
+application stores, which a heap dump could have handed to whoever chose it - is sent as it is.
+
 When Sentinel nodes take a login of their own, `sentinelUser=` and `sentinel-provider=` (with
 `sentinel-path=`, and so on) supply Sentinel's credentials through a second placeholder, also off
 the heap.
