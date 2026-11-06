@@ -64,7 +64,8 @@ public final class AwsInstanceRole {
 
     private static final AwsInstanceRole SHARED = new AwsInstanceRole(HOST, 80, 2000);
 
-    private record Fetched(String accessKeyId, Instant expires, SecretScope secretKey,
+    /** What a credentials source answered; package-private for the parser's tests. */
+    record Fetched(String accessKeyId, Instant expires, SecretScope secretKey,
                            SecretScope sessionToken) {
     }
 
@@ -423,7 +424,7 @@ public final class AwsInstanceRole {
         }
     }
 
-    private static Fetched parseJson(MemorySegment json, int length) {
+    static Fetched parseJson(MemorySegment json, int length) {
         SecretScope key = SecretScope.allocateShared(KEY_ROOM);
         SecretScope session;
         try {
@@ -445,7 +446,7 @@ public final class AwsInstanceRole {
         }
     }
 
-    private static Fetched parseXml(MemorySegment xml, int length) {
+    static Fetched parseXml(MemorySegment xml, int length) {
         SecretScope key = SecretScope.allocateShared(KEY_ROOM);
         SecretScope session;
         try {

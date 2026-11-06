@@ -12,6 +12,13 @@ All notable changes to seclume are recorded here. Versions follow
   `maven-wrapper.properties`, otherwise fetches it from Maven Central or Google's mirror of it
   under the same check, and retries a failure before the build up to three more times with
   growing, jittered pauses.
+- **A Vault transit secret of exactly `max-length` bytes is read.** `provider=vault-transit`
+  refused before decoding whatever Base64 decoded to an upper bound above the target plus two -
+  and that bound is three bytes above the truth, so a 32-byte data key with `max-length=32` was
+  "does not fit". It now refuses early only what cannot fit whatever the padding, and checks the
+  decoded length exactly as before. Found by the tests written against PIT's survivors in the
+  secret package (`VaultTransitEdgesTest`, `AwsCredentialsParserTest`: STS's XML and the
+  container endpoint's JSON read at their edges).
 - **Tests against the mutants PIT left alive in field encryption.** A closed key ring says so
   wherever it is asked and wipes every scope it opened; the providers are closed once read; Base64
   keys at every edge of the alphabet and of the trimmed whitespace; the shortest sealed value, a
