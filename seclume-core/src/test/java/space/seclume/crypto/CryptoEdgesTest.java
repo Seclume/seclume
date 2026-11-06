@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -29,7 +30,8 @@ import org.junit.jupiter.api.Test;
  * The crypto package at its edges, checked against the JDK's own
  * implementations: DER ECDSA signatures of every length form and at every
  * bound, PBKDF2 past 255 output blocks in the Java code, and RSA encryption of
- * the longest message each padding takes, decrypted by the JDK. Written
+ * the longest message each padding takes, decrypted by the JDK (OAEP) or by the
+ * raw RSA of the private key (PKCS#1 v1.5). Written
  * against the mutants PIT left alive in this package.
  */
 class CryptoEdgesTest {
@@ -212,19 +214,40 @@ class CryptoEdgesTest {
         return message.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE);
     }
 
+    /**
+     * The encryption block of a PKCS#1 v1.5 ciphertext, opened with the raw RSA
+     * of the private key - BigInteger, not a cipher configured for this old
+     * padding, which nothing should decrypt with - and its message checked by
+     * the layout RFC 8017 7.2.2 gives: 00 02, at least eight non-zero bytes, 00.
+     */
+    private static byte[] openPkcs1(byte[] ciphertext, int k) {
+        java.security.interfaces.RSAPrivateKey key = (java.security.interfaces.RSAPrivateKey) rsa.getPrivate();
+        byte[] block = new BigInteger(1, ciphertext).modPow(key.getPrivateExponent(), key.getModulus())
+                .toByteArray();
+        byte[] em = new byte[k];
+        System.arraycopy(block, Math.max(0, block.length - k), em, k - Math.min(k, block.length),
+                Math.min(k, block.length));
+        assertEquals(0x00, em[0]);
+        assertEquals(0x02, em[1]);
+        int separator = 2;
+        while (em[separator] != 0) {
+            separator++;
+        }
+        assertTrue(separator - 2 >= 8, "at least eight bytes of padding, not " + (separator - 2));
+        return Arrays.copyOfRange(em, separator + 1, k);
+    }
+
     @Test
-    void pkcs1TakesUpToElevenBytesLessThanTheModulus() throws Exception {
+    void pkcs1TakesUpToElevenBytesLessThanTheModulus() {
         try (Arena arena = Arena.ofConfined()) {
             RsaPublicKey key = ours(arena);
             int k = key.modulusBytes();
             assertEquals(256, k);
-            Cipher jdk = Cipher.getInstance("RSA/ECB/PKCS1Padding");
-            jdk.init(Cipher.DECRYPT_MODE, rsa.getPrivate());
             for (int length : new int[] {0, 1, k - 11}) {
                 MemorySegment message = message(arena, length);
                 MemorySegment out = arena.allocate(k);
                 assertEquals(k, Rsa.encryptPkcs1(key, message, 0, length, out, 0));
-                assertArrayEquals(plain(message, length), jdk.doFinal(out.toArray(ValueLayout.JAVA_BYTE)),
+                assertArrayEquals(plain(message, length), openPkcs1(out.toArray(ValueLayout.JAVA_BYTE), k),
                         length + " bytes");
             }
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
