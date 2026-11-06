@@ -610,6 +610,7 @@ jobs:
         include:
           - {os: ubuntu-26.04-arm, platform: linux-arm64}
           - {os: windows-latest, platform: windows-x64}
+          - {os: macos-latest, platform: macos-arm64}
     defaults:
       run:
         shell: bash

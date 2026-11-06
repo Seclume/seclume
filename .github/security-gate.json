@@ -9,7 +9,7 @@
     "skip cases on a platform for a reason, 'skips' names the platform and the reason,",
     "and the status is PASS with the reason shown - never silently."
   ],
-  "platforms": ["linux-x64", "linux-arm64", "windows-x64"],
+  "platforms": ["linux-x64", "linux-arm64", "windows-x64", "macos-arm64"],
   "groups": {
     "core": [
       {"test": "space.seclume.ForbiddenApiTest", "module": "seclume-core",
