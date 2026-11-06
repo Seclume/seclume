@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Tests against the mutants PIT left alive in the crypto package**, each checked against the
+  JDK's own implementation where there is one: DER ECDSA signatures in every length form and at
+  every bound, PBKDF2 past 255 output blocks in the Java code, RSA PKCS#1 and OAEP with the
+  longest message each padding takes, decrypted by the JDK; DER read at its bounds, EC private
+  keys in PKCS#8, SEC1 and PEM of both curves, Shamir's bounds, the Java AES-GCM past 255 counter
+  blocks; OpenSSH Ed25519 keys built field by field; and 300 Ed25519 signatures byte for byte
+  against the JDK's.
 - **The Maven wrapper's jar from the cache.** The first full flake hunt - `ci.yml` three times
   at once - found no flaky test; its three failures were jobs whose runner could not download
   `maven-wrapper.jar` from Maven Central in three attempts. `mvnw-retry.sh` now keeps the jar in
