@@ -180,16 +180,8 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
                 digits = 0;
                 state = State.ARRAY_LENGTH;
             }
-            case ARRAY_LENGTH, BULK_LENGTH -> {
-                if (b >= '0' && b <= '9' && digits < MAX_DIGITS) {
-                    number = number * 10 + (b - '0');
-                    digits++;
-                } else if (b == '\r' && digits > 0) {
-                    state = state == State.ARRAY_LENGTH ? State.ARRAY_LF : State.BULK_LF;
-                } else {
-                    state = State.LOST;
-                }
-            }
+            case ARRAY_LENGTH -> digit(b, State.ARRAY_LF);
+            case BULK_LENGTH -> digit(b, State.BULK_LF);
             case ARRAY_LF -> {
                 if (b != '\n') {
                     state = State.LOST;
@@ -236,6 +228,18 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
             case LOST -> {
                 // Nothing can be told any more; nothing is replaced any more.
             }
+        }
+    }
+
+    /** One byte of a length: a digit, or the CR that ends it and leads to {@code next}. */
+    private void digit(byte b, State next) {
+        if (b >= '0' && b <= '9' && digits < MAX_DIGITS) {
+            number = number * 10 + (b - '0');
+            digits++;
+        } else if (b == '\r' && digits > 0) {
+            state = next;
+        } else {
+            state = State.LOST;
         }
     }
 
