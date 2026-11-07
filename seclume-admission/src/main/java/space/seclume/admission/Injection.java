@@ -29,7 +29,9 @@ import java.util.Set;
  *
  * <p>Nothing the pod sets is replaced: a container that already has
  * {@code JAVA_TOOL_OPTIONS} gets the options as {@code JDK_JAVA_OPTIONS},
- * one with both gets a warning instead. The patch never repeats a value of
+ * one with both gets a warning instead. So does a container with
+ * {@code envFrom}: a ConfigMap or Secret may set either variable there,
+ * unseen by the webhook, and an {@code env} entry would win over it. The patch never repeats a value of
  * the pod's - an environment variable may hold a password - and applying it
  * twice changes nothing: what is injected is recorded in {@value #INJECTED}
  * and found again by its names.
@@ -272,6 +274,14 @@ final class Injection {
             return false;
         }
 
+        /**
+         * Whether the container takes variables from a ConfigMap or Secret,
+         * which the webhook cannot see and an {@code env} entry overrides.
+         */
+        private boolean hasEnvFrom(int index) {
+            return !Json.asArray(container(index).get("envFrom")).isEmpty();
+        }
+
         private void env(int index, String name, String value) {
             Map<String, Object> variable = new LinkedHashMap<>();
             variable.put("name", name);
@@ -307,7 +317,12 @@ final class Injection {
                     continue;
                 }
                 mount(index, mountOf(DUMPS_VOLUME, DUMPS, false));
-                if (!hasEnv(index, "JAVA_TOOL_OPTIONS")) {
+                if (hasEnvFrom(index)) {
+                    warnings.add("seclume: container " + name(index) + " takes variables from "
+                            + "envFrom, which may set JAVA_TOOL_OPTIONS or JDK_JAVA_OPTIONS - "
+                            + "and a variable added here would replace it. Add " + JVM_OPTIONS
+                            + " to one of them, or its dumps go elsewhere");
+                } else if (!hasEnv(index, "JAVA_TOOL_OPTIONS")) {
                     env(index, "JAVA_TOOL_OPTIONS", JVM_OPTIONS);
                 } else if (!hasEnv(index, "JDK_JAVA_OPTIONS")) {
                     env(index, "JDK_JAVA_OPTIONS", JVM_OPTIONS);
@@ -401,7 +416,13 @@ final class Injection {
                     continue;
                 }
                 mount(index, mountOf(SPIFFE_VOLUME, settings.spiffeMountPath(), true));
-                if (!hasEnv(index, "SPIFFE_ENDPOINT_SOCKET")) {
+                if (hasEnvFrom(index)) {
+                    if (!hasEnv(index, "SPIFFE_ENDPOINT_SOCKET")) {
+                        warnings.add("seclume: container " + name(index) + " takes variables "
+                                + "from envFrom, which may set SPIFFE_ENDPOINT_SOCKET; it is not "
+                                + "set here - set it to " + socket + " if nothing else does");
+                    }
+                } else if (!hasEnv(index, "SPIFFE_ENDPOINT_SOCKET")) {
                     env(index, "SPIFFE_ENDPOINT_SOCKET", socket);
                 }
             }

@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
+  choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
+  the middle - asking for one iteration got a proof that costs one hash per guessed password to
+  test offline. PostgreSQL and Kafka accepted any count from 1; only MongoDB had a floor. Now
+  every SCRAM login refuses a count below 4096 (RFC 7677's, and every server's default) before
+  any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
+  process. A refused server-first message no longer leaves a half-read state that a proof
+  could be made from (`ScramMinimumIterationsTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
@@ -16,6 +24,20 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **LDAP: the placeholder logs in only the application.** Spring Security binds an end user
+  over the same socket factory as the application, with what they typed - and the socket
+  replaced the placeholder in any simple bind, whatever the name, whichever registered server
+  the connection went to. The placeholder was `seclume-ldap-binds-in-native-memory:1`, a
+  counter. Typed into a login form, it bound as the service account wherever the user name
+  led to the service account's DN; with `authentication=kerberos` it did more: the socket ran
+  the service's Kerberos bind and answered JNDI with its success, whatever user was logging
+  in. And one registration's password went to another registered server if its placeholder
+  was sent there. Now the placeholder is 144 random bits after the prefix, and it is replaced -
+  or starts the Kerberos bind - only in a bind as the registration's `user=`, on a connection
+  to the registration's host and port; anywhere else it goes out as typed, and the server
+  refuses it. An unknown placeholder no longer ends the connection, and a BindRequest whose BER
+  lengths run past it is refused rather than read past. `LdapPlaceholderSlotTest` (12 tests,
+  without a server; 6 fail on the old socket).
 - **The PostgreSQL and MySQL drivers on Windows and macOS against real servers.** Linux x64
   was the only platform whose CI talked to databases. `postgresql-platforms` and
   `mysql-platforms` run the drivers' tests on Windows (the image's PostgreSQL 17 and MySQL 8.4)
@@ -23,6 +45,14 @@ All notable changes to seclume are recorded here. Versions follow
   CNG's and Homebrew OpenSSL's against a real server - then the security gate's group for that
   driver, and fail if a test skipped for want of the server. `LocalDirectTlsTest`'s refusal by a
   server before 17 now asks the server's version first instead of assuming it.
+- **RabbitMQ: a Start-Ok that does not add up is refused, and nothing goes out after it.** The
+  socket that writes the real password into the client's `Connection.Start-Ok` believed the
+  lengths in that frame: a client-properties table or a response longer than the frame - or
+  "negative" - ended in an index exception rather than a refusal, and the frame's end octet was
+  not looked at. Each length is now checked against what is left of the frame, a refusal closes
+  the socket, and the handshake frames are collected in pieces rather than copied once per byte.
+  `AmqpStartOkTest` (14 tests) covers the rewrite without a broker: lengths in UTF-8 bytes,
+  writes split at every byte, frames before and after the login, and each refusal.
 - **A MySQL row's cells stay inside the row.** A row is a window onto the receive buffer, and
   the length in front of a cell was believed as it came: the last cell of a text row could run
   into the next packet and come back as its value with the next row's first bytes in it; an
@@ -100,6 +130,13 @@ All notable changes to seclume are recorded here. Versions follow
   `libcrypto.4.dylib` on macOS, 3 first where both are - the EVP, OSSL_PARAM and decoder calls
   the backends make are OpenSSL 3's current API, which 4 keeps. CI runs the native
   cryptography and TLS tests on macOS a second time on OpenSSL 4.
+- **NATS: the password goes into `"pass"` and nowhere else.** The data port replaced the
+  first placeholder anywhere in the client's `CONNECT` line. The placeholder is on the heap and
+  not a secret; given as the connection's `"name"` - which comes before `"pass"`, and which the
+  NATS server logs and shows on its monitoring port - it had the real password written there.
+  Now only the value of `"pass"` (or `"auth_token"` for a token) is replaced. The slot search
+  and the JSON escaping are `ConnectLine`'s, under test in `ConnectLineTest` (8 tests) without
+  the client library.
 - **AWS: the session token goes into its header and nowhere else.** With temporary
   credentials the TLS socket wrote the session token where it first found the placeholder's
   prefix in a request head - the request target or any header, an `x-amz-meta-` value an
@@ -128,6 +165,13 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **SMTP: an address stays inside its command line.** `SmtpConnection.send` wrote the envelope
+  sender and recipients into `MAIL FROM:<...>` and `RCPT TO:<...>` as they were. A recipient
+  typed into a form with a line break in it - `b@example.com>\r\nRCPT TO:<everyone@...` -
+  ended the command and sent the rest as commands of the logged-in session: more recipients,
+  or a `DATA` of its own. An address with a control character or an angle bracket is refused
+  now, before anything of the message is sent (a `SendFailedException` through Jakarta Mail),
+  and `ehlo=` must be one word of printable ASCII.
 - **A JWT is checked as it is written.** `SeclumeJwt.verify` decoded each part with the JDK's
   base64url decoder, which also takes padding and a last character whose spare bits are set:
   a signature written so decodes to the same MAC, so one token could be passed as several
@@ -135,6 +179,12 @@ All notable changes to seclume are recorded here. Versions follow
   know it again. Every part must now be base64url as RFC 7515 writes it. A token with a `crit`
   header is refused too: RFC 7515 makes it invalid unless the recipient understands every
   extension listed, and this verifier understands none (`SeclumeJwtTest`).
+- **The admission webhook leaves what `envFrom` sets alone.** It added `JAVA_TOOL_OPTIONS`
+  (and `SPIFFE_ENDPOINT_SOCKET`) to a container that set neither in `env` - but a container may
+  take them from a ConfigMap or Secret through `envFrom`, which the webhook cannot see, and an
+  `env` entry wins over `envFrom`: the application's own JVM options were replaced by the
+  webhook's. A container with `envFrom` gets the folder and a warning saying what to add, and no
+  variable.
 - **HTTP: a credential goes into a header, never into the request target.** A credential
   placeholder was replaced wherever it stood in a request head, the request line included -
   HTTP/2's `:path` and `:authority` as well. The client holds the placeholder on the heap, a heap
@@ -189,6 +239,18 @@ All notable changes to seclume are recorded here. Versions follow
   a Vault renewal of exactly half the TTL kept and one second less replaced, a refused renewal,
   an empty namespace, the token scope wiped when forgotten, replaced or closed
   (`VaultLoginEdgesTest`).
+- **`provider=process` with the helper's standard output works, and no local helper or agent waits for ever.**
+  Without `{fifo}` in the command, the helper's standard output is the FIFO - and the JVM
+  opens that write end itself, inside `ProcessBuilder.start()`, which waits for a reader; the
+  reader was opened only after `start()` returned, so the two waited for each other and the
+  call never returned. The read end is now opened first, on a thread of its own. And the
+  timeout applied only after the FIFO had been read to its end: a helper that failed before
+  opening the path it was given, or that never finished, held the caller for ever. A watchdog
+  now ends the helper at the timeout and releases the read (`ProcessSecretProviderTest`).
+  `provider=unix-socket` had the same flaw: it read until the agent closed the connection,
+  with no timeout, so an agent that kept it open after its answer held the caller for ever.
+  The whole answer now has to arrive within `timeout-millis` (10 000 by default)
+  (`UnixSocketSecretProviderTest`).
 - **What the server sent is wiped once it is read.** The TLS record layer opened every record
   into one buffer of its own, and the caller copied the plaintext out - but the buffer kept it:
   the tail of a longer record behind every shorter one, the last record until the memory was

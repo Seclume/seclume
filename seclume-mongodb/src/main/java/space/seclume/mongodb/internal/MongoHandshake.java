@@ -37,8 +37,6 @@ public final class MongoHandshake {
 
     private static final int OP_MSG = 2013;
     private static final int MAX_BSON_SIZE = 48 * 1024 * 1024;
-    private static final int MIN_ITERATIONS = 4096;
-    private static final int MAX_ITERATIONS = 10_000_000;
     private static final AtomicInteger REQUEST_IDS = new AtomicInteger();
 
     private MongoHandshake() {
@@ -107,12 +105,9 @@ public final class MongoHandshake {
                         + "' on " + host + ":" + port + ": " + e.getMessage(), e);
             }
 
-            int iterations = scram.iterations();
-            if (iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) {
-                throw new SSLException("MongoDB login failed for user '" + user + "' on "
-                        + host + ":" + port + ": server requested " + iterations
-                        + " iterations; expected between " + MIN_ITERATIONS + " and " + MAX_ITERATIONS);
-            }
+            // Too few iterations, or implausibly many, are Scram's to refuse
+            // in serverFirst - for every SCRAM login alike, and lowered for all
+            // of them with seclume.scram.minIterations.
 
             // Step 2: saslContinue. The client-final message carries the
             // proof; it and the command built around it are zeroed once
