@@ -87,6 +87,14 @@ public final class TlsLayers {
             layer = stack == TlsStack.SECLUME
                     ? SeclumeTls.start(transport, host, checkChain, identity, alpn)
                     : jsse(transport, host, port, checkChain, alpn);
+            try {
+                // seclume-verify --print-pin: the certificate, and no further.
+                TrustChoice.certificateOnly(layer);
+            } catch (IOException taken) {
+                closeQuietly(layer);
+                layer = null;
+                throw taken;
+            }
             if (pinned) {
                 try {
                     TrustChoice.checkPin(layer);
@@ -122,6 +130,14 @@ public final class TlsLayers {
         try {
             layer = SeclumeTls.startOffering(transport, host, verify && !pinned, identity,
                     space.seclume.tls.ClientHello.Offer.TLS12);
+            try {
+                // seclume-verify --print-pin: the certificate, and no further.
+                TrustChoice.certificateOnly(layer);
+            } catch (IOException taken) {
+                closeQuietly(layer);
+                layer = null;
+                throw taken;
+            }
             if (pinned) {
                 try {
                     TrustChoice.checkPin(layer);
@@ -139,6 +155,14 @@ public final class TlsLayers {
         } finally {
             space.seclume.jfr.Observed.endHandshake(event, host + ":" + port, "seclume",
                     layer == null ? null : layer.description());
+        }
+    }
+
+    private static void closeQuietly(TlsLayer layer) {
+        try {
+            layer.close();
+        } catch (Exception ignored) {
+            // ended either way
         }
     }
 
