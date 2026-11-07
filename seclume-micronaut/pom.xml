@@ -18,7 +18,7 @@
     in the configuration.</description>
 
   <properties>
-    <micronaut.version>4.10.21</micronaut.version>
+    <micronaut.version>5.2.4</micronaut.version>
   </properties>
 
   <dependencyManagement>
