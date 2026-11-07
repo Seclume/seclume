@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Heap-dump redaction finds a password beyond ASCII where a `String` holds it.** A named
+  secret was looked for as UTF-8, UTF-16 and Base64 - but a compact `String` of characters up
+  to U+00FF lies in a dump as Latin-1, one byte per character: `Grüße` is `47 72 FC DF 65`, not
+  its UTF-8. Such a password stayed in the copy, and the check at the end, looking for the same
+  encodings, let the copy out as clean. It is looked for as Latin-1 too now - for secrets kept
+  off the heap as well, encoded in native memory (`RedactorTest`, `OffHeapSecretsTest`).
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to

@@ -50,7 +50,14 @@ class OffHeapSecretsTest {
             try (Arena arena = Arena.ofConfined()) {
                 OffHeapSecrets.Needle needle = OffHeapSecrets.text("t",
                         nativeCopy(arena, text.getBytes(StandardCharsets.UTF_8)), arena);
-                assertEquals(4, needle.patterns().size(), text);
+                boolean latin1 = text.chars().allMatch(c -> c <= 0xff)
+                        && text.chars().anyMatch(c -> c > 0x7f);
+                assertEquals(latin1 ? 5 : 4, needle.patterns().size(), text);
+                if (latin1) {
+                    assertEquals("ISO-8859-1", needle.patterns().get(4).encoding());
+                    assertArrayEquals(text.getBytes(StandardCharsets.ISO_8859_1),
+                            bytes(needle.patterns().get(4).bytes()), text);
+                }
                 assertArrayEquals(text.getBytes(StandardCharsets.UTF_16BE),
                         bytes(needle.patterns().get(1).bytes()), text);
                 assertArrayEquals(text.getBytes(StandardCharsets.UTF_16LE),

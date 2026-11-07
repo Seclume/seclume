@@ -137,6 +137,34 @@ class RedactorTest {
                 password.getBytes(StandardCharsets.UTF_8)));
     }
 
+    /**
+     * A password with an umlaut lies in a compact String as Latin-1, one byte
+     * per character - not as UTF-8. It was not looked for that way, so it
+     * stayed, and the check at the end, looking for the same encodings,
+     * passed the copy as clean.
+     */
+    @Test
+    void aPasswordBeyondAsciiIsFoundAsTheLatin1OfACompactString(@TempDir Path directory)
+            throws IOException {
+        String password = "Grüße-Geheimnis-" + alnum(10);
+        Fixture f = fixture(directory, password, password);
+        Path out = directory.resolve("redacted.hprof");
+        Redactor.Report report = Redactor.redact(f.dump(), out,
+                List.of(Redactor.Needle.text("db-password", password)), false, Set.of());
+        byte[] after = Files.readAllBytes(out);
+        assertFalse(contains(after, password.getBytes(StandardCharsets.ISO_8859_1)),
+                "the Latin-1 String is still in the copy");
+        assertFalse(contains(after, password.getBytes(StandardCharsets.UTF_16BE)));
+        assertArrayEquals("*".repeat(password.length()).getBytes(StandardCharsets.US_ASCII),
+                slice(after, f.passwordAt(), password.length()));
+        assertEquals(2, report.named().get("db-password"), "the byte[] and the char[]");
+        // A secret past U+00FF has no Latin-1 form to look for.
+        assertTrue(Redactor.Needle.text("k", "key-€-" + alnum(8)).patterns().stream()
+                .noneMatch(p -> p.encoding().equals("ISO-8859-1")));
+        assertTrue(Redactor.Needle.text("k", "plain-ascii-" + alnum(8)).patterns().stream()
+                .noneMatch(p -> p.encoding().equals("ISO-8859-1")), "ASCII is its UTF-8");
+    }
+
     @Test
     void discoveryOverwritesTheValueNotTheWholeMatch(@TempDir Path directory)
             throws IOException {
