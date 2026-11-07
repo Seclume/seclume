@@ -47,6 +47,14 @@ updates:
       # SDK's own line (Azure: Netty 4.1, Jackson 2.18; JasperReports: Jackson
       # 2.18; client-java: Jackson 2.22). Patch releases only; a new line
       # moves when the SDK moves.
+      # The integrations are built against the frameworks' current lines, so
+      # that their users need not move: Micronaut 4 and Helidon 4 (MP). The
+      # newer majors - Micronaut 5, Helidon 27 (SE only, built for JDK 27) -
+      # are tested beside them in the framework-compat job, not built against.
+      - dependency-name: "io.micronaut.platform:micronaut-platform"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "io.helidon:helidon-dependencies"
+        update-types: ["version-update:semver-major"]
       - dependency-name: "io.netty:netty-bom"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "com.fasterxml.jackson:jackson-bom"
