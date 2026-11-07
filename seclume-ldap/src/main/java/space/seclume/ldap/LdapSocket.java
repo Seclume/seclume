@@ -355,10 +355,10 @@ final class LdapSocket extends Socket {
                         int value = (int) (auth + authHeader[0]);
                         byte[] password = Arrays.copyOfRange(message, value,
                                 (int) (value + authHeader[1]));
-                        LdapSettings registered = startsWith(password, PREFIX)
-                                ? SeclumeLdap.BY_PLACEHOLDER.get(new String(password,
-                                        StandardCharsets.US_ASCII)) // seclume-allow: the placeholder - no secret
-                                : null;
+                        String typed = startsWith(password, PREFIX)
+                                ? new String(password, StandardCharsets.US_ASCII) : null; // seclume-allow: the placeholder - no secret
+                        LdapSettings registered = typed == null ? null
+                                : SeclumeLdap.BY_PLACEHOLDER.get(typed);
                         if (registered != null && madeFor(registered, message,
                                 (int) (name + nameHeader[0]), (int) nameHeader[1])) {
                             if (registered.kerberos) {

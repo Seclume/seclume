@@ -1,7 +1,7 @@
 package space.seclume.ldap;
 
 import java.security.SecureRandom;
-import java.util.Base64;
+import java.util.Base64; // seclume-allow: encodes the placeholder's random bits - not a secret
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Objects;
@@ -105,7 +105,7 @@ public final class SeclumeLdap {
             byte[] random = new byte[18];
             RANDOM.nextBytes(random);
             placeholder = PLACEHOLDER_PREFIX
-                    + Base64.getUrlEncoder().withoutPadding().encodeToString(random);
+                    + Base64.getUrlEncoder().withoutPadding().encodeToString(random); // seclume-allow: the placeholder - not a secret
         } while (BY_PLACEHOLDER.putIfAbsent(placeholder, settings) != null);
         return new SeclumeLdap(settings, placeholder);
     }
