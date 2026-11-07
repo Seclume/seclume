@@ -1,10 +1,11 @@
 package space.seclume.ldap;
 
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.Hashtable;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import javax.naming.Context;
@@ -50,13 +51,22 @@ import space.seclume.internal.Gssapi;
  * Everything else JNDI sends and receives goes through unchanged, including
  * binds with other passwords: an end user logging in through Spring Security
  * binds with the password they typed, which is theirs to have on the heap.
+ *
+ * <p>The placeholder is replaced only in a bind as {@link #user()}, on a
+ * connection to this registration's server. Typed into a login form for
+ * another user - by someone who read it in a heap dump - or sent to another
+ * registered server, it goes out as it is, and the server refuses it.
  */
 public final class SeclumeLdap {
 
-    /** What JNDI holds instead of the password, followed by the registration's id. */
+    /**
+     * What JNDI holds instead of the password, followed by 144 random bits -
+     * not a counter: a placeholder anyone could guess could be typed into a
+     * login form.
+     */
     static final String PLACEHOLDER_PREFIX = "seclume-ldap-binds-in-native-memory:";
 
-    private static final AtomicLong IDS = new AtomicLong();
+    private static final SecureRandom RANDOM = new SecureRandom();
     static final Map<String, LdapSettings> BY_PLACEHOLDER = new ConcurrentHashMap<>();
     static final Map<String, LdapSettings> BY_AUTHORITY = new ConcurrentHashMap<>();
 
@@ -90,8 +100,13 @@ public final class SeclumeLdap {
             }
             BY_AUTHORITY.put(settings.authority(), settings);
         }
-        String placeholder = PLACEHOLDER_PREFIX + IDS.incrementAndGet();
-        BY_PLACEHOLDER.put(placeholder, settings);
+        String placeholder;
+        do {
+            byte[] random = new byte[18];
+            RANDOM.nextBytes(random);
+            placeholder = PLACEHOLDER_PREFIX
+                    + Base64.getUrlEncoder().withoutPadding().encodeToString(random);
+        } while (BY_PLACEHOLDER.putIfAbsent(placeholder, settings) != null);
         return new SeclumeLdap(settings, placeholder);
     }
 

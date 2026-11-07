@@ -1780,6 +1780,12 @@ source.setBaseEnvironmentProperties(ldap.socketFactory());
   (RFC 4752 SASL authorization identity). No JAAS config and no keytab in the JVM heap.
 - **What passes through unchanged:** binds with any other password. An end user logging in
   through Spring Security binds with what they typed.
+- **The placeholder logs in only the application:** it is replaced only in a bind as the
+  registration's `user=`, on a connection to the registration's own host and port. Typed into
+  a login form for another user - by someone who read it in a heap dump - or sent to another
+  registered server, it goes out as it is and the server refuses it; with
+  `authentication=kerberos` it starts no Kerberos bind then. It is 144 random bits after a
+  fixed prefix, not a counter one could guess.
 - **Spring Boot:** `seclume.ldap.url=ldaps://...` or `ldap://...` makes the
   `LdapContextSource` bean. Boot's `LdapTemplate` and Spring Security's LDAP authentication
   use it.

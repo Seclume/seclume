@@ -42,7 +42,10 @@ import space.seclume.secret.SecretScope;
  * of the three enclosing elements, or (when {@code authentication=kerberos} is
  * configured) drives the RFC 4752 {@code GSSAPI} SASL bind over the TLS channel
  * and hands the final {@code BindResponse} back to JNDI. Any other message, and
- * a bind with any other password, goes out as JNDI wrote it.
+ * a bind with any other password, goes out as JNDI wrote it - and so does the
+ * placeholder in a bind as another name than the one it was made for, or on a
+ * connection to another server: an end user's login with it is theirs, not the
+ * application's, and the password of one registration is not another server's.
  */
 final class LdapSocket extends Socket {
 
@@ -76,6 +79,15 @@ final class LdapSocket extends Socket {
     private volatile TlsLayer tls;
     private volatile boolean closed;
     private int timeout;
+
+    LdapSocket() {
+    }
+
+    /** One already connected to {@code server} over {@code connected}, for tests of what is sent. */
+    LdapSocket(LdapSettings server, TlsLayer connected) {
+        this.settings = server;
+        this.tls = connected;
+    }
 
     @Override
     public void connect(SocketAddress address, int connectTimeout) throws IOException {
@@ -271,6 +283,32 @@ final class LdapSocket extends Socket {
     }
 
     /**
+     * The header of a whole element at {@code at} that ends by {@code end} -
+     * what JNDI writes; anything else is refused rather than read past.
+     */
+    private static long[] bindElement(byte[] b, int at, int end) throws IOException {
+        long[] found = at < end ? header(b, at, end) : null;
+        if (found == null || found[1] > end - at - found[0]) {
+            throw new IOException("a BindRequest whose BER lengths do not add up - not as JNDI "
+                    + "writes one");
+        }
+        return found;
+    }
+
+    /**
+     * Whether a bind as the name at {@code name} on this connection is the one
+     * {@code registered}'s placeholder was made for: its user, its server.
+     */
+    private boolean madeFor(LdapSettings registered, byte[] message, int name, int length) {
+        LdapSettings server = settings;
+        if (server == null || !registered.authority().equals(server.authority())) {
+            return false;
+        }
+        byte[] user = registered.user.getBytes(StandardCharsets.UTF_8); // seclume-allow: the bind DN, which is public
+        return Arrays.equals(message, name, name + length, user, 0, user.length);
+    }
+
+    /**
      * The tag and length at {@code at}: {@code {header size, content length}},
      * or {@code null} while the header is not complete.
      */
@@ -302,27 +340,27 @@ final class LdapSocket extends Socket {
             if ((message[0] & 0xff) == SEQUENCE) {
                 long[] outer = header(message, 0, message.length);
                 int id = (int) outer[0];
-                long[] idHeader = header(message, id, message.length);
+                long[] idHeader = bindElement(message, id, message.length);
                 int op = (int) (id + idHeader[0] + idHeader[1]);
                 if (op < message.length && (message[op] & 0xff) == BIND_REQUEST) {
-                    long[] bind = header(message, op, message.length);
+                    long[] bind = bindElement(message, op, message.length);
+                    int opEnd = (int) (op + bind[0] + bind[1]);
                     int version = (int) (op + bind[0]);
-                    long[] versionHeader = header(message, version, message.length);
+                    long[] versionHeader = bindElement(message, version, opEnd);
                     int name = (int) (version + versionHeader[0] + versionHeader[1]);
-                    long[] nameHeader = header(message, name, message.length);
+                    long[] nameHeader = bindElement(message, name, opEnd);
                     int auth = (int) (name + nameHeader[0] + nameHeader[1]);
-                    if (auth < message.length && (message[auth] & 0xff) == SIMPLE) {
-                        long[] authHeader = header(message, auth, message.length);
+                    if (auth < opEnd && (message[auth] & 0xff) == SIMPLE) {
+                        long[] authHeader = bindElement(message, auth, opEnd);
                         int value = (int) (auth + authHeader[0]);
                         byte[] password = Arrays.copyOfRange(message, value,
                                 (int) (value + authHeader[1]));
-                        if (startsWith(password, PREFIX)) {
-                            LdapSettings registered = SeclumeLdap.BY_PLACEHOLDER.get(
-                                    new String(password, StandardCharsets.US_ASCII)); // seclume-allow: the placeholder - no secret
-                            if (registered == null) {
-                                throw new IOException("a seclume placeholder no SeclumeLdap.of(...) "
-                                        + "made - is the password from another instance's SeclumeLdap?");
-                            }
+                        LdapSettings registered = startsWith(password, PREFIX)
+                                ? SeclumeLdap.BY_PLACEHOLDER.get(new String(password,
+                                        StandardCharsets.US_ASCII)) // seclume-allow: the placeholder - no secret
+                                : null;
+                        if (registered != null && madeFor(registered, message,
+                                (int) (name + nameHeader[0]), (int) nameHeader[1])) {
                             if (registered.kerberos) {
                                 bindKerberos(message, id, op, registered);
                             } else {
