@@ -143,7 +143,10 @@ public class Scram implements AutoCloseable {
             throw new IllegalStateException(MIN_ITERATIONS_PROPERTY + " is a number of 1 to "
                     + MAX_ITERATIONS + ", not " + number);
         }
-        int minimum = Integer.parseInt(number);
+        int minimum = 0;
+        for (int i = 0; i < number.length(); i++) {
+            minimum = minimum * 10 + (number.charAt(i) - '0');   // eight digits at most
+        }
         if (minimum < 1 || minimum > MAX_ITERATIONS) {
             throw new IllegalStateException(MIN_ITERATIONS_PROPERTY + " is a number of 1 to "
                     + MAX_ITERATIONS + ", not " + number);
