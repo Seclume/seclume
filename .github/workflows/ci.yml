@@ -897,11 +897,22 @@ jobs:
           brew install mongodb/brew/mongodb-community@8.0 mongosh
           echo "MONGO_BIN=$(brew --prefix mongodb-community@8.0)/bin" >> "$GITHUB_ENV"
           echo "OPENSSL=$(brew --prefix openssl@3)/bin/openssl" >> "$GITHUB_ENV"
-      - name: MongoDB of the image
+      # The image's MongoDB is 7.0, which has no client-level bulkWrite (8.0) -
+      # LocalSameAsOfficialTest compares it with the official driver's. The
+      # same 8.0 as Homebrew's, MongoDB's own build, checked against its SHA-256.
+      - name: MongoDB 8.0 from MongoDB, mongosh of the image
         if: runner.os == 'Windows'
+        env:
+          MONGODB_VERSION: 8.0.34
         run: |
-          bin="$(ls -d "/c/Program Files/MongoDB/Server"/*/bin | tail -1)"
-          ls "$bin/mongod.exe"
+          zip="mongodb-windows-x86_64-$MONGODB_VERSION.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$zip" "https://fastdl.mongodb.org/windows/$zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$zip.sha256" \
+            "https://fastdl.mongodb.org/windows/$zip.sha256"
+          (cd "$RUNNER_TEMP" && sha256sum -c "$zip.sha256")
+          unzip -q "$RUNNER_TEMP/$zip" -d "$RUNNER_TEMP/mongodb-dist"
+          bin="$(ls -d "$RUNNER_TEMP"/mongodb-dist/*/bin | head -1)"
+          "$bin/mongod.exe" --version | head -1
           command -v mongosh
           echo "MONGO_BIN=$bin" >> "$GITHUB_ENV"
       - name: MongoDB standalone and replica set
