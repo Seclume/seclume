@@ -5,16 +5,6 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **An HTTP placeholder's secret goes to one server.** The TLS sockets of seclume-http
-  (JGit, Kubernetes, gRPC, Elasticsearch, `SeclumeSslSocketFactory`) wrote the secret into any
-  request that carried its placeholder, whatever host the connection went to - and a client
-  sends its credentials where it is led: JGit gives the same login to a submodule's host from
-  `.gitmodules` and after a redirect. Now a placeholder is bound to the host and port of the
-  first request it is written for; on a connection to any other it goes as the placeholder,
-  and that server refuses it. Elasticsearch binds it to the URL's nodes, and
-  `SeclumeSslSocketFactory.placeholder(spec, servers)` names the servers for a secret several
-  take (`PlaceholderServerTest`, 8 tests: HTTP/1.1, Basic, HTTP/2, a cluster, a race of first
-  requests).
 - **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
   the secret and its padded Base64 only. The usual leak is neither: a wire log's
   `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into
@@ -60,6 +50,16 @@ All notable changes to seclume are recorded here. Versions follow
   refuses it. An unknown placeholder no longer ends the connection, and a BindRequest whose BER
   lengths run past it is refused rather than read past. `LdapPlaceholderSlotTest` (12 tests,
   without a server; 6 fail on the old socket).
+- **An HTTP placeholder's secret goes to one server.** The TLS sockets of seclume-http
+  (JGit, Kubernetes, gRPC, Elasticsearch, `SeclumeSslSocketFactory`) wrote the secret into any
+  request that carried its placeholder, whatever host the connection went to - and a client
+  sends its credentials where it is led: JGit gives the same login to a submodule's host from
+  `.gitmodules` and after a redirect. Now a placeholder is bound to the host and port of the
+  first request it is written for; on a connection to any other it goes as the placeholder,
+  and that server refuses it. Elasticsearch binds it to the URL's nodes, and
+  `SeclumeSslSocketFactory.placeholder(spec, servers)` names the servers for a secret several
+  take (`PlaceholderServerTest`, 8 tests: HTTP/1.1, Basic, HTTP/2, a cluster, a race of first
+  requests).
 - **The PostgreSQL and MySQL drivers on Windows and macOS against real servers.** Linux x64
   was the only platform whose CI talked to databases. `postgresql-platforms` and
   `mysql-platforms` run the drivers' tests on Windows (the image's PostgreSQL 17 and MySQL 8.4)
