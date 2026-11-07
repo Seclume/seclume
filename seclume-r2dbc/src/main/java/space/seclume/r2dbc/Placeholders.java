@@ -19,7 +19,10 @@ import java.util.Map;
  *
  * <p>Only code is rewritten: string literals, quoted identifiers, comments
  * and PostgreSQL's dollar-quoted bodies are copied as they are - a {@code $1}
- * inside a function body is not a parameter of this statement.
+ * inside a function body is not a parameter of this statement. So are
+ * PostgreSQL's {@code E'...'} strings, where a backslash escapes the quote,
+ * Oracle's {@code q'[...]'} strings, where a quote needs no escaping at all,
+ * and a PostgreSQL identifier with a {@code $} in it ({@code col$1}).
  */
 final class Placeholders {
 
@@ -105,7 +108,7 @@ final class Placeholders {
             String name = null;
             int next = i + 1;
             if (dialect == Dialect.POSTGRESQL && c == '$' && i + 1 < n
-                    && Character.isDigit(sql.charAt(i + 1))) {
+                    && Character.isDigit(sql.charAt(i + 1)) && !inIdentifier(sql, i)) {
                 next = digitsEnd(sql, i + 1);
                 name = sql.substring(i, next);                      // "$1"
             } else if (dialect == Dialect.MYSQL && c == '?') {
@@ -146,11 +149,19 @@ final class Placeholders {
     private static int skipQuoted(String sql, int i, Dialect dialect) {
         char c = sql.charAt(i);
         int n = sql.length();
+        if (dialect == Dialect.ORACLE && (c == 'q' || c == 'Q')) {
+            int end = oracleQuoted(sql, i);
+            if (end > i) {
+                return end;
+            }
+        }
         if (c == '\'' || c == '"' || (c == '`' && dialect == Dialect.MYSQL)) {
+            boolean backslash = dialect == Dialect.MYSQL ? c != '`'
+                    : dialect == Dialect.POSTGRESQL && c == '\'' && escapeString(sql, i);
             int j = i + 1;
             while (j < n) {
                 char d = sql.charAt(j);
-                if (d == '\\' && dialect == Dialect.MYSQL && c != '`') {
+                if (d == '\\' && backslash) {
                     j += 2;
                     continue;
                 }
@@ -182,7 +193,7 @@ final class Placeholders {
             return close < 0 ? n : close + 2;
         }
         if (c == '$' && dialect == Dialect.POSTGRESQL && i + 1 < n
-                && !Character.isDigit(sql.charAt(i + 1))) {
+                && !Character.isDigit(sql.charAt(i + 1)) && !inIdentifier(sql, i)) {
             // $tag$ ... $tag$, or $$ ... $$
             int tagEnd = sql.indexOf('$', i + 1);
             if (tagEnd < 0) {
@@ -198,6 +209,57 @@ final class Placeholders {
             return close < 0 ? n : close + tag.length();
         }
         return i;
+    }
+
+    /**
+     * Whether the {@code $} at {@code i} is inside a PostgreSQL identifier,
+     * which may have one after its first character: {@code col$1} is a
+     * column, not {@code col} and a parameter.
+     */
+    private static boolean inIdentifier(String sql, int i) {
+        return i > 0 && (isNamePart(sql.charAt(i - 1)) || sql.charAt(i - 1) == '$');
+    }
+
+    /** Whether the quote at {@code i} opens a PostgreSQL {@code E'...'} string. */
+    private static boolean escapeString(String sql, int i) {
+        if (i == 0 || (sql.charAt(i - 1) != 'E' && sql.charAt(i - 1) != 'e')) {
+            return false;
+        }
+        return i == 1 || !(isNamePart(sql.charAt(i - 2)) || sql.charAt(i - 2) == '$');
+    }
+
+    /**
+     * The end of an Oracle {@code q'X...X'} string at {@code i} (or of
+     * {@code nq'...'}, whose {@code n} the loop has copied), or {@code i}. The
+     * closing delimiter is the opening one's partner for {@code [ ( { <}, the
+     * same character otherwise.
+     */
+    private static int oracleQuoted(String sql, int i) {
+        int n = sql.length();
+        if (i + 2 >= n || sql.charAt(i + 1) != '\'') {
+            return i;
+        }
+        int before = i - 1;
+        if (before >= 0 && (sql.charAt(before) == 'n' || sql.charAt(before) == 'N')) {
+            before--;
+        }
+        if (before >= 0 && (isNamePart(sql.charAt(before)) || sql.charAt(before) == '$'
+                || sql.charAt(before) == '#')) {
+            return i;                                   // part of a name: abq'...
+        }
+        char open = sql.charAt(i + 2);
+        if (Character.isWhitespace(open)) {
+            return i;                                   // Oracle refuses q' ' too
+        }
+        char close = switch (open) {
+            case '[' -> ']';
+            case '(' -> ')';
+            case '{' -> '}';
+            case '<' -> '>';
+            default -> open;
+        };
+        int end = sql.indexOf(close + "'", i + 3);
+        return end < 0 ? n : end + 2;
     }
 
     /** Two runs of digits by their value, however long: $99999999999 is no int. */
