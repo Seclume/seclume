@@ -123,7 +123,7 @@ All notable changes to seclume are recorded here. Versions follow
   same shape as the MySQL row fix. A row that ends past its answer is refused as malformed,
   before the handler sees it (`TtcResultTest`).
 - **R2DBC: three more kinds of literal left alone.** The placeholder rewriting (`$1`, `:name`
-  to JDBC's `?`) read past the end of PostgreSQL's `E'it\\'s'` strings, where a backslash
+  to JDBC's `?`) read past the end of PostgreSQL's `E'it\'s'` strings, where a backslash
   escapes the quote, and of Oracle's `q'[it's]'` strings, where a quote needs no escape - and a
   `$1` or `:a` after such a quote, inside the literal, became a parameter; and it took the `$1`
   of a PostgreSQL identifier such as `col$1` for one. Each is copied as it is now
