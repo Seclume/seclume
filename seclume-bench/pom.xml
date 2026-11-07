@@ -18,7 +18,7 @@
 
   <properties>
     <jmh.version>1.37</jmh.version>
-    <mongodb.version>5.13.0</mongodb.version>
+    <mongodb.version>5.14.0</mongodb.version>
     <!-- Into no repository, nowhere at all. -->
     <maven.deploy.skip>true</maven.deploy.skip>
     <maven.install.skip>true</maven.install.skip>
