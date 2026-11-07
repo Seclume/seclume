@@ -191,4 +191,39 @@ class SecretWatchTest {
         assertThrows(IllegalArgumentException.class, () -> SecretWatch.start("x", file(secret),
                 Duration.ZERO, () -> { }));
     }
+
+    /**
+     * A checkpoint wipes the watch's key and fingerprint - with both in the
+     * image a password could be guessed against the fingerprint - and the
+     * first look after the restore reports a change, since it cannot compare.
+     */
+    @Test
+    void aCheckpointWipesTheFingerprintAndTheFirstLookAfterReportsAChange() throws Exception {
+        Path secret = directory.resolve("password");
+        Files.writeString(secret, "before-the-checkpoint");
+        AtomicInteger rotations = new AtomicInteger();
+        space.seclume.internal.Checkpoint.wipeAll();
+        long before = SecretScope.open();
+        try (SecretWatch watch = SecretWatch.start("db", file(secret), Duration.ofHours(1),
+                rotations::incrementAndGet)) {
+            assertEquals(before + 3, SecretScope.open(), "key, fingerprint, candidate");
+            space.seclume.internal.Checkpoint.wipeAll();
+            assertEquals(before, SecretScope.open(), "the fingerprint would be in the image");
+            // Restored - with the same secret, or a rotated one: it cannot tell.
+            assertTrue(watch.checkNow(), "the first look after a restore reports a change");
+            assertEquals(1, rotations.get());
+            assertFalse(watch.checkNow());
+            replace(secret, "after-the-restore");
+            assertTrue(watch.checkNow());
+            assertEquals(2, rotations.get());
+            // An unreadable source right after a restore postpones the report.
+            space.seclume.internal.Checkpoint.wipeAll();
+            Files.delete(secret);
+            assertFalse(watch.checkNow());
+            Files.writeString(secret, "after-the-restore");
+            assertTrue(watch.checkNow(), "reported once the source can be read");
+            assertEquals(3, rotations.get());
+        }
+        assertEquals(before, SecretScope.open());
+    }
 }

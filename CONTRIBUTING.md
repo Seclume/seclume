@@ -20,6 +20,10 @@ The repository requires successful CI and security checks before merging.
 Documentation-only pull requests also run the required checks. A change is
 ready when its current commit passes; a failed check needs investigation.
 
+A fix that comes from a code review is recorded in [REVIEWS.md](REVIEWS.md)
+with its severity and pull request, and so is what a review read and found
+sound.
+
 Add automated regression tests for fixes and tests for substantial new
 behavior. A useful regression exercises a concrete failure and passes after
 the fix; for security checks, include a failing control where practical.

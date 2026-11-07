@@ -478,6 +478,8 @@ public final class Migrate {
         String database = "";
         final Map<String, String> options = new LinkedHashMap<>();
         boolean passwordInUrl;
+        /** Connector/J's {@code (host=..,password=..)} or {@code address=(..)}: not translated. */
+        boolean keyValueHosts;
         boolean tcps;
         boolean sid;
         /** An Oracle net service name, {@code @ORDERS} - resolved through tnsnames.ora. */
@@ -512,13 +514,33 @@ public final class Migrate {
                 return null;
             }
         } else {
+            // Only the scheme: the rest of a URL nobody parsed may hold a
+            // password (jdbc:h2:mem:x;PASSWORD=...), and this goes to stderr.
+            int second = url.indexOf(':', 5);
             throw new IllegalArgumentException("not a URL seclume can translate: "
-                    + url.substring(0, Math.min(url.length(), 30))
+                    + (second < 0 || second > 40 ? "jdbc:..." : url.substring(0, second + 1))
                     + " - it reads jdbc:postgresql, jdbc:mysql, jdbc:mariadb, jdbc:sqlserver "
                     + "and jdbc:oracle:thin");
         }
+        // Connector/J's further factors (password1, password2, password3) are
+        // passwords as much as the first; none of them is carried on.
+        for (String factor : List.of("password1", "password2", "password3")) {
+            if ("mysql".equals(parsed.kind) && parsed.options.remove(factor) != null) {
+                parsed.passwordInUrl = true;
+            }
+        }
         if (parsed.options.containsKey("password")) {
             parsed.options.put("password", DROPPED);
+        }
+        if (parsed.keyValueHosts) {
+            findings.add(new Finding(Level.NOT_TRANSLATED, "a host written in Connector/J's "
+                    + "key-value form ((host=...,port=...) or address=(...)) - write each as "
+                    + "host:port; its properties are not carried over"));
+            if (parsed.passwordInUrl) {
+                findings.add(new Finding(Level.UNSAFE, "the password stood in the URL - it "
+                        + "belongs in a secret provider (see PROVIDERS.md)"));
+            }
+            return null;
         }
         return parsed;
     }
@@ -534,8 +556,33 @@ public final class Migrate {
         } else {
             address = address.substring(2);
             int slash = address.indexOf('/');
-            parsed.hosts = withPorts(slash < 0 ? address : address.substring(0, slash), port);
+            String authority = slash < 0 ? address : address.substring(0, slash);
             parsed.database = slash < 0 ? "" : address.substring(slash + 1);
+            if (authority.indexOf('(') >= 0 || authority.indexOf('=') >= 0) {
+                // (host=a,port=1,password=..) and address=(host=a)(password=..):
+                // properties per host, a password among them perhaps. Printed
+                // as it stands, the host list carried it into the output.
+                parsed.keyValueHosts = true;
+                parsed.passwordInUrl = authority.toLowerCase(Locale.ROOT).contains("password");
+                parsed.hosts = "";
+            } else {
+                // user:password@host - Connector/J reads it, so a URL may have it.
+                int at = authority.lastIndexOf('@');
+                if (at >= 0) {
+                    String userInfo = authority.substring(0, at);
+                    int colon = userInfo.indexOf(':');
+                    if (colon >= 0) {
+                        parsed.passwordInUrl = true;
+                    }
+                    String user = colon < 0 ? userInfo : userInfo.substring(0, colon);
+                    if (!user.isEmpty()) {
+                        parsed.options.put("user", URLDecoder.decode(user,
+                                StandardCharsets.UTF_8));
+                    }
+                    authority = authority.substring(at + 1);
+                }
+                parsed.hosts = withPorts(authority, port);
+            }
         }
         for (String pair : query.split("&")) {
             int equals = pair.indexOf('=');
@@ -548,13 +595,13 @@ public final class Migrate {
 
     /** {@code //host[\instance][:port];key=value;...} - mssql-jdbc. */
     private static void sqlServerForm(String rest, Parsed parsed) {
-        String[] parts = rest.split(";");
-        String address = parts[0].startsWith("//") ? parts[0].substring(2) : parts[0];
-        for (int i = 1; i < parts.length; i++) {
-            int equals = parts[i].indexOf('=');
+        List<String> parts = sqlServerParts(rest);
+        String address = parts.get(0).startsWith("//") ? parts.get(0).substring(2) : parts.get(0);
+        for (int i = 1; i < parts.size(); i++) {
+            int equals = parts.get(i).indexOf('=');
             if (equals > 0) {
-                parsed.options.put(parts[i].substring(0, equals).trim(),
-                        parts[i].substring(equals + 1).trim());
+                parsed.options.put(sqlServerKey(parts.get(i).substring(0, equals).trim()),
+                        unbrace(parts.get(i).substring(equals + 1).trim()));
             }
         }
         int backslash = address.indexOf('\\');
@@ -580,9 +627,92 @@ public final class Migrate {
         parsed.database = database == null ? "master" : database;
     }
 
+    /**
+     * mssql-jdbc's {@code ;}-separated parts, a value in braces taken whole:
+     * {@code password={a;b=c}} is one part. Split at every {@code ;}, the
+     * rest of such a password became a property whose name - a piece of the
+     * password - was printed as "not translated".
+     */
+    static List<String> sqlServerParts(String rest) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder part = new StringBuilder(); // seclume-allow: URL text; a password among it is dropped, never printed
+        boolean braced = false;
+        for (int i = 0; i < rest.length(); i++) {
+            char c = rest.charAt(i);
+            if (braced) {
+                if (c == '}' && i + 1 < rest.length() && rest.charAt(i + 1) == '}') {
+                    part.append("}}");
+                    i++;
+                    continue;
+                }
+                if (c == '}') {
+                    braced = false;
+                }
+                part.append(c);
+            } else if (c == ';') {
+                parts.add(part.toString());
+                part.setLength(0);
+            } else {
+                if (c == '{' && part.indexOf("=") >= 0 && part.substring(part.indexOf("=") + 1)
+                        .isBlank()) {
+                    braced = true;
+                }
+                part.append(c);
+            }
+        }
+        parts.add(part.toString());
+        return parts;
+    }
+
+    /** {@code {a;b}} as {@code a;b}, {@code }}} as {@code }}. */
+    private static String unbrace(String value) {
+        if (value.length() >= 2 && value.startsWith("{") && value.endsWith("}")) {
+            return value.substring(1, value.length() - 1).replace("}}", "}");
+        }
+        return value;
+    }
+
+    /**
+     * mssql-jdbc reads property names in any case: {@code Password=},
+     * {@code TrustServerCertificate=true} and {@code ENCRYPT=false} are what
+     * the lower-case spelling is. Taken by their spelling alone, the password
+     * went unnoticed and an unsafe setting was "not translated" instead of
+     * named.
+     */
+    private static String sqlServerKey(String key) {
+        String lower = key.toLowerCase(Locale.ROOT);
+        for (String known : List.of("password", "user", "encrypt", "trustServerCertificate",
+                "applicationName", "loginTimeout", "sendStringParametersAsUnicode",
+                "integratedSecurity", "authentication", "instanceName", "hostNameInCertificate",
+                "serverName", "portNumber", "databaseName", "database")) {
+            if (known.toLowerCase(Locale.ROOT).equals(lower)) {
+                return known;
+            }
+        }
+        return "username".equals(lower) ? "user" : key;
+    }
+
     /** {@code [user/password]@//host:port/service}, {@code @host:port:SID}, {@code @tcps://...}. */
     private static boolean oracleForm(String rest, Parsed parsed, List<Finding> findings) {
-        int at = rest.indexOf('@');
+        // The first @ outside double quotes: scott/"p@ss"@//db/svc is how
+        // Oracle writes a password with an @ in it. At the first @ the rest
+        // of the password became the host, and was printed in the URL.
+        int at = -1;
+        boolean quoted = false;
+        for (int i = 0; i < rest.length() && at < 0; i++) {
+            char c = rest.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (c == '@' && !quoted) {
+                at = i;
+            }
+        }
+        if (at < 0 && rest.indexOf('"') >= 0) {
+            // An open quote: what follows it may be a password - not shown.
+            findings.add(new Finding(Level.NOT_TRANSLATED, "an Oracle URL with an unclosed "
+                    + "quote - not translated"));
+            return false;
+        }
         if (at > 0) {
             String credentials = rest.substring(0, at);
             int slash = credentials.indexOf('/');

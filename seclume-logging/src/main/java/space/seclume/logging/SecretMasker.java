@@ -48,6 +48,12 @@ import space.seclume.secret.SecretScope;
  * {@value #SHORTEST} characters are not looked for: they would mask ordinary
  * words.
  *
+ * <p>Before a checkpoint (CRaC, SnapStart) the key and every fingerprint and
+ * tag are wiped: with the key in the image, each tag would be a way to test
+ * guesses at a password offline. The next line masked after the restore makes
+ * a new key and reads the secrets again - waiting, as every secret in the
+ * process does, while a checkpoint holds them back.
+ *
  * <p>{@link #refresh()} reads the secrets again - after a rotation - and
  * replaces what was kept. {@link #install} makes one masker the one the
  * Logback converters use. The providers stay the caller's.
@@ -69,9 +75,11 @@ public final class SecretMasker implements AutoCloseable {
     }
 
     private final java.util.function.Supplier<Map<String, SecretProvider>> providers;
-    private final SecretScope key;
+    private volatile SecretScope key;
     private volatile List<Form> forms = List.of();
     private volatile boolean closed;
+    /** Wiped for a checkpoint; the next {@link #mask} makes a new key and reads the secrets. */
+    private volatile boolean forgotten;
 
     /**
      * @param providers the secrets to look for, by the label a masked one is
@@ -95,9 +103,35 @@ public final class SecretMasker implements AutoCloseable {
      */
     public SecretMasker(java.util.function.Supplier<Map<String, SecretProvider>> providers) {
         this.providers = providers;
-        this.key = SecretScope.allocate(32);
-        Entropy.fill(key.segment(), 0, 32);
-        key.length(32);
+        this.key = newKey();
+        refresh();
+        space.seclume.internal.Checkpoint.register(this, SecretMasker::forget);
+    }
+
+    private static SecretScope newKey() {
+        SecretScope fresh = SecretScope.allocateShared(32);
+        Entropy.fill(fresh.segment(), 0, 32);
+        fresh.length(32);
+        return fresh;
+    }
+
+    /** Wipes the key and every form - before a checkpoint. */
+    private synchronized void forget() {
+        if (closed || forgotten) {
+            return;
+        }
+        forms = List.of();
+        key.close();
+        forgotten = true;
+    }
+
+    /** After a restore: a new key, and the secrets read again. */
+    private synchronized void restore() {
+        if (!forgotten || closed) {
+            return;
+        }
+        key = newKey();
+        forgotten = false;
         refresh();
     }
 
@@ -315,6 +349,9 @@ public final class SecretMasker implements AutoCloseable {
      * {@code [redacted:<label>]} - the same instance when there is none.
      */
     public String mask(String text) {
+        if (forgotten && text != null && !closed) {
+            restore();
+        }
         List<Form> now = forms;
         if (text == null || now.isEmpty() || closed) {
             return text;

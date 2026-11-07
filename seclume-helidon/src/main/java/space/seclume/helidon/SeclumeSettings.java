@@ -35,6 +35,9 @@ public final class SeclumeSettings {
     private static final Pattern HELIDON_PASSWORD = Pattern.compile(
             "javax\\.sql\\.datasource\\.([^.]+)\\.(?:datasource\\.)?password");
     private static final Pattern OWN_PASSWORD = Pattern.compile("seclume\\.datasources\\.([^.]+)\\.password");
+    /** The same as environment variables; a data source's name may hold {@code _} itself. */
+    private static final Pattern HELIDON_PASSWORD_VARIABLE = Pattern.compile("javax_sql_datasource_.+_password");
+    private static final Pattern OWN_PASSWORD_VARIABLE = Pattern.compile("seclume_datasources_.+_password");
 
     private final Map<String, String> all;
 
@@ -139,30 +142,57 @@ public final class SeclumeSettings {
     /**
      * The keys holding a password where seclume would have kept it off the
      * heap: {@code seclume.datasources.<name>.password}, and Helidon's own
-     * {@code javax.sql.DataSource.<name>[.dataSource].password} beside a seclume URL.
+     * {@code javax.sql.DataSource.<name>[.dataSource].password} beside a seclume URL -
+     * as properties and as environment variables
+     * ({@code JAVAX_SQL_DATASOURCE_APP_DATASOURCE_PASSWORD}), which MicroProfile
+     * Config reads as the same property, the same {@code String} on the heap.
      */
     public List<String> passwords() {
         List<String> found = new ArrayList<>();
         for (String key : all.keySet()) {
             String normalized = key.toLowerCase(Locale.ROOT);
-            if (OWN_PASSWORD.matcher(normalized).matches()) {
+            if (OWN_PASSWORD.matcher(normalized).matches()
+                    || OWN_PASSWORD_VARIABLE.matcher(normalized).matches()) {
                 found.add(key);
                 continue;
             }
             Matcher helidon = HELIDON_PASSWORD.matcher(normalized);
-            if (helidon.matches()) {
-                for (Map.Entry<String, String> other : all.entrySet()) {
-                    String otherKey = other.getKey().toLowerCase(Locale.ROOT);
-                    if (otherKey.startsWith("javax.sql.datasource." + helidon.group(1) + ".")
-                            && otherKey.endsWith("url") && other.getValue() != null
-                            && other.getValue().startsWith("jdbc:seclume:")) {
-                        found.add(key);
-                        break;
-                    }
+            boolean variable = HELIDON_PASSWORD_VARIABLE.matcher(normalized).matches();
+            if (!helidon.matches() && !variable) {
+                continue;
+            }
+            String owner = owner(normalized, "password");
+            for (Map.Entry<String, String> other : all.entrySet()) {
+                String otherKey = other.getKey().toLowerCase(Locale.ROOT);
+                if (other.getValue() == null || !other.getValue().regionMatches(true, 0, "jdbc:seclume:", 0,
+                        "jdbc:seclume:".length()) || !otherKey.endsWith("url")) {
+                    continue;
+                }
+                boolean sameDataSource = helidon.matches()
+                        && otherKey.startsWith("javax.sql.datasource." + helidon.group(1) + ".");
+                if (sameDataSource || owner.equals(owner(otherKey, null))) {
+                    found.add(key);
+                    break;
                 }
             }
         }
         return found;
+    }
+
+    /**
+     * The data source a key belongs to, in one spelling for properties and
+     * environment variables: {@code javax.sql.DataSource.app-db.dataSource.url}
+     * and {@code JAVAX_SQL_DATASOURCE_APP_DB_PASSWORD} both belong to
+     * {@code javax_sql_datasource_app_db}. The last part - {@code password},
+     * {@code url}, {@code jdbcUrl} - and a {@code dataSource} before it are left off.
+     */
+    private static String owner(String lowerKey, String last) {
+        String flat = lowerKey.replace('.', '_').replace('-', '_');
+        int cut = last != null && flat.endsWith("_" + last) ? flat.length() - last.length() - 1
+                : flat.lastIndexOf('_');
+        String owner = cut < 0 ? flat : flat.substring(0, cut);
+        return owner.endsWith("_datasource") && owner.length() > "javax_sql_datasource_datasource".length()
+                ? owner.substring(0, owner.length() - "_datasource".length()) : owner;
     }
 
     /** {@link #passwords} as an exception, or nothing. */
