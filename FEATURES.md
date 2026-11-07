@@ -1535,6 +1535,8 @@ OpenSearchClient os = SeclumeOpenSearch.client(
   native memory as each request head goes into the cipher - the API key, the token, or
   `base64(user:password)` for Basic. A head the client writes in pieces is held until it is
   whole, so a placeholder split across two writes never goes out unreplaced.
+- **The cluster's nodes only:** the secret is written in on connections to the URL's hosts and
+  ports, and on no other - a placeholder sent elsewhere goes as the placeholder.
 - **Bodies are not touched:** a document that contains a placeholder is stored with the
   placeholder; nor is the request line (or HTTP/2's `:path`), where applications put what their
   users typed. Only the header lines of request heads are rewritten - which is why the engine follows the HTTP/1.1
@@ -1688,6 +1690,12 @@ OkHttpClient client = new OkHttpClient.Builder()
 // request.header("Authorization", "Bearer " + token)
 ```
 
+- **One server per placeholder:** its secret is written in only on connections to the host and
+  port of the first request that carries it. A client sends credentials where it is led - to
+  a redirect's host, a URL from somewhere else - and there the placeholder goes as it is, and
+  that server refuses it. `placeholder(spec, List.of("a.example.com:443", "b.example.com:443"))`
+  names the servers instead, for a secret several of them take.
+
 - **HTTP/1.1:** the sockets follow the framing (heads, bodies, chunks) and rewrite heads
   only. A placeholder anywhere in a head becomes the secret; `Basic base64(user:placeholder)`
   is decoded and encoded again in native memory. Bodies go through untouched.
@@ -1732,7 +1740,9 @@ Git.cloneRepository().setURI("https://git.example.com/app.git")
 ```
 
 The password or access token goes into JGit's Basic login as a placeholder. It is written in
-native memory when the request leaves.
+native memory when the request leaves - for the host of the first request only: JGit gives the
+same login to a submodule's host and after a redirect, and there the placeholder goes, not the
+token.
 
 ### gRPC: `seclume-grpc`
 

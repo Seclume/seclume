@@ -104,7 +104,13 @@ record SearchUrl(List<Host> hosts, String pathPrefix, String authorization, Stri
         StringBuilder spec = new StringBuilder();
         secret.forEach((k, v) -> spec.append(spec.isEmpty() ? "" : "&").append(k).append('=')
                 .append(java.net.URLEncoder.encode(v, StandardCharsets.UTF_8)));
-        String placeholder = SeclumeSslSocketFactory.placeholder(spec.toString());
+        // The secret goes to the cluster's nodes, all of them from the first request.
+        List<String> nodes = new ArrayList<>();
+        for (Host host : hosts) {
+            nodes.add((host.name().indexOf(':') >= 0 && !host.name().startsWith("[")
+                    ? "[" + host.name() + "]" : host.name()) + ":" + host.port());
+        }
+        String placeholder = SeclumeSslSocketFactory.placeholder(spec.toString(), nodes);
         String authorization = switch (auth) {
             case "apikey" -> "ApiKey " + placeholder;
             case "bearer" -> "Bearer " + placeholder;

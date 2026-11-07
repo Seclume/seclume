@@ -77,7 +77,7 @@ public final class SeclumeSslContext extends SSLContext {
         @Override
         protected SSLEngine engineCreateSSLEngine(String host, int port) {
             return new SeclumeSslEngine(host, port, trust,
-                    new HttpCredentialRewriter(host + ":" + port));
+                    new HttpCredentialRewriter(CredentialPlaceholders.server(host, port)));
         }
 
         @Override
