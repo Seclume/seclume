@@ -572,14 +572,23 @@ public final class Verify {
                 : "one server - no failover";
     }
 
-    /** The URL as it may appear in a ticket: values of secret options removed. */
+    /**
+     * The URL as it may appear in a ticket: values of secret options removed.
+     *
+     * <p>Not only {@code password=} and {@code secret=}: a secret provider's
+     * nested settings put one in {@code token-value=}, {@code share.1.value=}
+     * or {@code secret-id-value=}, and a URL may carry {@code user:password@}
+     * before its host. The driver refuses all of them - after this report has
+     * printed the URL, which is the line that goes into the ticket.
+     */
     static String withoutSecrets(String url) {
-        int question = url.indexOf('?');
+        String masked = withoutUserInfoPassword(url);
+        int question = masked.indexOf('?');
         if (question < 0) {
-            return url;
+            return masked;
         }
-        StringBuilder text = new StringBuilder(url.substring(0, question + 1)); // seclume-allow: a URL, and the secret is taken out of it here
-        String[] options = url.substring(question + 1).split("&");
+        StringBuilder text = new StringBuilder(masked.substring(0, question + 1)); // seclume-allow: a URL, and the secret is taken out of it here
+        String[] options = masked.substring(question + 1).split("&");
         for (int i = 0; i < options.length; i++) {
             if (i > 0) {
                 text.append('&');
@@ -588,13 +597,52 @@ public final class Verify {
             String key = equals < 0 ? options[i] : options[i].substring(0, equals);
             // A password has no business being in a URL at all, and if somebody
             // put one there anyway it does not go into a report.
-            if (key.equalsIgnoreCase("password") || key.equalsIgnoreCase("secret")) {
+            if (equals >= 0 && isSecretKey(key)) {
                 text.append(key).append("=***");
             } else {
                 text.append(options[i]);
             }
         }
         return text.toString();
+    }
+
+    /** {@code password}, {@code token-value}, {@code share.2.secret}, {@code dbPassword} - and their %-encodings. */
+    static boolean isSecretKey(String key) {
+        String lower = java.net.URLDecoder.decode(key.replace("+", "%2B"),
+                java.nio.charset.StandardCharsets.UTF_8).toLowerCase(java.util.Locale.ROOT);
+        if (lower.endsWith("password") || lower.endsWith("passwd")) {
+            return true;
+        }
+        String[] parts = lower.split("[-._]");
+        String last = parts.length == 0 ? lower : parts[parts.length - 1];
+        return switch (last) {
+            case "password", "passwd", "pwd", "secret", "value", "token" -> true;
+            default -> false;
+        };
+    }
+
+    /** {@code //user:password@host} as {@code //user:***@host}. */
+    private static String withoutUserInfoPassword(String url) {
+        int start = url.indexOf("//");
+        if (start < 0) {
+            return url;
+        }
+        int end = url.length();
+        for (char stop : List.of('/', '?', '#')) {
+            int at = url.indexOf(stop, start + 2);
+            if (at >= 0 && at < end) {
+                end = at;
+            }
+        }
+        int at = url.lastIndexOf('@', end - 1);
+        if (at < start + 2) {
+            return url;
+        }
+        int colon = url.indexOf(':', start + 2);
+        if (colon < 0 || colon > at) {
+            return url;
+        }
+        return url.substring(0, colon + 1) + "***" + url.substring(at);
     }
 
     private static String option(String url, String key) {

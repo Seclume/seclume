@@ -29,7 +29,9 @@ All notable changes to seclume are recorded here. Versions follow
   and a URL no driver here reads was quoted to 30 characters in the error. mssql-jdbc property
   names are read in any case now (`Password=`, `TrustServerCertificate=true` was "not
   translated" instead of named unsafe), and Connector/J's `password1`-`password3` count as
-  passwords (`MigrateNeverPrintsAPasswordTest`, 9 tests).
+  passwords (`MigrateNeverPrintsAPasswordTest`, 9 tests). The report's URL line masks more
+  than `password=` and `secret=` now: a provider's nested `token-value=`, `share.1.value=` or
+  `secret-id-value=`, a `user:password@` before the host, `%`-encoded names (`VerifyTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
