@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
+  the secret and its padded Base64 only. The usual leak is neither: a wire log's
+  `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into
+  the Base64; a JDBC URL with the password percent-encoded; a JSON body with `\"` in it; a
+  token in unpadded or URL-safe Base64. Each of these is looked for now - the same way, a
+  fingerprint and an HMAC tag computed in native memory, no copy of the secret on the heap
+  (`SecretMaskerTest`, 5 tests more).
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to
