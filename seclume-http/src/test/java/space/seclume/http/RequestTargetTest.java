@@ -41,7 +41,8 @@ class RequestTargetTest {
     }
 
     private static String rewritten(String head) throws IOException {
-        try (SecretScope out = HttpFraming.rewrite(head.getBytes(StandardCharsets.ISO_8859_1))) {
+        try (SecretScope out = HttpFraming.rewrite(head.getBytes(StandardCharsets.ISO_8859_1),
+                "api.example.com:443")) {
             return new String(out.segment().asSlice(0, out.length()).toArray(ValueLayout.JAVA_BYTE),
                     StandardCharsets.ISO_8859_1);
         }

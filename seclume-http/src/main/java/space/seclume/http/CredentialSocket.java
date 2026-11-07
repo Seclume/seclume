@@ -64,7 +64,8 @@ final class CredentialSocket extends SSLSocket {
         this.host = host;
         this.port = port;
         this.tls = tls;
-        this.http2 = http2 ? new Http2Requests(this::write, host + ":" + port) : null;
+        this.http2 = http2 ? new Http2Requests(this::write,
+                CredentialPlaceholders.server(host, port)) : null;
     }
 
     /**
@@ -142,7 +143,8 @@ final class CredentialSocket extends SSLSocket {
         String text = new String(bytes, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT); // seclume-allow: a request head with placeholders - no secret
         space.seclume.jfr.Observed.secretUse("http", host + ":" + port,
                 text.contains(": basic ") ? "basic" : "header");
-        try (SecretScope out = HttpFraming.rewrite(bytes)) {
+        try (SecretScope out = HttpFraming.rewrite(bytes,
+                CredentialPlaceholders.server(host, port))) {
             write(out.segment().asSlice(0, out.length()).asByteBuffer());
         }
     }
