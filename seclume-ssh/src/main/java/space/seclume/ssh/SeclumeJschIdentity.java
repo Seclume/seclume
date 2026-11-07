@@ -92,8 +92,17 @@ public final class SeclumeJschIdentity implements Identity {
         return getSignature(data, algorithm.equals("ssh-rsa") ? "rsa-sha2-512" : algorithm);
     }
 
+    /**
+     * The signature for {@code alg}, or null where this key does not make one:
+     * SHA-1 {@code ssh-rsa}, an algorithm of another key type, or one unknown.
+     */
     @Override
     public byte[] getSignature(byte[] data, String alg) {
+        boolean ours = alg != null && (algorithm.equals("ssh-rsa") ? alg.startsWith("rsa-sha2-")
+                : algorithm.equals(alg));
+        if (!ours) {
+            return null;
+        }
         try {
             String jca = switch (alg) {
                 case "ssh-ed25519" -> "Ed25519";
