@@ -97,6 +97,12 @@ All notable changes to seclume are recorded here. Versions follow
   keys in PKCS#8, SEC1 and PEM of both curves, Shamir's bounds, the Java AES-GCM past 255 counter
   blocks; OpenSSH Ed25519 keys built field by field; and 300 Ed25519 signatures byte for byte
   against the JDK's.
+- **An Oracle row stays inside its answer.** A TTC row is not framed: it ends wherever the
+  lengths of its values say. A row whose last length said more than the answer held reached
+  into the bytes the receive buffer had after it, and since the JDBC result takes rows over by
+  copying their span from the raw segment, those bytes came back as the end of a value - the
+  same shape as the MySQL row fix. A row that ends past its answer is refused as malformed,
+  before the handler sees it (`TtcResultTest`).
 - **Examples for Micronaut and Helidon MP** (`examples/micronaut`, `examples/helidon`): an
   application with no seclume code, the pool from `application.yml` or
   `microprofile-config.properties`, the password from Vault. `examples/check-example.sh` starts

@@ -210,6 +210,16 @@ public final class TtcResult {
                         throw new SQLException("a row arrived before its description");
                     }
                     p = row.read(p, unchanged);
+                    if (p > end) {
+                        // A row is not framed: its end is wherever its last
+                        // length says. One that says more than the answer has
+                        // reaches into what the buffer held after it, and the
+                        // JDBC result takes rows over by copying their span
+                        // from the raw segment - past any limit - so it would
+                        // come back as the end of a value, not as an error.
+                        throw space.seclume.internal.WireBuffer.malformed("a row that runs "
+                                + (p - end) + " bytes past the end of the answer");
+                    }
                     rowCount++;
                     if (handler != null && refused == null) {
                         try {
