@@ -299,13 +299,15 @@ The ephemeral TLS keys (P-256, P-384, X25519, ML-KEM), private keys that sign, n
 and PBKDF2 belong to the operating system's cryptography, not to the JVM:
 
 - **Windows:** CNG.
-- **64-bit Linux:** OpenSSL 3, `libcrypto.so.3`, where the dynamic loader finds it.
-- **macOS:** OpenSSL 3 from Homebrew (`brew install openssl@3`; `/opt/homebrew` on Apple
-  silicon, then `/usr/local`) or MacPorts (`/opt/local/lib`). macOS has no OpenSSL 3 of its
-  own; its `/usr/lib/libcrypto.dylib` is a LibreSSL stub that ends the process that loads it,
-  and seclume never loads it.
+- **64-bit Linux:** OpenSSL 3 or 4, `libcrypto.so.3` and then `libcrypto.so.4`, where the
+  dynamic loader finds them.
+- **macOS:** OpenSSL 3 or 4 from Homebrew (`brew install openssl@3` or `openssl@4`;
+  `/opt/homebrew` on Apple silicon, then `/usr/local`) or MacPorts (`/opt/local/lib`), 3 first
+  where both are. macOS has no OpenSSL of its own; its `/usr/lib/libcrypto.dylib` is a
+  LibreSSL stub that ends the process that loads it, and seclume never loads it. CI runs the
+  native cryptography and TLS tests on macOS on both.
 
-`-Dseclume.crypto.libcrypto=/absolute/path/libcrypto...` names another OpenSSL 3, on Linux
+`-Dseclume.crypto.libcrypto=/absolute/path/libcrypto...` names another OpenSSL 3 or 4, on Linux
 or macOS. Whatever is loaded must report OpenSSL 3 or later, or it is not used. Where there is
 no OpenSSL 3, AES-GCM and PBKDF2 fall back to their constant-time Java versions, and what has
 no fallback - the TLS key exchange, signing with a private key - says what it needs.
