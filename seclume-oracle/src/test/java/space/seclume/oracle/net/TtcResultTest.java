@@ -1,6 +1,8 @@
 package space.seclume.oracle.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -55,6 +57,38 @@ class TtcResultTest {
                     result.columns().stream().map(OracleColumn::name).toList());
             assertEquals(1, result.rowCount());
             assertEquals(List.of("42", "abc", "42"), values);
+        }
+    }
+
+    /**
+     * The same answer with the last value's length raised from 3 to 5, and
+     * two bytes after the answer in the buffer - as the next packet's would
+     * be. The row's end is wherever its lengths say; read past the end of the
+     * answer it came back as "abcXY". It is refused now.
+     */
+    @Test
+    void aRowThatRunsPastTheEndOfTheAnswerIsRefused() throws Exception {
+        String tampered = EXPECTED.substring(0, EXPECTED.length() - 8) + "05616263";
+        byte[] bytes = new byte[tampered.length() / 2];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) Integer.parseInt(tampered.substring(i * 2, i * 2 + 2), 16);
+        }
+        try (WireBuffer in = new WireBuffer(bytes.length + 16)) {
+            for (byte b : bytes) {
+                in.putByte(b);
+            }
+            in.putByte((byte) 'X');
+            in.putByte((byte) 'Y');
+            in.position(0);
+            in.limit(bytes.length + 2);
+
+            List<String> values = new ArrayList<>();
+            TtcResult result = new TtcResult();
+            RuntimeException refused = assertThrows(RuntimeException.class,
+                    () -> result.read(in, 0, bytes.length, row -> values.add(row.text(1))));
+            assertTrue(refused.getMessage().contains("a row that runs 2 bytes past the end of "
+                    + "the answer"), refused.getMessage());
+            assertEquals(List.of(), values, "the row reached the handler");
         }
     }
 }
