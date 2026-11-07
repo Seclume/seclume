@@ -20,6 +20,15 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **Quarkus refuses a datasource password at the start too, not only in the build.** The
+  check that a seclume datasource has no `quarkus.datasource.password` - Agroal would keep it as
+  a `String` for the application's life - ran only as a build step. The datasource password is a
+  runtime property: `QUARKUS_DATASOURCE_PASSWORD` in a container's environment, a
+  `config/application.properties` beside the jar or a mounted Kubernetes secret was never seen
+  by the build, and only a password committed with the source was stopped. The same check now
+  runs at start-up, and knows the environment-variable spellings, a quoted name's
+  `QUARKUS_DATASOURCE__USERS__PASSWORD` among them (`PasswordGuardNamesTest`,
+  `RuntimePasswordRefusedTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
