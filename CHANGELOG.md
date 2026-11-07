@@ -93,6 +93,18 @@ All notable changes to seclume are recorded here. Versions follow
   and its NULL bitmap, were read before anything checked they were there. Every cell is now
   held to what is left of the row, and anything that does not fit is a `Truncated` - a
   connection failure, as the session maps it, not a value (`MyRowBoundsTest`).
+- **A checkpoint with field encryption, log masking or a secret watch: taken, and without
+  their keys.** `seclume-crac` waits until no secret is open before it lets a checkpoint
+  through - but a field key ring holds its data keys (and every column's and blind index's key)
+  for as long as it is open, the log masker its HMAC key, a secret watch its key and
+  fingerprint. With any of them in use the checkpoint was refused after
+  `seclume.crac.quiesceMillis`, every time; and without `seclume-crac` an image held them - the
+  data keys outright, and keyed tags that test password guesses offline. Now each wipes what it
+  holds before a checkpoint and reads or makes it again at its next use: the ring from its
+  providers, which stay open with it (they were closed once the keys were read), a subject's
+  ring from its store, the masker and the watch with a new key. The first look of a watch after
+  a restore reports a change, since it cannot compare (`FieldKeysCheckpointTest`, 4 tests;
+  `SecretWatchTest`, `SecretMaskerTest`).
 - **The Maven wrapper's jar from the cache.** The first full flake hunt - `ci.yml` three times
   at once - found no flaky test; its three failures were jobs whose runner could not download
   `maven-wrapper.jar` from Maven Central in three attempts. `mvnw-retry.sh` now keeps the jar in
