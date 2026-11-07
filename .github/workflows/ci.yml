@@ -659,6 +659,104 @@ jobs:
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
 
+  # The PostgreSQL driver against a real server on Windows and macOS too, over
+  # TLS: there the TLS key exchange is CNG's or Homebrew OpenSSL's, not the
+  # Linux libcrypto every other database job uses. No Linux containers on
+  # either runner, so the server is the one the image has (Windows:
+  # PostgreSQL 17 as a disabled service) or Homebrew's (macOS), with a
+  # self-signed certificate and SCRAM, as the Linux jobs have it.
+  postgresql-platforms:
+    name: postgresql-platforms (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, platform: windows-x64}
+          - {os: macos-latest, platform: macos-arm64}
+    defaults:
+      run:
+        shell: bash
+    env:
+      PG_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: PostgreSQL 18 and OpenSSL 3 from Homebrew
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew list --versions openssl@3 || brew install openssl@3
+          brew install postgresql@18
+          bin="$(brew --prefix postgresql@18)/bin"
+          data="$RUNNER_TEMP/pgdata"
+          printf '%s' "$PG_PASSWORD" > "$RUNNER_TEMP/pw"
+          "$bin/initdb" -D "$data" -U postgres --auth-host=scram-sha-256 --auth-local=trust \
+            --pwfile="$RUNNER_TEMP/pw" >/dev/null
+          rm -f "$RUNNER_TEMP/pw"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
+            -keyout "$data/server.key" -out "$data/server.crt" 2>/dev/null
+          chmod 600 "$data/server.key"
+          printf "ssl = on\nlisten_addresses = '127.0.0.1'\n" >> "$data/postgresql.conf"
+          "$bin/pg_ctl" -D "$data" -l "$RUNNER_TEMP/pg.log" -w start
+          "$bin/psql" -h /tmp -U postgres -d postgres -v ON_ERROR_STOP=1 -v pw="$PG_PASSWORD" <<'SQL'
+          CREATE ROLE seclume_test LOGIN PASSWORD :'pw';
+          CREATE DATABASE seclume_test OWNER seclume_test;
+          SQL
+      - name: PostgreSQL 17 of the image
+        if: runner.os == 'Windows'
+        run: |
+          data="$(cygpath -u "$PGDATA")"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
+            -keyout "$data/server.key" -out "$data/server.crt" 2>/dev/null
+          printf "\nssl = on\n" >> "$data/postgresql.conf"
+          pwsh -Command 'Set-Service postgresql-x64-17 -StartupType Manual; Start-Service postgresql-x64-17'
+          PGPASSWORD=root "$(cygpath -u "$PGBIN")/psql" -h 127.0.0.1 -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -v pw="$PG_PASSWORD" <<'SQL'
+          CREATE ROLE seclume_test LOGIN PASSWORD :'pw';
+          CREATE DATABASE seclume_test OWNER seclume_test;
+          SQL
+      # The same server for the TLS tests, which look on 5433 by default.
+      - run: |
+          printf '%s' "$PG_PASSWORD" > .local-pg-password
+          printf '%s' "$PG_PASSWORD" > .local-pgtls-password
+      - name: The PostgreSQL driver's tests
+        run: |
+          unset PG_PASSWORD
+          .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test \
+            -Dtest='space/seclume/postgresql/**/*' -Dsurefire.failIfNoSpecifiedTests=false \
+            -Dseclume.pgtls.port=5432
+      - name: Security gate
+        if: success() || failure()
+        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group postgresql --platform ${{ matrix.platform }}'
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: '"$(command -v python3 || command -v python)" .github/scripts/require_servers.py postgresql seclume-postgresql'
+      - if: failure()
+        run: |
+          "$(command -v python3 || command -v python)" - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:600]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+          PY
+      - if: always()
+        run: rm -f .local-pg-password .local-pgtls-password
+
   # Short coverage-guided JSON searches on every PR; the nightly fuzz
   # workflow runs the same targets for fifteen minutes each.
   json-fuzz:

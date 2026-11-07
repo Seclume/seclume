@@ -16,6 +16,12 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **The PostgreSQL driver on Windows and macOS against a real server.** Linux x64 was the
+  only platform whose CI talked to databases. `postgresql-platforms` runs the driver's tests on
+  Windows (the image's PostgreSQL 17) and macOS (Homebrew's PostgreSQL 18), over TLS with a
+  self-signed certificate and SCRAM - so the TLS key exchange is CNG's and Homebrew OpenSSL's
+  against a real server - then the security gate's PostgreSQL group, and fails if a test
+  skipped for want of the server.
 - **A MySQL row's cells stay inside the row.** A row is a window onto the receive buffer, and
   the length in front of a cell was believed as it came: the last cell of a text row could run
   into the next packet and come back as its value with the next row's first bytes in it; an
