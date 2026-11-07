@@ -891,6 +891,9 @@ jobs:
         run: |
           brew list --versions openssl@3 || brew install openssl@3
           brew tap mongodb/brew
+          # Homebrew loads formulae from a third-party tap only once it is trusted;
+          # older Homebrew has no such step.
+          if brew trust --help >/dev/null 2>&1; then brew trust mongodb/brew; fi
           brew install mongodb/brew/mongodb-community@8.0 mongosh
           echo "MONGO_BIN=$(brew --prefix mongodb-community@8.0)/bin" >> "$GITHUB_ENV"
           echo "OPENSSL=$(brew --prefix openssl@3)/bin/openssl" >> "$GITHUB_ENV"
