@@ -207,6 +207,49 @@ class SmtpConnectionTest {
         }
     }
 
+    /**
+     * A recipient typed into a form, with a line break in it, would end RCPT
+     * TO and send the rest as commands of the logged-in session - another
+     * recipient, or a DATA of its own. Nothing of such a message is sent.
+     */
+    @Test
+    void anAddressThatWouldLeaveItsCommandLineIsRefusedBeforeAnythingIsSent() throws Exception {
+        try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
+            try (SmtpConnection session = SeclumeMail.of(
+                    url("smtp", server, login(passwordFile))).open()) {
+                int before = server.commands.size();
+                for (String bad : List.of("b@example.com\r\nRCPT TO:<x@evil.example>",
+                        "b@example.com\nDATA", "b@example.com\r", "b@exa\u0000mple.com",
+                        "b@example.com> NOTIFY=NEVER", "<b@example.com", "b@example.com\u0085",
+                        "b@example.com\u2028x", "")) {
+                    IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                            () -> session.send("a@example.com", List.of("ok@example.com", bad),
+                                    message("x\r\n")), bad);
+                    assertTrue(refused.getMessage().contains("recipient"), refused.getMessage());
+                    IllegalArgumentException sender = assertThrows(IllegalArgumentException.class,
+                            () -> session.send(bad.isEmpty() ? null : bad,
+                                    List.of("ok@example.com"), message("x\r\n")), bad);
+                    assertTrue(sender.getMessage().contains("sender"), sender.getMessage());
+                }
+                assertEquals(before, server.commands.size(), "a command went out: "
+                        + server.commands.subList(before, server.commands.size()));
+                // The session is untouched and still sends.
+                session.send("a@example.com", List.of("b@example.com"), message("y\r\n"));
+            }
+            assertEquals(1, server.received.size());
+            assertEquals(List.of("b@example.com"), server.received.get(0).recipients());
+        }
+    }
+
+    @Test
+    void theEmptySenderOfABounceAndUnicodeAddressesAreAddresses() {
+        SmtpConnection.envelopeAddress("", "sender");
+        SmtpConnection.envelopeAddress("jürgen@exämple.com", "recipient");
+        SmtpConnection.envelopeAddress("\"john doe\"@example.com", "recipient");
+        assertThrows(IllegalArgumentException.class,
+                () -> SmtpConnection.envelopeAddress("", "recipient"));
+    }
+
     @Test
     void dotsAreStuffedAndBareLineEndsBecomeCrlf() throws Exception {
         try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
