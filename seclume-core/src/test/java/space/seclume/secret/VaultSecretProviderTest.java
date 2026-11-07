@@ -1,6 +1,7 @@
 package space.seclume.secret;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -207,6 +208,41 @@ class VaultSecretProviderTest {
             String request = vault.requests.get(0);
             assertTrue(request.startsWith("GET /v1/secret/data/app HTTP/1.1"), request);
             assertTrue(request.contains("X-Vault-Token: hvs.testtoken"), request);
+        }
+    }
+
+    /**
+     * A KV secret has no lease and does not go stale: it is fetched once and
+     * kept, however much time passes - not once per connection, and not once a
+     * lease-less "refresh" decided it was due.
+     */
+    @Test
+    void aStaticSecretIsFetchedOnceAndKept() throws Exception {
+        String answer = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
+        MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
+        try (FakeVault vault = new FakeVault(200, answer);
+             VaultSecretProvider provider = provider(vault, "secret/data/app", clock)) {
+            for (int i = 0; i < 4; i++) {
+                assertEquals("hunter2", read(provider));
+                clock.advance(Duration.ofDays(30));
+            }
+            assertEquals(1, vault.served(), vault.requests.toString());
+        }
+    }
+
+    /** A target exactly as long as the secret takes it; one byte shorter is refused. */
+    @Test
+    void theSecretFillsATargetOfItsOwnLengthAndNoShorter() throws Exception {
+        String answer = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
+        try (FakeVault vault = new FakeVault(200, answer);
+             VaultSecretProvider provider = provider(vault, "secret/data/app", Clock.systemUTC());
+             Arena arena = Arena.ofConfined()) {
+            assertEquals(7, provider.writeSecret(arena.allocate(7)));
+            SecretUnavailableException e = assertThrows(SecretUnavailableException.class,
+                    () -> provider.writeSecret(arena.allocate(6)));
+            assertTrue(e.getMessage().contains("is 7 bytes and does not fit into the 6"),
+                    e.getMessage());
+            assertFalse(e.getMessage().contains("hunter2"), e.getMessage());
         }
     }
 
