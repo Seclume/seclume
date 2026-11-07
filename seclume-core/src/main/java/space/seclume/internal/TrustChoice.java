@@ -132,8 +132,8 @@ public final class TrustChoice {
     public static final class CertificateTaken extends IOException {
         private static final long serialVersionUID = 1L;
 
-        CertificateTaken() {
-            super("stopped after the TLS handshake: only the server's certificate was wanted");
+        CertificateTaken(String message) {
+            super(message);
         }
     }
 
@@ -182,7 +182,8 @@ public final class TrustChoice {
         java.util.concurrent.atomic.AtomicReference<X509Certificate> seen = LOOK_ONLY.get();
         if (seen != null) {
             seen.compareAndSet(null, layer.peerCertificate());
-            throw new CertificateTaken();
+            throw new CertificateTaken("stopped after the TLS handshake: only the server's "
+                    + "certificate was wanted, nothing else is sent");
         }
     }
 
