@@ -763,6 +763,98 @@ jobs:
       - if: always()
         run: rm -f .local-pg-password .local-pgtls-password
 
+  # The MySQL driver the same way: Windows has MySQL 8.4's server from the
+  # image's MSI, macOS Homebrew's mysql@8.4. Both generate their TLS
+  # certificates at --initialize, so the logins are over TLS as on Linux.
+  mysql-platforms:
+    name: mysql-platforms (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, platform: windows-x64}
+          - {os: macos-latest, platform: macos-arm64}
+    defaults:
+      run:
+        shell: bash
+    env:
+      MY_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          java-version: '25'
+          distribution: temurin
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: MySQL 8.4 and OpenSSL 3 from Homebrew
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew list --versions openssl@3 || brew install openssl@3
+          brew install mysql@8.4
+          echo "MYSQL_BIN=$(brew --prefix mysql@8.4)/bin" >> "$GITHUB_ENV"
+      - name: MySQL 8.4 of the image
+        if: runner.os == 'Windows'
+        run: |
+          bin="$(ls -d "/c/Program Files/MySQL"/MySQL\ Server*/bin | head -1)"
+          ls "$bin/mysqld.exe"
+          echo "MYSQL_BIN=$bin" >> "$GITHUB_ENV"
+      - name: A server of our own, with a user and TLS
+        run: |
+          set -x
+          data="$RUNNER_TEMP/mydata"
+          "$MYSQL_BIN/mysqld" --no-defaults --initialize-insecure --datadir="$data"
+          "$MYSQL_BIN/mysqld" --no-defaults --datadir="$data" --port=3306 --bind-address=127.0.0.1 \
+            --mysqlx=OFF --log-error="$RUNNER_TEMP/mysqld.err" > /dev/null 2>&1 &
+          for i in $(seq 1 60); do
+            "$MYSQL_BIN/mysqladmin" --no-defaults -h 127.0.0.1 -P 3306 -u root ping >/dev/null 2>&1 && break
+            sleep 1
+          done
+          "$MYSQL_BIN/mysql" --no-defaults -h 127.0.0.1 -P 3306 -u root <<SQL || { cat "$RUNNER_TEMP/mysqld.err"; exit 1; }
+          CREATE DATABASE seclume_test;
+          CREATE DATABASE seclume_spring;
+          CREATE USER 'seclume_test'@'%' IDENTIFIED BY '$MY_PASSWORD';
+          GRANT ALL ON seclume_test.* TO 'seclume_test'@'%';
+          GRANT ALL ON seclume_spring.* TO 'seclume_test'@'%';
+          GRANT XA_RECOVER_ADMIN ON *.* TO 'seclume_test'@'%';
+          SET PERSIST log_bin_trust_function_creators = 1;
+          ALTER USER 'root'@'localhost' IDENTIFIED BY '$MY_PASSWORD';
+          SQL
+          printf '%s' "$MY_PASSWORD" > .local-mysql-password
+      - name: The MySQL driver's tests
+        run: |
+          unset MY_PASSWORD
+          .github/scripts/mvnw-retry.sh -B -pl seclume-mysql -am test \
+            -Dtest='space/seclume/mysql/**/*' -Dsurefire.failIfNoSpecifiedTests=false \
+            -Dseclume.mysql.port=3306
+      - name: Security gate
+        if: success() || failure()
+        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group mysql --platform ${{ matrix.platform }}'
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: '"$(command -v python3 || command -v python)" .github/scripts/require_servers.py mysql seclume-mysql'
+      - if: failure()
+        run: |
+          "$(command -v python3 || command -v python)" - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob('**/target/surefire-reports/TEST-*.xml', recursive=True):
+              for case in ET.parse(path).getroot().iter('testcase'):
+                  for bad in case.findall('failure') + case.findall('error'):
+                      text = (bad.get('type') or '') + ': ' + (bad.get('message') or '')
+                      text = text.replace('%', '%25').replace('\r', ' ').replace('\n', ' ')[:600]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
+          PY
+      - if: always()
+        run: rm -f .local-mysql-password
+
   # Short coverage-guided JSON searches on every PR; the nightly fuzz
   # workflow runs the same targets for fifteen minutes each.
   json-fuzz:
