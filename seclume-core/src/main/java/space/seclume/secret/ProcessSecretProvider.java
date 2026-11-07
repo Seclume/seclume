@@ -88,25 +88,77 @@ public final class ProcessSecretProvider implements SecretProvider {
             if (!placeholder) {
                 builder.redirectOutput(ProcessBuilder.Redirect.to(new File(fifo.toString())));
             }
-            Process process = builder.start();
+            // The read end is opened first, on a thread of its own. Opening a
+            // FIFO waits for its other end, and with the helper's standard
+            // output on the FIFO it is this JVM that opens the write end, in
+            // builder.start(): opened in the other order, each waited for the
+            // other, for ever - the standard-output form never worked.
+            java.util.concurrent.CompletableFuture<FileChannel> opening =
+                    new java.util.concurrent.CompletableFuture<>();
+            Path pipe = fifo;
+            Thread.ofVirtual().name("seclume-helper-fifo").start(() -> {
+                try {
+                    opening.complete(FileChannel.open(pipe, StandardOpenOption.READ));
+                } catch (IOException | RuntimeException e) {
+                    opening.completeExceptionally(e);
+                }
+            });
+            Process process;
+            try {
+                process = builder.start();
+            } catch (IOException | RuntimeException e) {
+                release(pipe);
+                opening.thenAccept(ProcessSecretProvider::closeQuietly);
+                throw e;
+            }
 
             // Opening the FIFO blocks until the helper has opened it for
-            // writing - that is the synchronisation, nothing more is needed.
+            // writing, and reading it until the helper closes it - neither
+            // with a timeout of its own. A helper that fails before it opens
+            // the path it was given, or that never finishes, held this thread
+            // for ever: a connection pool that never got its first
+            // connection. The watchdog ends the helper at the timeout and, once
+            // it is gone, releases the read by opening the FIFO itself.
+            java.util.concurrent.atomic.AtomicBoolean reading =
+                    new java.util.concurrent.atomic.AtomicBoolean(true);
+            java.util.concurrent.atomic.AtomicBoolean timedOut =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            java.util.concurrent.atomic.AtomicReference<FileChannel> open =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Thread watchdog = Thread.ofVirtual().name("seclume-helper-watchdog").start(() ->
+                    watch(process, pipe, reading, timedOut, open));
             int read;
-            try (FileChannel channel = FileChannel.open(fifo, StandardOpenOption.READ)) {
+            FileChannel opened;
+            try {
+                opened = opening.get();                   // the watchdog releases it, if need be
+            } catch (java.util.concurrent.ExecutionException e) {
+                reading.set(false);
+                throw new IOException("the FIFO could not be opened", e.getCause());
+            }
+            try (FileChannel channel = opened) {
+                open.set(channel);
                 read = OffHeapIo.readFully(channel, target);
                 if (read == target.byteSize() && OffHeapIo.hasMore(channel)) {
                     throw new SecretUnavailableException(
                             "the helper produced more than the configured " + maxLength + " bytes");
                 }
+            } catch (IOException e) {
+                if (timedOut.get()) {
+                    target.fill((byte) 0);
+                    throw new SecretUnavailableException("the helper " + command.get(0)
+                            + " did not finish within " + timeoutSeconds + " seconds", e);
+                }
+                throw e;
+            } finally {
+                reading.set(false);
             }
-
-            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            if (timedOut.get() || !process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
                 throw new SecretUnavailableException(
                         "the helper " + command.get(0) + " did not finish within "
                         + timeoutSeconds + " seconds");
             }
+            watchdog.join(TimeUnit.SECONDS.toMillis(5));
             if (process.exitValue() != 0) {
                 throw new SecretUnavailableException(
                         "the helper " + command.get(0) + " failed with exit code "
@@ -127,6 +179,69 @@ public final class ProcessSecretProvider implements SecretProvider {
         } finally {
             deleteQuietly(fifo);
             deleteQuietly(directory);
+        }
+    }
+
+    /**
+     * Waits for the helper, ends it at the timeout, and then - while the read
+     * is still waiting on the FIFO - opens the FIFO for reading and writing,
+     * which never blocks: a reader waiting for a writer gets one, and when it
+     * is closed again, the end of the stream.
+     */
+    private void watch(Process process, Path fifo,
+            java.util.concurrent.atomic.AtomicBoolean reading,
+            java.util.concurrent.atomic.AtomicBoolean timedOut,
+            java.util.concurrent.atomic.AtomicReference<FileChannel> open) {
+        try {
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                timedOut.set(true);
+                process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+            }
+            // The helper is gone. A read still waiting for it is released:
+            // an open() waiting for a writer by one that comes and goes, a
+            // read() at the timeout by closing its channel - a grandchild of
+            // the helper may still hold the FIFO's other end.
+            for (int round = 0; round < 50 && reading.get(); round++) {
+                FileChannel reader = open.get();
+                if (reader == null) {
+                    if (!release(fifo)) {
+                        return;                     // the FIFO is gone, so is the read
+                    }
+                } else if (timedOut.get()) {
+                    try {
+                        reader.close();
+                    } catch (IOException ignored) {
+                        // Closed is closed.
+                    }
+                }
+                Thread.sleep(100);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Opens the FIFO for reading and writing and closes it again - which never
+     * blocks, and lets an open() waiting for a writer return.
+     *
+     * @return false when the FIFO is not there any more
+     */
+    private static boolean release(Path fifo) {
+        try {
+            FileChannel.open(fifo, StandardOpenOption.READ, StandardOpenOption.WRITE).close();
+            return true;
+        } catch (IOException gone) {
+            return false;
+        }
+    }
+
+    private static void closeQuietly(FileChannel channel) {
+        try {
+            channel.close();
+        } catch (IOException ignored) {
+            // Closed is closed.
         }
     }
 

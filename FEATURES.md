@@ -221,6 +221,13 @@ providers each have a page of their own: [TLS.md](TLS.md),
   every other one, `requireAuth=!md5,!password` refuses just those. A refused method is
   refused before anything of the answer is sent, so a server - or anybody in the middle -
   that asks for an md5 hash gets none. `none` stands for a server that asks for nothing.
+- **No cheap SCRAM proofs.** The iteration count is the server's to choose, and the proof the
+  client sends is a PBKDF2 of the password with it: a server - or whoever sits between - that
+  asks for one iteration gets a proof that costs one hash per guessed password. A count below
+  4096 (RFC 7677's floor, and every server's default) is refused before any proof is made, for
+  PostgreSQL, Kafka and MongoDB alike. `-Dseclume.scram.minIterations=<n>` lowers the floor for a
+  server set below it on purpose (PostgreSQL's `scram_iterations`, a credential made with fewer),
+  or raises it.
 
 ## Writing, retrying, and not guessing
 
@@ -299,13 +306,15 @@ The ephemeral TLS keys (P-256, P-384, X25519, ML-KEM), private keys that sign, n
 and PBKDF2 belong to the operating system's cryptography, not to the JVM:
 
 - **Windows:** CNG.
-- **64-bit Linux:** OpenSSL 3, `libcrypto.so.3`, where the dynamic loader finds it.
-- **macOS:** OpenSSL 3 from Homebrew (`brew install openssl@3`; `/opt/homebrew` on Apple
-  silicon, then `/usr/local`) or MacPorts (`/opt/local/lib`). macOS has no OpenSSL 3 of its
-  own; its `/usr/lib/libcrypto.dylib` is a LibreSSL stub that ends the process that loads it,
-  and seclume never loads it.
+- **64-bit Linux:** OpenSSL 3 or 4, `libcrypto.so.3` and then `libcrypto.so.4`, where the
+  dynamic loader finds them.
+- **macOS:** OpenSSL 3 or 4 from Homebrew (`brew install openssl@3` or `openssl@4`;
+  `/opt/homebrew` on Apple silicon, then `/usr/local`) or MacPorts (`/opt/local/lib`), 3 first
+  where both are. macOS has no OpenSSL of its own; its `/usr/lib/libcrypto.dylib` is a
+  LibreSSL stub that ends the process that loads it, and seclume never loads it. CI runs the
+  native cryptography and TLS tests on macOS on both.
 
-`-Dseclume.crypto.libcrypto=/absolute/path/libcrypto...` names another OpenSSL 3, on Linux
+`-Dseclume.crypto.libcrypto=/absolute/path/libcrypto...` names another OpenSSL 3 or 4, on Linux
 or macOS. Whatever is loaded must report OpenSSL 3 or later, or it is not used. Where there is
 no OpenSSL 3, AES-GCM and PBKDF2 fall back to their constant-time Java versions, and what has
 no fallback - the TLS key exchange, signing with a private key - says what it needs.
@@ -600,7 +609,7 @@ Shown against MongoDB 8 (`LocalMongoTlsTest` against `seclume-mongo` with TLS 1.
 `ScriptedMongoServerTest` with mock TLS 1.3 fixture):
 - Successful SCRAM-SHA-256 authentication and `ping` command execution;
 - Both the password and the client proof are proven absent from the JVM heap dump via `NoSecretInHeap.assertAbsent`;
-- Refusal on missing SCRAM-SHA-256, low iterations (< 4096), invalid server nonce prefix, wrong server
+- Refusal on missing SCRAM-SHA-256, low iterations (< 4096, or `seclume.scram.minIterations`), invalid server nonce prefix, wrong server
   signature, premature connection termination, non-ASCII password, and TLS host name mismatch.
 
 The login is part of connecting: the connect timeout bounds TLS and SCRAM, so a server that
@@ -1778,6 +1787,12 @@ source.setBaseEnvironmentProperties(ldap.socketFactory());
   (RFC 4752 SASL authorization identity). No JAAS config and no keytab in the JVM heap.
 - **What passes through unchanged:** binds with any other password. An end user logging in
   through Spring Security binds with what they typed.
+- **The placeholder logs in only the application:** it is replaced only in a bind as the
+  registration's `user=`, on a connection to the registration's own host and port. Typed into
+  a login form for another user - by someone who read it in a heap dump - or sent to another
+  registered server, it goes out as it is and the server refuses it; with
+  `authentication=kerberos` it starts no Kerberos bind then. It is 144 random bits after a
+  fixed prefix, not a counter one could guess.
 - **Spring Boot:** `seclume.ldap.url=ldaps://...` or `ldap://...` makes the
   `LdapContextSource` bean. Boot's `LdapTemplate` and Spring Security's LDAP authentication
   use it.

@@ -354,6 +354,35 @@ class LdapBindTest {
         new InitialDirContext(environment).close();
     }
 
+    /**
+     * The placeholder typed into a login form - by someone who read it in a
+     * heap dump - for an end user is not the service's password for them.
+     */
+    @Test
+    void thePlaceholderTypedForAnEndUserIsRefusedByTheServer() throws Exception {
+        SeclumeLdap ldap = SeclumeLdap.of(server.url());
+        Hashtable<String, Object> environment = ldap.environment();
+        environment.put(Context.SECURITY_PRINCIPAL, LdapServer.ALICE);
+        assertEquals(ldap.password(), environment.get(Context.SECURITY_CREDENTIALS));
+        assertThrows(AuthenticationException.class,
+                () -> new InitialDirContext(environment).close());
+    }
+
+    @Test
+    void aKerberosPlaceholderTypedForAnEndUserStartsNoKerberosBind() throws Exception {
+        AtomicReference<String> negotiatedAuthzId = new AtomicReference<>();
+        try (InMemoryDirectoryServer ds = startGssapiServer((byte) 0x07, true, negotiatedAuthzId)) {
+            SeclumeLdap ldaps = SeclumeLdap.of("ldaps://localhost:" + ds.getListenPort("LDAPS")
+                    + "/" + LdapServer.BASE + "?authentication=kerberos&tlsRootCert="
+                    + server.certificate.toString().replace('\\', '/'), MockGssContext::new);
+            Hashtable<String, Object> environment = ldaps.environment();
+            environment.put(Context.SECURITY_PRINCIPAL, LdapServer.ALICE);
+            assertThrows(AuthenticationException.class,
+                    () -> new InitialDirContext(environment).close());
+            assertEquals(null, negotiatedAuthzId.get(), "a Kerberos bind ran");
+        }
+    }
+
     @Test
     void onlyLdapsOrLdapStartTlsAndValidAuthAreTaken() {
         assertThrows(IllegalArgumentException.class, () -> SeclumeLdap.of(

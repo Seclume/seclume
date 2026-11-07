@@ -56,7 +56,7 @@
       {"test": "space.seclume.crypto.WycheproofTest", "module": "seclume-core",
        "property": "AES-GCM, AES-GCM-SIV, HMAC, HKDF, PBKDF2 and ECDH pass Wycheproof"},
       {"test": "space.seclume.crypto.LibCryptoTest", "module": "seclume-core",
-       "property": "native cryptography loads OpenSSL 3 and nothing else - never macOS's LibreSSL stub, never a relative name",
+       "property": "native cryptography loads OpenSSL 3 or 4 and nothing else - never macOS's LibreSSL stub, never a relative name",
        "skips": {"windows-x64": "Windows uses CNG: only the search rules are checked there, the cases that load a libcrypto do not apply"}},
       {"test": "space.seclume.crypto.AesGcmSivTest", "module": "seclume-core",
        "property": "AES-GCM-SIV reveals only equality under a repeated nonce, and an altered value leaves no plaintext"},
