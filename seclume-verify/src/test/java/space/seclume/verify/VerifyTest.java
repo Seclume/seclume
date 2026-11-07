@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -26,6 +27,29 @@ class VerifyTest {
         assertTrue(shown.contains("password=***"), shown);
         assertTrue(shown.contains("user=app"), shown);
         assertTrue(shown.contains("x=1"), shown);
+    }
+
+    /**
+     * The secret settings a provider nests - and the refusal for them comes
+     * from the driver, after the report has printed its URL line.
+     */
+    @Test
+    void nestedSecretSettingsAndAUserInfoPasswordAreTakenOutToo() {
+        String url = "jdbc:seclume:postgresql://app:Info-Pw@db:5432/app?user=app"
+                + "&provider=vault&token-value=hvs.Nested-1&share.1.value=Share-2"
+                + "&secret-id-value=Role-3&dbPassword=Camel-4&pass%77ord=Enc-5"
+                + "&session-token=Aws-6&token-provider=file&token-path=/run/t&path=/run/db";
+        String shown = Verify.withoutSecrets(url);
+        for (String secret : List.of("Info-Pw", "Nested-1", "Share-2", "Role-3", "Camel-4", "Enc-5",
+                "Aws-6")) {
+            assertFalse(shown.contains(secret), secret + ": " + shown);
+        }
+        for (String kept : List.of("//app:***@db:5432/app", "user=app", "provider=vault",
+                "token-provider=file", "token-path=/run/t", "path=/run/db")) {
+            assertTrue(shown.contains(kept), kept + ": " + shown);
+        }
+        assertEquals("jdbc:seclume:postgresql://[::1]:5432/app?user=app",
+                Verify.withoutSecrets("jdbc:seclume:postgresql://[::1]:5432/app?user=app"));
     }
 
     @Test

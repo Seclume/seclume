@@ -112,6 +112,29 @@ class SecretMaskerTest {
         }
     }
 
+    /**
+     * A checkpoint wipes the key and every tag - with the key in the image a
+     * tag would test guesses at the password offline - and the next line
+     * masked after the restore is masked as before, under a new key.
+     */
+    @Test
+    void aCheckpointWipesTheKeyAndTheNextLineIsMaskedAsBefore() {
+        space.seclume.internal.Checkpoint.wipeAll();
+        long before = space.seclume.secret.SecretScope.open();
+        try (SecretMasker masker = new SecretMasker(Map.of("db",
+                new StaticSecretProvider("checkpointed-Pa55word")))) {
+            assertEquals("x [redacted:db]", masker.mask("x checkpointed-Pa55word"));
+            int forms = masker.forms();
+            space.seclume.internal.Checkpoint.wipeAll();
+            assertEquals(before, space.seclume.secret.SecretScope.open(),
+                    "the masker's key would be in the image");
+            assertEquals(0, masker.forms());
+            assertEquals("x [redacted:db]", masker.mask("x checkpointed-Pa55word"));
+            assertEquals(forms, masker.forms());
+        }
+        assertEquals(before, space.seclume.secret.SecretScope.open());
+    }
+
     // ---- the forms a secret takes on its way into a log line ------------------------
 
     private static final String SECRET = "p@ss/w0rd+\"q\\x~ y";

@@ -414,6 +414,9 @@ CRaC refuses the checkpoint over the pool's open sockets. Before the checkpoint 
   if that does not happen within `seclume.crac.quiesceMillis` (10 s);
 - **wipes the cached credentials** - Vault's leased credential, the instance role's AWS keys,
   OAuth access tokens - which are fetched again after the restore;
+- **wipes the keys kept for the application's lifetime** - field encryption's data keys and
+  every column's and blind index's key derived from them, the subjects' rings, the log
+  masker's and the secret watch's keys - which are read or made again at their next use;
 - **holds new secrets back** from that moment until the restore, so a login that starts in
   between waits instead of landing in the image (`seclume.crac.holdSecrets=false` switches
   this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits).
@@ -810,10 +813,12 @@ memory at each login. The key ring is built when the application starts - a key 
 read stops it - installed for the JPA converters, injectable as `FieldKeys`, and wiped when the
 context closes.
 
-**A password in the configuration stops the start**: `datasources.<name>.password` beside a
-seclume URL (Micronaut's Hikari would keep it as a `String` for the life of the application),
-`seclume.datasources.<name>.password`, or a URL with `password=` in it. The message names the
-property and what to write instead, never the value.
+**A password in the configuration stops the start**: `datasources.<name>.password` - or one
+among the data source's further keys, `data-source-properties.password` - beside a seclume URL
+(Micronaut's Hikari would keep it as a `String` for the life of the application),
+`seclume.datasources.<name>.password`, or a URL with `password=` in it; as properties and as
+environment variables (`DATASOURCES_DEFAULT_PASSWORD`). The message names the property and what
+to write instead, never the value.
 
 Tested in an application context with a stub driver - named and primary pools, every pool
 setting, a wrong one, the key ring built, installed and wiped, an unreadable key, the password
@@ -844,7 +849,8 @@ seclume.field-encryption.keys.1.uri=vault-transit?address=https://vault:8200&key
 
 A password stops the start on both: `seclume.datasources.<name>.password`, Helidon's own
 `javax.sql.DataSource.<name>.dataSource.password` beside a seclume URL, or `password=` in the
-URL - a deployment error in MP. Tested with a stub driver on both, the CDI extension inside a real
+URL - a deployment error in MP; as environment variables too
+(`JAVAX_SQL_DATASOURCE_APP_DATASOURCE_PASSWORD`). Tested with a stub driver on both, the CDI extension inside a real
 Helidon MP container (`SeclumeSettingsTest`, `SeclumeHelidonTest`, `SeclumeCdiExtensionTest`,
 `SeclumeCdiExtensionOnceTest`),
 and against CI's PostgreSQL with a heap dump afterwards (`LocalHelidonPostgresTest`).

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.logging.DeferredLogFactory;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
 
 /**
  * The two things the post-processor does, and the one thing it must never do.
@@ -274,6 +275,51 @@ class SeclumeEnvironmentPostProcessorTest {
                 "app.secretariat", "room 12")));
 
         assertTrue(warnings.isEmpty(), String.join("\n", warnings));
+    }
+
+    /**
+     * A password in the environment - how a container gets one - is a
+     * {@code String} in the environment's source like any other. The source
+     * lists the variables by their own names, and {@code SPRING_DATASOURCE_PASSWORD}
+     * never ended in {@code .password}.
+     */
+    @Test
+    void anEnvironmentVariableIsNamedToo() {
+        StandardEnvironment environment = environmentOf(Map.of());
+        environment.getPropertySources().addLast(new SystemEnvironmentPropertySource(
+                StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME, Map.of(
+                        "SPRING_DATASOURCE_PASSWORD", "env-canary-1",
+                        "APP_OAUTH_CLIENT_SECRET", "env-canary-2",
+                        "SIGNING_PRIVATE_KEY", "env-canary-3",
+                        "SECLUME_DATASOURCES_MAIN_SECRET_KEY", "DB_PASSWORD",
+                        "PASSWORD_POLICY", "strict",
+                        "HOME", "/home/app")));
+        run(environment);
+
+        String reported = String.join("\n", warnings);
+        assertEquals(1, warnings.size(), reported);
+        assertTrue(reported.contains("3 configuration properties hold secrets"), reported);
+        for (String name : List.of("SPRING_DATASOURCE_PASSWORD", "APP_OAUTH_CLIENT_SECRET",
+                "SIGNING_PRIVATE_KEY")) {
+            assertTrue(reported.contains(name), name + ": " + reported);
+        }
+        assertFalse(reported.contains("env-canary"), reported);
+        assertFalse(reported.contains("SECRET_KEY") || reported.contains("PASSWORD_POLICY"),
+                reported);
+    }
+
+    @Test
+    void theRelaxedSpellingsOfAName() {
+        for (String name : List.of("spring.mail.password", "app.db-password", "app.db_password",
+                "APP_DB_PASSWORD", "app.private-key", "app.private_key", "APP_PRIVATEKEY",
+                "password", "PASSWORD", "app.passwd", "APP_SECRET")) {
+            assertTrue(SeclumeEnvironmentPostProcessor.isSuspect(name), name);
+        }
+        for (String name : List.of("app.password-policy", "APP_PASSWORD_POLICY", "app.secretariat",
+                "seclume.datasources.main.secret.key", "SECLUME_DATASOURCES_MAIN_SECRET_PATH",
+                "token-uri", "app.keypassword-hint")) {
+            assertFalse(SeclumeEnvironmentPostProcessor.isSuspect(name), name);
+        }
     }
 
     // ------------------------------------------------------- registration --

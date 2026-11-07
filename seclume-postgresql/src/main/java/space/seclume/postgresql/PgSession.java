@@ -2493,6 +2493,14 @@ public final class PgSession implements AutoCloseable {
     private Row readDataRow() {
         WireBuffer in = channel.message();
         int count = in.getShort() & 0xffff;
+        // As many values as the RowDescription has columns, or the row is not
+        // this result's. One too few, and the reader took the missing cell's
+        // place and length from the row before - offsets into the same buffer,
+        // so another row's value came back as this one's, without a word.
+        if (!fields.isEmpty() && count != fields.size()) {
+            throw WireBuffer.malformed("a row of " + count + " values in a result of "
+                    + fields.size() + " columns");
+        }
         if (rowOffsets.length < count) {
             rowOffsets = new int[count]; // seclume-allow: column offsets of a row, not a secret
             rowLengths = new int[count]; // seclume-allow: column lengths of a row, not a secret

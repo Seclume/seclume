@@ -217,6 +217,22 @@ class SeclumeCdiExtensionTest {
         assertFalse(flat.containsKey("other.key"), "only seclume's and the data sources' keys");
     }
 
+    /** An environment variable that spells one of those keys is read by its own name too. */
+    @Test
+    void environmentVariablesAreReadByTheirOwnNames() {
+        MapSource environment = new MapSource("environment", 300, Map.of(
+                "SECLUME_DATASOURCES_ORDERS_PASSWORD", "zl-cdi-canary",
+                "JAVAX_SQL_DATASOURCE_APP_DATASOURCE_PASSWORD", "zl-cdi-canary",
+                "HOME", "/home/app"));
+        Map<String, String> flat = SeclumeCdiExtension.flat(new SourcesOnly(List.of(environment), List.of()));
+        assertEquals(java.util.Set.of("SECLUME_DATASOURCES_ORDERS_PASSWORD",
+                "JAVAX_SQL_DATASOURCE_APP_DATASOURCE_PASSWORD"), flat.keySet());
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> SeclumeSettings.of(flat).refusePasswords());
+        assertTrue(e.getMessage().contains("SECLUME_DATASOURCES_ORDERS_PASSWORD"), e.getMessage());
+        assertFalse(e.getMessage().contains("zl-cdi-canary"), e.getMessage());
+    }
+
     /** Names only from a list, values only from the sources - the least a config can do. */
     record SourcesOnly(List<ConfigSource> sources, List<String> names) implements Config {
         @Override

@@ -129,14 +129,17 @@ class FieldKeysLifecycleTest {
     }
 
     @Test
-    void theProvidersAreClosedOnceTheirKeysAreRead() {
+    void theProvidersAreClosedWithTheRing() {
         Counted one = new Counted(KEY);
         Counted two = new Counted(KEY.clone());
         try (FieldKeys keys = FieldKeys.builder().key(1, one).key(2, two).build()) {
-            assertEquals(1, one.closes.get(), "a key is read once and its source closed");
-            assertEquals(1, two.closes.get());
+            // Kept open: after a checkpoint the keys are read from them again.
+            assertEquals(0, one.closes.get(), "a source closed while the ring may need it");
+            assertEquals(0, two.closes.get());
             assertEquals(List.of(1, 2), keys.keyIds());
         }
+        assertEquals(1, one.closes.get(), "a source left open by a closed ring");
+        assertEquals(1, two.closes.get());
         Counted good = new Counted(KEY);
         Counted bad = new Counted(new byte[] {1, 2, 3});
         assertThrows(IllegalArgumentException.class, () -> FieldKeys.builder().key(1, good).key(2, bad).build());
