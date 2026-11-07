@@ -31,8 +31,11 @@ w=$(path "$work")
 cd "$work"
 "$openssl" req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
   -subj "/CN=seclume CI mongo CA" -keyout ca.key -out ca.pem 2>/dev/null
-"$openssl" req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=localhost" \
-  -keyout server.key -out server.csr 2>/dev/null
+# The server's own key is RSA in PKCS#1 form: mongod on macOS imports its key
+# through Apple's Security framework, which takes neither an EC key nor PKCS#8
+# ("Unknown format in import"), and Windows' SChannel build reads this form too.
+"$openssl" genrsa -traditional -out server.key 2048 2>/dev/null
+"$openssl" req -new -key server.key -subj "/CN=localhost" -out server.csr 2>/dev/null
 printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n' > ext
 "$openssl" x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
   -extfile ext -out server.crt 2>/dev/null
