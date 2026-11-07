@@ -33,7 +33,7 @@ class SecretMaskerTest {
     void aSecretInALogLineIsMaskedUnderItsLabel() {
         try (SecretMasker masker = new SecretMasker(Map.of("db", new StaticSecretProvider(
                 "s3cr3t-Pa55word")))) {
-            assertEquals(2, masker.forms());
+            assertTrue(masker.forms() >= 2, "itself and its Base64 at least");
             assertEquals("login with [redacted:db] failed, retrying with [redacted:db]",
                     masker.mask("login with s3cr3t-Pa55word failed, retrying with "
                             + "s3cr3t-Pa55word"));
@@ -52,8 +52,10 @@ class SecretMaskerTest {
         Map<String, SecretProvider> secrets = new LinkedHashMap<>();
         secrets.put("api", new StaticSecretProvider("Grüße-🔑-geheim"));
         secrets.put("pin", new StaticSecretProvider("1234"));
-        try (SecretMasker masker = new SecretMasker(secrets)) {
-            assertEquals(2, masker.forms(), "the PIN is too short to be looked for");
+        try (SecretMasker masker = new SecretMasker(secrets);
+             SecretMasker apiOnly = new SecretMasker(Map.of("api",
+                     new StaticSecretProvider("Grüße-🔑-geheim")))) {
+            assertEquals(apiOnly.forms(), masker.forms(), "the PIN is too short to be looked for");
             assertEquals("key=[redacted:api]; pin=1234",
                     masker.mask("key=Grüße-🔑-geheim; pin=1234"));
         }
@@ -105,7 +107,7 @@ class SecretMaskerTest {
         try (SecretMasker masker = new SecretMasker(Map.of("api",
                 space.seclume.secret.SecretProviders.of(Map.of("provider", "file", "path",
                         trimmed.toString()))))) {
-            assertEquals(2, masker.forms());
+            assertTrue(masker.forms() >= 2);
             NoSecretInHeap.assertAbsent(trimmed);
         }
     }
@@ -131,5 +133,81 @@ class SecretMaskerTest {
             assertEquals(forms, masker.forms());
         }
         assertEquals(before, space.seclume.secret.SecretScope.open());
+    }
+
+    // ---- the forms a secret takes on its way into a log line ------------------------
+
+    private static final String SECRET = "p@ss/w0rd+\"q\\x~ y";
+
+    private static SecretMasker masker() {
+        return new SecretMasker(Map.of("db", new StaticSecretProvider(SECRET)));
+    }
+
+    @Test
+    void aBasicHeaderIsMaskedWhateverTheUserBeforeThePassword() {
+        try (SecretMasker masker = masker()) {
+            for (String user : new String[] {"", "a", "ab", "abc", "deploy", "jürgen"}) {
+                String header = Base64.getEncoder().encodeToString((user + ":" + SECRET)
+                        .getBytes(StandardCharsets.UTF_8));
+                String masked = masker.mask("Authorization: Basic " + header);
+                assertTrue(masked.contains("[redacted:db]"), user + ": " + masked);
+                // What is left of the header is the user's part and at most two
+                // characters it shares with the password.
+                String left = masked.replace("Authorization: Basic ", "").replace("[redacted:db]",
+                        "");
+                assertTrue(left.length() <= Base64.getEncoder().encodeToString((user + ":")
+                        .getBytes(StandardCharsets.UTF_8)).length() + 4, user + ": " + masked);
+            }
+        }
+    }
+
+    @Test
+    void base64UnpaddedAndUrlSafeAreMasked() {
+        try (SecretMasker masker = masker()) {
+            byte[] bytes = SECRET.getBytes(StandardCharsets.UTF_8);
+            for (String encoded : new String[] {
+                Base64.getEncoder().encodeToString(bytes),
+                Base64.getEncoder().withoutPadding().encodeToString(bytes),
+                Base64.getUrlEncoder().encodeToString(bytes),
+                Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)}) {
+                String masked = masker.mask("token=" + encoded + "&x=1");
+                assertTrue(masked.contains("[redacted:db]"), encoded + " -> " + masked);
+                assertTrue(masked.endsWith("&x=1"), masked);
+            }
+        }
+    }
+
+    @Test
+    void percentEncodedAsInAUrlOrAFormIsMasked() {
+        try (SecretMasker masker = masker()) {
+            String rfc3986 = java.net.URLEncoder.encode(SECRET, StandardCharsets.UTF_8)
+                    .replace("+", "%20").replace("%7E", "~").replace("*", "%2A");
+            String form = java.net.URLEncoder.encode(SECRET, StandardCharsets.UTF_8);
+            assertEquals("jdbc:x://h/db?password=[redacted:db]&ssl=true",
+                    masker.mask("jdbc:x://h/db?password=" + rfc3986 + "&ssl=true"));
+            assertEquals("user=a&password=[redacted:db]",
+                    masker.mask("user=a&password=" + form));
+        }
+    }
+
+    @Test
+    void jsonEscapedIsMasked() {
+        try (SecretMasker masker = masker()) {
+            String escaped = SECRET.replace("\\", "\\\\").replace("\"", "\\\"");
+            assertEquals("{\"password\":\"[redacted:db]\"}",
+                    masker.mask("{\"password\":\"" + escaped + "\"}"));
+            // And as itself, still.
+            assertEquals("pw [redacted:db].", masker.mask("pw " + SECRET + "."));
+        }
+    }
+
+    @Test
+    void aSecretNoEncodingChangesIsLookedForOncePerForm() {
+        try (SecretMasker plain = new SecretMasker(Map.of("k",
+                new StaticSecretProvider("abcdefghijkl")))) {
+            // itself, Base64 (whole and at three offsets); nothing to percent- or
+            // JSON-escape, and the URL-safe alphabet is the standard one here.
+            assertEquals(4, plain.forms());
+        }
     }
 }

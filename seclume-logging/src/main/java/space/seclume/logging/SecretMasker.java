@@ -33,7 +33,18 @@ import space.seclume.secret.SecretScope;
  *
  * <p>A text is scanned with the fingerprint, rolled over every window as long
  * as a secret; a window that matches is confirmed by its tag. The secret is
- * looked for as itself and as its Base64. Secrets shorter than
+ * looked for as itself and in the forms it takes on its way into a log line:
+ * <ul>
+ *   <li>its Base64, standard and URL-safe, padded or not - and inside a longer
+ *       Base64 text, at any of the three places a byte can start, which is
+ *       how a password stands in {@code Authorization: Basic
+ *       base64(user:password)} whatever the user; the one or two characters
+ *       at its edges that it shares with its neighbours stay;</li>
+ *   <li>percent-encoded, as in a URL or a form ({@code p%40ss}, and
+ *       {@code URLEncoder}'s {@code +} for a blank);</li>
+ *   <li>JSON-escaped ({@code \"} and {@code \\}, line breaks and tabs).</li>
+ * </ul>
+ * Secrets shorter than
  * {@value #SHORTEST} characters are not looked for: they would mask ordinary
  * words.
  *
@@ -53,6 +64,7 @@ public final class SecretMasker implements AutoCloseable {
     public static final int SHORTEST = 6;
 
     private static final System.Logger LOG = System.getLogger(SecretMasker.class.getName());
+    private static final String HEX = "0123456789ABCDEF";
     private static final String BASE64 =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -134,7 +146,7 @@ public final class SecretMasker implements AutoCloseable {
         return masker == null ? text : masker.mask(text);
     }
 
-    /** How many forms are looked for - two per secret long enough. */
+    /** How many forms are looked for - several per secret long enough, see the class. */
     public int forms() {
         return forms.size();
     }
@@ -172,14 +184,139 @@ public final class SecretMasker implements AutoCloseable {
                     + "it would mask ordinary words");
             return;
         }
+        List<Form> mine = new ArrayList<>();
         try (SecretScope text = SecretScope.allocate(units * 2)) {
             utf16(utf8, length, text.segment());
-            into.add(form(label, text.segment(), units));
+            mine.add(form(label, text.segment(), units));
         }
-        int encoded = ((length + 2) / 3) * 4;
-        try (SecretScope base64 = SecretScope.allocate(encoded * 2)) {
-            base64(utf8, length, base64.segment());
-            into.add(form(label, base64.segment(), encoded));
+        for (boolean url : new boolean[] {false, true}) {
+            base64Forms(label, utf8, length, url, mine);
+        }
+        try (SecretScope escaped = SecretScope.allocate(length * 3 * 2)) {
+            for (boolean form : new boolean[] {false, true}) {
+                int count = percent(utf8, length, form, escaped.segment());
+                if (count >= 0) {
+                    mine.add(form(label, escaped.segment(), count));
+                }
+            }
+        }
+        try (SecretScope escaped = SecretScope.allocate(units * 2 * 2)) {
+            int count = json(utf8, length, escaped.segment());
+            if (count >= 0) {
+                mine.add(form(label, escaped.segment(), count));
+            }
+        }
+        // The same form twice (a secret no encoding changes) is looked for once.
+        for (Form form : mine) {
+            boolean seen = false;
+            for (Form other : into) {
+                seen |= other.label().equals(form.label()) && other.length() == form.length()
+                        && other.fingerprint() == form.fingerprint()
+                        && java.util.Arrays.equals(other.tag(), form.tag());
+            }
+            if (!seen && form.length() >= SHORTEST) {
+                into.add(form);
+            }
+        }
+    }
+
+    /**
+     * The secret's Base64 with padding, and the characters of it that depend
+     * on the secret alone when it starts 0, 1 or 2 bytes into a longer text:
+     * of the stream's 6-bit characters, those wholly inside the secret's bits.
+     * Standard or URL-safe; the URL-safe ones only where they differ.
+     */
+    private void base64Forms(String label, MemorySegment utf8, int length, boolean url,
+            List<Form> into) {
+        for (int shift = 0; shift <= 2; shift++) {
+            int total = shift + length;
+            int encoded = ((total + 2) / 3) * 4;
+            try (SecretScope shifted = SecretScope.allocate(total);
+                 SecretScope base64 = SecretScope.allocate(encoded * 2)) {
+                MemorySegment.copy(utf8, 0, shifted.segment(), shift, length);
+                base64(shifted.segment(), total, base64.segment());
+                boolean differs = false;
+                if (url) {
+                    for (long i = 0; i < encoded; i++) {
+                        char c = base64.segment().get(ValueLayout.JAVA_CHAR_UNALIGNED, 2 * i);
+                        if (c == '+' || c == '/') {
+                            differs = true;
+                            base64.segment().set(ValueLayout.JAVA_CHAR_UNALIGNED, 2 * i,
+                                    c == '+' ? '-' : '_');
+                        }
+                    }
+                    if (!differs) {
+                        return;
+                    }
+                }
+                if (shift == 0) {
+                    into.add(form(label, base64.segment(), encoded));
+                }
+                int first = (8 * shift + 5) / 6;
+                int end = 8 * total / 6;
+                into.add(form(label, base64.segment().asSlice(2L * first), end - first));
+            }
+        }
+    }
+
+    /**
+     * The secret percent-encoded into {@code out} - RFC 3986's unreserved
+     * characters kept, or, {@code form}, {@code URLEncoder}'s way (a blank as
+     * {@code +}, {@code *} kept, {@code ~} encoded) - and its length, or -1
+     * where it is the secret itself.
+     */
+    static int percent(MemorySegment utf8, int length, boolean form, MemorySegment out) {
+        int at = 0;
+        boolean changed = false;
+        for (int i = 0; i < length; i++) {
+            int b = utf8.get(ValueLayout.JAVA_BYTE, i) & 0xff;
+            boolean kept = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+                    || b == '-' || b == '.' || b == '_' || (form ? b == '*' : b == '~');
+            if (kept) {
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, (char) b);
+            } else if (form && b == ' ') {
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, '+');
+                changed = true;
+            } else {
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, '%');
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, HEX.charAt(b >>> 4));
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, HEX.charAt(b & 0xf));
+                changed = true;
+            }
+        }
+        return changed ? at : -1;
+    }
+
+    /**
+     * The secret as a JSON string's content into {@code out} - {@code "},
+     * {@code \}, line breaks and tabs escaped - and its length in characters,
+     * or -1 where it has none of them.
+     */
+    static int json(MemorySegment utf8, int length, MemorySegment out) {
+        int units = utf16Units(utf8, length);
+        try (SecretScope text = SecretScope.allocate(Math.max(1, units * 2))) {
+            utf16(utf8, length, text.segment());
+            int at = 0;
+            boolean changed = false;
+            for (int i = 0; i < units; i++) {
+                char c = text.segment().get(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * i);
+                char escape = switch (c) {
+                    case '"' -> '"';
+                    case '\\' -> '\\';
+                    case '\n' -> 'n';
+                    case '\r' -> 'r';
+                    case '\t' -> 't';
+                    default -> 0;
+                };
+                if (escape != 0) {
+                    out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, '\\');
+                    out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, escape);
+                    changed = true;
+                } else {
+                    out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at++, c);
+                }
+            }
+            return changed ? at : -1;
         }
     }
 
