@@ -116,6 +116,13 @@ All notable changes to seclume are recorded here. Versions follow
   keys in PKCS#8, SEC1 and PEM of both curves, Shamir's bounds, the Java AES-GCM past 255 counter
   blocks; OpenSSH Ed25519 keys built field by field; and 300 Ed25519 signatures byte for byte
   against the JDK's.
+- **SSH: every curve under test, and no signature for another key type.** `JschLoginTest`
+  logged in with Ed25519, P-384 and RSA; P-256 and P-521 join them - P-521's signature is the
+  one whose DER takes a long length - and new tests check each public-key blob against
+  `ssh-keygen`'s `.pub`, every ECDSA signature against the public key once made DER again, and
+  RSA's `rsa-sha2-256`/`-512`. `SeclumeJschIdentity.getSignature` asked for another key type's
+  algorithm (`ssh-ed25519` of an RSA key, say) threw from JCA; it returns null now, as JSch
+  expects of an identity that does not sign that way.
 - **An Oracle row stays inside its answer.** A TTC row is not framed: it ends wherever the
   lengths of its values say. A row whose last length said more than the answer held reached
   into the bytes the receive buffer had after it, and since the JDBC result takes rows over by
