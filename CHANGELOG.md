@@ -142,6 +142,14 @@ All notable changes to seclume are recorded here. Versions follow
   whoever had the placeholder could have had the API key written into a URL, the server's access
   log and every response that echoes the request. The request line and HTTP/2's pseudo-headers
   now go as they are; header lines are rewritten as before (`RequestTargetTest`).
+- **The pool puts catalog and schema back when a connection is returned.** It restored
+  auto-commit, read-only, the isolation level and the network timeout, but left
+  `setCatalog`/`setSchema` where the last borrower took them, and the session reset does not
+  cover them everywhere: MySQL's `COM_RESET_CONNECTION` keeps the current database, and a
+  foreign driver may have no reset at all. With a schema per tenant, the next borrower got
+  another tenant's tables. Now the first `setCatalog` or `setSchema` of a borrow asks what was
+  there, and the return puts it back - or closes the connection where there was none to put
+  back. A borrow that changes neither costs no question (`CatalogAndSchemaOnReturnTest`).
 - **The README starts with the check.** Its first screen now says in two paragraphs what the
   problem is and what seclume is, then gives the one-minute check for any JVM application:
   download `seclume-heapcheck` from Maven Central and run it against a process. The heapcheck

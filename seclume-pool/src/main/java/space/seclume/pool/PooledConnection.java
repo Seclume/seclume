@@ -102,6 +102,15 @@ final class PooledConnection implements Connection {
     private String catalog;
     private String schema;
     /**
+     * What catalog and schema were when this borrow first changed them -
+     * asked then, once, not on every handout - so that the return puts them
+     * back. A connection is not lent to the next borrower on another
+     * borrower's database or schema: a tenant chosen by {@code setSchema}
+     * stays that tenant's.
+     */
+    private String catalogAtBorrow;
+    private String schemaAtBorrow;
+    /**
      * Statements handed out during this borrow; a rebuild needs them closed.
      *
      * <p><b>Null until the first one.</b> It used to be allocated eagerly, and
@@ -299,6 +308,27 @@ final class PooledConnection implements Connection {
         }
         if (is(TOUCHED_ISOLATION) && delegate.getTransactionIsolation() != entry.initialIsolation()) {
             delegate.setTransactionIsolation(entry.initialIsolation());
+        }
+        // The session reset below does not cover these on every database:
+        // MySQL's COM_RESET_CONNECTION keeps the current database, and a
+        // foreign driver may have no reset at all.
+        if (is(TOUCHED_CATALOG) && !java.util.Objects.equals(delegate.getCatalog(),
+                catalogAtBorrow)) {
+            if (catalogAtBorrow == null) {
+                throw new SQLException("the borrower chose a catalog where there was none, and "
+                        + "none cannot be chosen again - the connection is closed rather than "
+                        + "lent on that catalog");
+            }
+            delegate.setCatalog(catalogAtBorrow);
+        }
+        if (is(TOUCHED_SCHEMA) && !java.util.Objects.equals(delegate.getSchema(),
+                schemaAtBorrow)) {
+            if (schemaAtBorrow == null) {
+                throw new SQLException("the borrower chose a schema where there was none, and "
+                        + "none cannot be chosen again - the connection is closed rather than "
+                        + "lent on that schema");
+            }
+            delegate.setSchema(schemaAtBorrow);
         }
         // A timeout one borrower chose for its own work - HikariCP-style
         // around a validation, or a short one for a quick lookup - would
@@ -678,6 +708,9 @@ final class PooledConnection implements Connection {
 
     @Override
     public void setCatalog(String catalog) throws SQLException {
+        if (!is(TOUCHED_CATALOG)) {
+            catalogAtBorrow = call(Connection::getCatalog);
+        }
         run(c -> c.setCatalog(catalog));
         this.catalog = catalog;
         set(TOUCHED_CATALOG, true);
@@ -812,6 +845,9 @@ final class PooledConnection implements Connection {
 
     @Override
     public void setSchema(String schema) throws SQLException {
+        if (!is(TOUCHED_SCHEMA)) {
+            schemaAtBorrow = call(Connection::getSchema);
+        }
         run(c -> c.setSchema(schema));
         this.schema = schema;
         set(TOUCHED_SCHEMA, true);
