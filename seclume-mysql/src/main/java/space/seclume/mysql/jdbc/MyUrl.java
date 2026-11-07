@@ -101,7 +101,11 @@ final class MyUrl {
                     parsed.flag("tinyInt1isBit", true),
                     // Connector/J's disabledAuthenticationPlugins: a server that
                     // asks for one of these gets no answer computed with it.
-                    disabledPlugins(parsed.option("disabledAuthenticationPlugins", null)));
+                    disabledPlugins(parsed.option("disabledAuthenticationPlugins", null)),
+                    // The password itself only to a server whose certificate
+                    // was checked, unless this says otherwise.
+                    parsed.flag("allowCleartextOverUnverifiedTls",
+                            MySession.Settings.cleartextByDefault()));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

@@ -681,6 +681,8 @@ public final class PgSession implements AutoCloseable {
                     }
                     case PgProtocol.AUTH_CLEARTEXT -> {
                         settings.requireAuth().check("password");
+                        refuseUnlessAuthenticated(settings, "the password itself (password "
+                                + "authentication: pg_hba.conf's password, ldap, pam or radius)");
                         asked = true;
                         authenticationMethod = "password";
                         channel.endMessage();
@@ -800,6 +802,30 @@ public final class PgSession implements AutoCloseable {
             channel.flush();
         }
         return gss;
+    }
+
+    /**
+     * A credential that works for whoever receives it - the password itself -
+     * goes only to a server that has proved who it is: tls=verify-full, or
+     * the pinned key. Under the default tls=prefer, TLS that checks nothing,
+     * a server in the middle asked for the password and got it; so did one
+     * that answered the SSLRequest with "no".
+     */
+    private void refuseUnlessAuthenticated(Settings settings, String what)
+            throws java.sql.SQLInvalidAuthorizationSpecException {
+        boolean encrypted = channel.tlsDescription() != null;
+        if (encrypted && (settings.tls().verifies()
+                || space.seclume.internal.TrustChoice.pinned())) {
+            return;
+        }
+        throw new java.sql.SQLInvalidAuthorizationSpecException(
+                "the server asks for " + what + ", which may only go to a server whose "
+                + "certificate was checked - this connection "
+                + (encrypted ? "does not check it (tls=" + settings.tls().name()
+                        .toLowerCase(java.util.Locale.ROOT).replace('_', '-') + ")"
+                    : "is not encrypted")
+                + ". Use tls=verify-full (with tlsRootCert for your own CA) or tlsPin, or have "
+                + "the server ask for scram-sha-256; nothing was sent", "28000");
     }
 
     private void sendPassword(MemorySegment password) throws IOException {

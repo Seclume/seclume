@@ -22,6 +22,18 @@ the result secure is lying by omission. On PostgreSQL the login is additionally 
 connection (SCRAM-SHA-256-PLUS), and when the server offers no binding the client says so
 rather than staying silent.
 
+**The password itself goes only to a server that has proved who it is** - `verify-full`, or
+`tlsPin` (below). Some logins send it as it is: PostgreSQL's `password` method (and `ldap`,
+`pam`, `radius` in `pg_hba.conf`), MySQL's `caching_sha2_password` full path - the first login
+after a server restart, or after `FLUSH PRIVILEGES` - `sha256_password` and
+`mysql_clear_password` (RDS IAM tokens). Under `prefer` or `require` the certificate is not
+checked, so a server in the middle that terminates TLS itself and asks for the password gets
+it; such a login is refused with SQLSTATE 28000 before a byte of the password leaves. SCRAM,
+MD5 and `mysql_native_password` send a proof, not the password, and are not affected (an
+OAuth token was refused the same way already). MySQL has an opt-out for whoever cannot check
+the certificate yet: `allowCleartextOverUnverifiedTls=true` in the URL, or
+`-Dseclume.mysql.allowCleartextOverUnverifiedTls=true` for the whole process.
+
 ## A CA the JVM does not know, without switching the check off
 
 A server whose CA the JVM does not know (an internal CA, a cloud provider's, a self-signed

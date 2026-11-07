@@ -77,6 +77,11 @@ public final class MyDriver implements Driver {
                     "let the driver ask an unencrypted server for its RSA public key "
                     + "(caching_sha2_password full authentication) - off by default, because "
                     + "a man in the middle would answer that question too", false),
+            info("allowCleartextOverUnverifiedTls",
+                    "send the password itself (caching_sha2_password full authentication, "
+                    + "sha256_password, mysql_clear_password) over TLS that did not check the "
+                    + "server's certificate - off by default: it goes only to a server that "
+                    + "proved who it is, tls=verify-full or tlsPin", false),
         };
     }
 

@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The password itself goes only to a server whose certificate was checked.** PostgreSQL's
+  `password` authentication (and `ldap`, `pam`, `radius`), MySQL's `caching_sha2_password` full
+  path, `sha256_password` and `mysql_clear_password` send the password as it is - inside TLS, or
+  for PostgreSQL even without it. Under the default `tls=prefer`, and under `tls=require`, the
+  certificate is not checked: a server in the middle that terminated TLS itself and asked for
+  the password was handed it. Such a login is now refused (SQLSTATE 28000) before a byte of the
+  password leaves, unless the connection is `tls=verify-full` or `tlsPin`. **This changes what
+  works:** a MySQL 8 user on `tls=prefer` now fails the first login after a server restart.
+  Check the certificate (`tls=verify-full`, with `tlsRootCert` for your own CA, or `tlsPin` -
+  `seclume-verify --print-pin` shows it), or set `allowCleartextOverUnverifiedTls=true`
+  (MySQL; `-Dseclume.mysql.allowCleartextOverUnverifiedTls=true` for the process). A container's
+  connection details in Spring Boot set it, as they set `trustServerCertificate` for SQL Server.
+  PostgreSQL has no opt-out (`CleartextPasswordTest`, `CleartextOptOutUrlTest`,
+  `ConnectFailureWipeTest`).
 - **REVIEWS.md: the second round.** The tools around the drivers, the framework integrations'
   password checks, the cloud modules and the default TLS mode's cleartext logins - six findings,
   the open question of private keys in checkpoint images, and what was found sound.

@@ -44,6 +44,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
     private int connectTimeoutMillis = 10_000;
     private boolean allowPublicKeyRetrieval;
     private java.util.Set<String> disabledAuthenticationPlugins = java.util.Set.of();
+    private boolean allowCleartextOverUnverifiedTls = MySession.Settings.cleartextByDefault();
     private SecretProvider secret;
     private space.seclume.tls.ClientIdentity identity;
     private PrintWriter logWriter;
@@ -121,6 +122,20 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
      */
     public void setAllowPublicKeyRetrieval(boolean allow) {
         this.allowPublicKeyRetrieval = allow;
+    }
+
+    /**
+     * Sends the password itself - caching_sha2_password's full path,
+     * sha256_password, mysql_clear_password - over TLS that did not check the
+     * server's certificate. Off: it goes only to a server that proved who it
+     * is (tls=verify-full or tlsPin).
+     */
+    public void setAllowCleartextOverUnverifiedTls(boolean allow) {
+        this.allowCleartextOverUnverifiedTls = allow;
+    }
+
+    public boolean isAllowCleartextOverUnverifiedTls() {
+        return allowCleartextOverUnverifiedTls;
     }
 
     /**
@@ -228,6 +243,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
         this.applicationName = settings.applicationName();
         this.allowPublicKeyRetrieval = settings.allowPublicKeyRetrieval();
         this.disabledAuthenticationPlugins = settings.disabledAuthenticationPlugins();
+        this.allowCleartextOverUnverifiedTls = settings.allowCleartextOverUnverifiedTls();
         this.tls = settings.tls();
     }
 
@@ -280,7 +296,8 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
                 provider, applicationName, connectTimeoutMillis, allowPublicKeyRetrieval,
                 hosts != null ? hosts : HostList.of(host, port),
                 ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity(), true, disabledAuthenticationPlugins);
+                resolvedIdentity(), true, disabledAuthenticationPlugins,
+                allowCleartextOverUnverifiedTls);
         return new MyConnection(space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> MySession.allowingLocalData(loadDataLocal,

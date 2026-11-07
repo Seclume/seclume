@@ -38,10 +38,12 @@ class ConnectionDetailsTest {
         assertEquals("jdbc:seclume:postgresql://localhost:32768/test",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:postgresql://localhost:32768/test?loggerLevel=OFF"));
-        assertEquals("jdbc:seclume:mysql://localhost:32769/test?allowPublicKeyRetrieval=true",
+        assertEquals("jdbc:seclume:mysql://localhost:32769/test?allowPublicKeyRetrieval=true"
+                + "&allowCleartextOverUnverifiedTls=true",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:mysql://localhost:32769/test?useSSL=false"));
-        assertEquals("jdbc:seclume:mysql://localhost:32770/test?allowPublicKeyRetrieval=true",
+        assertEquals("jdbc:seclume:mysql://localhost:32770/test?allowPublicKeyRetrieval=true"
+                + "&allowCleartextOverUnverifiedTls=true",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:mariadb://localhost:32770/test"));
         assertEquals("jdbc:seclume:sqlserver://localhost:32771/master?trustServerCertificate=true",

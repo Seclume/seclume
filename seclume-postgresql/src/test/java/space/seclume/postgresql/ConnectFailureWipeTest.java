@@ -54,6 +54,7 @@ class ConnectFailureWipeTest {
 
     private static final String PASSWORD = "hunter2-hunter2";
     private static final int CLEARTEXT = 3;
+    private static final int MD5 = 5;
 
     /** What the fake server does once a client has connected. */
     @FunctionalInterface
@@ -126,6 +127,18 @@ class ConnectFailureWipeTest {
         out.flush();
     }
 
+    /**
+     * MD5: an answer the driver sends over plain TCP - unlike the password
+     * itself, which goes only to a server whose certificate was checked.
+     */
+    private static void sendPasswordRequest(OutputStream out) throws IOException {
+        out.write('R');
+        writeInt(out, 12);
+        writeInt(out, MD5);
+        out.write(new byte[] {1, 2, 3, 4});
+        out.flush();
+    }
+
     /** ErrorResponse: severity, SQLSTATE, message, then the terminator. */
     private static void sendError(OutputStream out, String sqlState, String message)
             throws IOException {
@@ -172,7 +185,7 @@ class ConnectFailureWipeTest {
 
         try (FakeServer server = new FakeServer((in, out, socket) -> {
             readStartup(in);
-            sendCleartextRequest(out);
+            sendPasswordRequest(out);
             assertEquals((byte) 'p', readMessage(in), "the driver should send a password");
             sendError(out, "28P01", "password authentication failed for user \"app\"");
         })) {
@@ -184,6 +197,29 @@ class ConnectFailureWipeTest {
 
         assertTrue(SecretScope.allocations() > read,
                 "the login never got as far as reading the secret - then this proves nothing");
+        assertEquals(open, SecretScope.open());
+    }
+
+    /**
+     * The password itself, asked for over plain TCP: refused before a byte of
+     * it leaves, and the secret read for the login wiped as on every failure.
+     */
+    @Test
+    void thePasswordItselfIsNotSentOverPlainTcpAndIsWiped() throws Exception {
+        long open = SecretScope.open();
+        AtomicReference<Integer> next = new AtomicReference<>();
+        try (FakeServer server = new FakeServer((in, out, socket) -> {
+            readStartup(in);
+            sendCleartextRequest(out);
+            next.set(in.read());
+        })) {
+            SQLException refused = assertThrows(SQLException.class,
+                    () -> PgSession.open(settings(server.port(), TlsMode.OFF)));
+            assertEquals("28000", refused.getSQLState(), refused.getMessage());
+            assertTrue(refused.getMessage().contains("is not encrypted"), refused.getMessage());
+        }
+        assertTrue(next.get() == null || next.get() == -1 || next.get() == 'X',
+                "something was sent after the request: " + next.get());
         assertEquals(open, SecretScope.open());
     }
 
@@ -289,7 +325,7 @@ class ConnectFailureWipeTest {
 
         try (FakeServer server = new FakeServer((in, out, socket) -> {
             readStartup(in);
-            sendCleartextRequest(out);
+            sendPasswordRequest(out);
             socket.setSoLinger(true, 0); // RST rather than a polite FIN
             socket.close();
         })) {
@@ -316,7 +352,7 @@ class ConnectFailureWipeTest {
 
         try (FakeServer server = new FakeServer((in, out, socket) -> {
             readStartup(in);
-            sendCleartextRequest(out);
+            sendPasswordRequest(out);
             reading.countDown();
             // Nothing else, ever. The client is now waiting for an answer.
             Thread.sleep(TimeUnit.SECONDS.toMillis(30));

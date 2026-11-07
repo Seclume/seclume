@@ -216,7 +216,13 @@
             <!-- The keytool export lets the test certificates be made by the
                  JDK's keytool inside the test JVM instead of a process per
                  step (TestCertificates) - the same tool, the same files. -->
-            <argLine>--enable-native-access=ALL-UNNAMED --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED ${seclume.test.argLine}</argLine>
+            <!-- The MySQL and MariaDB servers the tests reach - CI's
+                 containers, a developer's own - present certificates they
+                 made themselves, which the tests do not check (tls=prefer).
+                 The password itself goes over such TLS only with this
+                 opt-out; the tests of the refusal set the option explicitly
+                 (CleartextPasswordTest). -->
+            <argLine>--enable-native-access=ALL-UNNAMED --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED -Dseclume.mysql.allowCleartextOverUnverifiedTls=true ${seclume.test.argLine}</argLine>
           </configuration>
         </plugin>
         <plugin>
