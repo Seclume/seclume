@@ -150,6 +150,14 @@ All notable changes to seclume are recorded here. Versions follow
   a Vault renewal of exactly half the TTL kept and one second less replaced, a refused renewal,
   an empty namespace, the token scope wiped when forgotten, replaced or closed
   (`VaultLoginEdgesTest`).
+- **`provider=process` with the helper's standard output works, and never waits for ever.**
+  Without `{fifo}` in the command, the helper's standard output is the FIFO - and the JVM
+  opens that write end itself, inside `ProcessBuilder.start()`, which waits for a reader; the
+  reader was opened only after `start()` returned, so the two waited for each other and the
+  call never returned. The read end is now opened first, on a thread of its own. And the
+  timeout applied only after the FIFO had been read to its end: a helper that failed before
+  opening the path it was given, or that never finished, held the caller for ever. A watchdog
+  now ends the helper at the timeout and releases the read (`ProcessSecretProviderTest`).
 - **What the server sent is wiped once it is read.** The TLS record layer opened every record
   into one buffer of its own, and the caller copied the plaintext out - but the buffer kept it:
   the tail of a longer record behind every shorter one, the last record until the memory was
