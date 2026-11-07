@@ -52,6 +52,12 @@ All notable changes to seclume are recorded here. Versions follow
   key id using every header byte, an unknown flags byte; prefixes of 1 and 64 characters, the
   characters just outside the digits and the capitals; a rotation that commits with auto-commit
   off, asks for one batch of rows, and keeps to it when the driver returns more.
+- **Which Azure endpoint a managed identity asks, under test.** The choice between IMDS (a VM),
+  App Service's endpoint and header, and Azure Arc's challenge was made from the process's own
+  environment variables only, so no test could reach it, and ten of its conditions survived
+  every mutant run. The environment is now a parameter inside the package; the public
+  constructors read the process's as before (`AzureManagedIdentityEndpointTest`: every
+  combination of the three variables, blank ones, a non-HTTP endpoint, Arc's one identity).
 - **seclume-heapcheck dumps a process that refuses JMX.** `--pid` asks for the dump through
   JMX, which runs over RMI; a process whose serialization filter rejects what RMI sends -
   Helidon sets `!*` - refused it (`InvalidClassException: filter status: REJECTED`). The same dump

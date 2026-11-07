@@ -89,13 +89,26 @@ public final class AzureManagedIdentitySecretProvider implements SecretProvider 
      *                 system-assigned one
      */
     public AzureManagedIdentitySecretProvider(String resource, String clientId, int maxLength) {
-        this(environment("IDENTITY_ENDPOINT"), environment("IDENTITY_HEADER"), resource,
-                clientId, maxLength, environment("IMDS_ENDPOINT") != null
-                        && environment("IDENTITY_HEADER") == null);
+        this(System::getenv, resource, clientId, maxLength);
+    }
+
+    /**
+     * As {@code environment} says which platform this is - the process's own
+     * variables, or a test's: App Service, Functions and Container Apps set
+     * {@code IDENTITY_ENDPOINT} and {@code IDENTITY_HEADER}; an Azure Arc
+     * machine {@code IDENTITY_ENDPOINT} and {@code IMDS_ENDPOINT} and no
+     * header; anything else is a VM, and IMDS.
+     */
+    AzureManagedIdentitySecretProvider(java.util.function.Function<String, String> environment,
+            String resource, String clientId, int maxLength) {
+        this(variable(environment, "IDENTITY_ENDPOINT"), variable(environment, "IDENTITY_HEADER"),
+                resource, clientId, maxLength, variable(environment, "IMDS_ENDPOINT") != null
+                        && variable(environment, "IDENTITY_HEADER") == null, environment);
     }
 
     private AzureManagedIdentitySecretProvider(String endpoint, String header, String resource,
-            String clientId, int maxLength, boolean arc) {
+            String clientId, int maxLength, boolean arc,
+            java.util.function.Function<String, String> environment) {
         this(arc && endpoint != null ? uri(endpoint).getHost()
                         : endpoint == null || header == null ? IMDS_HOST : uri(endpoint).getHost(),
                 arc && endpoint != null ? port(uri(endpoint))
@@ -104,7 +117,7 @@ public final class AzureManagedIdentitySecretProvider implements SecretProvider 
                 !arc && endpoint != null && header != null ? uri(endpoint).getRawPath() : null,
                 arc ? null : header,
                 arc && endpoint != null ? uri(endpoint).getRawPath() : null,
-                arc && endpoint != null ? arcTokenDirectory() : null);
+                arc && endpoint != null ? arcTokenDirectory(environment) : null);
     }
 
     /**
@@ -120,9 +133,10 @@ public final class AzureManagedIdentitySecretProvider implements SecretProvider 
     }
 
     /** Where the Connected Machine agent writes its challenges. */
-    private static java.nio.file.Path arcTokenDirectory() {
+    private static java.nio.file.Path arcTokenDirectory(
+            java.util.function.Function<String, String> environment) {
         if (space.seclume.internal.Platform.isWindows()) {
-            String programData = environment("ProgramData");
+            String programData = variable(environment, "ProgramData");
             return java.nio.file.Path.of(programData == null ? "C:\\ProgramData" : programData,
                     "AzureConnectedMachineAgent", "Tokens");
         }
@@ -172,10 +186,18 @@ public final class AzureManagedIdentitySecretProvider implements SecretProvider 
         }
     }
 
-    private static String environment(String variable) {
+    private static String variable(java.util.function.Function<String, String> environment,
+            String variable) {
         // seclume-allow: an endpoint on loopback and the platform's request guard for it, not a credential
-        String value = System.getenv(variable);
+        String value = environment.apply(variable);
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** Where the token is asked for, as the constructors worked it out - for the tests. */
+    String endpointForTests() {
+        return host + ":" + port + (appServicePath != null ? " app-service " + appServicePath
+                + " header=" + (appServiceHeader != null) : "")
+                + (arcPath != null ? " arc " + arcPath + " tokens=" + arcTokens : "");
     }
 
     private static java.net.URI uri(String endpoint) {
