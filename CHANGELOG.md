@@ -192,6 +192,12 @@ All notable changes to seclume are recorded here. Versions follow
   RSA's `rsa-sha2-256`/`-512`. `SeclumeJschIdentity.getSignature` asked for another key type's
   algorithm (`ssh-ed25519` of an RSA key, say) threw from JCA; it returns null now, as JSch
   expects of an identity that does not sign that way.
+- **A PostgreSQL row has as many values as its result has columns.** The `DataRow` decoder
+  took the server's value count as it came. One value too few, and the missing cell kept the
+  place and length of the row before - offsets into the same receive buffer - so another row's
+  value was handed on as this one's, silently: bob's row with alice's secret in it. A row whose
+  count is not the `RowDescription`'s now breaks the connection (`RowColumnCountTest`; two of its
+  three tests fail on the old decoder).
 - **An Oracle row stays inside its answer.** A TTC row is not framed: it ends wherever the
   lengths of its values say. A row whose last length said more than the answer held reached
   into the bytes the receive buffer had after it, and since the JDBC result takes rows over by
