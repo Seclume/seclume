@@ -41,7 +41,9 @@ a root the JVM already trusts. Cloud SQL has a CA per instance, which you downlo
 console and name as a file.
 
 `java -jar seclume-verify.jar --print-pin "<url>"` connects once without checking and prints
-the pin, with the certificate's subject, issuer and expiry. Compare it with what the server's
+the pin, with the certificate's subject, issuer and expiry. The connection ends with the TLS
+handshake: no login, and the secret is not read - whoever answers an unchecked connection gets
+nothing but a ClientHello. Compare it with what the server's
 owner says before it goes into the URL. Both options work on all four drivers and both TLS
 stacks, SQL Server's TDS 7.4 handshake included (until 25.09.2026 it ignored them and checked
 no host name). A pin is the trust on its own, even with `trustServerCertificate=true`. A wrong

@@ -57,6 +57,14 @@ All notable changes to seclume are recorded here. Versions follow
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
   does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
   2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
+- **`seclume-verify --print-pin` no longer logs in.** It connects with `tls=require` -
+  encryption that checks nothing, because the server's key is what it wants to find out - and
+  then went on to the whole login: the secret read from its provider and sent to whoever had
+  answered. A server in the middle got a cleartext password from PostgreSQL's password
+  authentication or MySQL's `caching_sha2_password` full path, and an offline-testable proof
+  from the rest. The connection now ends with the TLS handshake, before a byte of the protocol,
+  on all four drivers and both TLS stacks, SQL Server's TDS 7.4 handshake included
+  (`TrustChoice.certificateOnly`; `CertificateOnlyTest`, 6 tests).
 - **REVIEWS.md: the code reviews on record.** What the internal reviews of 6 and 7 November
   read, the 22 findings with their severity and the pull request that fixed each, what was found
   sound, the residuals accepted, and where the next review starts. Linked from SECURITY.md and
