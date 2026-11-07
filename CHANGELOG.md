@@ -24,6 +24,11 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **The MongoDB drivers on Windows and macOS against real servers.** `mongodb-platforms` runs
+  the core and driver modules' tests against the image's MongoDB 7.0 (Windows) and Homebrew's
+  8.0 (macOS) - a standalone and a three-member replica set, TLS required, SCRAM and X.509 -
+  started as mongod processes by `mongo_native_fixtures.sh`, as `mongo_fixtures.sh` starts them
+  in containers on Linux. Only the load-balanced cluster is left to Linux.
 - **LDAP: the placeholder logs in only the application.** Spring Security binds an end user
   over the same socket factory as the application, with what they typed - and the socket
   replaced the placeholder in any simple bind, whatever the name, whichever registered server
