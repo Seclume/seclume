@@ -24,6 +24,20 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **LDAP: the placeholder logs in only the application.** Spring Security binds an end user
+  over the same socket factory as the application, with what they typed - and the socket
+  replaced the placeholder in any simple bind, whatever the name, whichever registered server
+  the connection went to. The placeholder was `seclume-ldap-binds-in-native-memory:1`, a
+  counter. Typed into a login form, it bound as the service account wherever the user name
+  led to the service account's DN; with `authentication=kerberos` it did more: the socket ran
+  the service's Kerberos bind and answered JNDI with its success, whatever user was logging
+  in. And one registration's password went to another registered server if its placeholder
+  was sent there. Now the placeholder is 144 random bits after the prefix, and it is replaced -
+  or starts the Kerberos bind - only in a bind as the registration's `user=`, on a connection
+  to the registration's host and port; anywhere else it goes out as typed, and the server
+  refuses it. An unknown placeholder no longer ends the connection, and a BindRequest whose BER
+  lengths run past it is refused rather than read past. `LdapPlaceholderSlotTest` (12 tests,
+  without a server; 6 fail on the old socket).
 - **The PostgreSQL and MySQL drivers on Windows and macOS against real servers.** Linux x64
   was the only platform whose CI talked to databases. `postgresql-platforms` and
   `mysql-platforms` run the drivers' tests on Windows (the image's PostgreSQL 17 and MySQL 8.4)
