@@ -3,7 +3,8 @@
 seclume has not had an external security review yet. This page is for whoever does one. It
 says what to look at first, what is implemented here rather than taken from a library, what
 the tests already show, and which questions are open. The threat model behind it is
-[THREAT-MODEL.md](THREAT-MODEL.md).
+[THREAT-MODEL.md](THREAT-MODEL.md). What internal reviews have already read, found and fixed -
+and where they have not looked yet - is in [REVIEWS.md](REVIEWS.md).
 
 ## The claim under review
 
