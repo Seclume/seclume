@@ -157,7 +157,7 @@ final class HttpFraming {
      * The head with the secrets written where their placeholders are, in
      * native memory; its length is the scope's.
      */
-    static SecretScope rewrite(byte[] bytes, String server) throws IOException {
+    static SecretScope rewrite(byte[] bytes) throws IOException {
         SecretScope out = SecretScope.allocateShared(bytes.length * 2 + 64 * 1024);
         try {
             MemorySegment w = out.segment();
@@ -180,7 +180,7 @@ final class HttpFraming {
                     end++;
                 }
                 end = Math.min(end + 1, bytes.length);
-                at = rewriteLine(bytes, line, end, w, at, server);
+                at = rewriteLine(bytes, line, end, w, at);
                 line = end;
             }
             out.length(at);
@@ -192,8 +192,8 @@ final class HttpFraming {
     }
 
     /** One header line, secrets written in. @return where the next line goes */
-    private static int rewriteLine(byte[] bytes, int from, int to, MemorySegment w, int at,
-            String server) throws IOException {
+    private static int rewriteLine(byte[] bytes, int from, int to, MemorySegment w, int at)
+            throws IOException {
         int basic = basicValue(bytes, from, to);
         if (basic >= 0) {
             int valueEnd = to;
@@ -210,10 +210,9 @@ final class HttpFraming {
                 int size = Base64Off.decode(encoded, 0, valueEnd - basic, decoded, 0);
                 byte[] plain = decoded.asSlice(0, size).toArray(ValueLayout.JAVA_BYTE); // seclume-allow: user:placeholder - no secret
                 int found = indexOf(plain, PREFIX, 0);
-                int placeholderEnd = found < 0 ? -1 : placeholderEnd(plain, found);
-                SecretProvider provider = found < 0 ? null
-                        : provider(plain, found, placeholderEnd, server);
-                if (provider != null) {
+                if (found >= 0) {
+                    int placeholderEnd = placeholderEnd(plain, found);
+                    SecretProvider provider = provider(plain, found, placeholderEnd);
                     try (SecretScope secret = SecretScope.fromProvider(provider);
                          SecretScope credentials = SecretScope.allocate(
                                  found + secret.length() + plain.length - placeholderEnd);
@@ -248,17 +247,10 @@ final class HttpFraming {
             MemorySegment.copy(bytes, cursor, w, ValueLayout.JAVA_BYTE, at, found - cursor);
             at += found - cursor;
             int placeholderEnd = placeholderEnd(bytes, found);
-            SecretProvider provider = provider(bytes, found, placeholderEnd, server);
-            if (provider == null) {
-                // Not this server's secret: the placeholder goes as it is.
-                MemorySegment.copy(bytes, found, w, ValueLayout.JAVA_BYTE, at,
-                        placeholderEnd - found);
-                at += placeholderEnd - found;
-            } else {
-                try (SecretScope secret = SecretScope.fromProvider(provider)) {
-                    MemorySegment.copy(secret.segment(), 0, w, at, secret.length());
-                    at += secret.length();
-                }
+            try (SecretScope secret = SecretScope.fromProvider(provider(bytes, found,
+                    placeholderEnd))) {
+                MemorySegment.copy(secret.segment(), 0, w, at, secret.length());
+                at += secret.length();
             }
             cursor = placeholderEnd;
         }
@@ -305,12 +297,14 @@ final class HttpFraming {
         return end;
     }
 
-    /** The provider, or null where this placeholder's secret does not go to {@code server}. */
-    private static SecretProvider provider(byte[] bytes, int from, int to, String server)
-            throws IOException {
+    private static SecretProvider provider(byte[] bytes, int from, int to) throws IOException {
         // seclume-allow: the placeholder - no secret
         String placeholder = new String(bytes, from, to - from, StandardCharsets.US_ASCII);
-        return CredentialPlaceholders.provider(placeholder, server);
+        SecretProvider provider = CredentialPlaceholders.provider(placeholder);
+        if (provider == null) {
+            throw new IOException("a credential placeholder this process did not hand out");
+        }
+        return provider;
     }
 
     private static long header(String head, String name) throws IOException {

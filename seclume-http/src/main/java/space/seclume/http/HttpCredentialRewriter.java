@@ -62,7 +62,7 @@ final class HttpCredentialRewriter implements SeclumeSslEngine.Outgoing {
         String text = new String(head, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT); // seclume-allow: a request head with placeholders - no secret
         space.seclume.jfr.Observed.secretUse("http", where,
                 text.contains(": basic ") ? "basic" : "header");
-        return HttpFraming.rewrite(head, where);
+        return HttpFraming.rewrite(head);
     }
 
     /** A head without a placeholder, as it is - in a scope only because a step takes one. */

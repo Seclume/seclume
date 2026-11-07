@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 import java.sql.SQLException;
-import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -104,24 +103,8 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
      * A placeholder for the secret named by {@code spec} - the secret
      * provider's options - to give the HTTP client instead of the secret.
      * Read each time a request carries it, so a rotated token is picked up.
-     *
-     * <p>Its secret goes to one server: the host and port of the first
-     * request it is written into. Sent anywhere else - a submodule's host, a
-     * redirect's, a URL someone else chose - it goes as the placeholder, and
-     * that server refuses it. For a secret that several servers take, see
-     * {@link #placeholder(String, Collection)}.
      */
     public static String placeholder(String spec) {
-        return placeholder(spec, java.util.List.of());
-    }
-
-    /**
-     * A placeholder whose secret goes to {@code servers} only - each
-     * {@code host:port}, an IPv6 address in brackets - such as the nodes of a
-     * cluster. Empty is {@link #placeholder(String)}: the first server it is
-     * written for.
-     */
-    public static String placeholder(String spec, Collection<String> servers) {
         Map<String, String> options = parse(spec);
         if (!options.containsKey("provider")) {
             throw new IllegalArgumentException("no secret named: give the secret provider's "
@@ -130,7 +113,7 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
         if (!options.containsKey("max-length") && !options.containsKey("maxLength")) {
             options.put("max-length", "16384");           // a JWT - a Kubernetes token - is kilobytes
         }
-        return CredentialPlaceholders.register(SecretProviders.of(options), servers);
+        return CredentialPlaceholders.register(SecretProviders.of(options));
     }
 
     /** For clients that ask: accepts the hostnames seclume's TLS already checked. */
