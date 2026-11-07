@@ -147,20 +147,19 @@ public final class SeclumeJwt implements AutoCloseable {
         if (first < 0 || second < 0 || token.indexOf('.', second + 1) >= 0) {
             throw new InvalidTokenException("not a compact JWS: three parts separated by dots");
         }
-        byte[] header;
-        byte[] payload;
-        byte[] signature;
-        try {
-            header = DECODER.decode(token.substring(0, first));
-            payload = DECODER.decode(token.substring(first + 1, second));
-            signature = DECODER.decode(token.substring(second + 1));
-        } catch (IllegalArgumentException e) {
-            throw new InvalidTokenException("a part of the token is not base64url", e);
-        }
+        byte[] header = canonical(token.substring(0, first));
+        byte[] payload = canonical(token.substring(first + 1, second));
+        byte[] signature = canonical(token.substring(second + 1));
         String alg = field(header, "alg");
         if (!key.algorithm.equals(alg)) {
             throw new InvalidTokenException("the token says alg " + alg + ", this key is "
                     + key.algorithm);
+        }
+        // RFC 7515 4.1.11: an extension the recipient does not understand makes
+        // the token invalid - and none is understood here.
+        if (JsonOff.has(MemorySegment.ofArray(header), header.length, "crit")) {
+            throw new InvalidTokenException("the token names critical header parameters "
+                    + "(crit), and this verifier understands none");
         }
         space.seclume.jfr.SeclumeEvents.Signature event =
                 space.seclume.jfr.Observed.beginSignature();
@@ -180,6 +179,28 @@ public final class SeclumeJwt implements AutoCloseable {
             throw new InvalidTokenException("the token is not valid before " + nbf);
         }
         return new String(payload, StandardCharsets.UTF_8); // seclume-allow: the claims - public, the application's data
+    }
+
+    /**
+     * One part of the token, decoded - and refused unless it is base64url as
+     * RFC 7515 writes it: without padding, and with the spare bits of the
+     * last character zero. The JDK's decoder takes both, so a signature part
+     * could be written several ways and still verify: one token, several
+     * strings, and a list of revoked or already-used tokens kept by their
+     * string would not know it again.
+     */
+    private static byte[] canonical(String part) {
+        byte[] decoded;
+        try {
+            decoded = DECODER.decode(part);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidTokenException("a part of the token is not base64url", e);
+        }
+        if (!ENCODER.encodeToString(decoded).equals(part)) {
+            throw new InvalidTokenException("a part of the token is not base64url as a JWS "
+                    + "writes it - padded, or with spare bits set");
+        }
+        return decoded;
     }
 
     private static String field(byte[] json, String name) {
