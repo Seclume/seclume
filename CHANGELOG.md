@@ -135,6 +135,12 @@ All notable changes to seclume are recorded here. Versions follow
   know it again. Every part must now be base64url as RFC 7515 writes it. A token with a `crit`
   header is refused too: RFC 7515 makes it invalid unless the recipient understands every
   extension listed, and this verifier understands none (`SeclumeJwtTest`).
+- **The admission webhook leaves what `envFrom` sets alone.** It added `JAVA_TOOL_OPTIONS`
+  (and `SPIFFE_ENDPOINT_SOCKET`) to a container that set neither in `env` - but a container may
+  take them from a ConfigMap or Secret through `envFrom`, which the webhook cannot see, and an
+  `env` entry wins over `envFrom`: the application's own JVM options were replaced by the
+  webhook's. A container with `envFrom` gets the folder and a warning saying what to add, and no
+  variable.
 - **HTTP: a credential goes into a header, never into the request target.** A credential
   placeholder was replaced wherever it stood in a request head, the request line included -
   HTTP/2's `:path` and `:authority` as well. The client holds the placeholder on the heap, a heap

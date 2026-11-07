@@ -128,6 +128,49 @@ class InjectionTest {
                 result.warnings().toString());
     }
 
+    /**
+     * {@code envFrom} may set JAVA_TOOL_OPTIONS from a ConfigMap, and an
+     * {@code env} entry wins over it: the webhook would have replaced the
+     * application's options with its own. It adds no variable then, and says
+     * what to add.
+     */
+    @Test
+    void aContainerWithEnvFromKeepsWhatItTakesFromThere() {
+        Map<String, Object> pod = pod("""
+                {"metadata":{"annotations":{"seclume.space/redact-dumps":"true",
+                  "seclume.space/spiffe":"true"}},
+                 "spec":{"containers":[
+                   {"name":"a","envFrom":[{"configMapRef":{"name":"jvm"}}]},
+                   {"name":"b","envFrom":[],"env":[{"name":"X","value":"1"}]},
+                   {"name":"c","envFrom":[{"secretRef":{"name":"s"}}],
+                    "env":[{"name":"SPIFFE_ENDPOINT_SOCKET","value":"unix:///mine.sock"}]}]}}""");
+        Injection.Result result = Injection.mutate(pod, SETTINGS);
+        Map<String, Object> after = applied(pod, result);
+
+        Map<String, Object> a = container(after, "a");
+        assertNull(a.get("env"), Json.write(a));
+        assertTrue(Json.write(a.get("volumeMounts")).contains("/seclume/dumps"),
+                "the folder is mounted all the same");
+        assertTrue(result.warnings().stream().anyMatch(w -> w.contains("container a")
+                && w.contains("envFrom") && w.contains(Injection.JVM_OPTIONS)),
+                result.warnings().toString());
+        assertTrue(result.warnings().stream().anyMatch(w -> w.contains("container a")
+                && w.contains("SPIFFE_ENDPOINT_SOCKET")), result.warnings().toString());
+
+        // An empty envFrom takes nothing.
+        Map<String, Object> b = container(after, "b");
+        assertEquals(Injection.JVM_OPTIONS, env(b, "JAVA_TOOL_OPTIONS"));
+        assertEquals("1", env(b, "X"));
+        assertTrue(env(b, "SPIFFE_ENDPOINT_SOCKET").startsWith("unix://"));
+
+        // The container's own socket stays, with no warning about it.
+        Map<String, Object> c = container(after, "c");
+        assertEquals("unix:///mine.sock", env(c, "SPIFFE_ENDPOINT_SOCKET"));
+        assertNull(env(c, "JAVA_TOOL_OPTIONS"));
+        assertFalse(result.warnings().stream().anyMatch(w -> w.contains("container c")
+                && w.contains("SPIFFE_ENDPOINT_SOCKET")), result.warnings().toString());
+    }
+
     @Test
     void onlyTheContainersNamedAreChanged() {
         Map<String, Object> pod = pod("""
