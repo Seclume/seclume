@@ -415,9 +415,12 @@ could guess against; the tests prove the first with a heap dump. A log line is s
 fingerprint over every window as long as a secret, and a window that matches is confirmed by
 its tag.
 
-- **What is found:** the secret itself and its Base64, anywhere in the message or in an
-  exception's message and stack trace. Secrets shorter than six characters are not looked for:
-  they would mask ordinary words.
+- **What is found:** the secret itself and the forms it takes on its way into a line, anywhere
+  in the message or in an exception's message and stack trace: its Base64, standard or
+  URL-safe, padded or not, and inside a longer Base64 text - `Authorization: Basic
+  base64(user:password)` whatever the user, the one or two characters the password shares with
+  its neighbours left; percent-encoded, as in a JDBC URL or a form; JSON-escaped. Secrets
+  shorter than six characters are not looked for: they would mask ordinary words.
 - **Which secrets:** every data source's password and `seclume.heapdump.secrets.<label>.*` -
   the same the heap dump redaction looks for. Read again once every bean is made, and then every
   `seclume.logging.refresh-interval`.
