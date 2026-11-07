@@ -147,7 +147,7 @@
       <dependency>
         <groupId>com.google.guava</groupId>
         <artifactId>guava</artifactId>
-        <version>33.7.2-jre</version>
+        <version>33.8.0-jre</version>
       </dependency>
       <!-- Coverage-guided fuzzing: an ordinary build replays the saved
            inputs, JAZZER_FUZZ=1 searches for new ones. Tests only. -->
