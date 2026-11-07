@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -92,17 +91,17 @@ class CleartextPasswordTest {
         return CompletableFuture.supplyAsync(() -> {
             try (Socket plain = listener.accept()) {
                 plain.setSoTimeout(30_000);
-                DataInputStream request = new DataInputStream(plain.getInputStream());
-                request.readNBytes(request.readInt() - 4);          // SSLRequest
+                InputStream request = plain.getInputStream();
+                request.readNBytes(readInt(request) - 4);           // SSLRequest
                 plain.getOutputStream().write('S');
                 plain.getOutputStream().flush();
                 SSLSocket tls = (SSLSocket) serverContext.getSocketFactory()
                         .createSocket(plain, "127.0.0.1", plain.getPort(), true);
                 tls.setUseClientMode(false);
                 tls.startHandshake();
-                DataInputStream in = new DataInputStream(tls.getInputStream());
+                InputStream in = tls.getInputStream();
                 OutputStream out = tls.getOutputStream();
-                in.readNBytes(in.readInt() - 4);                     // startup message
+                in.readNBytes(readInt(in) - 4);                      // startup message
                 out.write('R');
                 writeInt(out, 8);
                 writeInt(out, 3);                                    // the password itself
@@ -116,7 +115,7 @@ class CleartextPasswordTest {
                 if (tag != 'p') {
                     return null;
                 }
-                byte[] body = in.readNBytes(in.readInt() - 4);
+                byte[] body = in.readNBytes(readInt(in) - 4);
                 byte[] error = "SFATAL\0C28P01\0Mno\0\0".getBytes(StandardCharsets.US_ASCII);
                 out.write('E');
                 writeInt(out, 4 + error.length);
@@ -127,6 +126,15 @@ class CleartextPasswordTest {
                 throw new IllegalStateException(e);
             }
         });
+    }
+
+    private static int readInt(InputStream in) throws IOException {
+        byte[] four = in.readNBytes(4);
+        if (four.length < 4) {
+            throw new IOException("the client hung up");
+        }
+        return (four[0] & 0xff) << 24 | (four[1] & 0xff) << 16 | (four[2] & 0xff) << 8
+                | (four[3] & 0xff);
     }
 
     private static void writeInt(OutputStream out, int value) throws IOException {

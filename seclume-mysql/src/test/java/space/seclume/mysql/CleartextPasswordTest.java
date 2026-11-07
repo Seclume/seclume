@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
-import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -157,12 +156,15 @@ class CleartextPasswordTest {
     }
 
     private static byte[] readPacket(InputStream in) throws IOException {
-        DataInputStream data = new DataInputStream(in);
-        int length = data.readUnsignedByte() | data.readUnsignedByte() << 8
-                | data.readUnsignedByte() << 16;
-        data.readUnsignedByte();
-        byte[] payload = new byte[length];
-        data.readFully(payload);
+        byte[] head = in.readNBytes(4);
+        if (head.length < 4) {
+            throw new IOException("the client hung up");
+        }
+        int length = (head[0] & 0xff) | (head[1] & 0xff) << 8 | (head[2] & 0xff) << 16;
+        byte[] payload = in.readNBytes(length);
+        if (payload.length < length) {
+            throw new IOException("the client hung up");
+        }
         return payload;
     }
 
