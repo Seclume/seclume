@@ -168,7 +168,9 @@ class LocalPostgresTest {
         SQLException failure = assertThrows(SQLException.class,
                 () -> PgSession.open(new PgSession.Settings(HOST, PORT, DATABASE, USER, wrong))
                         .close());
-        assertEquals("28P01", failure.getSQLState());
+        // Once 08001 on Windows (#241): the message says what was read instead.
+        assertEquals("28P01", failure.getSQLState(), () -> failure + " / cause: "
+                + failure.getCause());
     }
 
     private static PgSession open() throws SQLException {
