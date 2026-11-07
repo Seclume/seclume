@@ -159,6 +159,12 @@ All notable changes to seclume are recorded here. Versions follow
   copying their span from the raw segment, those bytes came back as the end of a value - the
   same shape as the MySQL row fix. A row that ends past its answer is refused as malformed,
   before the handler sees it (`TtcResultTest`).
+- **R2DBC: three more kinds of literal left alone.** The placeholder rewriting (`$1`, `:name`
+  to JDBC's `?`) read past the end of PostgreSQL's `E'it\'s'` strings, where a backslash
+  escapes the quote, and of Oracle's `q'[it's]'` strings, where a quote needs no escape - and a
+  `$1` or `:a` after such a quote, inside the literal, became a parameter; and it took the `$1`
+  of a PostgreSQL identifier such as `col$1` for one. Each is copied as it is now
+  (`PlaceholdersTest`, 6 tests more; 4 fail on the old parser).
 - **Examples for Micronaut and Helidon MP** (`examples/micronaut`, `examples/helidon`): an
   application with no seclume code, the pool from `application.yml` or
   `microprofile-config.properties`, the password from Vault. `examples/check-example.sh` starts

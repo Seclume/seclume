@@ -79,4 +79,66 @@ class PlaceholdersTest {
         assertEquals(List.of("$9", "$10", "$010", "$99999999999"),
                 List.copyOf(parsed.positions().keySet()));
     }
+
+    @Test
+    void postgresEscapeStringsEndWhereTheirQuoteIsNotEscaped() {
+        String sql = "select E'it\\'s $1', e'\\\\', $1, 'plain\\' , $2";
+        Placeholders.Parsed parsed = Placeholders.parse(sql, Dialect.POSTGRESQL);
+        assertEquals("select E'it\\'s $1', e'\\\\', ?, 'plain\\' , ?", parsed.sql());
+        assertEquals(List.of("$1", "$2"), List.copyOf(parsed.positions().keySet()));
+        // An identifier ending in e before a quote is not an E string: the
+        // backslash is a character and the quote ends the literal.
+        Placeholders.Parsed name = Placeholders.parse("select type'\\', $1",
+                Dialect.POSTGRESQL);
+        assertEquals("select type'\\', ?", name.sql());
+        assertEquals(1, name.count());
+    }
+
+    @Test
+    void aDollarInsideAPostgresIdentifierIsPartOfIt() {
+        Placeholders.Parsed parsed = Placeholders.parse(
+                "select col$1, t$x$.a, \"q$2\" from t$1 where c = $1 and d = ($2)",
+                Dialect.POSTGRESQL);
+        assertEquals("select col$1, t$x$.a, \"q$2\" from t$1 where c = ? and d = (?)",
+                parsed.sql());
+        assertEquals(List.of("$1", "$2"), List.copyOf(parsed.positions().keySet()));
+        assertArrayEquals(new int[] {1}, parsed.positions().get("$1"));
+    }
+
+    @Test
+    void postgresDollarQuotesStillOpenAfterAnOperator() {
+        Placeholders.Parsed parsed = Placeholders.parse(
+                "select $1||$a$ $2 $a$, ($$ $3 $$), $2", Dialect.POSTGRESQL);
+        assertEquals("select ?||$a$ $2 $a$, ($$ $3 $$), ?", parsed.sql());
+        assertEquals(List.of("$1", "$2"), List.copyOf(parsed.positions().keySet()));
+    }
+
+    @Test
+    void oracleAlternativeQuotingIsALiteral() {
+        String sql = "select q'[it's :a]', Q'{:b}', q'(:c)', q'<:d>', q'!:e's!', nq'#:f#',"
+                + " :g from t where x = :h";
+        Placeholders.Parsed parsed = Placeholders.parse(sql, Dialect.ORACLE);
+        assertEquals("select q'[it's :a]', Q'{:b}', q'(:c)', q'<:d>', q'!:e's!', nq'#:f#',"
+                + " ? from t where x = ?", parsed.sql());
+        assertEquals(List.of("g", "h"), List.copyOf(parsed.positions().keySet()));
+    }
+
+    @Test
+    void anOracleNameEndingInQIsNotAQuote() {
+        Placeholders.Parsed parsed = Placeholders.parse(
+                "select seq'x', :a, 'y' from dual where b = :b", Dialect.ORACLE);
+        // seq'x' is the column seq and the literal 'x'; the parameters are code.
+        assertEquals("select seq'x', ?, 'y' from dual where b = ?", parsed.sql());
+        assertEquals(2, parsed.count());
+    }
+
+    @Test
+    void anUnclosedOracleQuoteRunsToTheEnd() {
+        Placeholders.Parsed parsed = Placeholders.parse("select q'[ :a ' :b", Dialect.ORACLE);
+        assertEquals("select q'[ :a ' :b", parsed.sql());
+        assertEquals(0, parsed.count());
+        Placeholders.Parsed spaced = Placeholders.parse("select q' :a' , :b", Dialect.ORACLE);
+        // a blank is no delimiter: q is a name and ' :a' a literal
+        assertEquals("select q' :a' , ?", spaced.sql());
+    }
 }
