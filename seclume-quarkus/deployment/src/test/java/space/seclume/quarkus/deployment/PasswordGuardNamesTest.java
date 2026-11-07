@@ -66,7 +66,7 @@ class PasswordGuardNamesTest {
 
     private static List<String> refused(String... namesAndValues) {
         Map<String, String> values = new LinkedHashMap<>();
-        for (int i = 0; i < namesAndValues.length; i += 2) {
+        for (int i = 0; i + 1 < namesAndValues.length; i += 2) {
             values.put(namesAndValues[i], namesAndValues[i + 1]);
         }
         return SeclumePasswordGuard.refused(new MapConfig(values));
