@@ -109,4 +109,37 @@ class SeclumeSettingsTest {
         SeclumeSettings.of(Map.of("javax.sql.DataSource.legacy.dataSource.url", "jdbc:h2:mem:x",
                 "javax.sql.DataSource.legacy.dataSource.password", "sa")).refusePasswords();
     }
+
+    /**
+     * As environment variables, the way a container passes a password:
+     * MicroProfile Config reads {@code JAVAX_SQL_DATASOURCE_APP_DATASOURCE_PASSWORD}
+     * as {@code javax.sql.DataSource.app.dataSource.password}, the same
+     * {@code String} on the heap - and the environment's source lists it by
+     * its own name, which the check never matched.
+     */
+    @Test
+    void passwordsInEnvironmentVariables() {
+        Map<String, String> all = new LinkedHashMap<>();
+        all.put("JAVAX_SQL_DATASOURCE_APP_DATASOURCE_URL", "jdbc:seclume:postgresql://db/app?user=app");
+        all.put("JAVAX_SQL_DATASOURCE_APP_DATASOURCE_PASSWORD", "zl-helidon-canary");
+        all.put("javax.sql.DataSource.app-db.dataSource.url", "jdbc:seclume:mysql://db/app?user=app");
+        all.put("JAVAX_SQL_DATASOURCE_APP_DB_PASSWORD", "zl-helidon-canary");
+        all.put("JAVAX_SQL_DATASOURCE_LEGACY_DATASOURCE_URL", "jdbc:h2:mem:x");
+        all.put("JAVAX_SQL_DATASOURCE_LEGACY_DATASOURCE_PASSWORD", "sa");
+        all.put("SECLUME_DATASOURCES_ORDERS_PASSWORD", "zl-helidon-canary");
+        all.put("SECLUME_RABBITMQ_PASSWORD_FILE", "/run/secrets/rabbit");
+        SeclumeSettings settings = SeclumeSettings.of(all);
+        assertEquals(List.of("JAVAX_SQL_DATASOURCE_APP_DATASOURCE_PASSWORD", "JAVAX_SQL_DATASOURCE_APP_DB_PASSWORD",
+                "SECLUME_DATASOURCES_ORDERS_PASSWORD"), settings.passwords().stream().sorted().toList());
+        IllegalStateException e = assertThrows(IllegalStateException.class, settings::refusePasswords);
+        assertFalse(e.getMessage().contains("zl-helidon-canary"), e.getMessage());
+        assertEquals(Map.of(), settings.dataSources(), "an environment variable's name is not a data source");
+    }
+
+    @Test
+    void aDottedPasswordBesideAnEnvironmentVariablesUrl() {
+        assertEquals(List.of("javax.sql.DataSource.app.dataSource.password"), SeclumeSettings.of(Map.of(
+                "JAVAX_SQL_DATASOURCE_APP_DATASOURCE_URL", "jdbc:seclume:postgresql://db/app?user=app",
+                "javax.sql.DataSource.app.dataSource.password", "zl-helidon-canary")).passwords());
+    }
 }
