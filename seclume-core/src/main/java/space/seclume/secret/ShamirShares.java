@@ -92,6 +92,11 @@ public final class ShamirShares {
             Path directory) throws IOException {
         long split;
         List<Path> written = new ArrayList<>();
+        List<SecretScope> scopes = new ArrayList<>();
+        boolean done = false;
+        // The secret's copy, the shares and their text in locked memory kept
+        // out of core dumps, as every secret is - a share is one, and k of
+        // them are the secret.
         try (Arena arena = Arena.ofConfined();
              SecretScope secret = SecretScope.fromProvider(source)) {
             int length = secret.length();
@@ -103,53 +108,122 @@ public final class ShamirShares {
             Entropy.fill(id);
             split = id.get(ValueLayout.JAVA_LONG_UNALIGNED.withOrder(java.nio.ByteOrder.BIG_ENDIAN), 0);
             int payload = length + CHECK;
-            MemorySegment plain = arena.allocate(payload);
+            if (shares < 1 || shares > 255) {
+                throw new IllegalArgumentException("1 to 255 shares, not " + shares);
+            }
+            // One block for all of it: a scope per share would lock a page each.
+            MemorySegment work = held(scopes, payload * (shares + 1) + textLength(length));
+            MemorySegment plain = work.asSlice(0, payload);
             MemorySegment[] ys = new MemorySegment[shares];
-            MemorySegment text = arena.allocate(textLength(length));
-            try {
-                MemorySegment.copy(secret.segment(), 0, plain, 0, length);
-                check(split, plain, length, plain, length);
-                for (int i = 0; i < shares; i++) {
-                    ys[i] = arena.allocate(payload);
-                }
-                Shamir.split(plain, 0, payload, threshold, shares, ys, 0);
-                Files.createDirectories(directory);
-                for (int i = 0; i < shares; i++) {
-                    int n = encode(split, threshold, i + 1, ys[i], payload, text);
-                    Path file = directory.resolve("share-" + (i + 1) + "-of-" + shares + ".txt");
-                    write(file, text, n);
-                    written.add(file);
-                }
-            } finally {
-                plain.fill((byte) 0);
-                text.fill((byte) 0);
-                for (MemorySegment y : ys) {
-                    if (y != null) {
-                        y.fill((byte) 0);
-                    }
+            for (int i = 0; i < shares; i++) {
+                ys[i] = work.asSlice((long) payload * (i + 1), payload);
+            }
+            MemorySegment text = work.asSlice((long) payload * (shares + 1), textLength(length));
+            MemorySegment.copy(secret.segment(), 0, plain, 0, length);
+            check(split, plain, length, plain, length);
+            Shamir.split(plain, 0, payload, threshold, shares, ys, 0);
+            Files.createDirectories(directory);
+            for (int i = 0; i < shares; i++) {
+                int n = encode(split, threshold, i + 1, ys[i], payload, text);
+                Path file = directory.resolve("share-" + (i + 1) + "-of-" + shares + ".txt");
+                write(file, text, n);
+                written.add(file);
+            }
+            done = true;
+        } finally {
+            for (SecretScope scope : scopes) {
+                scope.close();
+            }
+            if (!done) {
+                // All or nothing: the shares written before the failure go
+                // again. Left behind, they were shares of a split nobody was
+                // told about - "no shares written", said the tool.
+                for (Path file : written) {
+                    discard(file);
                 }
             }
         }
         return written;
     }
 
+    private static MemorySegment held(List<SecretScope> scopes, int length) {
+        SecretScope scope = SecretScope.allocate(length);
+        scopes.add(scope);
+        return scope.segment();
+    }
+
+    /** Overwritten with zeros, then deleted - as far as the file system lets either happen. */
+    private static void discard(Path file) {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE,
+                java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            ByteBuffer zeros = ByteBuffer.allocateDirect((int) Math.min(channel.size(), 1 << 16));
+            long at = 0;
+            while (at < channel.size()) {
+                zeros.clear().limit((int) Math.min(zeros.capacity(), channel.size() - at));
+                at += channel.write(zeros, at);
+            }
+            channel.force(true);
+        } catch (IOException | RuntimeException ignored) {
+            // deleted below all the same
+        }
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+            // nothing more to do
+        }
+    }
+
+    /**
+     * A new file, owner-only from its first byte, written through the one
+     * channel that created it: the name is not looked up a second time, so
+     * nothing swapped in between - a link to somewhere else - gets the share.
+     */
     private static void write(Path file, MemorySegment text, int length) throws IOException {
-        if (Files.exists(file)) {
+        java.util.Set<java.nio.file.OpenOption> options = java.util.Set.of(
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        boolean posix = file.getFileSystem().supportedFileAttributeViews().contains("posix");
+        FileChannel channel;
+        try {
+            channel = posix
+                    ? FileChannel.open(file, options, PosixFilePermissions.asFileAttribute(
+                            PosixFilePermissions.fromString("rw-------")))
+                    : FileChannel.open(file, options);
+        } catch (FileAlreadyExistsException e) {
             throw new FileAlreadyExistsException(file.toString(), null,
                     "a share is never overwritten");
         }
-        try {
-            Files.createFile(file, PosixFilePermissions.asFileAttribute(
-                    PosixFilePermissions.fromString("rw-------")));
-        } catch (UnsupportedOperationException e) {
-            Files.createFile(file);
-        }
-        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE)) {
+        try (channel) {
+            if (!posix) {
+                ownerOnly(file);
+            }
             ByteBuffer view = text.asSlice(0, length).asByteBuffer();
             while (view.hasRemaining()) {
                 channel.write(view);
             }
+        } catch (IOException | RuntimeException e) {
+            discard(file);
+            throw e;
         }
+    }
+
+    /**
+     * Windows: the file's ACL down to its owner, before a byte of the share
+     * is in it. A new file takes its directory's ACL, which on a shared or
+     * system directory lets every local user read it.
+     */
+    private static void ownerOnly(Path file) throws IOException {
+        java.nio.file.attribute.AclFileAttributeView acl = Files.getFileAttributeView(file,
+                java.nio.file.attribute.AclFileAttributeView.class);
+        if (acl == null) {
+            return;
+        }
+        java.nio.file.attribute.UserPrincipal owner = acl.getOwner();
+        acl.setAcl(List.of(java.nio.file.attribute.AclEntry.newBuilder()
+                .setType(java.nio.file.attribute.AclEntryType.ALLOW)
+                .setPrincipal(owner)
+                .setPermissions(java.util.EnumSet.allOf(
+                        java.nio.file.attribute.AclEntryPermission.class))
+                .build()));
     }
 
     /**

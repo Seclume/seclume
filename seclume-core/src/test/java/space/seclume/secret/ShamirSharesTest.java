@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.CRC32;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -277,6 +278,58 @@ class ShamirSharesTest {
         }
         assertThrows(FileAlreadyExistsException.class,
                 () -> ShamirShares.split(new FileSecretProvider(secretFile, 256), 2, 3, out));
+    }
+
+    /**
+     * All or nothing. A split that failed at the second file left the first
+     * behind - a share of a split the tool had just reported as "no shares
+     * written".
+     */
+    @Test
+    void aSplitThatFailsLeavesNoShareBehind() throws IOException {
+        Path secretFile = Files.write(directory.resolve("secret-partial"), secret());
+        Path out = Files.createDirectories(directory.resolve("partial"));
+        Path theirs = Files.writeString(out.resolve("share-2-of-3.txt"), "someone else's file");
+        assertThrows(FileAlreadyExistsException.class,
+                () -> ShamirShares.split(new FileSecretProvider(secretFile, 256), 2, 3, out));
+        assertFalse(Files.exists(out.resolve("share-1-of-3.txt")), "the first share stayed");
+        assertFalse(Files.exists(out.resolve("share-3-of-3.txt")));
+        assertEquals("someone else's file", Files.readString(theirs), "a file not ours was touched");
+    }
+
+    /** Where a link stands under a share's name, nothing is written - not through it either. */
+    @Test
+    void aLinkWhereAShareGoesIsRefusedAndItsTargetUntouched() throws IOException {
+        Path out = Files.createDirectories(directory.resolve("linked"));
+        Assumptions.assumeTrue(Files.getFileStore(out).supportsFileAttributeView("posix"),
+                "links need privileges on Windows");
+        Path target = directory.resolve("elsewhere");
+        Files.createSymbolicLink(out.resolve("share-1-of-2.txt"), target);
+        Path secretFile = Files.write(directory.resolve("secret-linked"), secret());
+        assertThrows(FileAlreadyExistsException.class,
+                () -> ShamirShares.split(new FileSecretProvider(secretFile, 256), 2, 2, out));
+        assertFalse(Files.exists(target), "the share went through the link");
+        assertFalse(Files.exists(out.resolve("share-2-of-2.txt")));
+    }
+
+    /**
+     * Windows: a new file takes its directory's ACL, which can let every local
+     * user read it. A share's ACL is its owner, and only its owner.
+     */
+    @Test
+    void onWindowsAShareIsTheOwnersAlone() throws IOException {
+        Path out = Files.createDirectories(directory.resolve("acl"));
+        Assumptions.assumeTrue(!Files.getFileStore(out).supportsFileAttributeView("posix")
+                && Files.getFileStore(out).supportsFileAttributeView("acl"), "no ACLs here");
+        Path secretFile = Files.write(directory.resolve("secret-acl"), secret());
+        for (Path file : ShamirShares.split(new FileSecretProvider(secretFile, 256), 2, 2, out)) {
+            java.nio.file.attribute.AclFileAttributeView view = Files.getFileAttributeView(file,
+                    java.nio.file.attribute.AclFileAttributeView.class);
+            List<java.nio.file.attribute.AclEntry> entries = view.getAcl();
+            assertEquals(1, entries.size(), entries.toString());
+            assertEquals(view.getOwner(), entries.get(0).principal());
+            assertEquals(java.nio.file.attribute.AclEntryType.ALLOW, entries.get(0).type());
+        }
     }
 
     @Test
