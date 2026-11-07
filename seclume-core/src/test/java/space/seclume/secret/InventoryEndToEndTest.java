@@ -85,8 +85,11 @@ class InventoryEndToEndTest {
             settings.put("ciphertext", "vault:v1:AAAA");
             settings.put("token-provider", "file");
             settings.put("token-path", token.toString());
-            try (FieldKeys keys = FieldKeys.builder().key(1, SecretProviders.of(settings))
-                    .build()) {
+            // Held here to the end: the inventory holds providers weakly, and
+            // the ring has read its key and keeps no reference to this one -
+            // a collection in between took it out of the snapshot.
+            SecretProvider transit = SecretProviders.of(settings);
+            try (FieldKeys keys = FieldKeys.builder().key(1, transit).build()) {
                 List<Asset> assets = CryptoInventory.snapshot();
                 List<String> providers = assets.stream().filter(a -> a.kind() == Kind.SECRET)
                         .map(a -> a.facts().get("provider")).toList();
@@ -110,6 +113,8 @@ class InventoryEndToEndTest {
                 assertFalse(cbom.contains("zlInventory"));
                 assertTrue(cbom.contains("\"algorithm:AES-256-GCM-SIV\""));
                 assertEquals(1, keys.keyIds().size());
+            } finally {
+                java.lang.ref.Reference.reachabilityFence(transit);
             }
         }
     }
