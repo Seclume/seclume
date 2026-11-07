@@ -249,11 +249,26 @@ public class SeclumeEnvironmentPostProcessor implements EnvironmentPostProcessor
         return allowed;
     }
 
-    private static boolean isSuspect(String property) {
+    /**
+     * Whether the name is one a secret goes by: {@code spring.mail.password},
+     * and as Spring's relaxed binding writes the same property -
+     * {@code app.db-password}, and the environment variable
+     * {@code SPRING_DATASOURCE_PASSWORD}. The environment's source lists its
+     * variables by their own names, and with only {@code .password} looked
+     * for, a password set the way containers set them - in the environment -
+     * was never named.
+     */
+    static boolean isSuspect(String property) {
         String lower = property.toLowerCase(Locale.ROOT);
         for (String ending : SUSPECT) {
-            if (lower.endsWith("." + ending) || lower.equals(ending)) {
+            if (lower.equals(ending) || lower.equals(ending.replace('-', '_'))) {
                 return true;
+            }
+            for (String separator : List.of(".", "-", "_")) {
+                if (lower.endsWith(separator + ending)
+                        || lower.endsWith(separator + ending.replace('-', '_'))) {
+                    return true;
+                }
             }
         }
         return false;

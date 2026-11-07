@@ -40,6 +40,13 @@ import space.seclume.jfr.SeclumeEvents;
  * readable secret differs from the last readable one, as a
  * {@code space.seclume.SecretRotation} event.
  *
+ * <p>Before a checkpoint (CRaC, SnapStart) the key and the fingerprint are
+ * wiped: with both in the image, a password could be guessed against the
+ * fingerprint offline. After the restore the watch cannot tell whether the
+ * secret changed in between - an image may be restored long after it was
+ * taken - so its first look reports a rotation, and what was built with the
+ * secret is built again.
+ *
  * <p>How often to look is a trade: every tick is a read of the source - for a
  * file nothing, for Vault a request. The kubelet updates a mounted secret
  * within about a minute, so 30 seconds loses nothing there.
@@ -54,9 +61,13 @@ public final class SecretWatch implements AutoCloseable {
     private final String name;
     private final SecretProvider source;
     private final Runnable onChange;
-    private final SecretScope key = SecretScope.allocateShared(32);
-    private final SecretScope fingerprint = SecretScope.allocateShared(32);
-    private final SecretScope candidate = SecretScope.allocateShared(32);
+    private SecretScope key = SecretScope.allocateShared(32);            // guarded by checking
+    private SecretScope fingerprint = SecretScope.allocateShared(32);    // guarded by checking
+    private SecretScope candidate = SecretScope.allocateShared(32);      // guarded by checking
+    /** Wiped for a checkpoint; the next look after it cannot compare and reports a change. */
+    private boolean forgotten;
+    /** Set by the first look after a restore, which reports a change whatever it finds. */
+    private boolean reportNext;
     private final Object checking = new Object();
     private final AtomicLong changes = new AtomicLong();
     private boolean known;
@@ -69,6 +80,20 @@ public final class SecretWatch implements AutoCloseable {
         this.source = source;
         this.onChange = onChange;
         Entropy.fill(key.segment(), 0, 32);
+        space.seclume.internal.Checkpoint.register(this, SecretWatch::forget);
+    }
+
+    /** Wipes the key and the fingerprint - before a checkpoint. */
+    private void forget() {
+        synchronized (checking) {
+            if (closed || forgotten) {
+                return;
+            }
+            key.close();
+            fingerprint.close();
+            candidate.close();
+            forgotten = true;
+        }
     }
 
     /**
@@ -130,19 +155,34 @@ public final class SecretWatch implements AutoCloseable {
             if (closed) {
                 return false;
             }
+            if (forgotten) {
+                // A new key: the old one is gone, and with it what the
+                // fingerprint could be compared against.
+                key = SecretScope.allocateShared(32);
+                fingerprint = SecretScope.allocateShared(32);
+                candidate = SecretScope.allocateShared(32);
+                Entropy.fill(key.segment(), 0, 32);
+                forgotten = false;
+                known = false;
+                reportNext = true;
+            }
             if (!fingerprint(candidate.segment())) {
                 return false;
             }
             if (!known) {
                 MemorySegment.copy(candidate.segment(), 0, fingerprint.segment(), 0, 32);
                 known = true;
-                return false;
+                if (!reportNext) {
+                    return false;
+                }
+                reportNext = false;                 // after a restore: assume it changed
+            } else {
+                if (candidate.segment().asSlice(0, 32)
+                        .mismatch(fingerprint.segment().asSlice(0, 32)) < 0) {
+                    return false;
+                }
+                MemorySegment.copy(candidate.segment(), 0, fingerprint.segment(), 0, 32);
             }
-            if (candidate.segment().asSlice(0, 32)
-                    .mismatch(fingerprint.segment().asSlice(0, 32)) < 0) {
-                return false;
-            }
-            MemorySegment.copy(candidate.segment(), 0, fingerprint.segment(), 0, 32);
         }
         changes.incrementAndGet();
         SeclumeEvents.SecretRotation event = Observed.beginSecretRotation();

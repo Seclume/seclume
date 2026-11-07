@@ -137,7 +137,8 @@ public final class EncryptedColumn {
     private final FieldKeys ring;
     private final String name;
     private final Mode mode;
-    private final Map<Integer, SecretScope> keys;
+    /** Replaced when the ring reads its keys again after a checkpoint; see {@link FieldKeys}. */
+    private volatile Map<Integer, SecretScope> keys;
 
     EncryptedColumn(FieldKeys ring, String name, Mode mode, Map<Integer, SecretScope> keys) {
         this.ring = ring;
@@ -188,16 +189,14 @@ public final class EncryptedColumn {
                 Entropy.fill(value, HEADER, AesGcmSiv.NONCE);
             }
             MemorySegment aad = associatedData(arena, value, context0);
-            ring.lock().lock();
-            try {
+            ring.underKeys(() -> {
                 MemorySegment keys = columnKey(keyId);
                 commitment(keys, value, value, HEADER + AesGcmSiv.NONCE);
                 AesGcmSiv.encrypt(keys, 0, FieldKeys.KEY_LENGTH,
                         value, HEADER, aad, 0, aad.byteSize(),
                         plaintext, 0, length, value, BODY);
-            } finally {
-                ring.lock().unlock();
-            }
+                return null;
+            });
             return value.toArray(ValueLayout.JAVA_BYTE);
         }
     }
@@ -239,23 +238,19 @@ public final class EncryptedColumn {
             MemorySegment value = arena.allocate(ciphertext.length);
             MemorySegment.copy(ciphertext, 0, value, ValueLayout.JAVA_BYTE, 0, ciphertext.length);
             MemorySegment aad = associatedData(arena, value, context0);
-            boolean authentic;
-            ring.lock().lock();
-            try {
+            boolean authentic = ring.underKeys(() -> {
                 MemorySegment keys = columnKey(keyId);
                 // The commitment first: a value made under another key - one that
                 // happens to open under this one too - is refused before AES-GCM-SIV
                 // is asked, and with the same words, so that neither check is an oracle.
                 MemorySegment expected = arena.allocate(COMMITMENT);
                 commitment(keys, value, expected, 0);
-                authentic = space.seclume.crypto.ConstantTime.equals(expected, 0, value,
+                return space.seclume.crypto.ConstantTime.equals(expected, 0, value,
                         HEADER + AesGcmSiv.NONCE, COMMITMENT)
                         && AesGcmSiv.decrypt(keys, 0, FieldKeys.KEY_LENGTH,
                                 value, HEADER, aad, 0, aad.byteSize(),
                                 value, BODY, length, target, 0);
-            } finally {
-                ring.lock().unlock();
-            }
+            });
             if (!authentic) {
                 throw new FieldEncryptionException("a value of " + name + " did not authenticate"
                         + " - another column's, another row's context, or altered");
@@ -485,7 +480,7 @@ public final class EncryptedColumn {
         }
         int keyId = ((ciphertext[2] & 0xff) << 24) | ((ciphertext[3] & 0xff) << 16)
                 | ((ciphertext[4] & 0xff) << 8) | (ciphertext[5] & 0xff);
-        if (!keys.containsKey(keyId)) {
+        if (!ring.keyIds().contains(keyId)) {
             throw new FieldEncryptionException("a value of " + name + " is under key " + keyId
                     + ", which the ring does not hold (it holds " + ring.keyIds() + ")");
         }
@@ -522,6 +517,11 @@ public final class EncryptedColumn {
 
     void wipe() {
         keys.values().forEach(SecretScope::close);
+    }
+
+    /** The keys derived anew after the ring read its own again; the old ones are wiped already. */
+    void rekey(Map<Integer, SecretScope> fresh) {
+        keys = fresh;
     }
 
     @Override

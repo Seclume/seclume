@@ -67,7 +67,8 @@ not*.
 Who is defended against, and who is not, attacker by attacker: [THREAT-MODEL.md](THREAT-MODEL.md).
 seclume has had no external security review yet; [AUDIT.md](AUDIT.md) is the guide for one - the
 cryptography implemented here rather than taken from a library, the decoders of hostile input
-and their fuzz targets, and the open questions.
+and their fuzz targets, and the open questions. The internal code reviews - what was read, what
+was found and fixed where, what was found sound - are recorded in [REVIEWS.md](REVIEWS.md).
 
 Every claim with its test, method, result, limits and platform:
 [SECURITY-VERIFICATION.md](SECURITY-VERIFICATION.md). The tests that carry the claims are a

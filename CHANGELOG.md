@@ -12,6 +12,17 @@ All notable changes to seclume are recorded here. Versions follow
   token in unpadded or URL-safe Base64. Each of these is looked for now - the same way, a
   fingerprint and an HMAC tag computed in native memory, no copy of the secret on the heap
   (`SecretMaskerTest`, 5 tests more).
+- **The password guards see environment variables.** Spring's, Micronaut's and Helidon's
+  check for a password in the configuration matched property names only - `.password` - while
+  the environment's property source lists its variables by their own names: a password in
+  `SPRING_DATASOURCE_PASSWORD`, `DATASOURCES_DEFAULT_PASSWORD` or
+  `SECLUME_DATASOURCES_ORDERS_PASSWORD`, how containers pass one, was never named, though the
+  framework reads it as the same property and it is the same `String` on the heap. Spring's
+  guard also knows `app.db-password` and `app.db_password` now; Micronaut's refuses a password
+  among Hikari's `data-source-properties`. Note: with `seclume.secret-guard=fail` an application
+  whose environment holds such a variable no longer starts until it is removed or listed in
+  `seclume.secret-guard-allow` (`SeclumeEnvironmentPostProcessorTest`,
+  `ConfigurationGuardEverywhereTest`, `SeclumeSettingsTest`, `SeclumeCdiExtensionTest`).
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to
@@ -20,6 +31,18 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **`seclume-verify --migrate` prints no password, whatever form the URL writes it in.** The
+  translation drops `password=`, but a URL has other places for one, and their contents went
+  into the printed configuration: Connector/J's `user:password@host` stayed in the host list;
+  its key-value hosts `(host=db,password=...)` too; a braced mssql-jdbc value
+  `password={a;b=c}` was split at the `;` and the piece after it was printed as a "not
+  translated" property name; an Oracle password with an `@` in quotes became part of the host;
+  and a URL no driver here reads was quoted to 30 characters in the error. mssql-jdbc property
+  names are read in any case now (`Password=`, `TrustServerCertificate=true` was "not
+  translated" instead of named unsafe), and Connector/J's `password1`-`password3` count as
+  passwords (`MigrateNeverPrintsAPasswordTest`, 9 tests). The report's URL line masks more
+  than `password=` and `secret=` now: a provider's nested `token-value=`, `share.1.value=` or
+  `secret-id-value=`, a `user:password@` before the host, `%`-encoded names (`VerifyTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
@@ -33,6 +56,10 @@ All notable changes to seclume are recorded here. Versions follow
   from the rest. The connection now ends with the TLS handshake, before a byte of the protocol,
   on all four drivers and both TLS stacks, SQL Server's TDS 7.4 handshake included
   (`TrustChoice.certificateOnly`; `CertificateOnlyTest`, 6 tests).
+- **REVIEWS.md: the code reviews on record.** What the internal reviews of 6 and 7 November
+  read, the 22 findings with their severity and the pull request that fixed each, what was found
+  sound, the residuals accepted, and where the next review starts. Linked from SECURITY.md and
+  AUDIT.md; CONTRIBUTING asks every review fix to be entered there.
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
@@ -97,6 +124,18 @@ All notable changes to seclume are recorded here. Versions follow
   and its NULL bitmap, were read before anything checked they were there. Every cell is now
   held to what is left of the row, and anything that does not fit is a `Truncated` - a
   connection failure, as the session maps it, not a value (`MyRowBoundsTest`).
+- **A checkpoint with field encryption, log masking or a secret watch: taken, and without
+  their keys.** `seclume-crac` waits until no secret is open before it lets a checkpoint
+  through - but a field key ring holds its data keys (and every column's and blind index's key)
+  for as long as it is open, the log masker its HMAC key, a secret watch its key and
+  fingerprint. With any of them in use the checkpoint was refused after
+  `seclume.crac.quiesceMillis`, every time; and without `seclume-crac` an image held them - the
+  data keys outright, and keyed tags that test password guesses offline. Now each wipes what it
+  holds before a checkpoint and reads or makes it again at its next use: the ring from its
+  providers, which stay open with it (they were closed once the keys were read), a subject's
+  ring from its store, the masker and the watch with a new key. The first look of a watch after
+  a restore reports a change, since it cannot compare (`FieldKeysCheckpointTest`, 4 tests;
+  `SecretWatchTest`, `SecretMaskerTest`).
 - **The Maven wrapper's jar from the cache.** The first full flake hunt - `ci.yml` three times
   at once - found no flaky test; its three failures were jobs whose runner could not download
   `maven-wrapper.jar` from Maven Central in three attempts. `mvnw-retry.sh` now keeps the jar in
@@ -196,6 +235,12 @@ All notable changes to seclume are recorded here. Versions follow
   RSA's `rsa-sha2-256`/`-512`. `SeclumeJschIdentity.getSignature` asked for another key type's
   algorithm (`ssh-ed25519` of an RSA key, say) threw from JCA; it returns null now, as JSch
   expects of an identity that does not sign that way.
+- **A PostgreSQL row has as many values as its result has columns.** The `DataRow` decoder
+  took the server's value count as it came. One value too few, and the missing cell kept the
+  place and length of the row before - offsets into the same receive buffer - so another row's
+  value was handed on as this one's, silently: bob's row with alice's secret in it. A row whose
+  count is not the `RowDescription`'s now breaks the connection (`RowColumnCountTest`; two of its
+  three tests fail on the old decoder).
 - **An Oracle row stays inside its answer.** A TTC row is not framed: it ends wherever the
   lengths of its values say. A row whose last length said more than the answer held reached
   into the bytes the receive buffer had after it, and since the JDBC result takes rows over by
