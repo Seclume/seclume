@@ -84,11 +84,41 @@ public final class MySession implements AutoCloseable {
                            space.seclume.internal.jdbc.TlsStack tlsStack,
                            space.seclume.tls.ClientIdentity identity,
                            boolean tinyInt1isBit,
-                           java.util.Set<String> disabledAuthenticationPlugins) {
+                           java.util.Set<String> disabledAuthenticationPlugins,
+                           boolean allowCleartextOverUnverifiedTls) {
+
+        /**
+         * The process-wide default of {@code allowCleartextOverUnverifiedTls}:
+         * {@code -Dseclume.mysql.allowCleartextOverUnverifiedTls=true}. Off.
+         */
+        public static final String CLEARTEXT_PROPERTY =
+                "seclume.mysql.allowCleartextOverUnverifiedTls";
 
         public Settings {
             disabledAuthenticationPlugins = disabledAuthenticationPlugins == null
                     ? java.util.Set.of() : java.util.Set.copyOf(disabledAuthenticationPlugins);
+        }
+
+        /**
+         * Without the cleartext opt-out: the password itself goes only to a
+         * server whose certificate was checked - unless
+         * {@link #CLEARTEXT_PROPERTY} says otherwise for the whole process.
+         */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity, boolean tinyInt1isBit,
+                        java.util.Set<String> disabledAuthenticationPlugins) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, tls, tlsStack, identity,
+                    tinyInt1isBit, disabledAuthenticationPlugins, cleartextByDefault());
+        }
+
+        /** {@link #CLEARTEXT_PROPERTY}, read when a connection is configured. */
+        public static boolean cleartextByDefault() {
+            return Boolean.getBoolean(CLEARTEXT_PROPERTY);
         }
 
         /** Every plugin the driver speaks allowed - what a URL without the option means. */
@@ -190,7 +220,7 @@ public final class MySession implements AutoCloseable {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
                     resultLimit, tls, tlsStack, identity, tinyInt1isBit,
-                    disabledAuthenticationPlugins);
+                    disabledAuthenticationPlugins, allowCleartextOverUnverifiedTls);
         }
 
     }
@@ -799,7 +829,7 @@ public final class MySession implements AutoCloseable {
             int lengthAt = out.position();
             out.putByte((byte) 0);                 // a placeholder for the length
             int written = writeAuthResponse(settings, plugin, scramble, out,
-                    channel.isEncrypted());
+                    channel.isEncrypted(), authenticatedServer(channel, settings));
             if (written > 250) {
                 throw new SQLException(
                         "the authentication response is " + written + " bytes; seclume writes "
@@ -828,7 +858,7 @@ public final class MySession implements AutoCloseable {
     /** Computes the answer of the respective plugin - in the buffer, not beside it. */
     private static int writeAuthResponse(Settings settings, String plugin,
                                          MemorySegment scramble, WireBuffer out,
-                                         boolean encrypted)
+                                         boolean encrypted, boolean authenticated)
             throws SQLException {
         int at = out.position();
         try (SecretScope password = SecretScope.fromProvider(settings.secret())) {
@@ -844,18 +874,24 @@ public final class MySession implements AutoCloseable {
                 case "caching_sha2_password" -> CachingSha2Password.response(
                         password.secret(), 0, password.length(), scramble, 0,
                         out.segment(), at);
-                case "sha256_password" ->
-                        // Inside TLS this plugin wants the password itself;
-                        // without TLS only the request for the key can stand
-                        // here and the real answer follows in the exchange.
-                        encrypted ? writeClearPassword(password, out, at) : 0;
+                case "sha256_password" -> {
+                    // Inside TLS this plugin wants the password itself;
+                    // without TLS only the request for the key can stand
+                    // here and the real answer follows in the exchange.
+                    if (!encrypted) {
+                        yield 0;
+                    }
+                    refuseCleartext(settings, authenticated, "sha256_password");
+                    yield writeClearPassword(password, out, at);
+                }
                 case "mysql_clear_password" -> {
                     if (!encrypted) {
                         throw new SQLException(
                                 "the server asked for mysql_clear_password, which sends the "
                                 + "password in the clear - seclume refuses that on an "
-                                + "unencrypted connection. Use tls=require.", "28000");
+                                + "unencrypted connection. Use tls=verify-full.", "28000");
                     }
+                    refuseCleartext(settings, authenticated, "mysql_clear_password");
                     yield writeClearPassword(password, out, at);
                 }
                 default -> throw new SQLException(
@@ -865,6 +901,43 @@ public final class MySession implements AutoCloseable {
             out.position(at + written);
             return written;
         }
+    }
+
+    /**
+     * Whether the server has proved who it is: TLS whose certificate was
+     * checked (tls=verify-full) or whose key is the pinned one.
+     */
+    private boolean authenticatedServer(Settings settings) {
+        return authenticatedServer(channel, settings);
+    }
+
+    private static boolean authenticatedServer(MyChannel channel, Settings settings) {
+        return channel.isEncrypted() && (settings.tls().verifies()
+                || space.seclume.internal.TrustChoice.pinned());
+    }
+
+    /**
+     * The password itself goes only to a server that has proved who it is.
+     * Encrypted is not enough: under the default tls=prefer the certificate
+     * is not checked, and a server in the middle that asked for the full
+     * caching_sha2_password path - or for sha256_password or
+     * mysql_clear_password - was handed the password in the clear, inside
+     * TLS it had terminated itself. {@code allowCleartextOverUnverifiedTls}
+     * (or {@code -Dseclume.mysql.allowCleartextOverUnverifiedTls}) sends it
+     * anyway, for whoever cannot check the certificate yet.
+     */
+    private static void refuseCleartext(Settings settings, boolean authenticated, String why)
+            throws java.sql.SQLInvalidAuthorizationSpecException {
+        if (authenticated || settings.allowCleartextOverUnverifiedTls()) {
+            return;
+        }
+        throw new java.sql.SQLInvalidAuthorizationSpecException(
+                "the server needs the password itself (" + why + "), which goes only to a "
+                + "server whose certificate was checked - this connection does not check it "
+                + "(tls=" + settings.tls().name().toLowerCase(java.util.Locale.ROOT)
+                        .replace('_', '-') + "). Use tls=verify-full (with tlsRootCert for your "
+                + "own CA) or tlsPin; allowCleartextOverUnverifiedTls=true sends it anyway. "
+                + "Nothing was sent", "28000");
     }
 
     /**
@@ -1108,7 +1181,9 @@ public final class MySession implements AutoCloseable {
                 // Inside TLS the password travels as it is - that is what the
                 // encryption is for, and it is what every other client does
                 // here. The RSA detour below exists only for the unencrypted
-                // case.
+                // case. But only inside TLS that checked whom it reached.
+                refuseCleartext(settings, authenticatedServer(settings),
+                        "caching_sha2_password full authentication");
                 sendClearPassword(settings);
                 return plugin;
             }
@@ -1262,6 +1337,7 @@ public final class MySession implements AutoCloseable {
                     if (!channel.isEncrypted()) {
                         yield 0;     // the key exchange follows, see handleAuthMoreData
                     }
+                    refuseCleartext(settings, authenticatedServer(settings), plugin);
                     yield writeClearPassword(password, out, at);
                 }
                 default -> throw new SQLException(

@@ -66,7 +66,8 @@ public class SeclumeConnectionDetailsAutoConfiguration {
     /**
      * A container's JDBC URL in seclume's form. Its query options are the
      * vendor driver's and are dropped; what the containers need instead is
-     * added - a public key over an unencrypted MySQL connection, and trust in
+     * added - a public key over an unencrypted MySQL connection, the password
+     * over its unchecked TLS, and trust in
      * the self-signed certificate a SQL Server container makes.
      */
     static String translate(String url) {
@@ -76,7 +77,12 @@ public class SeclumeConnectionDetailsAutoConfiguration {
         }
         if (lower.startsWith("jdbc:mysql:") || lower.startsWith("jdbc:mariadb:")) {
             String rest = url.substring(url.indexOf(':', 5) + 1);
-            return "jdbc:seclume:mysql:" + withoutQuery(rest) + "?allowPublicKeyRetrieval=true";
+            // A container's self-signed certificate cannot be checked, and
+            // its password came as a String already: the password itself
+            // may go over its unchecked TLS, as trustServerCertificate does
+            // for SQL Server below.
+            return "jdbc:seclume:mysql:" + withoutQuery(rest)
+                    + "?allowPublicKeyRetrieval=true&allowCleartextOverUnverifiedTls=true";
         }
         if (lower.startsWith("jdbc:sqlserver:")) {
             String[] parts = url.substring("jdbc:sqlserver:".length()).split(";");
