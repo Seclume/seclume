@@ -20,6 +20,16 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **`seclume-verify --migrate` prints no password, whatever form the URL writes it in.** The
+  translation drops `password=`, but a URL has other places for one, and their contents went
+  into the printed configuration: Connector/J's `user:password@host` stayed in the host list;
+  its key-value hosts `(host=db,password=...)` too; a braced mssql-jdbc value
+  `password={a;b=c}` was split at the `;` and the piece after it was printed as a "not
+  translated" property name; an Oracle password with an `@` in quotes became part of the host;
+  and a URL no driver here reads was quoted to 30 characters in the error. mssql-jdbc property
+  names are read in any case now (`Password=`, `TrustServerCertificate=true` was "not
+  translated" instead of named unsafe), and Connector/J's `password1`-`password3` count as
+  passwords (`MigrateNeverPrintsAPasswordTest`, 9 tests).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
