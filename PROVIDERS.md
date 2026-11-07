@@ -350,7 +350,10 @@ about it (Shamir's scheme over GF(2^8), byte by byte):
 java -jar seclume-verify.jar --split "file:/root/master.key" 3 5 /root/shares
 ```
 
-Each share is one line in an owner-only file, `seclume-share-1.<split>.<k>.<x>.<value>.<crc>`.
+Each share is one line in an owner-only file, `seclume-share-1.<split>.<k>.<x>.<value>.<crc>`
+(mode `0600`; on Windows an ACL of the owner alone). A split is all or nothing: if one file
+cannot be written, the ones before it are overwritten and deleted, and an existing file is never
+overwritten.
 Each holder keeps theirs where only they can reach it; the application reads shares in the
 order configured until it has `k`, passing over the ones that cannot be read - that a holder is
 away is the point - and fails, naming which shares were missing and why, when fewer than `k`

@@ -92,6 +92,14 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **`seclume-verify --split` writes all of its shares or none, and owner-only on Windows
+  too.** A split that failed at a later file - one already there - left the earlier shares on
+  disk while the tool said "no shares written". On Windows a share took its directory's ACL,
+  which in a shared or system directory lets every local user read it; it now has an ACL of its
+  owner alone, set before a byte of the share is written. Each file is written through the
+  channel that created it, so a link swapped in under its name gets nothing, and the copy of the
+  secret, the shares and their text are in locked memory kept out of core dumps, as every secret
+  is (`ShamirSharesTest`, 3 tests more).
 - **The MongoDB drivers on Windows and macOS against real servers.** `mongodb-platforms` runs
   the core and driver modules' tests against the image's MongoDB 7.0 (Windows) and Homebrew's
   8.0 (macOS) - a standalone and a three-member replica set, TLS required, SCRAM and X.509 -
