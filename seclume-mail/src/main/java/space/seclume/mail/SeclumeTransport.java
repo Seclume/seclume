@@ -107,7 +107,9 @@ public final class SeclumeTransport extends Transport {
                     throw new IOException(e.getMessage(), e);
                 }
             });
-        } catch (MailException e) {
+        } catch (MailException | IllegalArgumentException e) {
+            // IllegalArgumentException: an address that would leave its command
+            // line - nothing of the message was sent.
             notifyTransportListeners(TransportEvent.MESSAGE_NOT_DELIVERED, new Address[0],
                     addresses, new Address[0], message);
             throw new SendFailedException(e.getMessage(), e, new Address[0], addresses,

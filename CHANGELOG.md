@@ -165,6 +165,13 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **SMTP: an address stays inside its command line.** `SmtpConnection.send` wrote the envelope
+  sender and recipients into `MAIL FROM:<...>` and `RCPT TO:<...>` as they were. A recipient
+  typed into a form with a line break in it - `b@example.com>\r\nRCPT TO:<everyone@...` -
+  ended the command and sent the rest as commands of the logged-in session: more recipients,
+  or a `DATA` of its own. An address with a control character or an angle bracket is refused
+  now, before anything of the message is sent (a `SendFailedException` through Jakarta Mail),
+  and `ehlo=` must be one word of printable ASCII.
 - **A JWT is checked as it is written.** `SeclumeJwt.verify` decoded each part with the JDK's
   base64url decoder, which also takes padding and a last character whose spare bits are set:
   a signature written so decodes to the same MAC, so one token could be passed as several
