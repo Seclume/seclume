@@ -764,7 +764,10 @@ The secret is named in the URL and read by the driver into native memory at each
 **`quarkus.datasource.password` fails the build** for a seclume datasource: Agroal would keep
 it as a `String` for the life of the application, in every heap dump. The build error names
 the property and the URL option to use instead. Named datasources work the same way
-(`quarkus.datasource."orders".db-kind=...`).
+(`quarkus.datasource."orders".db-kind=...`). The password is a runtime property, so the same
+check runs again at the start, for what only the running application sees:
+`QUARKUS_DATASOURCE_PASSWORD` in the environment, `QUARKUS_DATASOURCE__ORDERS__PASSWORD`, a
+`config/application.properties` beside the jar.
 
 Shown in JVM mode against all four servers in one application
 (`DatasourceTest`): each logs in, and afterwards a heap dump of the application holds none

@@ -31,6 +31,15 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **Quarkus refuses a datasource password at the start too, not only in the build.** The
+  check that a seclume datasource has no `quarkus.datasource.password` - Agroal would keep it as
+  a `String` for the application's life - ran only as a build step. The datasource password is a
+  runtime property: `QUARKUS_DATASOURCE_PASSWORD` in a container's environment, a
+  `config/application.properties` beside the jar or a mounted Kubernetes secret was never seen
+  by the build, and only a password committed with the source was stopped. The same check now
+  runs at start-up, and knows the environment-variable spellings, a quoted name's
+  `QUARKUS_DATASOURCE__USERS__PASSWORD` among them (`PasswordGuardNamesTest`,
+  `RuntimePasswordRefusedTest`).
 - **`seclume-verify --migrate` prints no password, whatever form the URL writes it in.** The
   translation drops `password=`, but a URL has other places for one, and their contents went
   into the printed configuration: Connector/J's `user:password@host` stayed in the host list;
