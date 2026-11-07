@@ -111,7 +111,9 @@ public final class Redactor {
 
     /**
      * A named secret, as the patterns it can lie in: text as UTF-8, UTF-16 in
-     * both byte orders and Base64; bytes as they are and as Base64. Built by
+     * both byte orders and Base64 - and as Latin-1 where it is that but not
+     * ASCII, since a {@code String} of such characters lies in a dump one byte
+     * per character, not as UTF-8; bytes as they are and as Base64. Built by
      * the caller from wherever the secret is - in a process of its own, since
      * searching for a secret means holding it.
      *
@@ -143,6 +145,12 @@ public final class Redactor {
                     Fill.UTF16_LE));
             // seclume-allow: the searcher needs the pattern it hunts for
             patterns.add(new Pattern("Base64", Base64.getEncoder().encode(utf8), Fill.ASCII));
+            if (secret.chars().allMatch(c -> c <= 0xff) && secret.chars().anyMatch(c -> c > 0x7f)) {
+                // A compact String's own bytes: "Grüße" is 47 72 FC DF 65 there.
+                // seclume-allow: the searcher needs the pattern it hunts for
+                patterns.add(new Pattern("ISO-8859-1", secret.getBytes(StandardCharsets.ISO_8859_1),
+                        Fill.ASCII));
+            }
             return new Needle(label, List.copyOf(patterns));
         }
 

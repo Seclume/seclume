@@ -65,6 +65,12 @@ All notable changes to seclume are recorded here. Versions follow
   the socket, and the handshake frames are collected in pieces rather than copied once per byte.
   `AmqpStartOkTest` (14 tests) covers the rewrite without a broker: lengths in UTF-8 bytes,
   writes split at every byte, frames before and after the login, and each refusal.
+- **Heap-dump redaction finds a password beyond ASCII where a `String` holds it.** A named
+  secret was looked for as UTF-8, UTF-16 and Base64 - but a compact `String` of characters up
+  to U+00FF lies in a dump as Latin-1, one byte per character: `Grüße` is `47 72 FC DF 65`, not
+  its UTF-8. Such a password stayed in the copy, and the check at the end, looking for the same
+  encodings, let the copy out as clean. It is looked for as Latin-1 too now - for secrets kept
+  off the heap as well, encoded in native memory (`RedactorTest`, `OffHeapSecretsTest`).
 - **A MySQL row's cells stay inside the row.** A row is a window onto the receive buffer, and
   the length in front of a cell was believed as it came: the last cell of a text row could run
   into the next packet and come back as its value with the next row's first bytes in it; an

@@ -52,7 +52,8 @@ public interface OffHeapSecrets {
     /**
      * A secret that is text, given as UTF-8 in native memory: itself, as
      * UTF-16 in both byte orders - decoded here, in native memory - and as
-     * Base64. Every pattern is allocated by {@code allocator}, which is the
+     * Base64; and as Latin-1 where it is that but not ASCII, the way a
+     * compact {@code String} holds it. Every pattern is allocated by {@code allocator}, which is the
      * caller's to wipe. A secret that is not UTF-8 is looked for as bytes.
      */
     static Needle text(String label, MemorySegment utf8, SegmentAllocator allocator) {
@@ -72,6 +73,10 @@ public interface OffHeapSecrets {
         patterns.add(new Pattern("UTF-16BE", be, Redactor.Fill.UTF16_BE));
         patterns.add(new Pattern("UTF-16LE", le, Redactor.Fill.UTF16_LE));
         patterns.add(new Pattern("Base64", Native.base64(utf8, allocator), Redactor.Fill.ASCII));
+        MemorySegment latin1 = Native.latin1(utf8, units, allocator);
+        if (latin1 != null) {
+            patterns.add(new Pattern("ISO-8859-1", latin1, Redactor.Fill.ASCII));
+        }
         return new Needle(label, patterns);
     }
 
@@ -151,6 +156,33 @@ public interface OffHeapSecrets {
                     at = unit(out, at, code, bigEndian);
                 }
             }
+        }
+
+        /**
+         * {@code utf8} (valid, {@code units} long) as Latin-1, one byte per
+         * character, or null where a character is past U+00FF or none is past
+         * U+007F (then it is the UTF-8 already).
+         */
+        static MemorySegment latin1(MemorySegment utf8, long units, SegmentAllocator allocator) {
+            MemorySegment utf16 = allocator.allocate(units * 2);
+            utf16(utf8, utf16, true);
+            boolean wide = false;
+            for (long i = 0; i < units; i++) {
+                int unit = ((utf16.get(ValueLayout.JAVA_BYTE, 2 * i) & 0xff) << 8)
+                        | (utf16.get(ValueLayout.JAVA_BYTE, 2 * i + 1) & 0xff);
+                if (unit > 0xff) {
+                    return null;
+                }
+                wide |= unit > 0x7f;
+            }
+            if (!wide) {
+                return null;
+            }
+            MemorySegment out = allocator.allocate(units);
+            for (long i = 0; i < units; i++) {
+                out.set(ValueLayout.JAVA_BYTE, i, utf16.get(ValueLayout.JAVA_BYTE, 2 * i + 1));
+            }
+            return out;
         }
 
         private static long unit(MemorySegment out, long at, int unit, boolean bigEndian) {
