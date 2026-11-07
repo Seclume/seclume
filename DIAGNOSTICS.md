@@ -192,7 +192,9 @@ What a pod gets with `redact-dumps`:
   container, and `-XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/seclume/dumps` as
   `JAVA_TOOL_OPTIONS`. A container that sets `JAVA_TOOL_OPTIONS` already gets the options as
   `JDK_JAVA_OPTIONS` instead, read by the `java` launcher. A container that sets both gets a
-  warning and no options. Nothing the pod sets is replaced, and the patch never repeats a value
+  warning and no options - and so does one with `envFrom`, since a ConfigMap or Secret may set
+  either there, out of the webhook's sight, and an `env` entry would win over it (likewise for
+  `SPIFFE_ENDPOINT_SOCKET`). Nothing the pod sets is replaced, and the patch never repeats a value
   of the pod's. A `-XX:HeapDumpPath` on the command line still wins over the injected one.
 - **A sidecar, `seclume-redact-dumps`.** It runs `seclume-heapcheck --watch /seclume/dumps
   --discover` with `--secret-dir` for each volume in `secret-volumes`, mounted read-only. Every
