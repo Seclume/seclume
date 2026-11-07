@@ -56,9 +56,16 @@ final class AmqpSocket extends Socket {
     private boolean rewritten;
     private int headerLeft = 8;                        // "AMQP" 0 0 9 1
     private final java.io.ByteArrayOutputStream frame = new java.io.ByteArrayOutputStream();
+    private int frameLength = -1;                      // header, payload and end; -1 until known
 
     AmqpSocket(RabbitSettings settings) {
         this.settings = settings;
+    }
+
+    /** One already connected over {@code connected}, for the tests of the handshake. */
+    AmqpSocket(RabbitSettings settings, TlsLayer connected) {
+        this.settings = settings;
+        this.tls = connected;
     }
 
     @Override
@@ -150,23 +157,39 @@ final class AmqpSocket extends Socket {
             at += n;
         }
         while (at < end && !rewritten) {
-            frame.write(source[at++]);
-            byte[] bytes = frame.toByteArray();
-            if (bytes.length < 7) {
+            // Collected in pieces as large as the write allows: the 7-byte
+            // header first, then the rest of a frame whose length it gives.
+            int wanted = (frameLength < 0 ? 7 : frameLength) - frame.size();
+            int n = Math.min(wanted, end - at);
+            frame.write(source, at, n);
+            at += n;
+            if (n < wanted) {
                 continue;
             }
-            long size = ((bytes[3] & 0xffL) << 24) | ((bytes[4] & 0xff) << 16)
-                    | ((bytes[5] & 0xff) << 8) | (bytes[6] & 0xff);
-            if (size > MAX_HANDSHAKE_FRAME) {
-                throw new IOException("a handshake frame of " + size + " bytes from the client");
-            }
-            if (bytes.length < 7 + size + 1) {
+            byte[] bytes = frame.toByteArray();
+            if (frameLength < 0) {
+                long size = ((bytes[3] & 0xffL) << 24) | ((bytes[4] & 0xff) << 16)
+                        | ((bytes[5] & 0xff) << 8) | (bytes[6] & 0xff);
+                if (size > MAX_HANDSHAKE_FRAME) {
+                    close();
+                    throw new IOException("a handshake frame of " + size
+                            + " bytes from the client");
+                }
+                frameLength = 7 + (int) size + 1;
                 continue;
             }
             frame.reset();
+            frameLength = -1;
+            int size = bytes.length - 8;
             if (bytes[0] == FRAME_METHOD && bytes[1] == 0 && bytes[2] == 0 && size >= 4
                     && bytes[7] == 0 && bytes[8] == 10 && bytes[9] == 0 && bytes[10] == 11) {
-                startOk(bytes, (int) size);
+                try {
+                    startOk(bytes, size);
+                } catch (IOException | RuntimeException refused) {
+                    // Nothing of a refused login goes out, and nothing after it.
+                    close();
+                    throw refused;
+                }
                 rewritten = true;
             } else {
                 open().write(ByteBuffer.wrap(bytes));
@@ -180,17 +203,27 @@ final class AmqpSocket extends Socket {
     /** Connection.Start-Ok, written again with the real PLAIN response. */
     private void startOk(byte[] bytes, int size) throws IOException {
         int payload = 7;
+        int payloadEnd = payload + size;
+        if (bytes[payloadEnd] != FRAME_END) {
+            throw malformed("does not end in the frame-end octet");
+        }
         int at = payload + 4;                                        // class, method
-        int table = readInt(bytes, at);
+        int table = field(bytes, at, payloadEnd, "client properties");
         at += 4 + table;
+        if (at >= payloadEnd) {
+            throw malformed("ends before its mechanism");
+        }
         int mechanismLength = bytes[at] & 0xff;
+        if (at + 1 + mechanismLength > payloadEnd) {
+            throw malformed("has a mechanism that runs past its end");
+        }
         String mechanism = new String(bytes, at + 1, mechanismLength, StandardCharsets.US_ASCII); // seclume-allow: AMQP handshake frame with the placeholder - no secret
         at += 1 + mechanismLength;
         if (!mechanism.equals("PLAIN")) {
             throw new IOException("the RabbitMQ client chose " + mechanism + " rather than PLAIN; "
                     + "SeclumeRabbit's connection factory sets PLAIN - it was changed");
         }
-        int responseLength = readInt(bytes, at);
+        int responseLength = field(bytes, at, payloadEnd, "response");
         byte[] response = Arrays.copyOfRange(bytes, at + 4, at + 4 + responseLength);
         byte[] expected = ("\0" + settings.user + "\0" + SeclumeRabbit.PLACEHOLDER)
                 .getBytes(StandardCharsets.UTF_8); // seclume-allow: the user and the placeholder - no secret
@@ -200,7 +233,7 @@ final class AmqpSocket extends Socket {
                     + "user and password to the seclume URL");
         }
         int restFrom = at + 4 + responseLength;
-        int restLength = payload + size - restFrom;
+        int restLength = payloadEnd - restFrom;
         byte[] user = settings.user.getBytes(StandardCharsets.UTF_8); // seclume-allow: the user name, which is public
         space.seclume.jfr.Observed.secretUse("rabbitmq", settings.host + ":" + settings.port,
                 "plain");
@@ -236,6 +269,26 @@ final class AmqpSocket extends Socket {
                 open().write(w.asSlice(0, p).asByteBuffer());
             }
         }
+    }
+
+    /**
+     * The length of the long string or field table at {@code at}, checked to
+     * fit before {@code end}.
+     */
+    private static int field(byte[] b, int at, int end, String what) throws IOException {
+        if (at + 4 > end) {
+            throw malformed("ends before the length of its " + what);
+        }
+        long length = readInt(b, at) & 0xffff_ffffL;
+        if (length > end - (at + 4)) {
+            throw malformed("says its " + what + " is " + length + " bytes, more than are left");
+        }
+        return (int) length;
+    }
+
+    private static IOException malformed(String what) {
+        return new IOException("the Connection.Start-Ok frame from the RabbitMQ client " + what
+                + "; it is not sent");
     }
 
     private static int readInt(byte[] b, int at) {
