@@ -5,6 +5,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **REVIEWS.md: the second round.** The tools around the drivers, the framework integrations'
+  password checks, the cloud modules and the default TLS mode's cleartext logins - six findings,
+  the open question of private keys in checkpoint images, and what was found sound.
 - **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
   the secret and its padded Base64 only. The usual leak is neither: a wire log's
   `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into
