@@ -67,13 +67,13 @@ class CatalogAndSchemaOnReturnTest {
                 StubDataSource.StubConnection stub = source.handedOut().get(0);
                 stub.catalog = "shop";
                 stub.schema = "public";
-                c.createStatement().close();
+                assertEquals(null, c.getWarnings());
             }
             // Changed behind the pool's back (a SET search_path, say): not the
             // pool's to know - the session reset's.
             source.handedOut().get(0).schema = "elsewhere";
             try (Connection c = pool.getConnection()) {
-                c.createStatement().close();
+                assertEquals(null, c.getWarnings());
             }
             assertEquals("elsewhere", source.handedOut().get(0).schema);
         }
