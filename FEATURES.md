@@ -221,6 +221,13 @@ providers each have a page of their own: [TLS.md](TLS.md),
   every other one, `requireAuth=!md5,!password` refuses just those. A refused method is
   refused before anything of the answer is sent, so a server - or anybody in the middle -
   that asks for an md5 hash gets none. `none` stands for a server that asks for nothing.
+- **No cheap SCRAM proofs.** The iteration count is the server's to choose, and the proof the
+  client sends is a PBKDF2 of the password with it: a server - or whoever sits between - that
+  asks for one iteration gets a proof that costs one hash per guessed password. A count below
+  4096 (RFC 7677's floor, and every server's default) is refused before any proof is made, for
+  PostgreSQL, Kafka and MongoDB alike. `-Dseclume.scram.minIterations=<n>` lowers the floor for a
+  server set below it on purpose (PostgreSQL's `scram_iterations`, a credential made with fewer),
+  or raises it.
 
 ## Writing, retrying, and not guessing
 
@@ -602,7 +609,7 @@ Shown against MongoDB 8 (`LocalMongoTlsTest` against `seclume-mongo` with TLS 1.
 `ScriptedMongoServerTest` with mock TLS 1.3 fixture):
 - Successful SCRAM-SHA-256 authentication and `ping` command execution;
 - Both the password and the client proof are proven absent from the JVM heap dump via `NoSecretInHeap.assertAbsent`;
-- Refusal on missing SCRAM-SHA-256, low iterations (< 4096), invalid server nonce prefix, wrong server
+- Refusal on missing SCRAM-SHA-256, low iterations (< 4096, or `seclume.scram.minIterations`), invalid server nonce prefix, wrong server
   signature, premature connection termination, non-ASCII password, and TLS host name mismatch.
 
 The login is part of connecting: the connect timeout bounds TLS and SCRAM, so a server that

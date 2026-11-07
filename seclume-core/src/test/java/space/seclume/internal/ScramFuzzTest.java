@@ -27,7 +27,10 @@ class ScramFuzzTest {
         byte[] first = data.consumeBytes(600);
         byte[] last = data.consumeRemainingAsBytes();
         try (Arena arena = Arena.ofConfined();
-             Scram scram = new Scram(sha512 ? HashAlgorithm.SHA_512 : HashAlgorithm.SHA_256)) {
+             // Down to one iteration, so that the later steps are reached for
+             // cheap counts; the floor has ScramMinimumIterationsTest.
+             Scram scram = new Scram(sha512 ? HashAlgorithm.SHA_512 : HashAlgorithm.SHA_256)
+                     .minimumIterations(1)) {
             MemorySegment out = arena.allocate(4096);
             scram.clientFirst(out, "fuzz");
             // Let a fuzzed first message carry our nonce, so the later steps are reached.
