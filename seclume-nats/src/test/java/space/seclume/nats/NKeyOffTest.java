@@ -147,10 +147,10 @@ class NKeyOffTest {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment in = arena.allocate(raw.length);
             MemorySegment.copy(raw, 0, in, JAVA_BYTE, 0, raw.length);
-            int escapedLen = SeclumeNatsDataPort.jsonEscapedLength(in, raw.length);
+            int escapedLen = ConnectLine.jsonEscapedLength(in, raw.length);
             assertEquals(expected.length(), escapedLen);
             MemorySegment out = arena.allocate(escapedLen);
-            int end = SeclumeNatsDataPort.writeJsonEscaped(in, raw.length, out, 0);
+            int end = ConnectLine.writeJsonEscaped(in, raw.length, out, 0);
             assertEquals(escapedLen, end);
             assertEquals(expected, new String(out.toArray(JAVA_BYTE), StandardCharsets.UTF_8)); // seclume-allow: test assertion
         }

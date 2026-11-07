@@ -184,25 +184,27 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
         if (options != null) {
             verifyPlaceholderUnchanged();
         }
-        int at = indexOf(line, PLACEHOLDER_BYTES);
+        int at = ConnectLine.credentialSlot(line, settings.mode, SeclumeNats.PLACEHOLDER);
         if (at < 0) {
-            throw new IOException("the NATS client was given a password or token of its own; "
-                    + "that secret is on the heap already and is not sent. Leave credentials "
-                    + "to the seclume URL");
+            throw new IOException("the NATS client's CONNECT has no " + (settings.mode
+                    == NatsSettings.AuthMode.TOKEN ? "\"auth_token\"" : "\"pass\"")
+                    + " that is the placeholder - it was given a password or token of its own, "
+                    + "which is on the heap already and is not sent. Leave credentials to the "
+                    + "seclume URL");
         }
         String mechanism = settings.mode == NatsSettings.AuthMode.PASSWORD ? "password" : "token";
         Observed.secretUse("nats", settings.target(), mechanism);
         try (SecretScope secret = SecretScope.fromProvider(settings.secret)) {
             MemorySegment seg = secret.segment();
             int rawLen = secret.length();
-            int escapedLen = jsonEscapedLength(seg, rawLen);
+            int escapedLen = ConnectLine.jsonEscapedLength(seg, rawLen);
             int afterOffset = at + PLACEHOLDER_BYTES.length;
             int afterLen = line.length - afterOffset;
             int total = at + escapedLen + afterLen;
             try (SecretScope outScope = SecretScope.allocate(total)) {
                 MemorySegment out = outScope.segment();
                 MemorySegment.copy(line, 0, out, JAVA_BYTE, 0, at);
-                int pos = writeJsonEscaped(seg, rawLen, out, at);
+                int pos = ConnectLine.writeJsonEscaped(seg, rawLen, out, at);
                 MemorySegment.copy(line, afterOffset, out, JAVA_BYTE, pos, afterLen);
                 pos += afterLen;
                 outScope.length(pos);
@@ -237,86 +239,6 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
         return true;
     }
 
-    /**
-     * Computes the JSON-escaped UTF-8 byte length of {@code secret} in native
-     * memory without creating any heap objects.
-     */
-    static int jsonEscapedLength(MemorySegment secret, int length) {
-        int total = 0;
-        for (int i = 0; i < length; i++) {
-            int b = secret.get(JAVA_BYTE, i) & 0xff;
-            if (b == '"' || b == '\\' || b == '/' || b == '\b' || b == '\f'
-                    || b == '\n' || b == '\r' || b == '\t') {
-                total += 2;
-            } else if (b < 0x20) {
-                total += 6;
-            } else {
-                total += 1;
-            }
-        }
-        return total;
-    }
-
-    /** Writes the JSON-escaped bytes of {@code secret} into {@code out} at {@code offset}. */
-    static int writeJsonEscaped(MemorySegment secret, int length,
-                                MemorySegment out, int offset) {
-        int p = offset;
-        for (int i = 0; i < length; i++) {
-            int b = secret.get(JAVA_BYTE, i) & 0xff;
-            switch (b) {
-                case '"' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) '"');
-                }
-                case '\\' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                }
-                case '/' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) '/');
-                }
-                case '\b' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) 'b');
-                }
-                case '\f' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) 'f');
-                }
-                case '\n' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) 'n');
-                }
-                case '\r' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) 'r');
-                }
-                case '\t' -> {
-                    out.set(JAVA_BYTE, p++, (byte) '\\');
-                    out.set(JAVA_BYTE, p++, (byte) 't');
-                }
-                default -> {
-                    if (b < 0x20) {
-                        out.set(JAVA_BYTE, p++, (byte) '\\');
-                        out.set(JAVA_BYTE, p++, (byte) 'u');
-                        out.set(JAVA_BYTE, p++, (byte) '0');
-                        out.set(JAVA_BYTE, p++, (byte) '0');
-                        out.set(JAVA_BYTE, p++, hexDigit((b >>> 4) & 0x0f));
-                        out.set(JAVA_BYTE, p++, hexDigit(b & 0x0f));
-                    } else {
-                        out.set(JAVA_BYTE, p++, (byte) b);
-                    }
-                }
-            }
-        }
-        return p;
-    }
-
-    private static byte hexDigit(int nibble) {
-        return (byte) (nibble < 10 ? ('0' + nibble) : ('a' + (nibble - 10)));
-    }
-
     private static boolean startsWithConnect(byte[] line) {
         if (line.length < CONNECT_PREFIX.length) {
             return false;
@@ -327,19 +249,6 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
             }
         }
         return true;
-    }
-
-    private static int indexOf(byte[] haystack, byte[] needle) {
-        outer:
-        for (int i = 0; i <= haystack.length - needle.length; i++) {
-            for (int j = 0; j < needle.length; j++) {
-                if (haystack[i + j] != needle[j]) {
-                    continue outer;
-                }
-            }
-            return i;
-        }
-        return -1;
     }
 
     private void sendRaw(ByteBuffer bytes) throws IOException {

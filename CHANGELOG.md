@@ -100,6 +100,13 @@ All notable changes to seclume are recorded here. Versions follow
   `libcrypto.4.dylib` on macOS, 3 first where both are - the EVP, OSSL_PARAM and decoder calls
   the backends make are OpenSSL 3's current API, which 4 keeps. CI runs the native
   cryptography and TLS tests on macOS a second time on OpenSSL 4.
+- **NATS: the password goes into `"pass"` and nowhere else.** The data port replaced the
+  first placeholder anywhere in the client's `CONNECT` line. The placeholder is on the heap and
+  not a secret; given as the connection's `"name"` - which comes before `"pass"`, and which the
+  NATS server logs and shows on its monitoring port - it had the real password written there.
+  Now only the value of `"pass"` (or `"auth_token"` for a token) is replaced. The slot search
+  and the JSON escaping are `ConnectLine`'s, under test in `ConnectLineTest` (8 tests) without
+  the client library.
 - **AWS: the session token goes into its header and nowhere else.** With temporary
   credentials the TLS socket wrote the session token where it first found the placeholder's
   prefix in a request head - the request target or any header, an `x-amz-meta-` value an
