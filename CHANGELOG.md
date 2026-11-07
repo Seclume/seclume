@@ -16,6 +16,11 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **The MongoDB drivers on Windows and macOS against real servers.** `mongodb-platforms` runs
+  the core and driver modules' tests against the image's MongoDB 7.0 (Windows) and Homebrew's
+  8.0 (macOS) - a standalone and a three-member replica set, TLS required, SCRAM and X.509 -
+  started as mongod processes by `mongo_native_fixtures.sh`, as `mongo_fixtures.sh` starts them
+  in containers on Linux. Only the load-balanced cluster is left to Linux.
 - **The PostgreSQL and MySQL drivers on Windows and macOS against real servers.** Linux x64
   was the only platform whose CI talked to databases. `postgresql-platforms` and
   `mysql-platforms` run the drivers' tests on Windows (the image's PostgreSQL 17 and MySQL 8.4)
