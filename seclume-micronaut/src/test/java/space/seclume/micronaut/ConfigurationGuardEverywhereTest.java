@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Isolated;
 
 import io.micronaut.context.ApplicationContext;
+import io.micronaut.context.env.MapPropertySource;
 import io.micronaut.context.env.PropertySource;
 
 /**
@@ -29,9 +30,16 @@ class ConfigurationGuardEverywhereTest {
 
     /** {@code variables} as the process environment, {@code properties} as a file. */
     private static ApplicationContext start(Map<String, Object> variables, Map<String, Object> properties) {
+        // What Micronaut's own EnvironmentPropertySource is: a map of the
+        // variables by their own names, with the environment's convention.
+        PropertySource environment = new MapPropertySource("test-environment", variables) {
+            @Override
+            public PropertyConvention getConvention() {
+                return PropertyConvention.ENVIRONMENT_VARIABLE;
+            }
+        };
         return ApplicationContext.builder()
-                .propertySources(PropertySource.of("test-environment", variables,
-                        PropertySource.PropertyConvention.ENVIRONMENT_VARIABLE))
+                .propertySources(environment)
                 .properties(properties)
                 .start();
     }
