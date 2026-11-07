@@ -165,12 +165,24 @@ class LocalPostgresTest {
                     }
                     return 8;
                 });
-        SQLException failure = assertThrows(SQLException.class,
-                () -> PgSession.open(new PgSession.Settings(HOST, PORT, DATABASE, USER, wrong))
-                        .close());
-        // Once 08001 on Windows (#241): the message says what was read instead.
-        assertEquals("28P01", failure.getSQLState(), () -> failure + " / cause: "
-                + failure.getCause());
+        // A PostgreSQL backend on Windows ends a failed login by exiting, and
+        // Windows may then reset the connection before the client has read the
+        // error that was sent - the client sees a reset, 08001, instead of
+        // 28P01 (twice in CI, #241 and #248). Which of the two arrives is the
+        // server's platform, not the driver; so there, a reset is tried again,
+        // and the wrong password still has to end in 28P01 - never in a login.
+        int attempts = space.seclume.internal.Platform.isWindows() ? 5 : 1;
+        SQLException failure = null;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            failure = assertThrows(SQLException.class,
+                    () -> PgSession.open(new PgSession.Settings(HOST, PORT, DATABASE, USER, wrong))
+                            .close());
+            if (!"08001".equals(failure.getSQLState())) {
+                break;
+            }
+        }
+        SQLException last = failure;
+        assertEquals("28P01", last.getSQLState(), () -> last + " / cause: " + last.getCause());
     }
 
     private static PgSession open() throws SQLException {
