@@ -23,6 +23,14 @@ All notable changes to seclume are recorded here. Versions follow
   CNG's and Homebrew OpenSSL's against a real server - then the security gate's group for that
   driver, and fail if a test skipped for want of the server. `LocalDirectTlsTest`'s refusal by a
   server before 17 now asks the server's version first instead of assuming it.
+- **RabbitMQ: a Start-Ok that does not add up is refused, and nothing goes out after it.** The
+  socket that writes the real password into the client's `Connection.Start-Ok` believed the
+  lengths in that frame: a client-properties table or a response longer than the frame - or
+  "negative" - ended in an index exception rather than a refusal, and the frame's end octet was
+  not looked at. Each length is now checked against what is left of the frame, a refusal closes
+  the socket, and the handshake frames are collected in pieces rather than copied once per byte.
+  `AmqpStartOkTest` (14 tests) covers the rewrite without a broker: lengths in UTF-8 bytes,
+  writes split at every byte, frames before and after the login, and each refusal.
 - **A MySQL row's cells stay inside the row.** A row is a window onto the receive buffer, and
   the length in front of a cell was believed as it came: the last cell of a text row could run
   into the next packet and come back as its value with the next row's first bytes in it; an
