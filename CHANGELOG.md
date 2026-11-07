@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
+  choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
+  the middle - asking for one iteration got a proof that costs one hash per guessed password to
+  test offline. PostgreSQL and Kafka accepted any count from 1; only MongoDB had a floor. Now
+  every SCRAM login refuses a count below 4096 (RFC 7677's, and every server's default) before
+  any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
+  process. A refused server-first message no longer leaves a half-read state that a proof
+  could be made from (`ScramMinimumIterationsTest`).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's

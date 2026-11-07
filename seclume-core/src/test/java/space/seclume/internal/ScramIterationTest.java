@@ -31,7 +31,8 @@ class ScramIterationTest {
 
     /** serverFirst with the client's own nonce and {@code count} as the iterations. */
     private static Scram withCount(Arena arena, String count) {
-        Scram scram = new Scram(HashAlgorithm.SHA_256);
+        // The parsing, not the floor: ScramMinimumIterationsTest has that.
+        Scram scram = new Scram(HashAlgorithm.SHA_256).minimumIterations(1);
         MemorySegment out = arena.allocate(256);
         int length = scram.clientFirst(out, "app");
         String first = new String(out.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE), StandardCharsets.US_ASCII);
