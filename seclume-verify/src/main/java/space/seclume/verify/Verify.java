@@ -181,9 +181,13 @@ public final class Verify {
      */
     static int printPin(String url) {
         String unchecked = uncheckedTls(url);
-        try (java.sql.Connection connection = java.sql.DriverManager.getConnection(unchecked)) {
+        // The connection ends with the TLS handshake. Carried on to a login,
+        // it sent the password - over TLS that checked nothing, to whoever
+        // answered - and finding out who answers is what this is for.
+        try {
             java.security.cert.X509Certificate presented =
-                    Secured.of(connection).serverCertificate();
+                    space.seclume.internal.TrustChoice.certificateOnly(
+                            () -> java.sql.DriverManager.getConnection(unchecked));
             if (presented == null) {
                 System.err.println("the server did not use TLS on this connection - there is "
                         + "no certificate to pin");
