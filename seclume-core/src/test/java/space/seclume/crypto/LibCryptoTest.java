@@ -140,12 +140,19 @@ class LibCryptoTest {
     }
 
     @Test
-    void theFileThePropertyNamesIsTheOneLoaded() {
+    void whatIsLoadedIsWhatThePropertyOrTheSearchNames() {
         // CI runs the crypto tests a second time on macOS with Homebrew's
-        // OpenSSL 4 named here: that run has to be on 4, not quietly on 3.
+        // OpenSSL 4 named by the property: that run has to be on 4, not
+        // quietly on 3. Without the property, it is one of the candidates.
         String named = System.getProperty(LibCrypto.PROPERTY);
-        Assumptions.assumeTrue(named != null && !named.isBlank(), "no " + LibCrypto.PROPERTY);
-        assertEquals(named.strip(), LibCrypto.file(), LibCrypto.missing());
+        if (named != null && !named.isBlank()) {
+            assertEquals(named.strip(), LibCrypto.file(), LibCrypto.missing());
+        } else if (LibCrypto.available()) {
+            assertTrue(LibCrypto.candidates(System.getProperty("os.name"), 8, null)
+                    .contains(LibCrypto.file()), LibCrypto.file());
+        } else {
+            assertNull(LibCrypto.file());
+        }
     }
 
     @Test
