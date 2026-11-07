@@ -25,6 +25,10 @@ All notable changes to seclume are recorded here. Versions follow
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
   does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
   2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
+- **REVIEWS.md: the code reviews on record.** What the internal reviews of 6 and 7 November
+  read, the 22 findings with their severity and the pull request that fixed each, what was found
+  sound, the residuals accepted, and where the next review starts. Linked from SECURITY.md and
+  AUDIT.md; CONTRIBUTING asks every review fix to be entered there.
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
