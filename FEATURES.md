@@ -414,6 +414,9 @@ CRaC refuses the checkpoint over the pool's open sockets. Before the checkpoint 
   if that does not happen within `seclume.crac.quiesceMillis` (10 s);
 - **wipes the cached credentials** - Vault's leased credential, the instance role's AWS keys,
   OAuth access tokens - which are fetched again after the restore;
+- **wipes the keys kept for the application's lifetime** - field encryption's data keys and
+  every column's and blind index's key derived from them, the subjects' rings, the log
+  masker's and the secret watch's keys - which are read or made again at their next use;
 - **holds new secrets back** from that moment until the restore, so a login that starts in
   between waits instead of landing in the image (`seclume.crac.holdSecrets=false` switches
   this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits).
