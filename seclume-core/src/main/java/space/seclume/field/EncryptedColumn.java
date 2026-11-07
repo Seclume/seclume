@@ -137,7 +137,8 @@ public final class EncryptedColumn {
     private final FieldKeys ring;
     private final String name;
     private final Mode mode;
-    private final Map<Integer, SecretScope> keys;
+    /** Replaced when the ring reads its keys again after a checkpoint; see {@link FieldKeys}. */
+    private volatile Map<Integer, SecretScope> keys;
 
     EncryptedColumn(FieldKeys ring, String name, Mode mode, Map<Integer, SecretScope> keys) {
         this.ring = ring;
@@ -188,7 +189,7 @@ public final class EncryptedColumn {
                 Entropy.fill(value, HEADER, AesGcmSiv.NONCE);
             }
             MemorySegment aad = associatedData(arena, value, context0);
-            ring.lock().lock();
+            java.util.concurrent.locks.Lock held = ring.acquire();
             try {
                 MemorySegment keys = columnKey(keyId);
                 commitment(keys, value, value, HEADER + AesGcmSiv.NONCE);
@@ -196,7 +197,7 @@ public final class EncryptedColumn {
                         value, HEADER, aad, 0, aad.byteSize(),
                         plaintext, 0, length, value, BODY);
             } finally {
-                ring.lock().unlock();
+                held.unlock();
             }
             return value.toArray(ValueLayout.JAVA_BYTE);
         }
@@ -240,7 +241,7 @@ public final class EncryptedColumn {
             MemorySegment.copy(ciphertext, 0, value, ValueLayout.JAVA_BYTE, 0, ciphertext.length);
             MemorySegment aad = associatedData(arena, value, context0);
             boolean authentic;
-            ring.lock().lock();
+            java.util.concurrent.locks.Lock held = ring.acquire();
             try {
                 MemorySegment keys = columnKey(keyId);
                 // The commitment first: a value made under another key - one that
@@ -254,7 +255,7 @@ public final class EncryptedColumn {
                                 value, HEADER, aad, 0, aad.byteSize(),
                                 value, BODY, length, target, 0);
             } finally {
-                ring.lock().unlock();
+                held.unlock();
             }
             if (!authentic) {
                 throw new FieldEncryptionException("a value of " + name + " did not authenticate"
@@ -485,7 +486,7 @@ public final class EncryptedColumn {
         }
         int keyId = ((ciphertext[2] & 0xff) << 24) | ((ciphertext[3] & 0xff) << 16)
                 | ((ciphertext[4] & 0xff) << 8) | (ciphertext[5] & 0xff);
-        if (!keys.containsKey(keyId)) {
+        if (!ring.keyIds().contains(keyId)) {
             throw new FieldEncryptionException("a value of " + name + " is under key " + keyId
                     + ", which the ring does not hold (it holds " + ring.keyIds() + ")");
         }
@@ -522,6 +523,11 @@ public final class EncryptedColumn {
 
     void wipe() {
         keys.values().forEach(SecretScope::close);
+    }
+
+    /** The keys derived anew after the ring read its own again; the old ones are wiped already. */
+    void rekey(Map<Integer, SecretScope> fresh) {
+        keys = fresh;
     }
 
     @Override

@@ -94,7 +94,8 @@ public final class BlindIndex {
     private final String name;
     private final int bits;
     private final Transform transform;
-    private final Map<Integer, SecretScope> keys;
+    /** Replaced when the ring reads its keys again after a checkpoint; see {@link FieldKeys}. */
+    private volatile Map<Integer, SecretScope> keys;
 
     BlindIndex(FieldKeys ring, String name, int bits, Transform transform, Map<Integer, SecretScope> keys) {
         this.ring = ring;
@@ -198,7 +199,7 @@ public final class BlindIndex {
             int length = apply(transform, plaintext, transformed.segment());
             transformed.length(length);
             MemorySegment mac = arena.allocate(32);
-            ring.lock().lock();
+            java.util.concurrent.locks.Lock held = ring.acquire();
             try {
                 ring.checkOpen();
                 SecretScope key = keys.get(keyId);
@@ -210,7 +211,7 @@ public final class BlindIndex {
                     hmac.doFinal(mac, 0);
                 }
             } finally {
-                ring.lock().unlock();
+                held.unlock();
             }
             long value = mac.get(ValueLayout.JAVA_LONG_UNALIGNED.withOrder(java.nio.ByteOrder.BIG_ENDIAN), 0);
             mac.fill((byte) 0);
@@ -276,6 +277,11 @@ public final class BlindIndex {
 
     void wipe() {
         keys.values().forEach(SecretScope::close);
+    }
+
+    /** The key derived anew after the ring read its own again; the old one is wiped already. */
+    void rekey(Map<Integer, SecretScope> fresh) {
+        keys = fresh;
     }
 
     @Override

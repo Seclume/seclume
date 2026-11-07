@@ -66,7 +66,17 @@ public final class FieldKeys implements AutoCloseable {
 
     private static final MemorySegment SALT = utf8("seclume field encryption v1");
 
-    private final SortedMap<Integer, SecretScope> keys;
+    /**
+     * The data keys. Wiped before a checkpoint ({@link #forget}) and read
+     * again from {@link #providers} at the next use: a CRaC or SnapStart image
+     * of a running application held every data key - and the checkpoint was
+     * refused, since these are open secrets.
+     */
+    private volatile SortedMap<Integer, SecretScope> keys;
+    /** Where the keys are read from again; null for a ring that cannot be (a subject's). */
+    private final SortedMap<Integer, SecretProvider> providers;
+    private final List<Integer> ids;
+    private volatile boolean forgotten;
     private final int primary;
     private final Map<String, EncryptedColumn> columns = new HashMap<>();
     private final Map<String, BlindIndex> indexes = new HashMap<>();
@@ -74,9 +84,12 @@ public final class FieldKeys implements AutoCloseable {
     private final ReentrantReadWriteLock use = new ReentrantReadWriteLock();
     private volatile boolean closed;
 
-    private FieldKeys(SortedMap<Integer, SecretScope> keys, int primary) {
+    private FieldKeys(SortedMap<Integer, SecretScope> keys, int primary,
+            SortedMap<Integer, SecretProvider> providers) {
         this.keys = keys;
         this.primary = primary;
+        this.providers = providers;
+        this.ids = List.copyOf(keys.keySet());
     }
 
     /** The ring {@link #install} made available to code that cannot be handed one. */
@@ -124,7 +137,7 @@ public final class FieldKeys implements AutoCloseable {
 
     /** The numbers of the ring, in ascending order. */
     public List<Integer> keyIds() {
-        return List.copyOf(keys.keySet());
+        return ids;
     }
 
     /**
@@ -210,8 +223,90 @@ public final class FieldKeys implements AutoCloseable {
         return Collections.unmodifiableMap(derived);
     }
 
-    Lock lock() {
-        return use.readLock();
+    /**
+     * The read lock, held while a key is used - with the keys there: read
+     * again first if a checkpoint made the ring forget them.
+     */
+    Lock acquire() {
+        while (true) {
+            if (forgotten) {
+                reload();
+            }
+            Lock read = use.readLock();
+            read.lock();
+            if (!forgotten || closed) {
+                return read;                 // a closed ring is refused by checkOpen
+            }
+            read.unlock();                   // forgotten again in between: read them again
+        }
+    }
+
+    /**
+     * Wipes every data key and every key derived from one - before a
+     * checkpoint, see {@link space.seclume.internal.Checkpoint}. Columns and
+     * indexes stay usable: the next use reads the keys again from their
+     * providers, after the restore.
+     */
+    synchronized void forget() {
+        if (closed || forgotten || providers == null) {
+            return;
+        }
+        use.writeLock().lock();
+        try {
+            for (EncryptedColumn column : columns.values()) {
+                column.wipe();
+            }
+            for (BlindIndex index : indexes.values()) {
+                index.wipe();
+            }
+            keys.values().forEach(SecretScope::close);
+            keys = Collections.emptySortedMap();
+            forgotten = true;
+        } finally {
+            use.writeLock().unlock();
+        }
+    }
+
+    /** Reads the keys again and derives every column's and index's anew. */
+    private synchronized void reload() {
+        if (!forgotten || closed) {
+            return;
+        }
+        use.writeLock().lock();
+        try {
+            SortedMap<Integer, SecretScope> read = new TreeMap<>();
+            try {
+                for (Map.Entry<Integer, SecretProvider> entry : providers.entrySet()) {
+                    read.put(entry.getKey(), Builder.read(entry.getKey(), entry.getValue()));
+                }
+            } catch (RuntimeException e) {
+                read.values().forEach(SecretScope::close);
+                throw e;
+            }
+            keys = Collections.unmodifiableSortedMap(read);
+            try {
+                for (EncryptedColumn column : columns.values()) {
+                    column.rekey(derive(column.name(), column.mode()));
+                }
+                for (Map.Entry<String, BlindIndex> index : indexes.entrySet()) {
+                    index.getValue().rekey(derive(BLIND_INDEX, index.getKey(), KEY_LENGTH));
+                }
+            } catch (RuntimeException e) {
+                // Half derived is not to be used: forget it all again.
+                for (EncryptedColumn column : columns.values()) {
+                    column.wipe();
+                }
+                for (BlindIndex index : indexes.values()) {
+                    index.wipe();
+                }
+                keys.values().forEach(SecretScope::close);
+                keys = Collections.emptySortedMap();
+                throw e;
+            }
+            forgotten = false;
+        } finally {
+            use.writeLock().unlock();
+        }
     }
 
     void checkOpen() {
@@ -244,11 +339,20 @@ public final class FieldKeys implements AutoCloseable {
         } finally {
             use.writeLock().unlock();
         }
+        if (providers != null) {
+            for (SecretProvider provider : providers.values()) {
+                try {
+                    provider.close();
+                } catch (Exception e) {
+                    // the keys are wiped; a source that does not close cleanly changes nothing
+                }
+            }
+        }
     }
 
     @Override
     public String toString() {
-        return "FieldKeys[keys=" + keys.keySet() + ", primary=" + primary
+        return "FieldKeys[keys=" + ids + ", primary=" + primary
                 + (closed ? ", closed" : "") + "]";
     }
 
@@ -276,7 +380,9 @@ public final class FieldKeys implements AutoCloseable {
 
         /**
          * A data key under {@code id}, read from {@code provider} when the
-         * ring is built. The provider is closed then; the key stays.
+         * ring is built. The provider stays open with the ring - it is read
+         * again after a checkpoint, before which the key is wiped - and is
+         * closed with it.
          *
          * @param id a positive number, stored with every value encrypted under
          *           this key - so a number must never be reused for another key
@@ -330,28 +436,37 @@ public final class FieldKeys implements AutoCloseable {
             } catch (RuntimeException e) {
                 read.values().forEach(SecretScope::close);
                 failures.add(e);
-            } finally {
-                for (SecretProvider provider : providers.values()) {
-                    try {
-                        provider.close();
-                    } catch (Exception e) {
-                        // the key is read; a source that does not close cleanly changes nothing
-                    }
-                }
+            }
+            // A subject's ring is made from a key that is not read twice; it
+            // is dropped before a checkpoint (SubjectKeys) and made again.
+            if (!failures.isEmpty() || !listed) {
+                closeAll(providers.values());
             }
             if (!failures.isEmpty()) {
                 throw failures.get(0);
             }
-            FieldKeys keys = new FieldKeys(Collections.unmodifiableSortedMap(read), chosen);
+            FieldKeys keys = new FieldKeys(Collections.unmodifiableSortedMap(read), chosen,
+                    listed ? Collections.unmodifiableSortedMap(new TreeMap<>(providers)) : null);
             if (!listed) {
                 return keys;
             }
+            space.seclume.internal.Checkpoint.register(keys, FieldKeys::forget);
             Map<Integer, String> sources = new TreeMap<>();
             providers.forEach((id, provider) -> sources.put(id,
                     space.seclume.inventory.CryptoInventory.kindOf(provider)));
             space.seclume.inventory.CryptoInventory.ring(keys, () -> keys.closed, sources, chosen,
                     "AES-256-GCM-SIV");
             return keys;
+        }
+
+        private static void closeAll(java.util.Collection<SecretProvider> all) {
+            for (SecretProvider provider : all) {
+                try {
+                    provider.close();
+                } catch (Exception e) {
+                    // nothing was kept from it, or it is being given up
+                }
+            }
         }
 
         /** 32 bytes as they are, or their Base64 - decoded off the heap. */

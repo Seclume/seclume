@@ -74,6 +74,17 @@ public final class SubjectKeys implements AutoCloseable {
                 return false;
             }
         };
+        // The subjects' rings hold their keys; before a checkpoint they are
+        // dropped and made again from the store when next asked for.
+        space.seclume.internal.Checkpoint.register(this, SubjectKeys::dropCached);
+    }
+
+    /** Wipes and drops every cached ring; the next use makes it again. */
+    private synchronized void dropCached() {
+        for (FieldKeys open : rings.values()) {
+            open.close();
+        }
+        rings.clear();
     }
 
     /** Subject keys wrapped by {@code ring}, kept in {@code store}, the last 1000 used cached. */
