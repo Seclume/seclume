@@ -128,6 +128,11 @@ All notable changes to seclume are recorded here. Versions follow
   chunked) was read as if chunked, and is refused. And the end of the headers was searched
   from the first byte again after every read: a head sent a byte at a time cost a scan of the
   whole buffer per byte; the search goes on from where it stopped (`SecretFetchStrictnessTest`).
+- **An OAuth token is renewed within a day.** The client-credentials token was kept for
+  whatever `expires_in` said; seconds times 10^9 overflow a long at 292 years, and an
+  `expires_in` near that - a typo, a "never" written as a large number - wrapped the renewal
+  time into the past or past the token's real end. At most a day now, at least a second, five
+  minutes without one (`OAuthLifetimeTest`).
 - **macOS: native cryptography, and a third platform in CI.** seclume-core looked for OpenSSL
   only as `libcrypto.so.3`, the Linux name, so on macOS the TLS key exchange, signing with a
   private key and native AES-GCM and PBKDF2 were not there at all. One lookup (`LibCrypto`)

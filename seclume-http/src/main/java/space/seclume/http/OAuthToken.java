@@ -41,6 +41,13 @@ final class OAuthToken implements BearerSource {
     private static final int MAX_TOKEN = 16 * 1024;
     private static final int MAX_LINE = 16 * 1024;
     private static final long DEFAULT_LIFETIME_SECONDS = 300;
+    /**
+     * A day at the most, whatever the endpoint says. Seconds times 10^9 is a
+     * long only up to 292 years, and an {@code expires_in} near that - a typo,
+     * a "never" written as a large number - wrapped the time to renew at into
+     * the past or far beyond the token's real end; a day costs one request.
+     */
+    static final long MAX_LIFETIME_SECONDS = 86_400;
     private static final byte[] HEAD = "Authorization: Bearer "
             .getBytes(StandardCharsets.US_ASCII); // seclume-allow: the header name and scheme; the token follows off the heap
 
@@ -398,7 +405,11 @@ final class OAuthToken implements BearerSource {
     }
 
     /** {@code expires_in}: a number as RFC 6749 says, or a string as older Entra ID sends. */
-    private static long lifetime(MemorySegment json, int length) {
+    static long lifetime(MemorySegment json, int length) {
+        return Math.min(MAX_LIFETIME_SECONDS, announced(json, length));
+    }
+
+    private static long announced(MemorySegment json, int length) {
         if (!JsonOff.has(json, length, "expires_in")) {
             return DEFAULT_LIFETIME_SECONDS;
         }
