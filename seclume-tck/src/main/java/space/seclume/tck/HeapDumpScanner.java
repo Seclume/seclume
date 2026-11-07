@@ -25,8 +25,9 @@ import java.util.Map;
  * </ol>
  *
  * <p>The search covers every form a password can end up in on the heap: UTF-8
- * (how a Latin-1 {@code String} has been stored since JDK 9, and every
- * {@code byte[]} read from a file), UTF-16BE (how a {@code char[]} sits in the
+ * (every {@code byte[]} read from a file, and a compact {@code String} of
+ * ASCII), Latin-1 (a compact {@code String} of characters up to U+00FF that
+ * are not all ASCII - one byte each, not UTF-8), UTF-16BE (how a {@code char[]} sits in the
  * file, since hprof is big-endian throughout), UTF-16LE (how it would arrive
  * from Windows) and Base64 (how secrets travel through configuration).
  *
@@ -118,6 +119,7 @@ public final class HeapDumpScanner {
         byte[] utf8 = needles.get("UTF-8");
         byte[] utf16be = needles.get("UTF-16BE");
         byte[] base64 = needles.get("Base64");
+        byte[] latin1 = needles.get("ISO-8859-1");
 
         HprofParser.forEachPrimitiveArray(dump, (objectId, type, data) -> {
             if (findings.size() > 50) {
@@ -127,6 +129,9 @@ public final class HeapDumpScanner {
                 case BYTE -> {
                     check(findings, data, utf8, "byte[] " + objectId, "UTF-8");
                     check(findings, data, base64, "byte[] " + objectId, "Base64");
+                    if (latin1 != null) {
+                        check(findings, data, latin1, "byte[] " + objectId, "ISO-8859-1");
+                    }
                 }
                 case CHAR -> check(findings, data, utf16be, "char[] " + objectId,
                         "UTF-16BE");
@@ -163,6 +168,10 @@ public final class HeapDumpScanner {
         needles.put("UTF-16BE", secret.getBytes(StandardCharsets.UTF_16BE));
         // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
         needles.put("UTF-16LE", secret.getBytes(StandardCharsets.UTF_16LE));
+        if (secret.chars().allMatch(c -> c <= 0xff) && secret.chars().anyMatch(c -> c > 0x7f)) {
+            // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
+            needles.put("ISO-8859-1", secret.getBytes(StandardCharsets.ISO_8859_1));
+        }
         // seclume-allow: the searcher builds the pattern it hunts for; see the comment above
         needles.put("Base64", Base64.getEncoder()
                 .encodeToString(secret.getBytes(StandardCharsets.UTF_8)) // seclume-allow: the searcher builds the pattern it hunts for

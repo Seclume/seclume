@@ -195,7 +195,7 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
         indent(out, 1).append("\"method\": {\n");
         field(out, 2, "raw", "every byte of the dump file").append(",\n");
         field(out, 2, "structured", "every byte[] and char[] in the heap").append(",\n");
-        field(out, 2, "textEncodings", "UTF-8, UTF-16BE, UTF-16LE, Base64").append(",\n");
+        field(out, 2, "textEncodings", "UTF-8, UTF-16BE, UTF-16LE, Base64, Latin-1 (beyond ASCII)").append(",\n");
         field(out, 2, "binaryEncodings", "bytes, Base64").append('\n');
         indent(out, 1).append("},\n");
         indent(out, 1).append("\"secrets\": [");
@@ -447,7 +447,8 @@ record AuditReport(Instant checkedAt, String host, Target target, Dump dump,
                 + "analyser finds).\n");
         if (!secrets.isEmpty()) {
             out.append("- Text secrets were looked for as UTF-8, UTF-16BE, UTF-16LE and "
-                    + "Base64; binary ones as they are and as Base64.\n");
+                    + "Base64, and as Latin-1 where they go beyond ASCII but not U+00FF; "
+                    + "binary ones as they are and as Base64.\n");
         }
         if (discovery != null) {
             out.append("- For the discovery, every run of printable text in the file - as "
