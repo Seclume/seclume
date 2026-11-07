@@ -120,6 +120,73 @@ public final class TrustChoice {
         }
     }
 
+    /** Set while {@link #certificateOnly} runs: what the next handshake on this thread presents. */
+    private static final ThreadLocal<java.util.concurrent.atomic.AtomicReference<X509Certificate>>
+            LOOK_ONLY = new ThreadLocal<>();
+
+    /**
+     * Thrown by a handshake under {@link #certificateOnly}, once the server's
+     * certificate is taken: the connection ends there, before a byte of the
+     * protocol - before a login, before the secret is read.
+     */
+    public static final class CertificateTaken extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        CertificateTaken(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * The certificate the server presents to {@code opening}, which is cut
+     * short right after its TLS handshake. For {@code seclume-verify
+     * --print-pin}, which connects without checking the certificate because
+     * the pin is what it wants to find out: a whole login there sent the
+     * password to whoever answered - and an unchecked server is anyone.
+     *
+     * @return the certificate, or null when no handshake took place
+     * @throws SQLException when the connection failed before the handshake
+     *         finished
+     */
+    public static X509Certificate certificateOnly(Transports.Opening<?> opening)
+            throws SQLException {
+        java.util.concurrent.atomic.AtomicReference<X509Certificate> seen =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        LOOK_ONLY.set(seen);
+        try {
+            Object opened = opening.open();
+            // A connection that came back had no handshake to stop: in the clear.
+            if (opened instanceof AutoCloseable closeable) {
+                try {
+                    closeable.close();
+                } catch (Exception ignored) {
+                    // nothing of it is used
+                }
+            }
+            return seen.get();
+        } catch (SQLException e) {
+            if (seen.get() != null) {
+                return seen.get();
+            }
+            throw e;
+        } finally {
+            LOOK_ONLY.remove();
+        }
+    }
+
+    /**
+     * After a handshake: under {@link #certificateOnly}, takes the
+     * certificate and ends the connection; otherwise nothing.
+     */
+    static void certificateOnly(TlsLayer layer) throws IOException {
+        java.util.concurrent.atomic.AtomicReference<X509Certificate> seen = LOOK_ONLY.get();
+        if (seen != null) {
+            seen.compareAndSet(null, layer.peerCertificate());
+            throw new CertificateTaken("stopped after the TLS handshake: only the server's "
+                    + "certificate was wanted, nothing else is sent");
+        }
+    }
+
     /** The choice for a handshake starting on this thread, or null. */
     static Choice current() {
         return CHOSEN.get();

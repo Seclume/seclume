@@ -19,6 +19,9 @@ All notable changes to seclume are recorded here. Versions follow
   connection details in Spring Boot set it, as they set `trustServerCertificate` for SQL Server.
   PostgreSQL has no opt-out (`CleartextPasswordTest`, `CleartextOptOutUrlTest`,
   `ConnectFailureWipeTest`).
+- **REVIEWS.md: the second round.** The tools around the drivers, the framework integrations'
+  password checks, the cloud modules and the default TLS mode's cleartext logins - six findings,
+  the open question of private keys in checkpoint images, and what was found sound.
 - **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
   the secret and its padded Base64 only. The usual leak is neither: a wire log's
   `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into
@@ -26,6 +29,17 @@ All notable changes to seclume are recorded here. Versions follow
   token in unpadded or URL-safe Base64. Each of these is looked for now - the same way, a
   fingerprint and an HMAC tag computed in native memory, no copy of the secret on the heap
   (`SecretMaskerTest`, 5 tests more).
+- **The password guards see environment variables.** Spring's, Micronaut's and Helidon's
+  check for a password in the configuration matched property names only - `.password` - while
+  the environment's property source lists its variables by their own names: a password in
+  `SPRING_DATASOURCE_PASSWORD`, `DATASOURCES_DEFAULT_PASSWORD` or
+  `SECLUME_DATASOURCES_ORDERS_PASSWORD`, how containers pass one, was never named, though the
+  framework reads it as the same property and it is the same `String` on the heap. Spring's
+  guard also knows `app.db-password` and `app.db_password` now; Micronaut's refuses a password
+  among Hikari's `data-source-properties`. Note: with `seclume.secret-guard=fail` an application
+  whose environment holds such a variable no longer starts until it is removed or listed in
+  `seclume.secret-guard-allow` (`SeclumeEnvironmentPostProcessorTest`,
+  `ConfigurationGuardEverywhereTest`, `SeclumeSettingsTest`, `SeclumeCdiExtensionTest`).
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to
@@ -34,6 +48,15 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **Quarkus refuses a datasource password at the start too, not only in the build.** The
+  check that a seclume datasource has no `quarkus.datasource.password` - Agroal would keep it as
+  a `String` for the application's life - ran only as a build step. The datasource password is a
+  runtime property: `QUARKUS_DATASOURCE_PASSWORD` in a container's environment, a
+  `config/application.properties` beside the jar or a mounted Kubernetes secret was never seen
+  by the build, and only a password committed with the source was stopped. The same check now
+  runs at start-up, and knows the environment-variable spellings, a quoted name's
+  `QUARKUS_DATASOURCE__USERS__PASSWORD` among them (`PasswordGuardNamesTest`,
+  `RuntimePasswordRefusedTest`).
 - **`seclume-verify --migrate` prints no password, whatever form the URL writes it in.** The
   translation drops `password=`, but a URL has other places for one, and their contents went
   into the printed configuration: Connector/J's `user:password@host` stayed in the host list;
@@ -51,6 +74,14 @@ All notable changes to seclume are recorded here. Versions follow
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
   does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
   2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
+- **`seclume-verify --print-pin` no longer logs in.** It connects with `tls=require` -
+  encryption that checks nothing, because the server's key is what it wants to find out - and
+  then went on to the whole login: the secret read from its provider and sent to whoever had
+  answered. A server in the middle got a cleartext password from PostgreSQL's password
+  authentication or MySQL's `caching_sha2_password` full path, and an offline-testable proof
+  from the rest. The connection now ends with the TLS handshake, before a byte of the protocol,
+  on all four drivers and both TLS stacks, SQL Server's TDS 7.4 handshake included
+  (`TrustChoice.certificateOnly`; `CertificateOnlyTest`, 6 tests).
 - **REVIEWS.md: the code reviews on record.** What the internal reviews of 6 and 7 November
   read, the 22 findings with their severity and the pull request that fixed each, what was found
   sound, the residuals accepted, and where the next review starts. Linked from SECURITY.md and

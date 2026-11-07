@@ -517,7 +517,9 @@ precedence.
 
 At startup the starter reads the whole `Environment` and names every property that holds a
 password in plain text: `spring.mail.password`, and whatever the application invented for
-itself. It reports and does not forbid, because much of what it finds has no off-heap
+itself - in any of Spring's spellings, `app.db-password` and the environment variable
+`SPRING_DATASOURCE_PASSWORD` among them (a password in a container's environment is a `String`
+in the JVM like any other, from the moment it starts). It reports and does not forbid, because much of what it finds has no off-heap
 alternative yet, and a guard that blocks what cannot be fixed gets switched off. **Names are
 logged, never values.**
 
