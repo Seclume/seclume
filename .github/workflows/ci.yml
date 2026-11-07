@@ -717,11 +717,15 @@ jobs:
       - name: PostgreSQL 17 of the image
         if: runner.os == 'Windows'
         run: |
+          set -x
           data="$(cygpath -u "$PGDATA")"
-          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
-            -keyout "$data/server.key" -out "$data/server.crt" 2>/dev/null
+          ls -la "$data" | head -5
+          # Git's MSYS turns "/CN=..." into a Windows path; "//CN" keeps it.
+          MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
+            -keyout "$data/server.key" -out "$data/server.crt"
           printf "\nssl = on\n" >> "$data/postgresql.conf"
-          pwsh -Command 'Set-Service postgresql-x64-17 -StartupType Manual; Start-Service postgresql-x64-17'
+          pwsh -Command 'Set-Service postgresql-x64-17 -StartupType Manual; Start-Service postgresql-x64-17' \
+            || { cat "$data"/log/* 2>/dev/null | tail -40; exit 1; }
           PGPASSWORD=root "$(cygpath -u "$PGBIN")/psql" -h 127.0.0.1 -U postgres -d postgres \
             -v ON_ERROR_STOP=1 -v pw="$PG_PASSWORD" <<'SQL'
           CREATE ROLE seclume_test LOGIN PASSWORD :'pw';
@@ -736,7 +740,7 @@ jobs:
           unset PG_PASSWORD
           .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test \
             -Dtest='space/seclume/postgresql/**/*' -Dsurefire.failIfNoSpecifiedTests=false \
-            -Dseclume.pgtls.port=5432
+            -Dseclume.pgtls.port=5432 -Dseclume.pg17.port=5432
       - name: Security gate
         if: success() || failure()
         run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group postgresql --platform ${{ matrix.platform }}'

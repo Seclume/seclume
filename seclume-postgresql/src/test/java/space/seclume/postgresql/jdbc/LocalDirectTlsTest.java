@@ -61,8 +61,18 @@ class LocalDirectTlsTest {
     @ParameterizedTest
     @ValueSource(strings = {"seclume"})
     void aServerBeforeSeventeenRefusesItAudibly(String stack) throws SQLException {
-        String url = url(Integer.getInteger("seclume.pgtls.port", 5433),
-                "&tls=require&tlsNegotiation=direct&tlsStack=" + stack);
+        int port = Integer.getInteger("seclume.pgtls.port", 5433);
+        // The TLS server is whatever version the job runs - a PostgreSQL 17
+        // or later takes direct TLS, and there is nothing to refuse.
+        try (Connection connection = DriverManager.getConnection(url(port, "&tls=require"));
+             Statement statement = connection.createStatement();
+             ResultSet rows = statement.executeQuery(
+                     "select current_setting('server_version_num')::int")) {
+            rows.next();
+            Assumptions.assumeTrue(rows.getInt(1) < 170000,
+                    "the TLS server is PostgreSQL " + rows.getInt(1) + ", which takes direct TLS");
+        }
+        String url = url(port, "&tls=require&tlsNegotiation=direct&tlsStack=" + stack);
         org.junit.jupiter.api.Assertions.assertTrue(SeclumeUrl.settings(url, null).directTls(),
                 "the URL option did not reach the settings");
         assertThrows(SQLException.class, () -> DriverManager.getConnection(url).close());
