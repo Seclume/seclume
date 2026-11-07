@@ -178,7 +178,7 @@ public final class SecretMasker implements AutoCloseable {
             for (Form other : into) {
                 seen |= other.label().equals(form.label()) && other.length() == form.length()
                         && other.fingerprint() == form.fingerprint()
-                        && java.security.MessageDigest.isEqual(other.tag(), form.tag());
+                        && java.util.Arrays.equals(other.tag(), form.tag());
             }
             if (!seen && form.length() >= SHORTEST) {
                 into.add(form);
