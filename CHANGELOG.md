@@ -12,6 +12,17 @@ All notable changes to seclume are recorded here. Versions follow
   token in unpadded or URL-safe Base64. Each of these is looked for now - the same way, a
   fingerprint and an HMAC tag computed in native memory, no copy of the secret on the heap
   (`SecretMaskerTest`, 5 tests more).
+- **The password guards see environment variables.** Spring's, Micronaut's and Helidon's
+  check for a password in the configuration matched property names only - `.password` - while
+  the environment's property source lists its variables by their own names: a password in
+  `SPRING_DATASOURCE_PASSWORD`, `DATASOURCES_DEFAULT_PASSWORD` or
+  `SECLUME_DATASOURCES_ORDERS_PASSWORD`, how containers pass one, was never named, though the
+  framework reads it as the same property and it is the same `String` on the heap. Spring's
+  guard also knows `app.db-password` and `app.db_password` now; Micronaut's refuses a password
+  among Hikari's `data-source-properties`. Note: with `seclume.secret-guard=fail` an application
+  whose environment holds such a variable no longer starts until it is removed or listed in
+  `seclume.secret-guard-allow` (`SeclumeEnvironmentPostProcessorTest`,
+  `ConfigurationGuardEverywhereTest`, `SeclumeSettingsTest`, `SeclumeCdiExtensionTest`).
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to

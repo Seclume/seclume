@@ -128,7 +128,8 @@ public class SeclumeCdiExtension implements Extension {
 
     /**
      * Every {@code seclume.*} and {@code javax.sql.DataSource.*} property, as
-     * flat keys. The names come from the config sources themselves as well as
+     * flat keys - and every environment variable that spells one
+     * ({@code SECLUME_...}, {@code JAVAX_SQL_DATASOURCE_...}), for the password check. The names come from the config sources themselves as well as
      * from {@link Config#getPropertyNames()}: Helidon's MP config builds a tree
      * of its sources, and a name with a number in it -
      * {@code seclume.field-encryption.keys.1.uri} - can come out of that tree
@@ -146,8 +147,12 @@ public class SeclumeCdiExtension implements Extension {
         }
         Map<String, String> all = new java.util.TreeMap<>();
         for (String name : names) {
-            if (!name.startsWith("seclume.")
-                    && !name.toLowerCase(java.util.Locale.ROOT).startsWith("javax.sql.datasource.")) {
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            // Environment variables by their own names too: the environment's
+            // source lists SECLUME_DATASOURCES_..._PASSWORD as that, and the
+            // password check must see it.
+            if (!name.startsWith("seclume.") && !lower.startsWith("javax.sql.datasource.")
+                    && !lower.startsWith("seclume_") && !lower.startsWith("javax_sql_datasource_")) {
                 continue;
             }
             String value = null;
