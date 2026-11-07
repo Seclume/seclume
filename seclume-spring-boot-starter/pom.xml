@@ -20,7 +20,7 @@
     <spring-framework.version>7.0.10</spring-framework.version>
     <tomcat.version>11.0.27</tomcat.version>
     <spring-cloud-aws.version>4.2.1</spring-cloud-aws.version>
-    <aws-sdk.version>2.57.5</aws-sdk.version>
+    <aws-sdk.version>2.57.8</aws-sdk.version>
     <spring-ldap.version>4.1.2</spring-ldap.version>
     <sshd-core.version>2.20.1</sshd-core.version>
     <spring-integration.version>7.1.2</spring-integration.version>
@@ -38,8 +38,8 @@
     <jackson.version>2.18.12</jackson.version>
     <jackson3.version>3.2.4</jackson3.version>
     <amqp-client.version>5.37.0</amqp-client.version>
-    <netty.version>4.2.19.Final</netty.version>
-    <log4j.version>2.25.5</log4j.version>
+    <netty.version>4.1.140.Final</netty.version>
+    <log4j.version>2.26.1</log4j.version>
   </properties>
 
   <!-- The optional clients bring what has known holes: Jackson 2.22.2
