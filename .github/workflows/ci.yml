@@ -720,8 +720,8 @@ jobs:
           set -x
           data="$(cygpath -u "$PGDATA")"
           ls -la "$data" | head -5
-          # Git's MSYS would turn "/CN=..." into a Windows path.
-          MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj /CN=localhost \
+          # Git's MSYS turns "/CN=..." into a Windows path; "//CN=..." it leaves as "/CN=...".
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj //CN=localhost \
             -keyout "$data/server.key" -out "$data/server.crt"
           printf "\nssl = on\n" >> "$data/postgresql.conf"
           pwsh -Command 'Set-Service postgresql-x64-17 -StartupType Manual; Start-Service postgresql-x64-17' \
