@@ -261,10 +261,13 @@ final class Http2Requests {
                 boolean pseudo = field.name().length > 0 && field.name()[0] == ':';
                 int found = pseudo ? -1 : indexOf(field.value(), PREFIX, 0);
                 int valueLength = field.value().length;
-                if (found >= 0) {
-                    int end = placeholderEnd(field.value(), found);
-                    SecretScope secret = SecretScope.fromProvider(provider(field.value(), found,
-                            end));
+                int end = found < 0 ? -1 : placeholderEnd(field.value(), found);
+                // Null where the placeholder's secret does not go to this server:
+                // the field goes as it is, placeholder and all.
+                SecretProvider provider = found < 0 ? null
+                        : provider(field.value(), found, end, target);
+                if (provider != null) {
+                    SecretScope secret = SecretScope.fromProvider(provider);
                     secrets.add(secret);
                     spans.add(new int[] {found, end});
                     valueLength += secret.length() - (end - found);
@@ -416,14 +419,11 @@ final class Http2Requests {
         return end;
     }
 
-    private static SecretProvider provider(byte[] bytes, int from, int to) throws IOException {
+    private static SecretProvider provider(byte[] bytes, int from, int to, String server)
+            throws IOException {
         // seclume-allow: the placeholder - no secret
         String placeholder = new String(bytes, from, to - from, StandardCharsets.US_ASCII);
-        SecretProvider provider = CredentialPlaceholders.provider(placeholder);
-        if (provider == null) {
-            throw new IOException("a credential placeholder this process did not hand out");
-        }
-        return provider;
+        return CredentialPlaceholders.provider(placeholder, server);
     }
 
     private static int indexOf(byte[] data, byte[] pattern, int from) {

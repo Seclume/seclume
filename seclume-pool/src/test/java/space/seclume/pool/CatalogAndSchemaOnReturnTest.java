@@ -37,6 +37,7 @@ class CatalogAndSchemaOnReturnTest {
         StubDataSource source = new StubDataSource();
         try (SeclumePool pool = new SeclumePool(source, settings())) {
             try (Connection first = pool.getConnection()) {
+                assertEquals(null, first.getSchema());
                 StubDataSource.StubConnection stub = source.handedOut().get(0);
                 stub.catalog = "shop";                  // what the server put it on
                 stub.schema = "public";
