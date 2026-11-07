@@ -224,20 +224,25 @@ public final class FieldKeys implements AutoCloseable {
     }
 
     /**
-     * The read lock, held while a key is used - with the keys there: read
-     * again first if a checkpoint made the ring forget them.
+     * Runs {@code work} under the read lock, with the keys there: read again
+     * first if a checkpoint made the ring forget them, and again if it did so
+     * once more before the lock was taken.
      */
-    Lock acquire() {
+    <T> T underKeys(java.util.function.Supplier<T> work) {
         while (true) {
             if (forgotten) {
                 reload();
             }
             Lock read = use.readLock();
             read.lock();
-            if (!forgotten || closed) {
-                return read;                 // a closed ring is refused by checkOpen
+            try {
+                if (forgotten && !closed) {
+                    continue;                // forgotten again in between: read them again
+                }
+                return work.get();           // a closed ring is refused by checkOpen
+            } finally {
+                read.unlock();
             }
-            read.unlock();                   // forgotten again in between: read them again
         }
     }
 

@@ -199,8 +199,7 @@ public final class BlindIndex {
             int length = apply(transform, plaintext, transformed.segment());
             transformed.length(length);
             MemorySegment mac = arena.allocate(32);
-            java.util.concurrent.locks.Lock held = ring.acquire();
-            try {
+            ring.underKeys(() -> {
                 ring.checkOpen();
                 SecretScope key = keys.get(keyId);
                 if (key == null) {
@@ -210,9 +209,8 @@ public final class BlindIndex {
                     hmac.update(transformed.segment(), 0, length);
                     hmac.doFinal(mac, 0);
                 }
-            } finally {
-                held.unlock();
-            }
+                return null;
+            });
             long value = mac.get(ValueLayout.JAVA_LONG_UNALIGNED.withOrder(java.nio.ByteOrder.BIG_ENDIAN), 0);
             mac.fill((byte) 0);
             return bits == 64 ? value : value >>> (64 - bits);

@@ -189,16 +189,14 @@ public final class EncryptedColumn {
                 Entropy.fill(value, HEADER, AesGcmSiv.NONCE);
             }
             MemorySegment aad = associatedData(arena, value, context0);
-            java.util.concurrent.locks.Lock held = ring.acquire();
-            try {
+            ring.underKeys(() -> {
                 MemorySegment keys = columnKey(keyId);
                 commitment(keys, value, value, HEADER + AesGcmSiv.NONCE);
                 AesGcmSiv.encrypt(keys, 0, FieldKeys.KEY_LENGTH,
                         value, HEADER, aad, 0, aad.byteSize(),
                         plaintext, 0, length, value, BODY);
-            } finally {
-                held.unlock();
-            }
+                return null;
+            });
             return value.toArray(ValueLayout.JAVA_BYTE);
         }
     }
@@ -240,23 +238,19 @@ public final class EncryptedColumn {
             MemorySegment value = arena.allocate(ciphertext.length);
             MemorySegment.copy(ciphertext, 0, value, ValueLayout.JAVA_BYTE, 0, ciphertext.length);
             MemorySegment aad = associatedData(arena, value, context0);
-            boolean authentic;
-            java.util.concurrent.locks.Lock held = ring.acquire();
-            try {
+            boolean authentic = ring.underKeys(() -> {
                 MemorySegment keys = columnKey(keyId);
                 // The commitment first: a value made under another key - one that
                 // happens to open under this one too - is refused before AES-GCM-SIV
                 // is asked, and with the same words, so that neither check is an oracle.
                 MemorySegment expected = arena.allocate(COMMITMENT);
                 commitment(keys, value, expected, 0);
-                authentic = space.seclume.crypto.ConstantTime.equals(expected, 0, value,
+                return space.seclume.crypto.ConstantTime.equals(expected, 0, value,
                         HEADER + AesGcmSiv.NONCE, COMMITMENT)
                         && AesGcmSiv.decrypt(keys, 0, FieldKeys.KEY_LENGTH,
                                 value, HEADER, aad, 0, aad.byteSize(),
                                 value, BODY, length, target, 0);
-            } finally {
-                held.unlock();
-            }
+            });
             if (!authentic) {
                 throw new FieldEncryptionException("a value of " + name + " did not authenticate"
                         + " - another column's, another row's context, or altered");
