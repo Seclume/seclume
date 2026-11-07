@@ -738,8 +738,10 @@ jobs:
       - name: The PostgreSQL driver's tests
         run: |
           unset PG_PASSWORD
-          .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test \
-            -Dtest='space/seclume/postgresql/**/*' -Dsurefire.failIfNoSpecifiedTests=false \
+          # The Spring Boot starter too: two of the gate's PostgreSQL group are its.
+          .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql,seclume-spring-boot-starter -am test \
+            -Dtest='space/seclume/postgresql/**/*,space/seclume/spring/**/*' \
+            -Dsurefire.failIfNoSpecifiedTests=false \
             -Dseclume.pgtls.port=5432 -Dseclume.pg17.port=5432
       - name: Security gate
         if: success() || failure()
