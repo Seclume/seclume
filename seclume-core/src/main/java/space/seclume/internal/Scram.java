@@ -90,6 +90,14 @@ public class Scram implements AutoCloseable {
     private MemorySegment salt;
     private int saltLength;
     private int iterations;
+    /** The fewest iterations a server may ask for; see {@link #MIN_ITERATIONS_PROPERTY}. */
+    private int minimumIterations = configuredMinimum();
+    /**
+     * Whether a server-first message has been read and accepted. Its fields
+     * are taken one by one, so a refused one - a count below the minimum -
+     * leaves some of them set; nothing may make a proof from those.
+     */
+    private boolean serverFirstAccepted;
     private MemorySegment serverNonce;
     private int serverNonceLength;
     private MemorySegment expectedServerSignature;
@@ -103,6 +111,67 @@ public class Scram implements AutoCloseable {
     /** The GS2 header as bytes - it is sent once and hashed once. */
     private MemorySegment gs2Header;
     private int gs2Length;
+
+    /**
+     * The system property that sets the fewest PBKDF2 iterations a server may
+     * ask for, for every SCRAM login of the process - PostgreSQL, Kafka,
+     * MongoDB. The iteration count is the server's to choose, in its first
+     * message, and the client's proof is a PBKDF2 of the password with it:
+     * a server that asks for one iteration - or whoever sits between, before
+     * TLS is checked or where it is not - gets a proof that costs one hash
+     * per password guess to test offline. RFC 7677 (5.1): the count "SHOULD
+     * be at least 4096"; every server's default is that or more.
+     *
+     * <p>Lower it only for a server that is set so on purpose - PostgreSQL's
+     * {@code scram_iterations}, a SCRAM credential made with fewer.
+     */
+    public static final String MIN_ITERATIONS_PROPERTY = "seclume.scram.minIterations";
+
+    /** The default of {@link #MIN_ITERATIONS_PROPERTY}: RFC 7677's 4096. */
+    public static final int DEFAULT_MIN_ITERATIONS = 4096;
+
+    private static final int MAX_ITERATIONS = 10_000_000;
+
+    /** {@link #MIN_ITERATIONS_PROPERTY} as it is set now, or the default. */
+    static int configuredMinimum() {
+        String value = System.getProperty(MIN_ITERATIONS_PROPERTY);
+        if (value == null || value.isBlank()) {
+            return DEFAULT_MIN_ITERATIONS;
+        }
+        String number = value.strip();
+        if (number.length() > 8 || !number.chars().allMatch(c -> c >= '0' && c <= '9')) {
+            throw new IllegalStateException(MIN_ITERATIONS_PROPERTY + " is a number of 1 to "
+                    + MAX_ITERATIONS + ", not " + number);
+        }
+        int minimum = 0;
+        for (int i = 0; i < number.length(); i++) {
+            minimum = minimum * 10 + (number.charAt(i) - '0');   // eight digits at most
+        }
+        if (minimum < 1 || minimum > MAX_ITERATIONS) {
+            throw new IllegalStateException(MIN_ITERATIONS_PROPERTY + " is a number of 1 to "
+                    + MAX_ITERATIONS + ", not " + number);
+        }
+        return minimum;
+    }
+
+    /**
+     * The fewest iterations this login accepts, instead of
+     * {@link #MIN_ITERATIONS_PROPERTY}'s - for a module that takes it from
+     * its own configuration.
+     */
+    public Scram minimumIterations(int minimum) {
+        if (minimum < 1 || minimum > MAX_ITERATIONS) {
+            throw new IllegalArgumentException("a minimum of 1 to " + MAX_ITERATIONS
+                    + " iterations, not " + minimum);
+        }
+        this.minimumIterations = minimum;
+        return this;
+    }
+
+    /** The fewest iterations this login accepts. */
+    public int minimumIterations() {
+        return minimumIterations;
+    }
 
     /** A client on {@code algorithm}, with a fresh nonce. */
     public Scram(HashAlgorithm algorithm) {
@@ -257,9 +326,17 @@ public class Scram implements AutoCloseable {
 
         iterations = readNumber(data, attributePosition(data, offset, length, 'i'),
                 attributeLength(data, offset, length, 'i'));
-        if (iterations < 1 || iterations > 10_000_000) {
+        if (iterations < 1 || iterations > MAX_ITERATIONS) {
             throw new IllegalStateException("implausible iteration count " + iterations);
         }
+        if (iterations < minimumIterations) {
+            throw new IllegalStateException("the server asks for " + iterations
+                    + " PBKDF2 iterations, fewer than the " + minimumIterations + " this client "
+                    + "accepts - so few make the proof it would send cheap to test passwords "
+                    + "against. Where the server is set so on purpose, -D"
+                    + MIN_ITERATIONS_PROPERTY + "=" + iterations + " accepts it");
+        }
+        serverFirstAccepted = true;
     }
 
     /**
@@ -276,6 +353,9 @@ public class Scram implements AutoCloseable {
      * @return the length of the message written
      */
     public int clientFinal(MemorySegment target, MemorySegment password) {
+        if (!serverFirstAccepted) {
+            throw new IllegalStateException("no accepted server-first message to answer");
+        }
         MemorySegment saltedPassword = arena.allocate(keyLength);
         MemorySegment clientKey = arena.allocate(keyLength);
         MemorySegment storedKey = arena.allocate(keyLength);

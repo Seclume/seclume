@@ -144,6 +144,11 @@ final class MailSettings {
         int connectTimeout = Integer.parseInt(remove(options, "connectTimeout", "10000"));
         int timeout = Integer.parseInt(remove(options, "timeout", "60000"));
         String ehlo = options.remove("ehlo");
+        if (ehlo != null && (ehlo.isEmpty() || !ehlo.chars().allMatch(c -> c > 0x20 && c < 0x7f))) {
+            // It is the whole argument of EHLO: one word of printable ASCII.
+            throw new IllegalArgumentException("ehlo= is a host name or an address literal - "
+                    + "printable ASCII, no blank or line break");
+        }
 
         boolean startTls = !implicitTls;
         if (tlsMode != null) {

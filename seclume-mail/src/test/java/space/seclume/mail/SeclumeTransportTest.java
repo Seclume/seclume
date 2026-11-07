@@ -94,6 +94,28 @@ class SeclumeTransportTest {
     }
 
     @Test
+    void aRecipientWithALineBreakIsASendFailureAndNothingGoesOut() throws Exception {
+        try (FakeSmtpServer server = new FakeSmtpServer(pki.serverContext(), false)) {
+            Session session = session(server);
+            MimeMessage message = message(session, "team@example.com");
+            InternetAddress injected = new InternetAddress();
+            injected.setAddress("boss@example.com>\r\nRCPT TO:<everyone@example.com");
+            message.saveChanges();
+            // The envelope as an application builds it, from what someone typed.
+            Address[] envelope = {new InternetAddress("team@example.com"), injected};
+            try (Transport transport = session.getTransport("smtp")) {
+                transport.connect(null, -1, null, null);
+                SendFailedException refused = assertThrows(SendFailedException.class,
+                        () -> transport.sendMessage(message, envelope));
+                assertTrue(refused.getMessage().contains("recipient"), refused.getMessage());
+                assertTrue(server.commands.stream().noneMatch(c -> c.startsWith("RCPT")
+                        || c.startsWith("MAIL")), server.commands.toString());
+            }
+            assertEquals(0, server.received.size());
+        }
+    }
+
+    @Test
     void theWayJavaMailSenderImplConnects() throws Exception {
         // Spring's JavaMailSenderImpl: getTransport(protocol), connect(host, port, user,
         // password) with whatever it was configured with - here nothing - then sendMessage.

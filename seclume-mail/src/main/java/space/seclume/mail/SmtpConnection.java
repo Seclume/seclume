@@ -112,6 +112,14 @@ public final class SmtpConnection implements AutoCloseable {
         if (recipients.isEmpty()) {
             throw new IllegalArgumentException("a message needs at least one envelope recipient");
         }
+        // Checked before anything is sent: an address goes into a command line
+        // as it is, and a line break in one - a recipient typed into a form -
+        // would end MAIL FROM or RCPT TO and send the rest as commands of the
+        // logged-in session (more recipients, or a DATA of its own).
+        envelopeAddress(from, "sender");
+        for (String recipient : recipients) {
+            envelopeAddress(recipient, "recipient");
+        }
         boolean utf8 = !isAscii(from) || recipients.stream().anyMatch(r -> !isAscii(r));
         if (utf8 && !extensions.containsKey("SMTPUTF8")) {
             throw new MailException(-1, "an address is not ASCII, and " + settings.host
@@ -153,6 +161,31 @@ public final class SmtpConnection implements AutoCloseable {
         Reply queued = reply();
         expect(queued, 250, "the end of the message");
         return new Sent(List.copyOf(accepted), Map.copyOf(refused), queued.text());
+    }
+
+    /**
+     * Refuses an envelope address that would not stay inside its {@code <...>}
+     * or its command line: a control character (CR and LF among them), or an
+     * angle bracket. The empty sender {@code <>} of a bounce is allowed.
+     */
+    static void envelopeAddress(String address, String what) {
+        if (address == null) {
+            throw new IllegalArgumentException("no envelope " + what);
+        }
+        if (address.isEmpty() && what.equals("recipient")) {
+            throw new IllegalArgumentException("an empty envelope recipient");
+        }
+        for (int i = 0; i < address.length(); i++) {
+            char c = address.charAt(i);
+            if (c < 0x20 || c == 0x7f || c == '<' || c == '>'
+                    || (c >= 0x80 && c <= 0x9f) || c == '\u2028' || c == '\u2029') {
+                throw new IllegalArgumentException("the envelope " + what + " holds "
+                        + (c == '\r' || c == '\n' ? "a line break"
+                        : c == '<' || c == '>' ? "an angle bracket"
+                        : String.format("the control character U+%04X", (int) c))
+                        + " at " + i + " - it would leave its command line, and is not sent");
+            }
+        }
     }
 
     /** QUIT, then the connection closed - also when the server does not answer. */

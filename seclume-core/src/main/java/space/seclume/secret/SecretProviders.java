@@ -111,7 +111,10 @@ public final class SecretProviders {
             case "env-file", "envfile" -> new EnvFileSecretProvider(path(settings, "env-file"),
                     required(settings, "key", "env-file"), maxLength);
             case "unix-socket", "unixsocket" -> new UnixSocketSecretProvider(
-                    path(settings, "unix-socket"), value(settings, "request"), maxLength);
+                    path(settings, "unix-socket"), value(settings, "request"), maxLength,
+                    SpiffeWorkloadApi.timeoutMillis("timeout-millis",
+                            value(settings, "timeout-millis"),
+                            UnixSocketSecretProvider.DEFAULT_TIMEOUT_MILLIS));
             case "process" -> new ProcessSecretProvider(
                     List.of(required(settings, "command", "process").split("\\s+")), maxLength);
             case "dpapi" -> new DpapiSecretProvider(path(settings, "dpapi"),

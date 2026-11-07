@@ -105,7 +105,7 @@ class ScriptedMongoServerTest {
                 MongoDatabase db = client.getDatabase("admin");
                 MongoException ex = assertThrows(MongoException.class,
                         () -> db.runCommand(new Document("ping", 1)));
-                assertTrue(ex.getMessage().contains("minimum is 4096") || ex.getMessage().contains("iterations"),
+                assertTrue(ex.getMessage().contains("asks for 1000 PBKDF2 iterations, fewer than the 4096"),
                         ex.getMessage());
             }
         }

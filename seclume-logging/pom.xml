@@ -20,7 +20,7 @@
 
   <properties>
     <logback.version>1.6.6</logback.version>
-    <log4j.version>2.25.5</log4j.version>
+    <log4j.version>2.26.1</log4j.version>
   </properties>
 
   <dependencies>

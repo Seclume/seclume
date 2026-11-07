@@ -22,8 +22,8 @@
     <!-- The Hibernate that Spring Boot ${spring.boot.version} brings; its
          annotation processor writes the Jakarta Data repositories of the
          tests and has to be the same release. -->
-    <hibernate.version>7.4.13.Final</hibernate.version>
-    <jakarta.data.version>1.0.1</jakarta.data.version>
+    <hibernate.version>7.4.14.Final</hibernate.version>
+    <jakarta.data.version>1.0.2</jakarta.data.version>
     <!-- Spring Boot 4 brings its own JUnit version and it has to win
          here: the parent project's is older, and the difference shows as a
          NoSuchMethodError in the middle of a test run. -->

@@ -112,4 +112,14 @@ class MailSettingsTest {
         assertEquals(MailSettings.Auth.XOAUTH2, MailSettings.of(
                 "smtps://smtp.office365.com?user=r@example.com&auth=xoauth2" + SECRET).auth);
     }
+
+    @Test
+    void anEhloNameIsOneWordOfPrintableAscii() {
+        String base = "smtp://mail.example.com?user=a&provider=file&path=/x&ehlo=";
+        assertEquals("client.example.com", MailSettings.of(base + "client.example.com").ehloName);
+        assertEquals("[192.0.2.1]", MailSettings.of(base + "%5B192.0.2.1%5D").ehloName);
+        for (String bad : new String[] {"a%0D%0AMAIL%20FROM:x", "a%20b", "", "h%C3%A9", "a%00"}) {
+            assertThrows(IllegalArgumentException.class, () -> MailSettings.of(base + bad), bad);
+        }
+    }
 }
