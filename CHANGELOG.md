@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **An HTTP placeholder's secret goes to one server.** The TLS sockets of seclume-http
+  (JGit, Kubernetes, gRPC, Elasticsearch, `SeclumeSslSocketFactory`) wrote the secret into any
+  request that carried its placeholder, whatever host the connection went to - and a client
+  sends its credentials where it is led: JGit gives the same login to a submodule's host from
+  `.gitmodules` and after a redirect. Now a placeholder is bound to the host and port of the
+  first request it is written for; on a connection to any other it goes as the placeholder,
+  and that server refuses it. Elasticsearch binds it to the URL's nodes, and
+  `SeclumeSslSocketFactory.placeholder(spec, servers)` names the servers for a secret several
+  take (`PlaceholderServerTest`, 8 tests: HTTP/1.1, Basic, HTTP/2, a cluster, a race of first
+  requests).
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
