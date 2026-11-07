@@ -33,15 +33,18 @@ class LibCryptoTest {
     Path temporary;
 
     @Test
-    void linuxAsksTheLoaderForTheVersionedName() {
-        assertEquals(List.of("libcrypto.so.3"), LibCrypto.candidates(LINUX, 8, null));
+    void linuxAsksTheLoaderForTheVersionedNamesThreeFirst() {
+        assertEquals(List.of("libcrypto.so.3", "libcrypto.so.4"), LibCrypto.candidates(LINUX, 8, null));
     }
 
     @Test
-    void macOsTriesHomebrewOnBothArchitecturesThenMacPorts() {
+    void macOsTriesOpenSsl3ThenOpenSsl4FromHomebrewOnBothArchitecturesAndMacPorts() {
         assertEquals(List.of("/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib",
                         "/usr/local/opt/openssl@3/lib/libcrypto.3.dylib",
-                        "/opt/local/lib/libcrypto.3.dylib"),
+                        "/opt/local/lib/libcrypto.3.dylib",
+                        "/opt/homebrew/opt/openssl@4/lib/libcrypto.4.dylib",
+                        "/usr/local/opt/openssl@4/lib/libcrypto.4.dylib",
+                        "/opt/local/lib/libcrypto.4.dylib"),
                 LibCrypto.candidates(MAC, 8, null));
     }
 
@@ -50,7 +53,8 @@ class LibCryptoTest {
         for (String candidate : LibCrypto.candidates(MAC, 8, null)) {
             assertTrue(candidate.startsWith("/"), candidate);
             assertFalse(LibCrypto.normalize(candidate).startsWith("/usr/lib/"), candidate);
-            assertTrue(candidate.endsWith("/libcrypto.3.dylib"), candidate);
+            assertTrue(candidate.endsWith("/libcrypto.3.dylib")
+                    || candidate.endsWith("/libcrypto.4.dylib"), candidate);
         }
         for (String stub : List.of("/usr/lib/libcrypto.dylib", "/usr/lib/libcrypto.46.dylib",
                 "/usr/local/../lib/libcrypto.dylib", "/usr/lib/./libcrypto.3.dylib")) {
@@ -87,8 +91,8 @@ class LibCryptoTest {
 
     @Test
     void aBlankPropertyIsNoProperty() {
-        assertEquals(List.of("libcrypto.so.3"), LibCrypto.candidates(LINUX, 8, ""));
-        assertEquals(List.of("libcrypto.so.3"), LibCrypto.candidates(LINUX, 8, " \t"));
+        assertEquals(List.of("libcrypto.so.3", "libcrypto.so.4"), LibCrypto.candidates(LINUX, 8, ""));
+        assertEquals(List.of("libcrypto.so.3", "libcrypto.so.4"), LibCrypto.candidates(LINUX, 8, " \t"));
         assertEquals(LibCrypto.candidates(MAC, 8, null), LibCrypto.candidates(MAC, 8, " "));
     }
 
@@ -116,7 +120,7 @@ class LibCryptoTest {
 
     @Test
     void theSystemsAreToldApartRegardlessOfCase() {
-        assertEquals(List.of("libcrypto.so.3"), LibCrypto.candidates("LINUX", 8, null));
+        assertEquals(List.of("libcrypto.so.3", "libcrypto.so.4"), LibCrypto.candidates("LINUX", 8, null));
         assertEquals(LibCrypto.candidates(MAC, 8, null), LibCrypto.candidates("mac os x", 8, null));
     }
 
@@ -133,6 +137,15 @@ class LibCryptoTest {
                     LibCrypto::lookup);
             assertEquals(LibCrypto.missing(), none.getMessage());
         }
+    }
+
+    @Test
+    void theFileThePropertyNamesIsTheOneLoaded() {
+        // CI runs the crypto tests a second time on macOS with Homebrew's
+        // OpenSSL 4 named here: that run has to be on 4, not quietly on 3.
+        String named = System.getProperty(LibCrypto.PROPERTY);
+        Assumptions.assumeTrue(named != null && !named.isBlank(), "no " + LibCrypto.PROPERTY);
+        assertEquals(named.strip(), LibCrypto.file(), LibCrypto.missing());
     }
 
     @Test
@@ -158,7 +171,7 @@ class LibCryptoTest {
         assertTrue(report.contains(absent + " (not there)"), report);
         // What has no Java fallback says what it needs, and why it is not there.
         assertTrue(report.contains("P256 refused: native P-256 requires " + LibCrypto.REQUIRES
-                + ": no OpenSSL 3 libcrypto here; tried " + absent + " (not there)"), report);
+                + ": no OpenSSL 3 or 4 libcrypto here; tried " + absent + " (not there)"), report);
         assertTrue(report.contains("AES-GCM java"), report);
     }
 

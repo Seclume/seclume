@@ -14,17 +14,20 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * OpenSSL 3's libcrypto, looked for once, for every OpenSSL backend in this
- * package.
+ * OpenSSL's libcrypto - 3, or 4 - looked for once, for every OpenSSL backend
+ * in this package.
  *
- * <p>On 64-bit Linux it is {@code libcrypto.so.3}, found where the dynamic
- * loader finds it. macOS has no OpenSSL 3 of its own: the files looked for are
- * those of Homebrew's {@code openssl@3} (Apple silicon, then Intel) and of
- * MacPorts. The unversioned {@code /usr/lib/libcrypto.dylib} is never loaded -
+ * <p>On 64-bit Linux it is {@code libcrypto.so.3}, then {@code libcrypto.so.4},
+ * found where the dynamic loader finds them. macOS has no OpenSSL of its own:
+ * the files looked for are those of Homebrew's {@code openssl@3} and
+ * {@code openssl@4} (Apple silicon, then Intel) and of MacPorts - 3 first,
+ * where both are, as the version every test here has run against longest.
+ * The EVP, OSSL_PARAM and decoder calls the backends make are OpenSSL 3's
+ * current API, which 4 keeps. The unversioned {@code /usr/lib/libcrypto.dylib} is never loaded -
  * it is Apple's LibreSSL stub, which aborts the process that loads it.
  *
  * <p>{@value #PROPERTY} names another file - an absolute path, on either
- * system - for an OpenSSL 3 that is somewhere else. Whatever is loaded must say
+ * system - for an OpenSSL that is somewhere else. Whatever is loaded must say
  * that it is OpenSSL 3 or later ({@code OpenSSL_version_num}), or it is not
  * used.
  *
@@ -37,8 +40,8 @@ final class LibCrypto {
     static final String PROPERTY = "seclume.crypto.libcrypto";
 
     /** What the OpenSSL backends need, for the messages that say they are not there. */
-    static final String REQUIRES = "Windows, or 64-bit Linux or macOS with OpenSSL 3 "
-            + "(libcrypto.so.3; on macOS Homebrew's or MacPorts' openssl@3, or -D"
+    static final String REQUIRES = "Windows, or 64-bit Linux or macOS with OpenSSL 3 or 4 "
+            + "(libcrypto.so.3 or .4; on macOS Homebrew's or MacPorts' openssl@3 or @4, or -D"
             + PROPERTY + "=<path>)";
 
     /** OpenSSL 3.0.0, in {@code OpenSSL_version_num}'s 0xMNN00PP0L form. */
@@ -47,12 +50,17 @@ final class LibCrypto {
     private static final List<String> MAC = List.of(
             "/opt/homebrew/opt/openssl@3/lib/libcrypto.3.dylib",
             "/usr/local/opt/openssl@3/lib/libcrypto.3.dylib",
-            "/opt/local/lib/libcrypto.3.dylib");
+            "/opt/local/lib/libcrypto.3.dylib",
+            "/opt/homebrew/opt/openssl@4/lib/libcrypto.4.dylib",
+            "/usr/local/opt/openssl@4/lib/libcrypto.4.dylib",
+            "/opt/local/lib/libcrypto.4.dylib");
+
+    private static final List<String> LINUX = List.of("libcrypto.so.3", "libcrypto.so.4");
 
     private LibCrypto() {
     }
 
-    /** Whether there is an OpenSSL 3 libcrypto here. */
+    /** Whether there is an OpenSSL 3 or later libcrypto here. */
     static boolean available() {
         return Found.LOOKUP != null;
     }
@@ -102,7 +110,7 @@ final class LibCrypto {
             }
             return List.of(path);
         }
-        return linux ? List.of("libcrypto.so.3") : MAC;
+        return linux ? LINUX : MAC;
     }
 
     /**
@@ -143,7 +151,7 @@ final class LibCrypto {
                 why = candidates.isEmpty() ? "OpenSSL needs 64-bit Linux or macOS, and this is "
                         + System.getProperty("os.name") + " with "
                         + ValueLayout.ADDRESS.byteSize() * 8 + "-bit pointers"
-                        : "no OpenSSL 3 libcrypto here";
+                        : "no OpenSSL 3 or 4 libcrypto here";
                 for (String candidate : candidates) {
                     if (candidate.startsWith("/") && !Files.isRegularFile(Path.of(candidate))) {
                         tried.add(candidate + " (not there)");
@@ -153,7 +161,8 @@ final class LibCrypto {
                         SymbolLookup found = SymbolLookup.libraryLookup(candidate, Arena.global());
                         long version = version(found);
                         if (version < OPENSSL_3) {
-                            tried.add(candidate + String.format(" (version 0x%x, not 3)", version));
+                            tried.add(candidate + String.format(" (version 0x%x, older than 3)",
+                                    version));
                             continue;
                         }
                         lookup = found;

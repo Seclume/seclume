@@ -647,6 +647,20 @@ jobs:
       - name: All of seclume-core
         if: success() || failure()
         run: .github/scripts/mvnw-retry.sh -B -pl seclume-core test
+      # Homebrew's openssl formula is OpenSSL 4 now, and its default on macOS
+      # 26: the native cryptography and the TLS stack once more, on 4.
+      - name: The native cryptography and TLS on OpenSSL 4
+        if: runner.os == 'macOS' && (success() || failure())
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew list --versions openssl@4 || brew install openssl@4
+          lib="$(brew --prefix openssl@4)/lib/libcrypto.4.dylib"
+          ls -l "$lib"
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core test \
+            -Dtest='space/seclume/crypto/**/*,space/seclume/tls/**/*' \
+            -Dseclume.crypto.libcrypto="$lib"
       - if: failure()
         run: |
           "$(command -v python3 || command -v python)" - <<'PY'

@@ -81,6 +81,12 @@ All notable changes to seclume are recorded here. Versions follow
   key, an existing empty file and one longer than the 64 KiB window the writer continues from,
   sources described up to 200 characters, the checkpoint timer only with a key and a positive
   interval, on a daemon thread (`AccessLogEdgesTest`).
+- **OpenSSL 4 as well as 3.** Homebrew's `openssl` is OpenSSL 4 now (`openssl@4`), and the
+  GitHub runner images announce it as macOS 26's default; seclume-core looked only for
+  OpenSSL 3. `LibCrypto` now also loads `libcrypto.so.4` on Linux and `openssl@4`'s
+  `libcrypto.4.dylib` on macOS, 3 first where both are - the EVP, OSSL_PARAM and decoder calls
+  the backends make are OpenSSL 3's current API, which 4 keeps. CI runs the native
+  cryptography and TLS tests on macOS a second time on OpenSSL 4.
 - **AWS: the session token goes into its header and nowhere else.** With temporary
   credentials the TLS socket wrote the session token where it first found the placeholder's
   prefix in a request head - the request target or any header, an `x-amz-meta-` value an
