@@ -1,5 +1,6 @@
 package space.seclume.jwt;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -117,6 +118,46 @@ class SeclumeJwtTest {
              SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
             String token = wrongKey.sign(Map.of("sub", "a"));
             assertMessage("does not match", () -> jwt.verify(token));
+        }
+    }
+
+    /**
+     * One token, one string: the JDK's decoder also takes padding and a last
+     * character whose spare bits are set, and a signature written so decodes
+     * to the same MAC - a different string for the same token, which a list
+     * of used or revoked tokens kept by their string would not recognise.
+     */
+    @Test
+    void aTokenIsAcceptedOnlyAsItIsWritten(@TempDir Path dir) throws Exception {
+        Path key = file(dir, "hs", KEY);
+        try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
+            String token = jwt.sign(Map.of("sub", "a"));
+            jwt.verify(token);
+            int dot = token.lastIndexOf('.');
+            String signature = token.substring(dot + 1);
+            // HS256: 32 bytes, 43 characters, two spare bits in the last one.
+            assertEquals(43, signature.length());
+            String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+            char last = signature.charAt(42);
+            String spareBit = signature.substring(0, 42) + alphabet.charAt(alphabet.indexOf(last) ^ 1);
+            assertArrayEquals(B64.decode(signature), B64.decode(spareBit), "the same MAC");
+            assertMessage("spare bits", () -> jwt.verify(token.substring(0, dot + 1) + spareBit));
+            assertMessage("padded", () -> jwt.verify(token + "="));
+            String[] parts = token.split("\\.");
+            assertMessage("base64url", () -> jwt.verify(parts[0] + "=." + parts[1] + "." + parts[2]));
+        }
+    }
+
+    /** RFC 7515: a critical extension the recipient does not understand invalidates the token. */
+    @Test
+    void aCriticalHeaderParameterIsRefused(@TempDir Path dir) throws Exception {
+        Path key = file(dir, "hs", KEY);
+        try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
+            String token = jwt.sign(Map.of("crit", List.of("exp-bound"), "exp-bound", true),
+                    Map.of("sub", "a"));
+            assertMessage("crit", () -> jwt.verify(token));
+            // Without crit the same extra header parameter is only information.
+            jwt.verify(jwt.sign(Map.of("exp-bound", true), Map.of("sub", "a")));
         }
     }
 

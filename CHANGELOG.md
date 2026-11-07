@@ -116,6 +116,13 @@ All notable changes to seclume are recorded here. Versions follow
   each, searches a heap dump for the password and checks that a configured password stops the
   start without being printed; the `framework-examples` job runs both on every pull request.
   SUPPORTED-VERSIONS.md has a table of the framework versions.
+- **A JWT is checked as it is written.** `SeclumeJwt.verify` decoded each part with the JDK's
+  base64url decoder, which also takes padding and a last character whose spare bits are set:
+  a signature written so decodes to the same MAC, so one token could be passed as several
+  different strings - and a list of used or revoked tokens kept by their string would not
+  know it again. Every part must now be base64url as RFC 7515 writes it. A token with a `crit`
+  header is refused too: RFC 7515 makes it invalid unless the recipient understands every
+  extension listed, and this verifier understands none (`SeclumeJwtTest`).
 - **HTTP: a credential goes into a header, never into the request target.** A credential
   placeholder was replaced wherever it stood in a request head, the request line included -
   HTTP/2's `:path` and `:authority` as well. The client holds the placeholder on the heap, a heap
