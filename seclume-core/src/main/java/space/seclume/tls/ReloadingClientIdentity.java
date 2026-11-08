@@ -82,6 +82,8 @@ final class ReloadingClientIdentity implements ClientIdentity {
     private final List<ClientIdentity> retiring = new ArrayList<>();
     private long reloads;
     private boolean closed;
+    /** Freed before a checkpoint; loaded again from the files at the next use. */
+    private boolean dropped;
 
     /**
      * Loads the identity now, so that a configuration that cannot work fails
@@ -94,6 +96,34 @@ final class ReloadingClientIdentity implements ClientIdentity {
         this.current = new EcClientIdentity(EcClientIdentity.parseChain(content, certificate),
                 key);
         this.loaded = content;
+        // The key in OpenSSL's or CNG's memory would be in a CRaC or SnapStart
+        // image: freed before the checkpoint, read again from the files after.
+        space.seclume.internal.Checkpoint.register(this, ReloadingClientIdentity::drop);
+    }
+
+    /** Before a checkpoint: the key freed - the one in use and the retiring ones. */
+    private synchronized void drop() {
+        if (closed || dropped) {
+            return;
+        }
+        current.close();
+        for (ClientIdentity old : retiring) {
+            old.close();
+        }
+        retiring.clear();
+        dropped = true;
+    }
+
+    /** The identity in use - loaded again from the files if a checkpoint dropped it. */
+    private ClientIdentity current() {
+        if (dropped) {
+            byte[] content = read(certificate);
+            current = new EcClientIdentity(EcClientIdentity.parseChain(content, certificate), key);
+            loaded = content;
+            refused = null;
+            dropped = false;
+        }
+        return current;
     }
 
     @Override
@@ -101,6 +131,7 @@ final class ReloadingClientIdentity implements ClientIdentity {
         if (closed) {
             throw new IllegalStateException("this client identity is closed");
         }
+        current();
         byte[] now;
         try {
             now = Files.readAllBytes(certificate); // seclume-allow: the certificate chain, which is public
@@ -162,17 +193,17 @@ final class ReloadingClientIdentity implements ClientIdentity {
 
     @Override
     public synchronized List<byte[]> chain() {
-        return current.chain();
+        return current().chain();
     }
 
     @Override
     public synchronized int signatureScheme() {
-        return current.signatureScheme();
+        return current().signatureScheme();
     }
 
     @Override
     public synchronized byte[] sign(byte[] content) {
-        return current.sign(content);
+        return current().sign(content);
     }
 
     @Override
@@ -181,7 +212,9 @@ final class ReloadingClientIdentity implements ClientIdentity {
             return;
         }
         closed = true;
-        current.close();
+        if (!dropped) {
+            current.close();
+        }
         for (ClientIdentity old : retiring) {
             old.close();
         }

@@ -37,9 +37,32 @@ final class NativeKey {
         this.key = key;
     }
 
-    /** Reads the key once from {@code secret}, PEM or DER, and decodes it in OpenSSL. */
+    /**
+     * Reads the key once from {@code secret}, PEM or DER, and decodes it in
+     * OpenSSL. The provider is the caller's and may be gone after: this key
+     * cannot be read again, and a checkpoint is refused while it is open.
+     */
     static NativeKey read(SecretProvider secret) {
         requireBackend();
+        return of(decode(secret));
+    }
+
+    /**
+     * Reads the key from the provider {@code source} opens - and closes - and
+     * again after a checkpoint dropped it ({@link PrivateSigningKey#reloadable}):
+     * a CRaC or SnapStart image does not hold it.
+     */
+    static NativeKey read(java.util.function.Supplier<? extends SecretProvider> source,
+                          String what) {
+        requireBackend();
+        return of(PrivateSigningKey.reloadable(() -> {
+            try (SecretProvider secret = source.get()) {
+                return decode(secret);
+            }
+        }, what));
+    }
+
+    private static PrivateSigningKey decode(SecretProvider secret) {
         PrivateSigningKey decoded;
         try (SecretScope encoded = SecretScope.fromProvider(secret)) {
             if (OpenSshPrivateKey.is(encoded.segment(), encoded.length())) {
@@ -53,7 +76,7 @@ final class NativeKey {
                 decoded = PrivateSigningKey.decode(encoded.segment(), encoded.length());
             }
         }
-        return of(decoded);
+        return decoded;
     }
 
     /** A new P-256 key, made in OpenSSL or CNG; it never existed anywhere else. */

@@ -18,6 +18,7 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import space.seclume.crypto.PrivateSigningKey;
 import space.seclume.pool.PoolSettings;
 import space.seclume.pool.SeclumePool;
 import space.seclume.secret.SecretScope;
@@ -167,6 +168,53 @@ class QuiesceTest {
             IllegalStateException refused = assertThrows(IllegalStateException.class,
                     () -> SeclumeCrac.quiesce(pool, 300));
             assertTrue(refused.getMessage().contains("secret"), refused.getMessage());
+        }
+    }
+
+    /**
+     * A private key in OpenSSL's or CNG's memory is in the image. One that
+     * cannot be read again - generated, here - refuses the checkpoint, and the
+     * refusal says who made it.
+     */
+    @Test
+    void aPrivateKeyThatCannotBeReadAgainRefusesTheCheckpoint() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(PrivateSigningKey.available(),
+                "neither OpenSSL 3 nor CNG here");
+        try (SeclumePool pool = pool(); PrivateSigningKey generated = PrivateSigningKey.generateP256()) {
+            assertTrue(generated.publicKey().length > 0);
+            IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> SeclumeCrac.quiesce(pool, 300));
+            assertTrue(refused.getMessage().contains("1 private key(s) held"), refused.getMessage());
+            assertTrue(refused.getMessage().contains(QuiesceTest.class.getName()),
+                    refused.getMessage());
+        }
+    }
+
+    /** One that can be read again is dropped, the checkpoint taken, and it signs after the restore. */
+    @Test
+    void aPrivateKeyReadFromItsSourceIsDroppedAndReadAgain() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(PrivateSigningKey.available(),
+                "neither OpenSSL 3 nor CNG here");
+        java.security.KeyPairGenerator generator = java.security.KeyPairGenerator.getInstance("EC");
+        generator.initialize(new java.security.spec.ECGenParameterSpec("secp256r1"));
+        byte[] der = generator.generateKeyPair().getPrivate().getEncoded();
+        try (SeclumePool pool = pool();
+             PrivateSigningKey key = PrivateSigningKey.reloadable(() -> {
+                 try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+                     java.lang.foreign.MemorySegment encoded = arena.allocate(der.length);
+                     java.lang.foreign.MemorySegment.copy(der, 0, encoded,
+                             java.lang.foreign.ValueLayout.JAVA_BYTE, 0, der.length);
+                     return PrivateSigningKey.decode(encoded, der.length);
+                 }
+             }, "the test's key")) {
+            SeclumeCrac.quiesce(pool, 2000);
+            assertEquals(0, PrivateSigningKey.held(), "a key is in the image");
+            SeclumeCrac.restored(pool);
+            try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+                java.lang.foreign.MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
+                assertTrue(key.sign("SHA256", false, arena.allocate(1), 1, out) > 0,
+                        "the key was not read again");
+            }
         }
     }
 

@@ -43,6 +43,7 @@ final class SigningKey implements AutoCloseable {
     final Map<String, String> options;
     private final SecretProvider secret;
     private PrivateSigningKey privateKey;          // guarded by this
+    private boolean dropsAtCheckpoints;            // guarded by this
 
     private SigningKey(String algorithm, Family family, String digest, HashAlgorithm hash,
                        int ecField, String kid, Map<String, String> options,
@@ -174,14 +175,16 @@ final class SigningKey implements AutoCloseable {
     }
 
     private byte[] signPrivate(byte[] input) {
-        PrivateSigningKey key = privateKey();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment message = arena.allocate(Math.max(1, input.length));
             MemorySegment.copy(input, 0, message, ValueLayout.JAVA_BYTE, 0, input.length);
             MemorySegment out = arena.allocate(PrivateSigningKey.MAX_SIGNATURE);
             int n;
             synchronized (this) {
-                n = key.sign(digest, family == Family.RSA_PSS, message, input.length, out);
+                // The key taken under the lock it is dropped under: a
+                // checkpoint between the two frees nothing in use.
+                n = privateKey().sign(digest, family == Family.RSA_PSS, message, input.length,
+                        out);
             }
             byte[] signature = out.asSlice(0, n).toArray(ValueLayout.JAVA_BYTE);
             return family == Family.EC ? OpenSslSigningKey.rawEcdsa(signature, ecField)
@@ -204,8 +207,23 @@ final class SigningKey implements AutoCloseable {
                 }
                 privateKey = decoded;
             }
+            if (!dropsAtCheckpoints) {
+                // The decoded key is in OpenSSL's memory, and so in a CRaC or
+                // SnapStart image: dropped before a checkpoint, decoded again
+                // from the provider - which this key keeps - when next needed.
+                dropsAtCheckpoints = true;
+                space.seclume.internal.Checkpoint.register(this, SigningKey::dropPrivateKey);
+            }
         }
         return privateKey;
+    }
+
+    /** Before a checkpoint: the decoded key freed; the next signature decodes it again. */
+    private synchronized void dropPrivateKey() {
+        if (privateKey != null) {
+            privateKey.close();
+            privateKey = null;
+        }
     }
 
     @Override

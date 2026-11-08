@@ -417,6 +417,13 @@ CRaC refuses the checkpoint over the pool's open sockets. Before the checkpoint 
 - **wipes the keys kept for the application's lifetime** - field encryption's data keys and
   every column's and blind index's key derived from them, the subjects' rings, the log
   masker's and the secret watch's keys - which are read or made again at their next use;
+- **frees the private keys that can be read again** - a key named by a keySpec (a TLS server's
+  or client's, an SSH client's), a service account's from its key file, a JWT or access log
+  signing key from its provider - which are read again from their source at the first signature
+  after the restore, and must be the same key then; and **refuses the checkpoint while a
+  private key that cannot be read again is held** - generated, issued (SPIFFE, Vault PKI) or
+  decoded from a provider handed in - naming who made it, since OpenSSL's and CNG's memory is
+  in the image like any other;
 - **holds new secrets back** from that moment until the restore, so a login that starts in
   between waits instead of landing in the image (`seclume.crac.holdSecrets=false` switches
   this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits).

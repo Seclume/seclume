@@ -124,6 +124,7 @@ public final class EcdsaSigner implements AutoCloseable {
         this.curve = curve;
         this.backend = backend;
         this.owner = owner;
+        LiveKeys.opened(this);
     }
 
     /**
@@ -207,6 +208,7 @@ public final class EcdsaSigner implements AutoCloseable {
         }
         closed = true;
         backend.close();
+        LiveKeys.closed(this);
     }
 
     private void checkOpen() {

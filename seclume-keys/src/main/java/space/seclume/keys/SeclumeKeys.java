@@ -65,6 +65,10 @@ public final class SeclumeKeys {
      * The private key named by {@code keySpec} - the secret provider's
      * options, {@code provider=file&path=...} - read once, decoded by OpenSSL.
      * Installs {@link SeclumeKeyProvider}, which signs with it.
+     *
+     * <p>Before a CRaC or SnapStart checkpoint the key is freed, and the first
+     * signature after the restore reads it again from {@code keySpec} - which
+     * has to name the same key then.
      */
     public static PrivateKey privateKey(String keySpec) {
         SeclumeKeyProvider.install();
@@ -79,16 +83,34 @@ public final class SeclumeKeys {
             }
             return OpenSslPrivateKey.of(NativeKey.of(KmsSigningKey.of(options)));
         }
-        try (SecretProvider secret = provider(keySpec)) {
-            return OpenSslPrivateKey.of(NativeKey.read(secret));
-        }
+        return OpenSslPrivateKey.of(NativeKey.read(() -> provider(keySpec),
+                "the private key " + where(options)));
+    }
+
+    /**
+     * The private key the provider {@code source} opens writes - PEM or DER -
+     * decoded by OpenSSL; the provider is closed after each read. Like
+     * {@link #privateKey(String)} the key is freed before a checkpoint and read
+     * again from a new provider after the restore; for a caller that finds the
+     * key inside something else, such as a cloud's service account file.
+     */
+    public static PrivateKey privateKey(java.util.function.Supplier<? extends SecretProvider> source) {
+        SeclumeKeyProvider.install();
+        return OpenSslPrivateKey.of(NativeKey.read(source, "the private key"));
+    }
+
+    /** Where a key spec says its key is - the provider and its path, nothing secret. */
+    private static String where(Map<String, String> options) {
+        String path = options.get("path");
+        return "from provider=" + options.getOrDefault("provider", "?")
+                + (path == null ? "" : " path=" + path);
     }
 
     /**
      * The private key {@code secret} writes - PEM or DER - read once and
-     * decoded by OpenSSL; for a caller that finds the key inside something
-     * else, such as a cloud's service account file. The provider stays the
-     * caller's.
+     * decoded by OpenSSL. The provider stays the caller's, and so the key
+     * cannot be read again: a CRaC or SnapStart checkpoint is refused while it
+     * is open - {@link #privateKey(java.util.function.Supplier)} can be.
      */
     public static PrivateKey privateKey(SecretProvider secret) {
         SeclumeKeyProvider.install();

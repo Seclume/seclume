@@ -108,6 +108,7 @@ public final class CngSigningKey implements PrivateSigningKey {
     private CngSigningKey(Kind kind, long key) {
         this.kind = kind;
         this.key = key;
+        LiveKeys.opened(this);
     }
 
     /** Whether CNG's software key storage provider could be opened here: Windows. */
@@ -474,6 +475,7 @@ public final class CngSigningKey implements PrivateSigningKey {
                 // nothing else frees it
             }
             key = 0;
+            LiveKeys.closed(this);
         }
     }
 
