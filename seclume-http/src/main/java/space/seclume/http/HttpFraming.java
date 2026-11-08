@@ -141,7 +141,7 @@ final class HttpFraming {
             state = State.CHUNK_SIZE;           // over any Content-Length (RFC 9112, 6.3)
             return;
         }
-        long bytes = length == null ? 0 : Long.parseLong(length);
+        long bytes = length == null ? 0 : number(length, 10);
         if (bytes > 0) {
             state = State.BODY;
             remaining = bytes;
