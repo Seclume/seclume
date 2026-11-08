@@ -81,6 +81,11 @@ All notable changes to seclume are recorded here. Versions follow
   `prefer` against a server without TLS, as documented. Three hand-made faults in each
   driver's `negotiateTls` - `require` ignored, a failed handshake carried on, `verify-full` not
   checking - each turn it red.
+- **SQL Server: the same test.** TDS 7.4 against a server whose PRELOGIN answer refuses
+  encryption: refused, and nothing more goes to it - no LOGIN7, no ClientHello. TDS 8.0
+  (`encrypt=strict`), on both stacks, with and without `trustServerCertificate`, against every
+  server `HostileTls` plays (which now offers ALPN, as TDS 8.0 requires). Ignoring the refused
+  encryption, or not checking the certificate under strict encryption, turns it red.
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to

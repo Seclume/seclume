@@ -511,7 +511,9 @@ a second connection, the password source for a read and `SecretScope.open()` for
 open. `tls=prefer` against a server without TLS goes on in the clear - the one documented case,
 checked so that it stays the only one. Removing the `require` check, carrying on after a failed
 handshake, or not verifying under `verify-full` each turns it red, in either driver. The
-servers after their yes are `space.seclume.tck.HostileTls`, for the drivers still to come.
+servers after their yes are `space.seclume.tck.HostileTls`. SQL Server's test holds TDS 7.4 to
+sending nothing more to a server whose PRELOGIN refuses encryption, and TDS 8.0 to the same
+seven servers with and without `trustServerCertificate`.
 
 ### Servers held to TLS 1.2
 

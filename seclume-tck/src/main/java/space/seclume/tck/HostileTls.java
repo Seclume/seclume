@@ -105,6 +105,15 @@ public final class HostileTls {
      * certificate, or the behaviour has no handshake.
      */
     public byte[] misbehave(Behaviour behaviour, Socket plain) throws IOException {
+        return misbehave(behaviour, plain, new String[0]);
+    }
+
+    /**
+     * The same, with {@code protocols} offered by ALPN - for a protocol whose
+     * client refuses a server that does not select one, as TDS 8.0's does.
+     */
+    public byte[] misbehave(Behaviour behaviour, Socket plain, String... protocols)
+            throws IOException {
         InputStream in = plain.getInputStream();
         OutputStream out = plain.getOutputStream();
         switch (behaviour) {
@@ -136,6 +145,11 @@ public final class HostileTls {
                 SSLSocket tls = (SSLSocket) context.getSocketFactory()
                         .createSocket(plain, "127.0.0.1", plain.getPort(), true);
                 tls.setUseClientMode(false);
+                if (protocols.length > 0) {
+                    javax.net.ssl.SSLParameters parameters = tls.getSSLParameters();
+                    parameters.setApplicationProtocols(protocols);
+                    tls.setSSLParameters(parameters);
+                }
                 try {
                     tls.startHandshake();
                     byte[] first = new byte[4096];
