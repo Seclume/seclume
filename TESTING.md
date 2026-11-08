@@ -88,6 +88,30 @@ whether the scope was closed - it is counted rather than read back, because afte
 the memory is released and reading it would mean reading freed pages. That closing leaves
 zeroes is shown separately, in an arena the test owns so the segment stays mapped.
 
+### Property tests: the same laws over random cases
+
+The classes above pick their cases by hand. Two more check the same laws over thousands of
+generated ones:
+
+- `space.seclume.secret.SecretScopeModelTest` - random sequences of what code does with a
+  secret (allocate in its own arena or another's, let a provider fill it or fail in four ways,
+  write, set the length, read, close once, twice, from two threads at once, from the wrong
+  thread) against a model. After every step the scope agrees with the model, a closed one
+  refuses every accessor and its memory is zero or no longer readable, and `SecretScope.open()`
+  is the model's count. Seven hand-made faults in `SecretScope` - no zeroing, no close after a
+  failed provider, no closed check, either length check gone, the arena not freed, the wrong
+  thread let through - each turn it red.
+- `space.seclume.internal.JdbcUrlPropertyTest` - JDBC URLs in every vendor's spelling of a
+  password, and arbitrary strings: `JdbcUrl.redact` leaves no piece of the password, and
+  `JdbcUrl.parse` ends in a result or an `IllegalArgumentException` whose message has none.
+  Its first run found both leaking.
+
+Both are seeded the way `FieldEncryptionPropertyTest` and the `seclume-diff` corpus are: a
+failure names its round and seed, `-Dseclume.scope.seed=` / `-Dseclume.url.seed=` replays it
+and `-Dseclume.scope.rounds=` / `-Dseclume.url.rounds=` runs longer. There is no property-test
+library: jqwik, the one maintained for the JVM, runs on the JUnit Platform 1.x only, and these
+tests run on JUnit 6 - a seeded `Random` and a model is all they need.
+
 ## The vendor drivers as the oracle
 
 `seclume-diff` runs the same values through seclume and through pgjdbc or Connector/J, against
