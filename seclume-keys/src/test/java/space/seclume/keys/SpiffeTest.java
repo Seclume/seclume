@@ -60,6 +60,7 @@ import space.seclume.tls.TlsConnection;
  * workloads with JSSE, and a rotated SVID taken up.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated   // Checkpoint.wipeAll would wipe what others hold
 class SpiffeTest {
 
     private static final String ORDERS = "spiffe://example.org/orders";

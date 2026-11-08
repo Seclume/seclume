@@ -27,8 +27,10 @@ All notable changes to seclume are recorded here. Versions follow
   and cannot be read again, so `seclume-crac` refused a checkpoint while one was open. Now the
   keys are freed before the checkpoint, the one in use and those still retiring, and the first
   handshake after the restore gets a new pair from Vault, or the SVID again from the agent;
-  renewing goes on as before. Listing the certificates asks nobody (`VaultPkiClientIdentityTest`,
-  `VaultPkiTest`, `SpiffeTest`).
+  renewing goes on as before. Listing the certificates asks nobody. And a closed Vault PKI,
+  SPIFFE or reloading key manager frees its keys - the one in use, the one before, one a renewal
+  replaced less than a minute ago: they stayed in OpenSSL's memory until the process ended
+  (`VaultPkiClientIdentityTest`, `VaultPkiTest`, `SpiffeTest`).
 - **The password itself goes only to a server whose certificate was checked.** PostgreSQL's
   `password` authentication (and `ldap`, `pam`, `radius`), MySQL's `caching_sha2_password` full
   path, `sha256_password` and `mysql_clear_password` send the password as it is - inside TLS, or

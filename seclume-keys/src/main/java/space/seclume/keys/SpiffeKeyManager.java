@@ -292,5 +292,8 @@ final class SpiffeKeyManager extends RotatingKeyManager {
         }
         unregister();
         scheduler.shutdownNow();
+        // A closed manager's keys are of no more use, and were in OpenSSL's
+        // memory until the process ended.
+        destroyKeys();
     }
 }

@@ -51,6 +51,7 @@ import space.seclume.crypto.PrivateSigningKey;
  * OpenSSL and the certificate then carries a TLS handshake that asks for it.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated   // Checkpoint.wipeAll would wipe what others hold
 class VaultPkiTest {
 
     private static Path directory;
@@ -240,6 +241,47 @@ class VaultPkiTest {
                         manager.getCertificateChain("seclume")[0].getPublicKey());
             }
         }
+    }
+
+    /**
+     * A renewal's old key is freed a minute later, so that a handshake that
+     * chose it can finish - and until then it was in OpenSSL's memory whatever
+     * happened: a checkpoint in that minute put it in the image, and a close
+     * left it there, as it left the two in use, until the process ended.
+     */
+    @Test
+    void aClosedManagerAndARenewalsOldKeyAreFreed() throws Exception {
+        try (FakeVault vault = new FakeVault(request -> new Answer(200,
+                signed(sign(field(request.body(), "csr"), "1", null))))) {
+            space.seclume.internal.Checkpoint.wipeAll();
+            long before = issuedKeys();
+            VaultPkiKeyManager manager = (VaultPkiKeyManager)
+                    SeclumeKeys.vaultPkiKeyManager(spec(vault, ""));
+            try {
+                manager.renewNow();
+                manager.renewNow();                   // the first now waits out its minute
+                assertEquals(before + 3, issuedKeys(), "in use, the one before, the one retiring");
+                space.seclume.internal.Checkpoint.wipeAll();
+                assertEquals(before, issuedKeys(),
+                        "a renewal's old key was still in OpenSSL's memory at the checkpoint");
+                assertEquals("CN=orders.seclume.test", handshake(manager));
+                manager.renewNow();
+                assertEquals(before + 2, issuedKeys());
+            } finally {
+                manager.close();
+            }
+            assertEquals(before, issuedKeys(), "closed, and its keys still there");
+            manager.close();
+            space.seclume.internal.Checkpoint.wipeAll();
+            assertEquals(before, issuedKeys());
+            assertEquals(5, vault.requests().size(), "a closed manager asked for a certificate");
+        }
+    }
+
+    /** The keys in OpenSSL's memory that the Vault PKI issuer made. */
+    private static long issuedKeys() {
+        return PrivateSigningKey.heldBy().stream().filter(by -> by.endsWith(".VaultPkiIssuer"))
+                .count();
     }
 
     /**

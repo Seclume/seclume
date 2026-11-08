@@ -39,6 +39,16 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
     private int generations;
     /** The pairs freed before a checkpoint; the next use gets a new one. */
     private volatile boolean dropped;
+    /**
+     * Pairs replaced by a renewal and freed after the grace a handshake that
+     * chose them has to finish. Kept here so that a checkpoint or a close in
+     * that minute frees them too: a timer that has not fired yet left the key
+     * in OpenSSL's memory - in the CRaC or SnapStart image, and after close.
+     */
+    private final java.util.Set<Generation> retiring =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Closed: the keys are freed, and nothing is issued again. */
+    private volatile boolean keysDestroyed;
 
     /** Makes {@code manager} the one handshakes get from now on; the one before the last is freed. */
     protected final synchronized void install(SeclumeKeyManager manager) {
@@ -47,14 +57,34 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
         previous = current;
         current = next;
         if (retired != null) {
+            retiring.add(retired);
             destroyLater(retired);
         }
     }
 
-    private static void destroyLater(Generation generation) {
+    private void destroyLater(Generation generation) {
         CompletableFuture.delayedExecutor(GRACE_SECONDS, TimeUnit.SECONDS)
-                .execute(() -> ((OpenSslPrivateKey) generation.manager()
-                        .getPrivateKey(SeclumeKeyManager.ALIAS)).destroy());
+                .execute(() -> {
+                    if (retiring.remove(generation)) {
+                        destroy(generation);
+                    }
+                });
+    }
+
+    /** Frees the keys of every pair; for {@link #close()}. Nothing is issued after it. */
+    protected final synchronized void destroyKeys() {
+        keysDestroyed = true;
+        destroy(current);
+        destroy(previous);
+        destroyRetiring();
+    }
+
+    private void destroyRetiring() {
+        for (Generation generation : java.util.List.copyOf(retiring)) {
+            if (retiring.remove(generation)) {
+                destroy(generation);
+            }
+        }
     }
 
     /**
@@ -75,7 +105,8 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
     }
 
     private synchronized void drop() {
-        if (dropped) {
+        destroyRetiring();
+        if (dropped || keysDestroyed) {
             return;
         }
         destroy(current);
@@ -97,11 +128,11 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
      * key, and the next one asks again.
      */
     private void afterRestore() {
-        if (!dropped) {
+        if (!dropped || keysDestroyed) {
             return;
         }
         synchronized (this) {
-            if (!dropped) {
+            if (!dropped || keysDestroyed) {
                 return;
             }
             try {
