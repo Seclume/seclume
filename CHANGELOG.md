@@ -153,6 +153,13 @@ All notable changes to seclume are recorded here. Versions follow
   read, the 22 findings with their severity and the pull request that fixed each, what was found
   sound, the residuals accepted, and where the next review starts. Linked from SECURITY.md and
   AUDIT.md; CONTRIBUTING asks every review fix to be entered there.
+- **The pool's tenant isolation, under concurrent borrowers.** `TenantContextConcurrencyTest`:
+  six threads borrow from one pool at once, each request for another tenant or for none, some
+  running nothing, some setting a value of their own, resets refused now and then. Every borrow
+  has to carry its own tenant and nothing else, no connection two holders, no connection whose
+  reset was refused lent again, and a connection that cannot take a context is not lent at all.
+  Removing the pool's reset of a context that nothing ran with, ignoring a refused reset, or
+  lending a connection that could not take the context - each turns it red.
 - **The nightly jobs say why they failed.** The fuzz job's constant-time step failed on two of
   four nights with nothing on the run's page but an exit code. Failing tests are now error
   annotations in every nightly job, as in the CI (`surefire_errors.py`, shared with `ci.yml`);
