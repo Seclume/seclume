@@ -101,11 +101,13 @@ jobs:
           lib="$HOME/openssl-asan/lib/libcrypto.so.3"
           mkdir -p "$RUNNER_TEMP/control"
           export ASAN_OPTIONS="detect_leaks=0:handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0:allow_user_segv_handler=1:use_sigaltstack=0:detect_stack_use_after_return=0:abort_on_error=1:log_path=$RUNNER_TEMP/control/asan"
+          # The step's shell stops at a failing command (bash -e), and failing
+          # is what this one is for: its status is taken, not obeyed.
+          status=0
           LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)" \
             java -Dseclume.crypto.libcrypto="$lib" --enable-native-access=ALL-UNNAMED \
             -cp seclume-core/target/classes:seclume-core/target/test-classes \
-            space.seclume.crypto.SanitizerControl
-          status=$?
+            space.seclume.crypto.SanitizerControl || status=$?
           if [ "$status" -eq 0 ] || [ "$status" -eq 3 ] \
               || ! grep -qs "AddressSanitizer: heap-buffer-overflow" "$RUNNER_TEMP"/control/asan.*; then
             echo "::error title=sanitizers::the control's read of 64 bytes of 8 was not stopped (exit $status) - a green run proves nothing"
