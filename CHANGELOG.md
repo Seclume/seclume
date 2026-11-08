@@ -5,22 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **A vendor's JDBC URL in a message no longer carries its password.** `JdbcUrl.redact`, which
-  every message naming a wrong URL goes through (the drivers' "not a seclume URL", Spring Boot's
-  "which no seclume driver handles" and the container connection details' log line), removed the
-  values of `?key=value` only. SQL Server's `;password=hunter2`, `//user:hunter2@host` (MySQL,
-  MariaDB, MongoDB), Oracle's `thin:scott/tiger@host` and MySQL's key-value hosts
-  `(host=db,password=hunter2)` came back as they were - into the exception and the log. Each is
-  masked now, braced SQL Server values and quoted Oracle passwords included. And a seclume URL
-  with `user:password@` before its host is refused: the parser took it for a host named
-  `user:password@db`, or the password for a port, and the message of either named it. Found by
-  the new property tests (`JdbcUrlPropertyTest`).
-- **Property tests for the secret lifecycle and the URL parser.** `SecretScopeModelTest` runs
-  random sequences of allocating, filling (and failing to fill), writing, reading and closing -
-  twice, from two threads at once, from the wrong thread - against a model; `JdbcUrlPropertyTest`
-  generates URLs in every vendor's spelling and arbitrary strings. Both are seeded and replay a
-  failure with `-Dseclume.scope.seed=` and `-Dseclume.url.seed=`.
-
+- **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
+  JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
+  tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
+  artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
+  `test_coverage_report.py`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
@@ -56,6 +45,21 @@ All notable changes to seclume are recorded here. Versions follow
   token in unpadded or URL-safe Base64. Each of these is looked for now - the same way, a
   fingerprint and an HMAC tag computed in native memory, no copy of the secret on the heap
   (`SecretMaskerTest`, 5 tests more).
+- **A vendor's JDBC URL in a message no longer carries its password.** `JdbcUrl.redact`, which
+  every message naming a wrong URL goes through (the drivers' "not a seclume URL", Spring Boot's
+  "which no seclume driver handles" and the container connection details' log line), removed the
+  values of `?key=value` only. SQL Server's `;password=hunter2`, `//user:hunter2@host` (MySQL,
+  MariaDB, MongoDB), Oracle's `thin:scott/tiger@host` and MySQL's key-value hosts
+  `(host=db,password=hunter2)` came back as they were - into the exception and the log. Each is
+  masked now, braced SQL Server values and quoted Oracle passwords included. And a seclume URL
+  with `user:password@` before its host is refused: the parser took it for a host named
+  `user:password@db`, or the password for a port, and the message of either named it. Found by
+  the new property tests (`JdbcUrlPropertyTest`).
+- **Property tests for the secret lifecycle and the URL parser.** `SecretScopeModelTest` runs
+  random sequences of allocating, filling (and failing to fill), writing, reading and closing -
+  twice, from two threads at once, from the wrong thread - against a model; `JdbcUrlPropertyTest`
+  generates URLs in every vendor's spelling and arbitrary strings. Both are seeded and replay a
+  failure with `-Dseclume.scope.seed=` and `-Dseclume.url.seed=`.
 - **The password guards see environment variables.** Spring's, Micronaut's and Helidon's
   check for a password in the configuration matched property names only - `.password` - while
   the environment's property source lists its variables by their own names: a password in

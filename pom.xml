@@ -114,6 +114,10 @@
   <properties>
     <!-- Extra JVM arguments for test runs; see surefire below. -->
     <seclume.test.argLine></seclume.test.argLine>
+    <!-- Set by JaCoCo in the coverage profile, empty otherwise; read late
+         (@{...}) by surefire, so that the agent's arguments are the ones it
+         made for this module. -->
+    <seclume.coverage.agent></seclume.coverage.agent>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <maven.compiler.release>25</maven.compiler.release>
@@ -222,7 +226,7 @@
                  The password itself goes over such TLS only with this
                  opt-out; the tests of the refusal set the option explicitly
                  (CleartextPasswordTest). -->
-            <argLine>--enable-native-access=ALL-UNNAMED --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED -Dseclume.mysql.allowCleartextOverUnverifiedTls=true ${seclume.test.argLine}</argLine>
+            <argLine>@{seclume.coverage.agent} --enable-native-access=ALL-UNNAMED --add-exports java.base/sun.security.tools.keytool=ALL-UNNAMED -Dseclume.mysql.allowCleartextOverUnverifiedTls=true ${seclume.test.argLine}</argLine>
           </configuration>
         </plugin>
         <plugin>
@@ -291,6 +295,56 @@
                 <seclume.fuzz.full>true</seclume.fuzz.full>
               </systemPropertyVariables>
             </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <!--
+      Line and branch coverage with JaCoCo: which code the tests ran, module
+      by module. Coverage says a line ran, not that a test checked it - the
+      mutation profile is what says that - but code no test runs is code no
+      test checks, and that is what this finds:
+
+        mvn -Pcoverage -pl seclume-core -am test
+
+      Each module's report lands in target/site/jacoco (jacoco.xml, .csv and
+      HTML); .github/scripts/coverage_report.py sums them up per module and
+      for the security-critical packages. Nothing is excluded.
+    -->
+    <profile>
+      <id>coverage</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>0.8.14</version>
+            <executions>
+              <execution>
+                <id>agent</id>
+                <goals>
+                  <goal>prepare-agent</goal>
+                </goals>
+                <configuration>
+                  <propertyName>seclume.coverage.agent</propertyName>
+                </configuration>
+              </execution>
+              <execution>
+                <id>report</id>
+                <phase>test</phase>
+                <goals>
+                  <goal>report</goal>
+                </goals>
+                <configuration>
+                  <formats>
+                    <format>XML</format>
+                    <format>CSV</format>
+                    <format>HTML</format>
+                  </formats>
+                </configuration>
+              </execution>
+            </executions>
           </plugin>
         </plugins>
       </build>
