@@ -1083,6 +1083,36 @@ Maven Central and then from Google's mirror of it, under the same check. The fir
 failed three jobs only because Maven Central would not hand one runner the jar three times in a
 row.
 
+## The boundary to OpenSSL, under sanitizers
+
+`sanitizers.yml` builds libcrypto from OpenSSL's sources (3.5.9, the commit checked) with
+AddressSanitizer and UndefinedBehaviorSanitizer, preloads the sanitizer runtimes and runs the
+tests of `seclume-core`, `seclume-keys`, `seclume-jwt` and `seclume-ssh` against it with
+`-Dseclume.crypto.libcrypto=`. With the runtime preloaded every `malloc` is ASan's, the JVM's
+own for `Arena.allocate` included, so a read or write past what seclume handed OpenSSL, a use
+after free or a double free is a report, and the report stops the JVM. Nightly, by hand, and
+on pull requests that touch `crypto`, `tls`, `internal` or `seclume-keys`.
+
+Two checks keep a green run from meaning nothing. `SanitizedOpenSslTest` fails unless the
+sanitized library is the one loaded - and drives the boundary from eight threads at once with
+keys made, used, closed twice and used after closing, and AES-GCM at every length around its
+blocks with forged tags. `SanitizerControl` makes a call that reads 64 bytes of an 8-byte
+allocation; the job fails unless AddressSanitizer stops it with `heap-buffer-overflow`.
+
+```bash
+# libcrypto built as in sanitizers.yml, into ~/openssl-asan
+export ASAN_OPTIONS=detect_leaks=0:handle_segv=0:handle_sigbus=0:allow_user_segv_handler=1:use_sigaltstack=0
+export LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)"
+lib=~/openssl-asan/lib/libcrypto.so.3
+./mvnw -pl seclume-core test -Dseclume.test.argLine="-Dseclume.crypto.libcrypto=$lib -Dseclume.sanitizer.libcrypto=$lib"
+```
+
+The JVM catches SIGSEGV itself, for null checks, so ASan must not (`handle_segv=0`). Leak
+detection is off: the JVM does not free what it allocated at exit, and LeakSanitizer would
+report all of it. seclume's own native memory is counted in Java instead -
+`SecretScope.open()`, `PrivateSigningKey.held()`. ThreadSanitizer needs every library in the
+process instrumented, the JVM included, and is not run.
+
 ## Mutation testing of the security core
 
 Line coverage says a test ran a line; it does not say a test checked what the line does. PIT

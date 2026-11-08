@@ -1,0 +1,137 @@
+# The Java-to-OpenSSL boundary under AddressSanitizer and
+# UndefinedBehaviorSanitizer.
+#
+# seclume has no C of its own in the library: its native code is OpenSSL's
+# libcrypto (and CNG on Windows), called through the FFM API with memory
+# seclume allocates, fills, hands over and frees. A length one too long, a
+# buffer freed before OpenSSL is done with it, a key freed twice - those are
+# faults on seclume's side of the call that only a sanitizer sees: the
+# ordinary build reads or writes a few bytes too far and goes on.
+#
+# So libcrypto is built from OpenSSL's own sources with -fsanitize=address
+# and -fsanitize=undefined, the sanitizer runtimes are preloaded into the
+# test JVMs - which makes every malloc ASan's, the JVM's own allocations for
+# Arena.allocate included - and the tests of the modules that call OpenSSL
+# run against it with -Dseclume.crypto.libcrypto. A report stops the JVM, and
+# fails the job. Two checks keep a green run honest: SanitizedOpenSslTest
+# fails unless the sanitized library is the one in use, and
+# SanitizerControl, a call that reads 64 bytes of 8, must be stopped with a
+# heap-buffer-overflow report - or the sanitizer would not have seen a real
+# fault either.
+#
+# Leak detection is off: the JVM does not free what it allocated at exit,
+# and LeakSanitizer would report all of it. seclume's own accounting of
+# native memory is tested in Java (SecretScope.open, PrivateSigningKey.held).
+name: sanitizers
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'seclume-core/src/main/java/space/seclume/crypto/**'
+      - 'seclume-core/src/main/java/space/seclume/tls/**'
+      - 'seclume-core/src/main/java/space/seclume/internal/**'
+      - 'seclume-keys/src/main/java/**'
+      - '.github/workflows/sanitizers.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanitizers-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  OPENSSL_TAG: openssl-3.5.9
+  # The commit the tag names, checked after the clone: a tag can be moved.
+  OPENSSL_COMMIT: 45e844fa2a14ec92d146bd8f5778ac130b6625fb
+
+jobs:
+  asan-ubsan:
+    name: sanitizers (asan, ubsan)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: The sanitized OpenSSL, from the cache
+        id: openssl
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/openssl-asan
+          key: ${{ env.OPENSSL_COMMIT }}-asan-ubsan-${{ runner.os }}-${{ runner.arch }}-gcc-v1
+      - name: The sanitized OpenSSL, built
+        if: steps.openssl.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$OPENSSL_TAG" \
+            https://github.com/openssl/openssl "$RUNNER_TEMP/openssl"
+          cd "$RUNNER_TEMP/openssl"
+          test "$(git rev-parse HEAD)" = "$OPENSSL_COMMIT"
+          ./Configure linux-x86_64 enable-asan enable-ubsan -O1 -g -fno-omit-frame-pointer \
+            shared no-tests no-docs --prefix="$HOME/openssl-asan" --libdir=lib
+          make -j"$(nproc)" build_libs
+          make install_dev
+      - name: Tests against it
+        run: |
+          set -euo pipefail
+          lib="$HOME/openssl-asan/lib/libcrypto.so.3"
+          mkdir -p "$RUNNER_TEMP/sanitizer"
+          export ASAN_OPTIONS="detect_leaks=0:handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0:allow_user_segv_handler=1:use_sigaltstack=0:detect_stack_use_after_return=0:abort_on_error=1:log_path=$RUNNER_TEMP/sanitizer/asan"
+          export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1:log_path=$RUNNER_TEMP/sanitizer/ubsan"
+          # Into every process of the step - Maven's JVM and the test JVMs it
+          # forks, which are the ones that load the library. A process that does
+          # not only has its malloc taken over, which changes nothing it does.
+          export LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)"
+          .github/scripts/mvnw-retry.sh -B -pl seclume-core,seclume-keys,seclume-jwt,seclume-ssh -am test \
+            -Dseclume.test.argLine="-Dseclume.crypto.libcrypto=$lib -Dseclume.sanitizer.libcrypto=$lib"
+      - name: The control - the sanitizer stops a read past the buffer
+        run: |
+          set -uo pipefail
+          lib="$HOME/openssl-asan/lib/libcrypto.so.3"
+          mkdir -p "$RUNNER_TEMP/control"
+          export ASAN_OPTIONS="detect_leaks=0:handle_segv=0:handle_sigbus=0:handle_sigill=0:handle_sigfpe=0:allow_user_segv_handler=1:use_sigaltstack=0:detect_stack_use_after_return=0:abort_on_error=1:log_path=$RUNNER_TEMP/control/asan"
+          LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)" \
+            java -Dseclume.crypto.libcrypto="$lib" --enable-native-access=ALL-UNNAMED \
+            -cp seclume-core/target/classes:seclume-core/target/test-classes \
+            space.seclume.crypto.SanitizerControl
+          status=$?
+          if [ "$status" -eq 0 ] || [ "$status" -eq 3 ] \
+              || ! grep -qs "AddressSanitizer: heap-buffer-overflow" "$RUNNER_TEMP"/control/asan.*; then
+            echo "::error title=sanitizers::the control's read of 64 bytes of 8 was not stopped (exit $status) - a green run proves nothing"
+            exit 1
+          fi
+          echo "::notice title=sanitizers::the control was stopped: heap-buffer-overflow in BN_bin2bn"
+      - name: Reports
+        if: always()
+        run: |
+          shopt -s nullglob
+          reports=("$RUNNER_TEMP"/sanitizer/*)
+          if [ ${#reports[@]} -gt 0 ]; then
+            for report in "${reports[@]}"; do
+              echo "::error title=sanitizers::$(grep -m1 -E 'ERROR: |runtime error' "$report" | cut -c1-300) - $report"
+            done
+            exit 1
+          fi
+          echo "no sanitizer report"
+      - name: Reports, kept
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sanitizer-reports
+          path: |
+            ${{ runner.temp }}/sanitizer/
+            ${{ runner.temp }}/control/
+            */target/surefire-reports/
+          retention-days: 14
+          if-no-files-found: ignore
