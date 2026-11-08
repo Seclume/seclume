@@ -56,15 +56,16 @@ All notable changes to seclume are recorded here. Versions follow
   whose environment holds such a variable no longer starts until it is removed or listed in
   `seclume.secret-guard-allow` (`SeclumeEnvironmentPostProcessorTest`,
   `ConfigurationGuardEverywhereTest`, `SeclumeSettingsTest`, `SeclumeCdiExtensionTest`).
-- **PostgreSQL: a test that no TLS mode falls back.** `TlsNeverFallsBackTest` runs `prefer`,
-  `require` and `verify-full`, over both TLS stacks, against seven servers: no TLS, bytes that
-  are not TLS after a yes, a hang-up mid-handshake, a fatal alert, and - for `verify-full` - a
-  self-signed certificate, one from a trusted CA for another host, and one that expired. Every
-  refusal is SQLSTATE 08, with no startup message in the clear, no second connection, the
+- **PostgreSQL and MySQL: a test that no TLS mode falls back.** `TlsNeverFallsBackTest` runs
+  `prefer`, `require` and `verify-full`, over both TLS stacks, against seven servers: no TLS,
+  bytes that are not TLS after a yes, a hang-up mid-handshake, a fatal alert, and - for
+  `verify-full` - a self-signed certificate, one from a trusted CA for another host, and one
+  that expired (`HostileTls` in `seclume-tck` plays them). Every refusal is SQLSTATE 08, with
+  no login in the clear, none inside a TLS whose certificate failed, no second connection, the
   password never read and no secret left open. The one case that goes on in the clear is
-  `prefer` against a server without TLS, as documented. Three hand-made faults in
-  `negotiateTls` - `require` ignored, a failed handshake carried on, `verify-full` not checking -
-  each turn it red.
+  `prefer` against a server without TLS, as documented. Three hand-made faults in each
+  driver's `negotiateTls` - `require` ignored, a failed handshake carried on, `verify-full` not
+  checking - each turn it red.
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to

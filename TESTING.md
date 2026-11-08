@@ -477,7 +477,8 @@ secret, secure renegotiation, the downgrade marker, the suites).
 
 ### No mode falls back
 
-`TlsNeverFallsBackTest` (PostgreSQL, no server needed) holds every TLS mode, over both stacks,
+`TlsNeverFallsBackTest` (PostgreSQL and MySQL, no server needed) holds every TLS mode, over both
+stacks,
 against a fake server that makes TLS fail in each way it can be made to: it says it has none,
 it says yes and sends bytes that are not TLS, it hangs up in the handshake, it sends a fatal
 alert, or it finishes the handshake with a certificate `verify-full` must refuse (self-signed;
@@ -486,7 +487,8 @@ leave no trace of the login: the server is checked for a startup message in the 
 a second connection, the password source for a read and `SecretScope.open()` for a scope left
 open. `tls=prefer` against a server without TLS goes on in the clear - the one documented case,
 checked so that it stays the only one. Removing the `require` check, carrying on after a failed
-handshake, or not verifying under `verify-full` each turns it red.
+handshake, or not verifying under `verify-full` each turns it red, in either driver. The
+servers after their yes are `space.seclume.tck.HostileTls`, for the drivers still to come.
 
 ### Servers held to TLS 1.2
 
