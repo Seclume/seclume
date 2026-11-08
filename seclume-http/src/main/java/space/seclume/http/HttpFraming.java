@@ -6,6 +6,8 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 import space.seclume.internal.Base64Off;
@@ -73,16 +75,79 @@ final class HttpFraming {
         byte[] bytes = head.toByteArray();
         head.reset();
         String text = new String(bytes, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT); // seclume-allow: a request head with placeholders - no secret
-        long length = header(text, "content-length");
-        if (text.contains("\r\ntransfer-encoding: chunked")) {
-            state = State.CHUNK_SIZE;
-        } else if (length > 0) {
+        frame(text);
+        return bytes;
+    }
+
+    /**
+     * Where the body of the request whose head is {@code text} ends - as the
+     * server will see it, RFC 9112 section 6. A body the framing took for a
+     * head would have secrets written into it; so whatever the server could
+     * read another way than this is refused rather than guessed: a folded
+     * line, a space before a colon, a coding after {@code chunked}, two
+     * lengths that differ, a length that is not digits.
+     *
+     * <p>Not only {@code Transfer-Encoding: chunked} with one space: a client
+     * may write {@code transfer-encoding:chunked}, a tab, or
+     * {@code gzip, chunked}. Each was taken for no body, and the chunks that
+     * followed - the body - for the next head.
+     */
+    private void frame(String text) throws IOException {
+        String[] lines = text.split("\r\n", -1);
+        StringBuilder codings = new StringBuilder();
+        String length = null;
+        for (int i = 1; i < lines.length && !lines[i].isEmpty(); i++) {
+            String line = lines[i];
+            if (line.charAt(0) == ' ' || line.charAt(0) == '\t') {
+                throw new IOException("the HTTP client folded a header line - the framing "
+                        + "of the request cannot be followed");
+            }
+            int colon = line.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            String name = line.substring(0, colon);
+            if (name.endsWith(" ") || name.endsWith("\t")) {
+                throw new IOException("the HTTP client wrote a space before a header's colon");
+            }
+            String value = line.substring(colon + 1).strip();
+            if (name.equals("transfer-encoding")) {
+                codings.append(codings.isEmpty() ? "" : ",").append(value);
+            } else if (name.equals("content-length")) {
+                if (!value.matches("[0-9]{1,18}")) {
+                    throw new IOException("the HTTP client wrote a length that is not a number: '"
+                            + value + "'");
+                }
+                if (length != null && !length.equals(value)) {
+                    throw new IOException("the HTTP client wrote two lengths, " + length
+                            + " and " + value);
+                }
+                length = value;
+            }
+        }
+        if (!codings.isEmpty()) {
+            List<String> each = new ArrayList<>();
+            for (String coding : codings.toString().split(",")) {
+                if (!coding.isBlank()) {
+                    each.add(coding.strip());
+                }
+            }
+            if (each.isEmpty() || !each.get(each.size() - 1).equals("chunked")
+                    || each.indexOf("chunked") != each.size() - 1) {
+                throw new IOException("the HTTP client wrote Transfer-Encoding: " + codings
+                        + " - a request body whose last coding is not chunked, once, has no end "
+                        + "a server can find");
+            }
+            state = State.CHUNK_SIZE;           // over any Content-Length (RFC 9112, 6.3)
+            return;
+        }
+        long bytes = length == null ? 0 : number(length, 10);
+        if (bytes > 0) {
             state = State.BODY;
-            remaining = length;
+            remaining = bytes;
         } else {
             state = State.HEAD;
         }
-        return bytes;
     }
 
     /**
@@ -313,17 +378,13 @@ final class HttpFraming {
         return CredentialPlaceholders.provider(placeholder, server);
     }
 
-    private static long header(String head, String name) throws IOException {
-        int at = head.indexOf("\r\n" + name + ":");
-        if (at < 0) {
-            return -1;
-        }
-        int end = head.indexOf("\r\n", at + 2);
-        return number(head.substring(at + name.length() + 3, end).trim(), 10);
-    }
-
     /** A length the client wrote - not one, and the framing cannot be followed. */
     private static long number(String text, int radix) throws IOException {
+        // Digits only: Long.parseLong takes a sign too, and "+5" is no chunk size.
+        if (!text.matches(radix == 16 ? "[0-9a-fA-F]{1,15}" : "[0-9]{1,18}")) {
+            throw new IOException("the HTTP client wrote a length that is not a number: '"
+                    + text + "'");
+        }
         try {
             return Long.parseLong(text, radix);
         } catch (NumberFormatException e) {

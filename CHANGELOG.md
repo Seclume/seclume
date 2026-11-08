@@ -149,6 +149,15 @@ All notable changes to seclume are recorded here. Versions follow
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
   does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
   2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
+- **`seclume-http` never takes a request body for a head.** The framing that decides where a
+  credential may be written read a body as chunked only for `Transfer-Encoding: chunked` with
+  one space. A client that wrote `transfer-encoding:chunked`, a tab, or `gzip, chunked` had its
+  body taken for none - and a request head inside that body, a document holding a placeholder,
+  for the next request's, with the secret written into it. The framing now follows RFC 9112
+  section 6 for any spelling and refuses what a server could read another way: a coding after
+  `chunked`, two lengths that differ, a length or chunk size that is not digits, a folded line, a
+  space before a colon. Found by `HttpFramingModelTest`, a model of HTTP/1.1's framing run over
+  random request sequences.
 - **`seclume-verify --print-pin` no longer logs in.** It connects with `tls=require` -
   encryption that checks nothing, because the server's key is what it wants to find out - and
   then went on to the whole login: the secret read from its provider and sent to whoever had
