@@ -86,6 +86,25 @@ def critical_packages(modules, critical):
     return result
 
 
+def total(modules):
+    """LINE and BRANCH summed over every module that has a report."""
+    sums = {"LINE": [0, 0], "BRANCH": [0, 0]}
+    for data in modules.values():
+        if not data:
+            continue
+        for kind, target in sums.items():
+            missed, covered = data["totals"].get(kind, (0, 0))
+            target[0] += missed
+            target[1] += covered
+    return {kind: tuple(pair) for kind, pair in sums.items()}
+
+
+def counted(pair):
+    """'covered / all' - the counts themselves, so that a percentage can be checked."""
+    missed, covered = pair
+    return f"{covered} / {missed + covered}"
+
+
 def percent(pair):
     value = ratio(pair) if pair else None
     return "-" if value is None else f"{value * 100:.1f} %"
@@ -93,7 +112,7 @@ def percent(pair):
 
 def markdown(modules, critical):
     lines = ["## Coverage (JaCoCo)", "",
-             "| Module | Lines | Line coverage | Branches | Branch coverage |",
+             "| Module | Lines covered | Line coverage | Branches covered | Branch coverage |",
              "|---|---:|---:|---:|---:|"]
     for module, data in modules.items():
         if data is None:
@@ -101,15 +120,21 @@ def markdown(modules, critical):
             continue
         line = data["totals"].get("LINE", (0, 0))
         branch = data["totals"].get("BRANCH", (0, 0))
-        lines.append(f"| {module} | {sum(line)} | {percent(line)} | {sum(branch)} | "
+        lines.append(f"| {module} | {counted(line)} | {percent(line)} | {counted(branch)} | "
                      f"{percent(branch)} |")
+    whole = total(modules)
+    lines.append(f"| **all modules with a report** | {counted(whole['LINE'])} | "
+                 f"{percent(whole['LINE'])} | {counted(whole['BRANCH'])} | "
+                 f"{percent(whole['BRANCH'])} |")
     lines += ["", "### Security-critical packages", "",
-              "| Package | Why | Line coverage | Branch coverage |", "|---|---|---:|---:|"]
+              "| Package | Why | Lines covered | Line coverage | Branches covered | Branch coverage |",
+              "|---|---|---:|---:|---:|---:|"]
     for name, data in critical.items():
         if not data["found"]:
-            lines.append(f"| `{name}` | {data['why']} | no report | - |")
+            lines.append(f"| `{name}` | {data['why']} | - | no report | - | - |")
             continue
-        lines.append(f"| `{name}` | {data['why']} | {percent(data['LINE'])} | "
+        lines.append(f"| `{name}` | {data['why']} | {counted(data['LINE'])} | "
+                     f"{percent(data['LINE'])} | {counted(data['BRANCH'])} | "
                      f"{percent(data['BRANCH'])} |")
     return "\n".join(lines) + "\n"
 
@@ -126,6 +151,7 @@ def as_json(modules, critical):
         if os.environ.get("GITHUB_RUN_ID") else None,
         "modules": {module: (numbers(data["totals"]) if data else None)
                     for module, data in modules.items()},
+        "total": numbers(total(modules)),
         "critical": {name: {"why": data["why"], **(numbers(data) if data["found"] else {})}
                      for name, data in critical.items()},
     }

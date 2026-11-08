@@ -1,7 +1,10 @@
+import contextlib
+import io
 import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import security_gate
 
@@ -74,7 +77,11 @@ class SecurityGateTest(unittest.TestCase):
                          ["a.Passes"])
 
     def test_the_gate_exits_nonzero_unless_everything_passes(self):
-        with tempfile.TemporaryDirectory() as root:
+        # Neither into the job's summary nor as an annotation on the run: the
+        # failure this test makes on purpose is not the build's.
+        environment = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                contextlib.redirect_stdout(io.StringIO()), tempfile.TemporaryDirectory() as root:
             manifest = {"platforms": ["linux-x64"], "groups": {"g": [
                 {"test": "a.Passes", "module": "m", "property": "p"}]}}
             path = os.path.join(root, "manifest.json")
