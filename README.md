@@ -415,7 +415,9 @@ writes a CycloneDX SBOM per module (`seclume-core` lists no runtime dependency a
 tests at servers elsewhere. On every push, CI runs the same suite against PostgreSQL 15 and
 18, MySQL 8.4, MariaDB 11.4, SQL Server 2022, Oracle Free 23ai, CockroachDB 24.1 and
 YugabyteDB 2024.1. The four wire parsers are fuzzed: a sample runs in every build, and the
-whole corpus runs nightly.
+whole corpus runs nightly. What the tests reach and catch - coverage per module, mutation
+scores, fuzzing, each figure with the CI run it came from - is in
+[SECURITY-QUALITY.md](SECURITY-QUALITY.md).
 
 ## Where the protocol knowledge came from
 
