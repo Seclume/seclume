@@ -1,8 +1,10 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 
-from pit_report import annotations, read, score, survivors_by_class, MAX_ANNOTATIONS, MAX_CHARS
+from pit_report import annotations, main, read, score, survivors_by_class, MAX_ANNOTATIONS, MAX_CHARS
 
 
 def mutation(status, cls, line, mutator="NegateConditionalsMutator", method="check",
@@ -76,6 +78,24 @@ class PitReportTest(unittest.TestCase):
         path.write_text('<!DOCTYPE m [<!ENTITY x SYSTEM "file:///etc/passwd">]><mutations>&x;</mutations>')
         with self.assertRaisesRegex(ValueError, "DTD"):
             read(path)
+
+
+    def test_a_floor_fails_a_score_below_it_and_only_then(self):
+        path = report(mutation("KILLED", "space.seclume.tls.A", 1),
+                      mutation("KILLED", "space.seclume.tls.A", 2),
+                      mutation("KILLED", "space.seclume.tls.A", 3),
+                      mutation("SURVIVED", "space.seclume.tls.A", 4),
+                      mutation("NO_COVERAGE", "space.seclume.tls.B", 1))
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertEqual(0, main(str(path), "src", "tls"))
+            self.assertEqual(0, main(str(path), "src", "tls", 75.0))
+            self.assertEqual(1, main(str(path), "src", "tls", 75.1))
+            self.assertEqual(1, main(str(path) + ".missing", "src", "tls"))
+        text = printed.getvalue()
+        self.assertIn("3 of 4 mutants with a test killed (75.0%)", text)
+        self.assertIn("3 of all 5 killed (60.0%)", text)
+        self.assertIn("below the floor of 75.1%", text)
 
 
 if __name__ == "__main__":

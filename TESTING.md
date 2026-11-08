@@ -1103,7 +1103,10 @@ a constant changed - and the tests have to notice each. `mutation.yml` runs it o
 that keep secrets off the heap and encrypt columns - `crypto`, `secret`, `field`, `audit` - on
 pull requests that touch them, by hand and on Saturday night. `pit_report.py` writes the score
 as a notice and every surviving mutant, class by class with line, method and what was changed,
-as warnings on the pull request.
+as warnings on the pull request. The own TLS client (`tls`), native memory, locking and
+transports (`internal`) and the pool (`seclume-pool`) are under it too since 8 November 2026.
+A package with a measured score has a floor in `mutation.yml` - its score then, rounded down,
+less a point for the variation between runs - and a run below it fails.
 
 Mutants on lines no test runs are counted apart: those are mostly paths that need a server, a
 KMS or Windows, which run in their own CI jobs and not under PIT. The survivors are the list:

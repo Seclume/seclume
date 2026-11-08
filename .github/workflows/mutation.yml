@@ -10,7 +10,9 @@ permissions:
 # code that keeps secrets off the heap and encrypts columns that is the
 # difference that matters.
 #
-# One package per job. pit_report.py writes the score as a notice and the
+# One package per job: crypto, secret, field and audit; the own TLS client
+# (tls); native memory, locking and transports (internal); and the pool.
+# pit_report.py writes the score as a notice and the
 # survivors, class by class with line, mutator and what was changed, as
 # warnings - so a pull request shows which lines its tests leave unchecked.
 on:
@@ -20,7 +22,11 @@ on:
       - 'seclume-core/src/main/java/space/seclume/secret/**'
       - 'seclume-core/src/main/java/space/seclume/field/**'
       - 'seclume-core/src/main/java/space/seclume/audit/**'
+      - 'seclume-core/src/main/java/space/seclume/tls/**'
+      - 'seclume-core/src/main/java/space/seclume/internal/**'
       - 'seclume-core/src/test/**'
+      - 'seclume-pool/src/main/java/space/seclume/pool/**'
+      - 'seclume-pool/src/test/**'
       - '.github/workflows/mutation.yml'
       - '.github/scripts/pit_report.py'
   workflow_dispatch:
@@ -35,11 +41,23 @@ jobs:
   pit:
     name: mutation (${{ matrix.package }})
     runs-on: ubuntu-26.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        package: [crypto, secret, field, audit]
+        # A floor is the score of the mutants with a test that the package had
+        # when it was set (SECURITY-QUALITY.md, run 42427494528), rounded down
+        # and less one point - a mutant that times out on one run and not on
+        # the next moves a score by a few tenths. Below it the job fails. tls,
+        # internal and pool have none until their first run has measured them.
+        include:
+          - {package: crypto, module: seclume-core, floor: '91'}
+          - {package: secret, module: seclume-core, floor: '86'}
+          - {package: field, module: seclume-core, floor: '96'}
+          - {package: audit, module: seclume-core, floor: '90'}
+          - {package: tls, module: seclume-core, floor: ''}
+          - {package: internal, module: seclume-core, floor: ''}
+          - {package: pool, module: seclume-pool, floor: ''}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -47,14 +65,19 @@ jobs:
           java-version: '25'
           distribution: temurin
           cache: maven
+      # A module after the core needs the core installed first, so that PIT
+      # runs in that module alone and not over the core's tests as well.
+      - name: What the module needs
+        if: matrix.module != 'seclume-core'
+        run: .github/scripts/mvnw-retry.sh -B -pl ${{ matrix.module }} -am install -DskipTests
       - name: Mutants in space.seclume.${{ matrix.package }}
         run: >-
-          .github/scripts/mvnw-retry.sh -B -Pmutation -pl seclume-core test-compile
+          .github/scripts/mvnw-retry.sh -B -Pmutation -pl ${{ matrix.module }} test-compile
           org.pitest:pitest-maven:mutationCoverage
           -DtargetClasses='space.seclume.${{ matrix.package }}.*'
           -DtargetTests='space.seclume.*'
       - name: The score, and the survivors
         if: always()
         run: >-
-          python3 .github/scripts/pit_report.py seclume-core/target/pit-reports/mutations.xml
-          seclume-core/src/main/java '${{ matrix.package }}'
+          python3 .github/scripts/pit_report.py ${{ matrix.module }}/target/pit-reports/mutations.xml
+          ${{ matrix.module }}/src/main/java '${{ matrix.package }}' '${{ matrix.floor }}'
