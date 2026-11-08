@@ -171,6 +171,13 @@ All notable changes to seclume are recorded here. Versions follow
   from the rest. The connection now ends with the TLS handshake, before a byte of the protocol,
   on all four drivers and both TLS stacks, SQL Server's TDS 7.4 handshake included
   (`TrustChoice.certificateOnly`; `CertificateOnlyTest`, 6 tests).
+- **The boundary to OpenSSL under AddressSanitizer and UndefinedBehaviorSanitizer.** A new
+  workflow, `sanitizers`, builds libcrypto with both and runs the tests of the modules that call
+  it against that build: a read or write past a buffer seclume handed over, a use after free or
+  a double free stops the JVM. `SanitizedOpenSslTest` makes sure the sanitized library is the one
+  in use and drives the boundary from eight threads at once; `SanitizerControl`, a read of 64
+  bytes of 8, has to be stopped, or the job fails. The first run, locally: `seclume-core`'s
+  tests, no report.
 - **REVIEWS.md: the code reviews on record.** What the internal reviews of 6 and 7 November
   read, the 22 findings with their severity and the pull request that fixed each, what was found
   sound, the residuals accepted, and where the next review starts. Linked from SECURITY.md and
