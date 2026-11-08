@@ -123,6 +123,9 @@ class TlsNeverFallsBackTest {
                 failure = e;
             }
             Seen what = seen.get(60, TimeUnit.SECONDS);
+            if (behaviour != null && hostile.lastPlaintext().length > 0) {
+                return "the client went on in the clear: " + hostile.lastPlaintext().length + " bytes";
+            }
             if (SecretScope.open() != open) {
                 return "a secret was left open";
             }

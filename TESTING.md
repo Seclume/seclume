@@ -513,7 +513,9 @@ checked so that it stays the only one. Removing the `require` check, carrying on
 handshake, or not verifying under `verify-full` each turns it red, in either driver. The
 servers after their yes are `space.seclume.tck.HostileTls`. SQL Server's test holds TDS 7.4 to
 sending nothing more to a server whose PRELOGIN refuses encryption, and TDS 8.0 to the same
-seven servers with and without `trustServerCertificate`.
+seven servers with and without `trustServerCertificate`; Oracle's holds TCPS to them under
+`require` and `verify-full`. Each test also checks that the client sent a ClientHello where one
+belonged, not its login in the clear (`HostileTls.lastPlaintext`).
 
 ### Servers held to TLS 1.2
 
