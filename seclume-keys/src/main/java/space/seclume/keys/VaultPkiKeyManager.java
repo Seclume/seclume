@@ -58,6 +58,7 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
                     + issuer.signPath() + ": " + e.getMessage(), e);
         }
         register();
+        dropAtCheckpoints();
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "seclume-vault-pki " + issuer.commonName());
             thread.setDaemon(true);
@@ -99,6 +100,14 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
         LOG.log(System.Logger.Level.INFO, "a new certificate for " + issuer.commonName()
                 + " from " + issuer.signPath() + ", valid until " + notAfter
                 + "; used from the next handshake on");
+    }
+
+    /** After a checkpoint freed the key: a new key, a new certificate. */
+    @Override
+    protected synchronized void restore() throws IOException {
+        install(issue());
+        LOG.log(System.Logger.Level.INFO, "a new certificate for " + issuer.commonName()
+                + " from " + issuer.signPath() + " after the restore, valid until " + notAfter);
     }
 
     private void schedule(Duration delay) {
@@ -157,6 +166,9 @@ final class VaultPkiKeyManager extends RotatingKeyManager {
         }
         unregister();
         scheduler.shutdownNow();
+        // A closed manager's keys are of no more use, and were in OpenSSL's
+        // memory until the process ended.
+        destroyKeys();
         issuer.close();
     }
 }

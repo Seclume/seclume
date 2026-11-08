@@ -60,6 +60,7 @@ import space.seclume.tls.TlsConnection;
  * workloads with JSSE, and a rotated SVID taken up.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated   // Checkpoint.wipeAll would wipe what others hold
 class SpiffeTest {
 
     private static final String ORDERS = "spiffe://example.org/orders";
@@ -303,6 +304,34 @@ class SpiffeTest {
                         .filter(c -> c.kind().equals("spiffe") && c.generations() == 2)
                         .findFirst().orElseThrow();
                 assertEquals(ORDERS, listed.name(), "an SVID with no name is its SPIFFE ID");
+            }
+        }
+    }
+
+    /**
+     * The SVID's key came from the agent and cannot be read again: a
+     * checkpoint frees it, and the first use after the restore asks the agent
+     * again - and takes its answer even when it is the same SVID, whose key in
+     * hand is gone.
+     */
+    @Test
+    void aCheckpointFreesTheKeyAndTheNextUseAsksTheAgentAgain() throws Exception {
+        try (FakeWorkloadApi agent = new FakeWorkloadApi(socket("checkpoint"),
+                () -> first.answer(ORDERS))) {
+            try (SpiffeKeyManager manager = assertInstanceOf(SpiffeKeyManager.class,
+                    SeclumeKeys.spiffeKeyManager("socket=unix://" + agent.socket()
+                            + "&stream=false"))) {
+                X509Certificate before = manager.getCertificateChain("seclume")[0];
+                space.seclume.internal.Checkpoint.wipeAll();
+                for (String by : PrivateSigningKey.heldBy()) {
+                    assertFalse(by.contains("Spiffe"), "a key is still held by " + by
+                            + " - it would be in the image");
+                }
+                String alias = manager.chooseServerAlias("EC", null, null);
+                assertEquals(2, manager.generations(), "the agent was not asked again");
+                assertEquals(before, manager.getCertificateChain(alias)[0], "the same SVID");
+                assertTrue(manager.getPrivateKey(alias) != null);
+                assertFalse(((OpenSslPrivateKey) manager.getPrivateKey(alias)).isDestroyed());
             }
         }
     }

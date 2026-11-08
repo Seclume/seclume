@@ -81,6 +81,7 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                     + api.socket() + ": " + e.getMessage(), e);
         }
         register();
+        dropAtCheckpoints();
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "seclume-spiffe " + api.socket());
             thread.setDaemon(true);
@@ -196,6 +197,20 @@ final class SpiffeKeyManager extends RotatingKeyManager {
         return fresh;
     }
 
+    /**
+     * After a checkpoint freed the key: the agent's SVID again, installed even
+     * if it is the one in hand - that one's key is gone.
+     */
+    @Override
+    protected synchronized void restore() throws IOException {
+        serial = null;
+        if (!fetch()) {
+            throw new IOException("the Workload API answered with an SVID replaced already");
+        }
+        LOG.log(System.Logger.Level.INFO, "the X.509-SVID for " + spiffeId + " again after the "
+                + "restore, valid until " + notAfter);
+    }
+
     private void schedule(Duration delay) {
         scheduler.schedule(this::renewOrRetry, Math.max(0, delay.toMillis()),
                 TimeUnit.MILLISECONDS);
@@ -277,5 +292,8 @@ final class SpiffeKeyManager extends RotatingKeyManager {
         }
         unregister();
         scheduler.shutdownNow();
+        // A closed manager's keys are of no more use, and were in OpenSSL's
+        // memory until the process ended.
+        destroyKeys();
     }
 }

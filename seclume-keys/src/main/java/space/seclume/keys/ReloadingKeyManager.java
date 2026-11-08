@@ -90,5 +90,6 @@ final class ReloadingKeyManager extends RotatingKeyManager {
         keyWatch.close();
         chainWatch.close();
         key.close();
+        destroyKeys();
     }
 }
