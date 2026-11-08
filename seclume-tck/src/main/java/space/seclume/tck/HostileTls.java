@@ -71,6 +71,7 @@ public final class HostileTls {
     private final SSLContext selfSigned;
     private final SSLContext otherHost;
     private final SSLContext expired;
+    private volatile byte[] plaintext = new byte[0];
 
     private HostileTls(Path directory) throws Exception {
         this.directory = directory;
@@ -105,8 +106,29 @@ public final class HostileTls {
      * certificate, or the behaviour has no handshake.
      */
     public byte[] misbehave(Behaviour behaviour, Socket plain) throws IOException {
+        return misbehave(behaviour, plain, new String[0]);
+    }
+
+    /**
+     * The same, with {@code protocols} offered by ALPN - for a protocol whose
+     * client refuses a server that does not select one, as TDS 8.0's does.
+     */
+    public byte[] misbehave(Behaviour behaviour, Socket plain, String... protocols)
+            throws IOException {
         InputStream in = plain.getInputStream();
         OutputStream out = plain.getOutputStream();
+        plaintext = new byte[0];
+        // The client's first five bytes: a TLS record header, or the client
+        // went on in the clear - which every test needs to know, whatever the
+        // behaviour was to be.
+        byte[] header = in.readNBytes(5);
+        if (header.length > 0 && header[0] != 0x16) {
+            ByteArrayOutputStream clear = new ByteArrayOutputStream();
+            clear.writeBytes(header);
+            clear.writeBytes(readSome(in));
+            plaintext = clear.toByteArray();
+            return null;
+        }
         switch (behaviour) {
             case NOT_TLS -> {
                 // seclume-allow: a fixed text that is not TLS, no secret
@@ -116,11 +138,9 @@ public final class HostileTls {
                 return null;
             }
             case HANGS_UP -> {
-                in.readNBytes(5);
                 return null;
             }
             case FATAL_ALERT -> {
-                in.readNBytes(5);
                 // alert, TLS 1.2 record version, length 2: fatal, handshake_failure
                 out.write(new byte[] {0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28});
                 out.flush();
@@ -134,8 +154,13 @@ public final class HostileTls {
                     default -> expired;
                 };
                 SSLSocket tls = (SSLSocket) context.getSocketFactory()
-                        .createSocket(plain, "127.0.0.1", plain.getPort(), true);
+                        .createSocket(plain, new java.io.ByteArrayInputStream(header), true);
                 tls.setUseClientMode(false);
+                if (protocols.length > 0) {
+                    javax.net.ssl.SSLParameters parameters = tls.getSSLParameters();
+                    parameters.setApplicationProtocols(protocols);
+                    tls.setSSLParameters(parameters);
+                }
                 try {
                     tls.startHandshake();
                     byte[] first = new byte[4096];
@@ -146,6 +171,14 @@ public final class HostileTls {
                 }
             }
         }
+    }
+
+    /**
+     * What the client sent in the clear in the last {@link #misbehave}, where
+     * it should have sent a ClientHello - empty when it did not.
+     */
+    public byte[] lastPlaintext() {
+        return plaintext.clone();
     }
 
     /** What arrives until the client hangs up or the socket's timeout passes. */
