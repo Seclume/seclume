@@ -60,9 +60,23 @@ public final class AccessLogVerifier {
      * {@code SubjectPublicKeyInfo}), or not at all when it is {@code null}.
      */
     public static Result verify(Path file, byte[] publicKey) throws IOException {
-        // seclume-allow: an access log holds facts, never a secret
-        String text = Files.readString(file, StandardCharsets.ISO_8859_1);
-        return verify(text, publicKey);
+        return verify(List.of(file), publicKey);
+    }
+
+    /**
+     * Checks {@code files} as one log, in their order - a rotated log and the
+     * file it continues: the chain runs from the first file's first entry
+     * through the last file's last. Only so is a log cut at the start told
+     * from a rotated one: on its own, a file whose first entry is not entry 1
+     * holds either way ({@link Result#first()}).
+     */
+    public static Result verify(List<Path> files, byte[] publicKey) throws IOException {
+        StringBuilder text = new StringBuilder(); // seclume-allow: an access log holds facts, never a secret
+        for (Path file : files) {
+            // seclume-allow: an access log holds facts, never a secret
+            text.append(Files.readString(file, StandardCharsets.ISO_8859_1));
+        }
+        return verify(text.toString(), publicKey);
     }
 
     static Result verify(String text, byte[] publicKey) {

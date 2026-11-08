@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **`--audit-verify` says when a log does not start at entry 1, and checks rotated files as one
+  log.** A log whose first entries were cut off holds like a rotated one - the chain cannot tell
+  them apart - and the tool printed "continuing a rotated log" as if it knew; the documentation
+  listed only a cut at the end as what it cannot find. Now it says that the first entries are
+  not there and how to check them, and several files given in order are verified as one chain
+  (`AuditVerifyTest`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held

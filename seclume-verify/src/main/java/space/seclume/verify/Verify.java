@@ -110,7 +110,7 @@ public final class Verify {
                            java -jar seclume-verify.jar --migrate <application.properties | jdbc url>
                            java -jar seclume-verify.jar --doctor [--json] [--pool-size N] "<jdbc url>"
                            java -jar seclume-verify.jar --split "<secret uri>" <k> <n> <directory>
-                           java -jar seclume-verify.jar --audit-verify <access-log.jsonl> [public-key]
+                           java -jar seclume-verify.jar --audit-verify <access-log.jsonl>... [public-key]
                            java -jar seclume-verify.jar --policy <policy.properties> <cbom.json | "<jdbc url>"> [--json]
                            java -jar seclume-verify.jar --quantum <cbom.json | "<jdbc url>"> [--json]
                            java -jar seclume-verify.jar --cbom-diff <before.json> <after.json>
@@ -145,7 +145,10 @@ public final class Verify {
 
                     --audit-verify checks an access log: its hash chain and, with the
                     public key (PEM or DER), the signed checkpoints. Exit code 1 when an
-                    entry was changed, removed, slipped in, or a signature fails.
+                    entry was changed, removed, slipped in, or a signature fails. Several
+                    log files are one log in their order - a rotated file first; a file
+                    that does not start at entry 1 says so, as only the one before can
+                    tell a rotation from a log cut at the start.
 
                     --policy checks a CBOM (or the inventory of one connection) against
                     a crypto policy - key sizes, TLS version and forward secrecy, the

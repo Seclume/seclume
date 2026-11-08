@@ -395,7 +395,11 @@ java -jar seclume-verify.jar --audit-verify seclume-access.jsonl audit-key.pem
 
 finds an entry changed, removed, swapped or slipped in, and a chain re-hashed by someone without
 the key - at its next checkpoint. **What it cannot find on its own** is entries cut off at the
-end together with their checkpoints: the shorter log is valid. That is what a copy elsewhere is
+end together with their checkpoints: the shorter log is valid. Nor entries cut off at the
+start: a file whose first entry is not entry 1 is what a rotated log looks like
+(`copytruncate`), so it holds - and the tool says that the first entries are not there. Give
+the files in order, the rotated one first, and the chain is checked across them:
+`--audit-verify seclume-access.jsonl.1 seclume-access.jsonl audit-key.pem`. That is what a copy elsewhere is
 for - `SeclumeAccessLogExporter` (`seclume-opentelemetry`, wired by the starter when there is an
 `OpenTelemetry` bean) sends every entry as a log record whose body is the line itself, so the
 copy verifies with the same tool, and its last head tells a cut log from a short one.
