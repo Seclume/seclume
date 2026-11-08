@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
+  JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
+  tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
+  artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
+  `test_coverage_report.py`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
