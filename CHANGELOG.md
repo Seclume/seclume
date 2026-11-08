@@ -48,6 +48,12 @@ All notable changes to seclume are recorded here. Versions follow
 - **REVIEWS.md: the second round.** The tools around the drivers, the framework integrations'
   password checks, the cloud modules and the default TLS mode's cleartext logins - six findings,
   the open question of private keys in checkpoint images, and what was found sound.
+- **`--audit-verify` says when a log does not start at entry 1, and checks rotated files as one
+  log.** A log whose first entries were cut off holds like a rotated one - the chain cannot tell
+  them apart - and the tool printed "continuing a rotated log" as if it knew; the documentation
+  listed only a cut at the end as what it cannot find. Now it says that the first entries are
+  not there and how to check them, and several files given in order are verified as one chain
+  (`AuditVerifyTest`).
 - **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
   the secret and its padded Base64 only. The usual leak is neither: a wire log's
   `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into
