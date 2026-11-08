@@ -13,7 +13,7 @@ and writes:
 Counted, never estimated: a module without a report is listed as such, not
 as zero and not left out.
 
-    python3 .github/scripts/coverage_report.py [repository] [--json coverage.json]
+    python3 .github/scripts/coverage_report.py [repository] [--json coverage.json] [--title T]
 """
 
 import json
@@ -110,8 +110,8 @@ def percent(pair):
     return "-" if value is None else f"{value * 100:.1f} %"
 
 
-def markdown(modules, critical):
-    lines = ["## Coverage (JaCoCo)", "",
+def markdown(modules, critical, title="Coverage (JaCoCo)"):
+    lines = [f"## {title}", "",
              "| Module | Lines covered | Line coverage | Branches covered | Branch coverage |",
              "|---|---:|---:|---:|---:|"]
     for module, data in modules.items():
@@ -160,10 +160,15 @@ def as_json(modules, critical):
 def main(arguments):
     repository = "."
     output = None
+    title = "Coverage (JaCoCo)"
     rest = list(arguments)
     if "--json" in rest:
         at = rest.index("--json")
         output = rest[at + 1]
+        del rest[at:at + 2]
+    if "--title" in rest:
+        at = rest.index("--title")
+        title = rest[at + 1]
         del rest[at:at + 2]
     if rest:
         repository = rest[0]
@@ -171,7 +176,7 @@ def main(arguments):
         critical_list = json.load(f)
     modules = collect(repository)
     critical = critical_packages(modules, critical_list)
-    text = markdown(modules, critical)
+    text = markdown(modules, critical, title)
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

@@ -67,6 +67,14 @@ request; the job summary has the tables and the `coverage` artifact the reports.
 excluded. Coverage says a line ran, not that a test checked it - the mutation profile says that
 - but a line no test runs is a line no test checks.
 
+The core job's numbers are those of the tests that need no server, and most of a driver's code
+runs only with one. So `postgresql (18)`, `mysql (mysql:8.4, …)`, `sqlserver` (2022) and
+`oracle` run their tests with the agent too and upload what it recorded, with the classes it
+was recorded against, as `coverage-exec-<job>`; the `coverage` job merges those and the core
+job's module by module with JaCoCo's command line (`.github/scripts/coverage_merge.py`) and
+writes the same tables for all of them together - the `coverage-merged` artifact. Each row
+shows the counts beside the percentage, and the last one sums every module with a report.
+
 ## The wipe, and the paths where it gets lost
 
 The heap-dump proof covers a login that works. Wipes are not usually lost there - they are
