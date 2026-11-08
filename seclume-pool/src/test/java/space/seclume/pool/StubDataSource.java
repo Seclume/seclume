@@ -44,12 +44,33 @@ final class StubDataSource implements DataSource {
         volatile String schema;
         final AtomicInteger statements = new AtomicInteger();
         final List<StubStatement> statementsHandedOut = new CopyOnWriteArrayList<>();
+        /** The session context the server would hold - see {@link StubContext}. */
+        final java.util.Map<String, String> context = new java.util.concurrent.ConcurrentHashMap<>();
+        /** Whether it can be unwrapped to a {@link space.seclume.SessionContext}. */
+        volatile boolean takesContext;
+        private final StubContext contextWriter = new StubContext() {
+            @Override
+            public void setSessionContext(String name, String value) {
+                context.put(java.util.Objects.requireNonNull(name),
+                        java.util.Objects.requireNonNull(value));
+            }
+
+            @Override
+            public StubConnection stub() {
+                return StubConnection.this;
+            }
+        };
 
         StubConnection() {
             this.proxy = (Connection) Proxy.newProxyInstance(
                     Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
                     new Handler(this));
         }
+    }
+
+    /** The session context of a stub connection - and, for a test, the connection behind it. */
+    interface StubContext extends space.seclume.SessionContext {
+        StubConnection stub();
     }
 
     /** The little of a statement that these tests need: is it still open. */
@@ -93,11 +114,17 @@ final class StubDataSource implements DataSource {
                 throw new SQLException("the connection to the server was lost", "08006");
             }
             return switch (method.getName()) {
-                case "isWrapperFor" -> args[0] == space.seclume.SessionReset.class
-                        && state.sessionReset != null;
+                case "isWrapperFor" -> (args[0] == space.seclume.SessionReset.class
+                        && state.sessionReset != null)
+                        || ((args[0] == space.seclume.SessionContext.class
+                        || args[0] == StubContext.class) && state.takesContext);
                 case "unwrap" -> {
                     if (args[0] == space.seclume.SessionReset.class && state.sessionReset != null) {
                         yield state.sessionReset;
+                    }
+                    if ((args[0] == space.seclume.SessionContext.class || args[0] == StubContext.class)
+                            && state.takesContext) {
+                        yield state.contextWriter;
                     }
                     throw new SQLException("not a wrapper");
                 }
