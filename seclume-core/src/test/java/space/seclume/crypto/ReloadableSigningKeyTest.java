@@ -42,7 +42,6 @@ class ReloadableSigningKeyTest {
     @BeforeEach
     void aBackend() {
         Assumptions.assumeTrue(PrivateSigningKey.available(), "neither OpenSSL 3 nor CNG here");
-        Checkpoint.wipeAll();                    // what other tests left loaded
     }
 
     /** A P-256 key's PKCS#8 - made by the JDK, which is fine for a test's key. */
@@ -128,7 +127,7 @@ class ReloadableSigningKeyTest {
         Supplier<PrivateSigningKey> other = source(second, new AtomicInteger(), new AtomicBoolean());
         try (PrivateSigningKey key = PrivateSigningKey.reloadable(
                 () -> reads.getAndIncrement() == 0 ? one.get() : other.get(), "the test's key")) {
-            Checkpoint.wipeAll();
+            ((ReloadableSigningKey) key).drop();
             IllegalStateException refused = assertThrows(IllegalStateException.class,
                     () -> sign(key, new byte[] {1}));
             assertTrue(refused.getMessage().contains("the test's key is another key"),
@@ -143,7 +142,7 @@ class ReloadableSigningKeyTest {
         AtomicInteger reads = new AtomicInteger();
         try (PrivateSigningKey key = PrivateSigningKey.reloadable(
                 source(pkcs8(), reads, failing), "the test's key")) {
-            Checkpoint.wipeAll();
+            ((ReloadableSigningKey) key).drop();
             failing.set(true);
             assertThrows(IllegalStateException.class, () -> sign(key, new byte[] {1}));
             failing.set(false);
@@ -156,7 +155,7 @@ class ReloadableSigningKeyTest {
         PrivateSigningKey key = PrivateSigningKey.reloadable(
                 source(pkcs8(), new AtomicInteger(), new AtomicBoolean()), "the test's key");
         key.close();
-        Checkpoint.wipeAll();
+        ((ReloadableSigningKey) key).drop();
         assertThrows(IllegalStateException.class, () -> sign(key, new byte[] {1}));
         key.close();
     }
@@ -180,38 +179,51 @@ class ReloadableSigningKeyTest {
         assertEquals(before, PrivateSigningKey.held());
     }
 
+    /**
+     * Signatures while the key is dropped again and again: each gets a key,
+     * none a freed one. The key is dropped directly - not through
+     * Checkpoint.wipeAll, which would wipe what tests running beside this one
+     * hold - a bounded number of times.
+     */
     @Test
-    void signaturesAcrossCheckpointsAllGetTheirKey() throws Exception {
+    void signaturesWhileTheKeyIsDroppedAllGetAKey() throws Exception {
         byte[] der = pkcs8();
         try (PrivateSigningKey key = PrivateSigningKey.reloadable(
                 source(der, new AtomicInteger(), new AtomicBoolean()), "the test's key")) {
             byte[] publicKey = key.publicKey();
-            AtomicBoolean stop = new AtomicBoolean();
             List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
-            List<Thread> signers = new ArrayList<>();
-            for (int t = 0; t < 4; t++) {
-                signers.add(Thread.ofPlatform().start(() -> {
+            AtomicBoolean stop = new AtomicBoolean();
+            Thread dropper = Thread.ofPlatform().start(() -> {
+                for (int i = 0; i < 50 && !stop.get(); i++) {
+                    ((ReloadableSigningKey) key).drop();
                     try {
-                        for (int i = 0; i < 200; i++) {
-                            byte[] message = {(byte) i};
-                            assertTrue(verifies(publicKey, message, sign(key, message)));
-                        }
-                    } catch (Throwable e) {
-                        failures.add(e);
+                        Thread.sleep(2);
+                    } catch (InterruptedException e) {
+                        return;
                     }
-                }));
-            }
-            Thread checkpoints = Thread.ofPlatform().start(() -> {
-                while (!stop.get()) {
-                    Checkpoint.wipeAll();
-                    Thread.onSpinWait();
                 }
             });
-            for (Thread signer : signers) {
-                signer.join();
+            List<Thread> signers = new ArrayList<>();
+            try {
+                for (int t = 0; t < 4; t++) {
+                    signers.add(Thread.ofPlatform().start(() -> {
+                        try {
+                            for (int i = 0; i < 50; i++) {
+                                byte[] message = {(byte) i};
+                                assertTrue(verifies(publicKey, message, sign(key, message)));
+                            }
+                        } catch (Throwable e) {
+                            failures.add(e);
+                        }
+                    }));
+                }
+                for (Thread signer : signers) {
+                    signer.join();
+                }
+            } finally {
+                stop.set(true);
+                dropper.join();
             }
-            stop.set(true);
-            checkpoints.join();
             assertEquals(List.of(), failures);
         }
     }

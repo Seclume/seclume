@@ -50,7 +50,7 @@ final class ReloadableSigningKey implements PrivateSigningKey {
     }
 
     /** Before a checkpoint: the key freed; the next use reads it again. */
-    private void drop() {
+    void drop() {
         lock.writeLock().lock();
         try {
             if (key != null) {
