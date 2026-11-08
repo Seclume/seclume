@@ -98,6 +98,11 @@ All notable changes to seclume are recorded here. Versions follow
   runs at start-up, and knows the environment-variable spellings, a quoted name's
   `QUARKUS_DATASOURCE__USERS__PASSWORD` among them (`PasswordGuardNamesTest`,
   `RuntimePasswordRefusedTest`).
+- **SECURITY-QUALITY.md: what the tests reach and catch, measured.** The test architecture, what
+  blocks a merge, and the baseline of 8 November 2026 - coverage per module and per
+  security-critical package, the number of tests and of security regression tests, mutation
+  scores, the nightly fuzzing - each figure with the CI run it came from; what that round found,
+  the platforms and JDKs tested, and what is not tested.
 - **`seclume-verify --migrate` prints no password, whatever form the URL writes it in.** The
   translation drops `password=`, but a URL has other places for one, and their contents went
   into the printed configuration: Connector/J's `user:password@host` stayed in the host list;
