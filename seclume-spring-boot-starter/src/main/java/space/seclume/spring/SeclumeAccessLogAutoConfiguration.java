@@ -106,9 +106,15 @@ public class SeclumeAccessLogAutoConfiguration {
         if (settings.containsKey("kms")) {
             return KmsSigningKey.of(settings);
         }
-        try (SecretScope encoded = SecretScope.fromProvider(SecretProviders.of(settings))) {
-            return PrivateSigningKey.decode(encoded.segment(), encoded.length());
-        }
+        // Read again after a checkpoint dropped it - the same key, or the
+        // access log's signatures would not verify across the restore.
+        Map<String, String> options = Map.copyOf(settings);
+        return PrivateSigningKey.reloadable(() -> {
+            try (var provider = SecretProviders.of(options);
+                 SecretScope encoded = SecretScope.fromProvider(provider)) {
+                return PrivateSigningKey.decode(encoded.segment(), encoded.length());
+            }
+        }, "the access log's signing key");
     }
 
     /** Every entry to OpenTelemetry too - only where it is. */

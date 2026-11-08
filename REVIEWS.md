@@ -100,16 +100,14 @@ in round 1: what the drivers send under the default `tls=prefer`.
 | 4 | Spring Boot, Micronaut, Helidon | The password checks matched property names only; a password in an environment variable (`SPRING_DATASOURCE_PASSWORD`, `DATASOURCES_DEFAULT_PASSWORD`, `JAVAX_SQL_DATASOURCE_..._PASSWORD`) - how containers pass one - was never named. Micronaut's also missed Hikari's `data-source-properties.password`. | medium | #254 |
 | 5 | Quarkus | The datasource password was refused only at build time, but it is a runtime property: the environment, a `config/application.properties`, a mounted secret were never checked. | medium | #255 |
 | 6 | `seclume-verify --split` | A split that failed at a later file left the earlier shares on disk while saying "no shares written"; on Windows a share took its directory's ACL; the shares were held in memory that is neither locked nor kept out of core dumps. | medium | #257 |
+| 7 | `seclume-crac` | Private keys in OpenSSL's or CNG's memory - a TLS server's or client's, a service account's, SSH and JWT signing keys - stayed for the life of the application and were not counted: a checkpoint was taken with them in the image while FEATURES.md said nothing secret was left. | medium | #261 (in review) |
 
 ### Open
 
-- **Private keys in a checkpoint image** (medium). TLS server and client keys, the GCP service
-  account, SSH and JWT signing keys live in OpenSSL or CNG for as long as the application runs.
-  `seclume-crac` does not count them, so a checkpoint is taken with them in it - while
-  [FEATURES.md](FEATURES.md) says nothing secret is left in the process when the image is
-  written. Proposed: a key that can be read again from its source is dropped before the
-  checkpoint and read again on first use after the restore; a key that cannot makes the
-  checkpoint fail. Awaiting the decision.
+None. The question left here - private keys in a checkpoint image - was decided on
+8 November 2026: a key that can be read again from its source is freed before the checkpoint
+and read again on first use after the restore; one that cannot makes `seclume-crac` refuse the
+checkpoint (#261).
 
 ### Reviewed, nothing found
 

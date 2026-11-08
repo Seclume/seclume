@@ -8,6 +8,7 @@ import org.crac.Core;
 import org.crac.Resource;
 
 import space.seclume.crypto.OpenSslRandom;
+import space.seclume.crypto.PrivateSigningKey;
 import space.seclume.internal.Checkpoint;
 import space.seclume.pool.SeclumePool;
 import space.seclume.secret.SecretScope;
@@ -31,7 +32,8 @@ import space.seclume.secret.SecretScope;
  * <p>The password itself was never in the image: seclume keeps it in native
  * memory only for the login and wipes it. What this adds is that nothing
  * derived from it stays behind either, and that the checkpoint can be taken at
- * all.
+ * all. Private keys in OpenSSL's or CNG's memory are freed when they can be
+ * read again from their source, and refuse the checkpoint when they cannot.
  */
 public final class SeclumeCrac {
 
@@ -88,7 +90,10 @@ public final class SeclumeCrac {
             Checkpoint.wipeAll();
             int borrowed = pool.activeCount();
             long secrets = SecretScope.open();
-            if (borrowed == 0 && secrets == 0) {
+            // Keys in OpenSSL's or CNG's memory: a reloadable one was freed by
+            // wipeAll above; one that cannot be read again is still here.
+            int keys = PrivateSigningKey.held();
+            if (borrowed == 0 && secrets == 0 && keys == 0) {
                 if (!HOLD_SECRETS) {
                     return;
                 }
@@ -96,7 +101,8 @@ public final class SeclumeCrac {
                 // made from here on. Checked once more under the hold, since
                 // a login may have started between the count and the hold.
                 Checkpoint.hold();
-                if (SecretScope.open() == 0 && pool.activeCount() == 0) {
+                if (SecretScope.open() == 0 && pool.activeCount() == 0
+                        && PrivateSigningKey.held() == 0) {
                     return;
                 }
                 Checkpoint.release();
@@ -106,12 +112,21 @@ public final class SeclumeCrac {
                 pool.resume();
                 throw new IllegalStateException("seclume refuses the checkpoint: after "
                         + millis + " ms " + borrowed + " connection(s) are still "
-                        + "borrowed and " + secrets + " secret(s) still open; an image "
-                        + "taken now would contain them (seclume.crac.quiesceMillis sets "
-                        + "the wait)");
+                        + "borrowed, " + secrets + " secret(s) still open and " + keys
+                        + " private key(s) held" + heldBy() + "; an image taken now would "
+                        + "contain them (seclume.crac.quiesceMillis sets the wait). A key read "
+                        + "from its source - a keySpec, a key file - is dropped and read again "
+                        + "after the restore; one that cannot be (generated, issued, decoded "
+                        + "from a provider handed in) has to be closed before the checkpoint");
             }
             Thread.sleep(20);
         }
+    }
+
+    /** Who made the keys still held, distinct: class names, nothing of the keys. */
+    private static String heldBy() {
+        java.util.List<String> by = PrivateSigningKey.heldBy().stream().distinct().sorted().toList();
+        return by.isEmpty() ? "" : " (made by " + String.join(", ", by) + ")";
     }
 
     /**

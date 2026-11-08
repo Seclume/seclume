@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
+  account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
+  as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
+  them. A key that can be read again - named by a keySpec, from a key file, from its provider -
+  is now freed before the checkpoint and read again at its first signature after the restore
+  (`PrivateSigningKey.reloadable`; a different key there is refused). A key that cannot be read
+  again - generated, issued by SPIFFE or Vault PKI, or decoded from a `SecretProvider` handed to
+  `SeclumeKeys.privateKey` - makes `seclume-crac` refuse the checkpoint, naming who made it;
+  `SeclumeKeys.privateKey(Supplier)` is the reloadable form of the latter. The access log's
+  signing key no longer leaves its provider open (`ReloadableSigningKeyTest`,
+  `CheckpointKeyTest`, `CheckpointSigningKeyTest`, `QuiesceTest`).
 - **The password itself goes only to a server whose certificate was checked.** PostgreSQL's
   `password` authentication (and `ldap`, `pam`, `radius`), MySQL's `caching_sha2_password` full
   path, `sha256_password` and `mysql_clear_password` send the password as it is - inside TLS, or

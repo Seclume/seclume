@@ -204,6 +204,33 @@ class CertificateReloadTest {
 
     // ------------------------------------------------------------- fixtures --
 
+    /**
+     * The client key in OpenSSL's or CNG's memory would be in a CRaC or
+     * SnapStart image: a checkpoint frees it, and the next handshake loads it
+     * again from the files.
+     */
+    @Test
+    void aCheckpointFreesTheKeyAndTheNextHandshakeLoadsItAgain(@TempDir Path dir)
+            throws Exception {
+        Path certificate = dir.resolve("client.crt");
+        Path key = dir.resolve("client.key");
+        write(certificate, key, newClient, newClient);
+        space.seclume.internal.Checkpoint.wipeAll();
+        int before = space.seclume.crypto.PrivateSigningKey.held();
+        try (ClientIdentity identity = ClientIdentities.of(settings(certificate, key))) {
+            handshake(identity);
+            assertEquals(before + 1, space.seclume.crypto.PrivateSigningKey.held());
+
+            space.seclume.internal.Checkpoint.wipeAll();
+            assertEquals(before, space.seclume.crypto.PrivateSigningKey.held(),
+                    "the client key would be in the image");
+
+            handshake(identity);
+            assertEquals(before + 1, space.seclume.crypto.PrivateSigningKey.held());
+        }
+        assertEquals(before, space.seclume.crypto.PrivateSigningKey.held());
+    }
+
     private static Map<String, String> settings(Path certificate, Path key) {
         return Map.of(
                 ClientIdentities.CERTIFICATE, certificate.toString(),

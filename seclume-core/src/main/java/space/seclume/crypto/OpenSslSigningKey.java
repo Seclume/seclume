@@ -44,6 +44,7 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
 
     private OpenSslSigningKey(MemorySegment key) {
         this.key = key;
+        LiveKeys.opened(this);
     }
 
     /** Whether OpenSSL 3's libcrypto can be used here. */
@@ -237,6 +238,7 @@ public final class OpenSslSigningKey implements PrivateSigningKey {
         key = NULL;
         if (!old.equals(NULL)) {
             Native.invoke(Native.KEY_FREE, old);
+            LiveKeys.closed(this);
         }
     }
 

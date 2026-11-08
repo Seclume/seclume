@@ -48,6 +48,34 @@ public interface PrivateSigningKey extends AutoCloseable {
         return recorded(SigningKeys.p256(), OpenSslSigningKey.available() ? "OpenSSL" : "CNG");
     }
 
+    /**
+     * A key read from {@code source}, and read from it again after a
+     * checkpoint dropped it. A key in OpenSSL's or CNG's memory is in a CRaC
+     * or SnapStart image of the process, so before a checkpoint this one is
+     * freed; the first use after the restore reads it again - and refuses a
+     * different key than the one it had, whose public half others may hold.
+     * {@code what} names the key in that refusal.
+     */
+    static PrivateSigningKey reloadable(java.util.function.Supplier<? extends PrivateSigningKey> source,
+                                        String what) {
+        return ReloadableSigningKey.of(source, what);
+    }
+
+    /**
+     * How many private keys OpenSSL or CNG holds for this process now: what a
+     * checkpoint would write into its image. {@code seclume-crac} refuses one
+     * while this is not zero - after the keys that can be read again
+     * ({@link #reloadable}) have been dropped.
+     */
+    static int held() {
+        return LiveKeys.count();
+    }
+
+    /** Who made each key {@link #held()} counts: a class name each, nothing of the key. */
+    static java.util.List<String> heldBy() {
+        return LiveKeys.origins();
+    }
+
     /** Into the cryptography inventory: its algorithm and size, from the public half. */
     private static PrivateSigningKey recorded(PrivateSigningKey key, String where) {
         try {

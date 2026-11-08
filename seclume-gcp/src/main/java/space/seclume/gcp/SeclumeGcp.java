@@ -75,7 +75,6 @@ public final class SeclumeGcp {
         }
         try (SecretProvider file = SecretProviders.of(options);
              SecretScope json = SecretScope.fromProvider(file);
-             SecretScope key = SecretScope.allocate(json.length());
              Arena arena = Arena.ofConfined()) {
             MemorySegment text = arena.allocate(1024);
             String type = field(json, text, "type");
@@ -83,20 +82,13 @@ public final class SeclumeGcp {
                 throw new IllegalArgumentException("the key file is a '" + type + "', not a "
                         + "service account's");
             }
-            key.length(JsonOff.string(json.segment(), json.length(), key.segment(),
-                    "private_key"));
-            PrivateKey privateKey = SeclumeKeys.privateKey(new SecretProvider() {
-                @Override
-                public int writeSecret(MemorySegment target) {
-                    MemorySegment.copy(key.segment(), 0, target, 0, key.length());
-                    return key.length();
-                }
-
-                @Override
-                public int maxSecretLength() {
-                    return key.length();
-                }
-            });
+            // The key is read from the file again whenever it is needed again -
+            // after a checkpoint dropped it - so it is the file's key, through
+            // a provider that finds it there each time.
+            Map<String, String> fileOptions = Map.copyOf(options);
+            int maxLength = file.maxSecretLength();  // the key is a part of the file
+            PrivateKey privateKey = SeclumeKeys.privateKey(
+                    () -> new KeyInFile(fileOptions, maxLength));
             ServiceAccountCredentials.Builder builder = ServiceAccountCredentials.newBuilder()
                     .setClientEmail(field(json, text, "client_email"))
                     .setPrivateKey(privateKey)
@@ -114,6 +106,34 @@ public final class SeclumeGcp {
                 builder.setScopes(List.of());
             }
             return builder.build();
+        }
+    }
+
+    /**
+     * The {@code private_key} of the service account file: each read opens the
+     * file's provider, reads the file into native memory, unescapes the key
+     * from it into the target and wipes the rest.
+     */
+    private static final class KeyInFile implements SecretProvider {
+        private final Map<String, String> options;
+        private final int maxLength;
+
+        KeyInFile(Map<String, String> options, int maxLength) {
+            this.options = options;
+            this.maxLength = maxLength;
+        }
+
+        @Override
+        public int writeSecret(MemorySegment target) {
+            try (SecretProvider file = SecretProviders.of(options);
+                 SecretScope json = SecretScope.fromProvider(file)) {
+                return JsonOff.string(json.segment(), json.length(), target, "private_key");
+            }
+        }
+
+        @Override
+        public int maxSecretLength() {
+            return maxLength;
         }
     }
 
