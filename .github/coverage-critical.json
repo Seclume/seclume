@@ -1,0 +1,10 @@
+[
+  {"package": "space.seclume.secret", "why": "secret providers, scopes and their wiping"},
+  {"package": "space.seclume.internal", "why": "native memory, locking, transports, TLS plumbing, URL parsing"},
+  {"package": "space.seclume.crypto", "why": "keys in OpenSSL/CNG, primitives computed here"},
+  {"package": "space.seclume.tls", "why": "seclume's own TLS: handshake, records, certificate checks"},
+  {"package": "space.seclume.field", "why": "field encryption and its keys"},
+  {"package": "space.seclume.audit", "why": "the signed access log"},
+  {"package": "space.seclume.pool", "why": "the pool: session resets, tenant isolation"},
+  {"package": "space.seclume.heapdump", "why": "heap dump redaction and scanning"}
+]
