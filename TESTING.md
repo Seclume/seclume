@@ -96,6 +96,30 @@ whether the scope was closed - it is counted rather than read back, because afte
 the memory is released and reading it would mean reading freed pages. That closing leaves
 zeroes is shown separately, in an arena the test owns so the segment stays mapped.
 
+### Property tests: the same laws over random cases
+
+The classes above pick their cases by hand. Two more check the same laws over thousands of
+generated ones:
+
+- `space.seclume.secret.SecretScopeModelTest` - random sequences of what code does with a
+  secret (allocate in its own arena or another's, let a provider fill it or fail in four ways,
+  write, set the length, read, close once, twice, from two threads at once, from the wrong
+  thread) against a model. After every step the scope agrees with the model, a closed one
+  refuses every accessor and its memory is zero or no longer readable, and `SecretScope.open()`
+  is the model's count. Seven hand-made faults in `SecretScope` - no zeroing, no close after a
+  failed provider, no closed check, either length check gone, the arena not freed, the wrong
+  thread let through - each turn it red.
+- `space.seclume.internal.JdbcUrlPropertyTest` - JDBC URLs in every vendor's spelling of a
+  password, and arbitrary strings: `JdbcUrl.redact` leaves no piece of the password, and
+  `JdbcUrl.parse` ends in a result or an `IllegalArgumentException` whose message has none.
+  Its first run found both leaking.
+
+Both are seeded the way `FieldEncryptionPropertyTest` and the `seclume-diff` corpus are: a
+failure names its round and seed, `-Dseclume.scope.seed=` / `-Dseclume.url.seed=` replays it
+and `-Dseclume.scope.rounds=` / `-Dseclume.url.rounds=` runs longer. There is no property-test
+library: jqwik, the one maintained for the JVM, runs on the JUnit Platform 1.x only, and these
+tests run on JUnit 6 - a seeded `Random` and a model is all they need.
+
 ## The vendor drivers as the oracle
 
 `seclume-diff` runs the same values through seclume and through pgjdbc or Connector/J, against
@@ -482,6 +506,20 @@ a client kept to TLS 1.3, and runs the own stack against servers that refuse it 
 a listener that hangs up) and against one whose certificate is untrusted, which must not count
 as a refusal. `Tls12ServerHelloTest` holds the TLS 1.2 profile to its rules (extended master
 secret, secure renegotiation, the downgrade marker, the suites).
+
+### No mode falls back
+
+`TlsNeverFallsBackTest` (PostgreSQL and MySQL, no server needed) holds every TLS mode, over both
+stacks, against a fake server that makes TLS fail in each way it can be made to: it says it has none,
+it says yes and sends bytes that are not TLS, it hangs up in the handshake, it sends a fatal
+alert, or it finishes the handshake with a certificate `verify-full` must refuse (self-signed;
+from a trusted CA for another host; from it and expired). A refusal has to be SQLSTATE 08 and
+leave no trace of the login: the server is checked for a startup message in the clear and for
+a second connection, the password source for a read and `SecretScope.open()` for a scope left
+open. `tls=prefer` against a server without TLS goes on in the clear - the one documented case,
+checked so that it stays the only one. Removing the `require` check, carrying on after a failed
+handshake, or not verifying under `verify-full` each turns it red, in either driver. The
+servers after their yes are `space.seclume.tck.HostileTls`, for the drivers still to come.
 
 ### Servers held to TLS 1.2
 

@@ -127,6 +127,18 @@ public final class JdbcUrl {
             hostPort = rest.substring(0, slash);
             database = rest.substring(slash + 1);
         }
+        // //user:password@host is how most vendors' URLs carry a login. Taken
+        // as a host it became "user:password", the password a port: refused
+        // with the password in the message ("app:hunter2 has no usable port"),
+        // or, with a port after the host, a server named "app:hunter2@db" in
+        // every connect failure. A seclume URL names its user in user= and its
+        // password nowhere, so whatever stands before an @ is refused - and
+        // the message shows the URL with it masked.
+        if (hostPort.indexOf('@') >= 0) {
+            throw new IllegalArgumentException("a seclume URL has nothing before its host - "
+                    + "no user@ and no user:password@: " + redact(url) + ". The user goes in "
+                    + "user=, the password in a secret provider (provider=file&path=...).");
+        }
         // Several servers, separated by commas, are allowed here: that is how
         // failover is configured, and the same spelling other drivers use.
         HostList hosts = HostList.parse(
@@ -186,41 +198,174 @@ public final class JdbcUrl {
      * <p><b>The case this is for is a URL that is not ours.</b> A seclume URL
      * carries a provider and a path and no credential - that is the whole
      * design. But the message that names a wrong URL is precisely the message
-     * that gets a <i>vendor's</i> URL, and those routinely read
-     * {@code ...?user=app&amp;password=hunter2}. Echoing it back puts the
-     * password in the application's log, at the moment somebody is already
-     * confused and reading logs.
+     * that gets a <i>vendor's</i> URL, and those carry passwords in four
+     * spellings: {@code ?user=app&amp;password=hunter2} (PostgreSQL, MySQL),
+     * {@code ;user=sa;password=hunter2} (SQL Server, a value with a {@code ;}
+     * in braces), {@code //app:hunter2@db} (MySQL, MariaDB, MongoDB) and
+     * {@code thin:scott/tiger@db} (Oracle), and MySQL's key-value hosts
+     * {@code (host=db,password=hunter2)}. Echoing one back puts the password
+     * in the application's log, at the moment somebody is already confused
+     * and reading logs.
      *
      * <p>So the shape is kept - scheme, host, port, database, and which
      * options were given - and every value after an {@code =} becomes
-     * {@code ?}. That is enough to see what is wrong with a URL, which is the
-     * only reason to print one.
+     * {@code ?}, as does the password of a {@code user:password@} or a
+     * {@code user/password@}. That is enough to see what is wrong with a URL,
+     * which is the only reason to print one.
      *
      * <p>Not a parser: this runs on strings that are malformed by definition,
-     * so it does the one textual thing it can do correctly.
+     * so it does textual things that hold for any input. One it cannot know:
+     * a {@code user:password@} whose password has a {@code ?} in it that is
+     * not %-encoded - no URL may have one there.
      */
     public static String redact(String url) {
         if (url == null) {
             return "null";
         }
-        int question = url.indexOf('?');
-        if (question < 0) {
-            return url;
-        }
+        // What is hidden is marked first and replaced after: the login's
+        // password and the values of options overlap where a value has an @
+        // in it or a password an =, and either may then only be cut out
+        // whole. Each run of hidden characters becomes one ?.
+        boolean[] hidden = new boolean[url.length()];
+        hideLoginPassword(url, hidden);
+        hideValues(url, hidden);
         StringBuilder out = new StringBuilder(url.length());
-        out.append(url, 0, question + 1);
-        String[] pairs = url.substring(question + 1).split("&", -1);
-        for (int i = 0; i < pairs.length; i++) {
-            if (i > 0) {
-                out.append('&');
-            }
-            int equals = pairs[i].indexOf('=');
-            if (equals < 0) {
-                out.append(pairs[i]);
-            } else {
-                out.append(pairs[i], 0, equals + 1).append('?');
+        for (int i = 0; i < url.length(); i++) {
+            if (!hidden[i]) {
+                out.append(url.charAt(i));
+            } else if (i == 0 || !hidden[i - 1]) {
+                out.append('?');
             }
         }
         return out.toString();
     }
+
+    /**
+     * {@code //app:hunter2@db} and Oracle's {@code thin:scott/tiger@db}: the
+     * password between the {@code :} or {@code /} and the {@code @}. For the
+     * first, the authority ends where RFC 3986 ends it - at the first
+     * {@code / ? #} - and its last {@code @} ends the login; for Oracle the
+     * first {@code @} outside quotes does, before any {@code //}, as its
+     * password may be quoted and have one.
+     */
+    private static void hideLoginPassword(String url, boolean[] hidden) {
+        int authority = url.indexOf("//");
+        int oracleAt = firstOutsideQuotes(url, '@');
+        if (oracleAt >= 0 && (authority < 0 || oracleAt < authority)) {
+            int slash = url.indexOf('/');
+            if (slash >= 0 && slash < oracleAt) {
+                java.util.Arrays.fill(hidden, slash + 1, oracleAt, true);
+            }
+            return;
+        }
+        if (authority < 0) {
+            return;
+        }
+        int end = url.length();
+        for (int i = authority + 2; i < url.length(); i++) {
+            if ("/?#".indexOf(url.charAt(i)) >= 0) {
+                end = i;
+                break;
+            }
+        }
+        int at = url.lastIndexOf('@', end - 1);
+        int colon = url.indexOf(':', authority + 2);
+        if (at > authority && colon >= 0 && colon < at) {
+            java.util.Arrays.fill(hidden, colon + 1, at, true);
+        }
+    }
+
+    private static int firstOutsideQuotes(String text, char wanted) {
+        boolean quoted = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (c == wanted && !quoted) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * The value of every {@code key=value}. Before the query - SQL Server's
+     * {@code ;password=}, MySQL's {@code (password=)}, an Oracle descriptor's
+     * {@code (HOST=)} - a value ends at {@code ; , ( )} or, in braces, at the
+     * brace that closes them ({@code }}} being a brace inside), and a
+     * {@code ?} in it is part of it: SQL Server's values may have one. The
+     * query starts at the first {@code ?} outside a value and outside quotes;
+     * there a value ends at {@code &}. An {@code =} in the login's password
+     * starts a value too: with SQL Server's {@code ;password=a@b?c} the
+     * login rule takes {@code a@b} for a login, and only the value hides it
+     * all.
+     */
+    private static void hideValues(String url, boolean[] hidden) {
+        boolean[] loginHidden = hidden.clone();
+        int i = 0;
+        boolean quoted = false;
+        while (i < url.length()) {
+            char c = url.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            }
+            // A ? in the login's password is the password's, not the query's.
+            if (quoted || (c != '=' && c != '?') || (c == '?' && loginHidden[i])) {
+                i++;
+                continue;
+            }
+            if (c == '?') {
+                break;
+            }
+            int end = i + 1;
+            if (end < url.length() && url.charAt(end) == '{') {
+                end++;
+                while (end < url.length()) {
+                    if (url.charAt(end) == '}') {
+                        if (end + 1 < url.length() && url.charAt(end + 1) == '}') {
+                            end += 2;
+                            continue;
+                        }
+                        end++;
+                        break;
+                    }
+                    end++;
+                }
+            } else {
+                while (end < url.length() && ";,()".indexOf(url.charAt(end)) < 0) {
+                    end++;
+                }
+            }
+            java.util.Arrays.fill(hidden, i + 1, end, true);
+            i = end;
+        }
+        // The query's values are hidden from its first ? on even where a
+        // value before it ran over that ? - a password ending in = before an
+        // @ makes one do that, and it ended at a ; in the query, not at the end.
+        boolean inQuotes = false;
+        for (int q = 0; q < url.length(); q++) {
+            char c = url.charAt(q);
+            if (c == '"') {
+                inQuotes = !inQuotes;
+            } else if (c == '?' && !inQuotes && !loginHidden[q]) {
+                hideQueryValues(url, q + 1, hidden);
+                return;
+            }
+        }
+    }
+
+    private static void hideQueryValues(String url, int from, boolean[] hidden) {
+        boolean inValue = false;
+        for (int i = from; i < url.length(); i++) {
+            char c = url.charAt(i);
+            if (c == '&') {
+                inValue = false;
+            } else if (inValue) {
+                hidden[i] = true;
+            } else if (c == '=') {
+                inValue = true;
+            }
+        }
+    }
+
 }

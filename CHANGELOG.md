@@ -45,6 +45,21 @@ All notable changes to seclume are recorded here. Versions follow
   token in unpadded or URL-safe Base64. Each of these is looked for now - the same way, a
   fingerprint and an HMAC tag computed in native memory, no copy of the secret on the heap
   (`SecretMaskerTest`, 5 tests more).
+- **A vendor's JDBC URL in a message no longer carries its password.** `JdbcUrl.redact`, which
+  every message naming a wrong URL goes through (the drivers' "not a seclume URL", Spring Boot's
+  "which no seclume driver handles" and the container connection details' log line), removed the
+  values of `?key=value` only. SQL Server's `;password=hunter2`, `//user:hunter2@host` (MySQL,
+  MariaDB, MongoDB), Oracle's `thin:scott/tiger@host` and MySQL's key-value hosts
+  `(host=db,password=hunter2)` came back as they were - into the exception and the log. Each is
+  masked now, braced SQL Server values and quoted Oracle passwords included. And a seclume URL
+  with `user:password@` before its host is refused: the parser took it for a host named
+  `user:password@db`, or the password for a port, and the message of either named it. Found by
+  the new property tests (`JdbcUrlPropertyTest`).
+- **Property tests for the secret lifecycle and the URL parser.** `SecretScopeModelTest` runs
+  random sequences of allocating, filling (and failing to fill), writing, reading and closing -
+  twice, from two threads at once, from the wrong thread - against a model; `JdbcUrlPropertyTest`
+  generates URLs in every vendor's spelling and arbitrary strings. Both are seeded and replay a
+  failure with `-Dseclume.scope.seed=` and `-Dseclume.url.seed=`.
 - **The password guards see environment variables.** Spring's, Micronaut's and Helidon's
   check for a password in the configuration matched property names only - `.password` - while
   the environment's property source lists its variables by their own names: a password in
@@ -56,6 +71,16 @@ All notable changes to seclume are recorded here. Versions follow
   whose environment holds such a variable no longer starts until it is removed or listed in
   `seclume.secret-guard-allow` (`SeclumeEnvironmentPostProcessorTest`,
   `ConfigurationGuardEverywhereTest`, `SeclumeSettingsTest`, `SeclumeCdiExtensionTest`).
+- **PostgreSQL and MySQL: a test that no TLS mode falls back.** `TlsNeverFallsBackTest` runs
+  `prefer`, `require` and `verify-full`, over both TLS stacks, against seven servers: no TLS,
+  bytes that are not TLS after a yes, a hang-up mid-handshake, a fatal alert, and - for
+  `verify-full` - a self-signed certificate, one from a trusted CA for another host, and one
+  that expired (`HostileTls` in `seclume-tck` plays them). Every refusal is SQLSTATE 08, with
+  no login in the clear, none inside a TLS whose certificate failed, no second connection, the
+  password never read and no secret left open. The one case that goes on in the clear is
+  `prefer` against a server without TLS, as documented. Three hand-made faults in each
+  driver's `negotiateTls` - `require` ignored, a failed handshake carried on, `verify-full` not
+  checking - each turn it red.
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to
