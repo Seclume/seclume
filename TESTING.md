@@ -53,6 +53,20 @@ on the curve. They were written by people collecting the bugs other libraries ha
 list no one writes about their own code. The files and the commit they come from are in
 `seclume-core/src/test/resources/wycheproof`.
 
+## Which code the tests ran: coverage
+
+```bash
+./mvnw -Pcoverage -pl seclume-core -am test
+python3 .github/scripts/coverage_report.py . --json coverage.json
+```
+
+JaCoCo's agent runs in each test JVM; each module's report lands in `target/site/jacoco`, and
+the script sums them up per module and for the security-critical packages named in
+`.github/coverage-critical.json`. CI's `core` job runs this for its 25 modules on every pull
+request; the job summary has the tables and the `coverage` artifact the reports. Nothing is
+excluded. Coverage says a line ran, not that a test checked it - the mutation profile says that
+- but a line no test runs is a line no test checks.
+
 ## The wipe, and the paths where it gets lost
 
 The heap-dump proof covers a login that works. Wipes are not usually lost there - they are
