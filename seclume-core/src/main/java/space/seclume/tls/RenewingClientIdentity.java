@@ -143,6 +143,8 @@ abstract class RenewingClientIdentity implements ClientIdentity {
     private Instant nextLook;
     private int generations;
     private boolean closed;
+    /** The pairs freed before a checkpoint; the next handshake gets a new one. */
+    private boolean dropped;
 
     RenewingClientIdentity(Clock clock) {
         this.clock = clock;
@@ -169,6 +171,54 @@ abstract class RenewingClientIdentity implements ClientIdentity {
             });
         }
         schedule(Duration.between(clock.instant(), nextLook()));
+        // The key was made in OpenSSL's or CNG's memory and cannot be read
+        // again: before a checkpoint it is freed, and the first handshake
+        // after the restore asks the service for a new pair.
+        space.seclume.internal.Checkpoint.register(this, RenewingClientIdentity::drop);
+    }
+
+    /** Before a checkpoint: every pair's key freed - the one in use and the retiring ones. */
+    private synchronized void drop() {
+        if (closed || dropped) {
+            return;
+        }
+        current.close();
+        for (Generation old : retiring) {
+            old.close();
+        }
+        retiring.clear();
+        dropped = true;
+    }
+
+    /**
+     * The pair in use - a new one from the service first if a checkpoint
+     * dropped it. Asked for while this holds its lock: the handshakes after a
+     * restore wait for the one answer rather than each asking.
+     */
+    private synchronized Generation inUse() {
+        if (closed) {
+            throw new IllegalStateException("this client identity is closed");
+        }
+        if (dropped) {
+            Generation fresh;
+            try {
+                fresh = look(null);
+            } catch (IOException e) {
+                throw new IllegalStateException("no client certificate " + name() + " from "
+                        + source() + " after the restore: " + e.getMessage(), e);
+            }
+            if (fresh == null) {
+                throw new IllegalStateException("no client certificate " + name() + " from "
+                        + source() + " after the restore");
+            }
+            current = fresh;
+            generations++;
+            nextLook = nextLook(fresh);
+            dropped = false;
+            LOG.log(System.Logger.Level.INFO, "a new client certificate {0} from {1} after the "
+                    + "restore, valid until {2}", name(), source(), fresh.notAfter);
+        }
+        return current;
     }
 
     /**
@@ -209,7 +259,8 @@ abstract class RenewingClientIdentity implements ClientIdentity {
     boolean renewNow() throws IOException {
         Generation now;
         synchronized (this) {
-            now = current;
+            // After a checkpoint the pair in hand is gone: ask as the first time.
+            now = dropped ? null : current;
         }
         Generation next = look(now);
         synchronized (this) {
@@ -224,7 +275,11 @@ abstract class RenewingClientIdentity implements ClientIdentity {
             current = next;
             generations++;
             nextLook = nextLook(next);
-            retire(previous);
+            if (dropped) {
+                dropped = false;       // freed already
+            } else {
+                retire(previous);
+            }
         }
         LOG.log(System.Logger.Level.INFO, "a new client certificate {0} from {1}, valid until "
                 + "{2}; the next handshake presents it", name(), source(), next.notAfter);
@@ -285,20 +340,17 @@ abstract class RenewingClientIdentity implements ClientIdentity {
 
     @Override
     public synchronized ClientIdentity forHandshake() {
-        if (closed) {
-            throw new IllegalStateException("this client identity is closed");
-        }
-        return current;
+        return inUse();
     }
 
     @Override
     public synchronized List<byte[]> chain() {
-        return current.chain();
+        return inUse().chain();
     }
 
     @Override
     public synchronized int signatureScheme() {
-        return current.signatureScheme();
+        return inUse().signatureScheme();
     }
 
     @Override
@@ -313,7 +365,7 @@ abstract class RenewingClientIdentity implements ClientIdentity {
                 return;
             }
             closed = true;
-            if (current != null) {
+            if (current != null && !dropped) {
                 current.close();
             }
             for (Generation old : retiring) {

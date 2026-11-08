@@ -53,6 +53,7 @@ import space.seclume.internal.Transport;
  * server that demands one and trusts only that CA.
  */
 @Timeout(120)
+@org.junit.jupiter.api.parallel.Isolated   // Checkpoint.wipeAll wipes what every test holds
 class VaultPkiClientIdentityTest {
 
     private static final String HOSTNAME = "db.example.com";
@@ -142,6 +143,44 @@ class VaultPkiClientIdentityTest {
                 identity.close();
             }
             assertThrows(IllegalStateException.class, identity::forHandshake);
+        }
+    }
+
+    /**
+     * The key Vault's certificate goes with was made in OpenSSL's or CNG's
+     * memory and cannot be read again. Before a checkpoint it is freed - the
+     * in-use one and a retiring one - and the first handshake after the
+     * restore asks Vault for a new pair.
+     */
+    @Test
+    void aCheckpointFreesTheKeyAndTheNextHandshakeGetsANewCertificate() throws Exception {
+        try (FakeVault vault = FakeVault.signing()) {
+            ClientIdentity identity = ClientIdentities.of(settings(vault, "orders-e"));
+            VaultPkiClientIdentity fromVault =
+                    assertInstanceOf(VaultPkiClientIdentity.class, identity);
+            try {
+                fromVault.renewNow();                      // one in use, one retiring
+                byte[] before = identity.chain().get(0);
+                space.seclume.internal.Checkpoint.wipeAll();
+                int held = space.seclume.crypto.PrivateSigningKey.held();
+                for (String by : space.seclume.crypto.PrivateSigningKey.heldBy()) {
+                    assertFalse(by.contains("VaultPki"), "a key is still held by " + by
+                            + " - it would be in the image");
+                }
+                assertEquals(2, vault.requests.size());
+
+                handshake(identity);
+                assertEquals(3, vault.requests.size(), "no new certificate after the restore");
+                assertEquals(3, fromVault.generations());
+                assertFalse(java.util.Arrays.equals(before, identity.chain().get(0)));
+                assertEquals(held + 1, space.seclume.crypto.PrivateSigningKey.held());
+
+                fromVault.renewNow();                      // and renewing goes on as before
+                assertEquals(4, fromVault.generations());
+                handshake(identity);
+            } finally {
+                identity.close();
+            }
         }
     }
 

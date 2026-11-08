@@ -81,6 +81,7 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                     + api.socket() + ": " + e.getMessage(), e);
         }
         register();
+        dropAtCheckpoints();
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "seclume-spiffe " + api.socket());
             thread.setDaemon(true);
@@ -194,6 +195,20 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                     + notAfter + "; used from the next handshake on");
         }
         return fresh;
+    }
+
+    /**
+     * After a checkpoint freed the key: the agent's SVID again, installed even
+     * if it is the one in hand - that one's key is gone.
+     */
+    @Override
+    protected synchronized void restore() throws IOException {
+        serial = null;
+        if (!fetch()) {
+            throw new IOException("the Workload API answered with an SVID replaced already");
+        }
+        LOG.log(System.Logger.Level.INFO, "the X.509-SVID for " + spiffeId + " again after the "
+                + "restore, valid until " + notAfter);
     }
 
     private void schedule(Duration delay) {

@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **An issued identity is asked for again after a restore, not a reason to refuse the
+  checkpoint.** A Vault PKI certificate's key and a SPIFFE SVID's - for a database connection's
+  client certificate or a server's key manager - were made in OpenSSL or fetched from the agent
+  and cannot be read again, so `seclume-crac` refused a checkpoint while one was open. Now the
+  keys are freed before the checkpoint, the one in use and those still retiring, and the first
+  handshake after the restore gets a new pair from Vault, or the SVID again from the agent;
+  renewing goes on as before. Listing the certificates asks nobody (`VaultPkiClientIdentityTest`,
+  `VaultPkiTest`, `SpiffeTest`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held

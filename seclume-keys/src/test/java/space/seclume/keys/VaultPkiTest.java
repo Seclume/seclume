@@ -214,6 +214,35 @@ class VaultPkiTest {
     }
 
     /**
+     * The key Vault signed for was made in OpenSSL and cannot be read again:
+     * a checkpoint frees it and the one before, and the first handshake after
+     * the restore gets a new key and certificate.
+     */
+    @Test
+    void aCheckpointFreesTheKeyAndTheNextHandshakeGetsANewCertificate() throws Exception {
+        try (FakeVault vault = new FakeVault(request -> new Answer(200,
+                signed(sign(field(request.body(), "csr"), "1", null))))) {
+            try (VaultPkiKeyManager manager = (VaultPkiKeyManager)
+                    SeclumeKeys.vaultPkiKeyManager(spec(vault, ""))) {
+                manager.renewNow();                       // one in use, one before it
+                X509Certificate before = manager.getCertificateChain("seclume")[0];
+                space.seclume.internal.Checkpoint.wipeAll();
+                for (String by : PrivateSigningKey.heldBy()) {
+                    assertFalse(by.contains("VaultPki"), "a key is still held by " + by
+                            + " - it would be in the image");
+                }
+                assertEquals(2, vault.requests().size());
+
+                assertEquals("CN=orders.seclume.test", handshake(manager));
+                assertEquals(3, vault.requests().size(), "no new certificate after the restore");
+                assertEquals(3, manager.generations());
+                assertNotEquals(before.getPublicKey(),
+                        manager.getCertificateChain("seclume")[0].getPublicKey());
+            }
+        }
+    }
+
+    /**
      * What an endpoint and a recording see: the certificate listed under its
      * name with its validity and next renewal, a failed renewal with its
      * reason - and gone from the list once closed.

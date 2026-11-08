@@ -37,6 +37,8 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
     private volatile Generation current;
     private volatile Generation previous;
     private int generations;
+    /** The pairs freed before a checkpoint; the next use gets a new one. */
+    private volatile boolean dropped;
 
     /** Makes {@code manager} the one handshakes get from now on; the one before the last is freed. */
     protected final synchronized void install(SeclumeKeyManager manager) {
@@ -53,6 +55,68 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
         CompletableFuture.delayedExecutor(GRACE_SECONDS, TimeUnit.SECONDS)
                 .execute(() -> ((OpenSslPrivateKey) generation.manager()
                         .getPrivateKey(SeclumeKeyManager.ALIAS)).destroy());
+    }
+
+    /**
+     * For a pair whose key cannot be read again - issued by a CA, fetched from
+     * an agent: before a checkpoint its key is freed, as it would otherwise be
+     * in the CRaC or SnapStart image, and the first use after the restore
+     * gets a new pair ({@link #restore()}). A subclass calls it once it has a
+     * pair; a key read from a file needs none of this, it is read again on
+     * its own.
+     */
+    protected final void dropAtCheckpoints() {
+        space.seclume.internal.Checkpoint.register(this, RotatingKeyManager::drop);
+    }
+
+    /** A new pair after a checkpoint dropped the one in hand: {@link #install} it. */
+    protected void restore() throws java.io.IOException {
+        throw new IllegalStateException("this key manager's keys are not dropped at checkpoints");
+    }
+
+    private synchronized void drop() {
+        if (dropped) {
+            return;
+        }
+        destroy(current);
+        destroy(previous);
+        previous = null;
+        dropped = true;
+    }
+
+    private static void destroy(Generation generation) {
+        if (generation != null) {
+            ((OpenSslPrivateKey) generation.manager().getPrivateKey(SeclumeKeyManager.ALIAS))
+                    .destroy();
+        }
+    }
+
+    /**
+     * Before every use: the new pair if a checkpoint dropped the one in hand.
+     * A failure is recorded and logged; the handshake then finds no usable
+     * key, and the next one asks again.
+     */
+    private void afterRestore() {
+        if (!dropped) {
+            return;
+        }
+        synchronized (this) {
+            if (!dropped) {
+                return;
+            }
+            try {
+                restore();
+                previous = null;            // the one before was freed already
+                dropped = false;
+                succeeded();
+            } catch (java.io.IOException | RuntimeException e) {
+                failed(e.getMessage());
+                System.getLogger(RotatingKeyManager.class.getName()).log(
+                        System.Logger.Level.WARNING, "no new certificate for " + name()
+                        + " after the restore (" + e.getMessage() + "); asking again at the "
+                        + "next handshake");
+            }
+        }
     }
 
     /** Listed from now on by {@link SeclumeKeys#managedCertificates()}; a subclass calls it once it has a pair. */
@@ -107,10 +171,13 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
 
     /** The chain handshakes get now. */
     X509Certificate[] currentChain() {
+        // Not a use: listing the certificate asks nobody for a new one after a
+        // restore - the chain in hand is public and still there.
         return current.manager().getCertificateChain(SeclumeKeyManager.ALIAS);
     }
 
     private SeclumeKeyManager of(String alias) {
+        afterRestore();
         Generation now = current;
         // the plain alias is whatever is current - for callers outside a handshake
         if (now.alias().equals(alias) || SeclumeKeyManager.ALIAS.equals(alias)) {
@@ -128,36 +195,42 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
         return chosen == null ? null : new String[] {current.alias()};
     }
 
+    /** The pair handshakes get now - a new one first, after a restore. */
+    private SeclumeKeyManager now() {
+        afterRestore();
+        return current.manager();
+    }
+
     @Override
     public String[] getClientAliases(String keyType, Principal[] issuers) {
-        return aliases(current.manager().getClientAliases(keyType, issuers));
+        return aliases(now().getClientAliases(keyType, issuers));
     }
 
     @Override
     public String chooseClientAlias(String[] keyType, Principal[] issuers, Socket socket) {
-        return alias(current.manager().chooseClientAlias(keyType, issuers, socket));
+        return alias(now().chooseClientAlias(keyType, issuers, socket));
     }
 
     @Override
     public String chooseEngineClientAlias(String[] keyType, Principal[] issuers,
                                           SSLEngine engine) {
-        return alias(current.manager().chooseEngineClientAlias(keyType, issuers, engine));
+        return alias(now().chooseEngineClientAlias(keyType, issuers, engine));
     }
 
     @Override
     public String[] getServerAliases(String keyType, Principal[] issuers) {
-        return aliases(current.manager().getServerAliases(keyType, issuers));
+        return aliases(now().getServerAliases(keyType, issuers));
     }
 
     @Override
     public String chooseServerAlias(String keyType, Principal[] issuers, Socket socket) {
-        return alias(current.manager().chooseServerAlias(keyType, issuers, socket));
+        return alias(now().chooseServerAlias(keyType, issuers, socket));
     }
 
     @Override
     public String chooseEngineServerAlias(String keyType, Principal[] issuers,
                                           SSLEngine engine) {
-        return alias(current.manager().chooseEngineServerAlias(keyType, issuers, engine));
+        return alias(now().chooseEngineServerAlias(keyType, issuers, engine));
     }
 
     @Override
