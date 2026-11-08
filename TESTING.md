@@ -478,8 +478,7 @@ secret, secure renegotiation, the downgrade marker, the suites).
 ### No mode falls back
 
 `TlsNeverFallsBackTest` (PostgreSQL and MySQL, no server needed) holds every TLS mode, over both
-stacks,
-against a fake server that makes TLS fail in each way it can be made to: it says it has none,
+stacks, against a fake server that makes TLS fail in each way it can be made to: it says it has none,
 it says yes and sends bytes that are not TLS, it hangs up in the handshake, it sends a fatal
 alert, or it finishes the handshake with a certificate `verify-full` must refuse (self-signed;
 from a trusted CA for another host; from it and expired). A refusal has to be SQLSTATE 08 and
