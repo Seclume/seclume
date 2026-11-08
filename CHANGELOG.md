@@ -105,6 +105,11 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **The constant-time measurement names the processor it ran on.** The nightly run found
+  `ConstantTime.equals` leaking on 5 and 7 November (t = -11.5; 6.8, 15.3, 8.9 in three rounds)
+  and not on the three nights between; locally it is quiet. A leak in the code would show every
+  night, one in a processor model only on that model, a noisy neighbour on no pattern at all -
+  the message now says which model, so that the red nights can be told apart. Open until then.
 - **Quarkus refuses a datasource password at the start too, not only in the build.** The
   check that a seclume datasource has no `quarkus.datasource.password` - Agroal would keep it as
   a `String` for the application's life - ran only as a build step. The datasource password is a

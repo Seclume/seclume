@@ -38,8 +38,8 @@ class ConstantTimeVerdictTest {
         List<Integer> asked = new ArrayList<>();
         AssertionError e = assertThrows(AssertionError.class,
                 () -> ConstantTimeLeakageTest.quiet("the GCM tag check", 3, rounds(asked, 4.5, -7.25, 30)));
-        assertEquals("the GCM tag check leaks: |t| above 4.5 in all 3 rounds (t = 4.50, -7.25, 30.00)",
-                e.getMessage(), "exactly the threshold is not below it");
+        assertEquals("the GCM tag check leaks: |t| above 4.5 in all 3 rounds (t = 4.50, -7.25, 30.00) on "
+                + ConstantTimeLeakageTest.machine(), e.getMessage(), "exactly the threshold is not below it");
         assertEquals(List.of(0, 1, 2), asked);
     }
 
@@ -50,8 +50,9 @@ class ConstantTimeVerdictTest {
         assertEquals(List.of(0, 1), asked);
         AssertionError e = assertThrows(AssertionError.class,
                 () -> ConstantTimeLeakageTest.seen("an early exit", 3, rounds(new ArrayList<>(), 4.5, -1, 0)));
-        assertEquals("an early exit was not seen in 3 rounds (t = 4.50, -1.00, 0.00) - the measurement cannot tell a "
-                + "leak from none", e.getMessage());
+        assertEquals("an early exit was not seen in 3 rounds (t = 4.50, -1.00, 0.00) on "
+                + ConstantTimeLeakageTest.machine() + " - the measurement cannot tell a leak from none",
+                e.getMessage());
     }
 
     @Test

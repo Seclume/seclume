@@ -70,7 +70,7 @@ class ConstantTimeLeakageTest {
             seen.append(seen.isEmpty() ? "" : ", ").append(String.format(java.util.Locale.ROOT, "%.2f", t));
         }
         throw new AssertionError(what + " leaks: |t| above " + LEAK + " in all " + rounds + " rounds (t = " + seen
-                + ")");
+                + ") on " + machine());
     }
 
     /** Seen if one round of {@code rounds} is beyond the threshold; otherwise a failure with every t. */
@@ -84,7 +84,29 @@ class ConstantTimeLeakageTest {
             quiet.append(quiet.isEmpty() ? "" : ", ").append(String.format(java.util.Locale.ROOT, "%.2f", t));
         }
         throw new AssertionError(what + " was not seen in " + rounds + " rounds (t = " + quiet
-                + ") - the measurement cannot tell a leak from none");
+                + ") on " + machine() + " - the measurement cannot tell a leak from none");
+    }
+
+    /**
+     * The processor, for the message: the nightly run fails on some nights
+     * and not on others, and a leak that is the hardware's - a store
+     * forwarded on one model and not on another - shows only as the same
+     * model on every red night.
+     */
+    static String machine() {
+        try {
+            for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/cpuinfo"))) {
+                if (line.startsWith("model name")) {
+                    return line.substring(line.indexOf(':') + 1).strip() + ", "
+                            + Runtime.getRuntime().availableProcessors() + " processors, "
+                            + System.getProperty("java.vm.version");
+                }
+            }
+        } catch (java.io.IOException | RuntimeException notLinux) {
+            // the architecture is all there is to say then
+        }
+        return System.getProperty("os.arch") + ", " + Runtime.getRuntime().availableProcessors()
+                + " processors, " + System.getProperty("java.vm.version");
     }
 
     @BeforeAll
