@@ -1,10 +1,12 @@
 """Tests for coverage_report.py: counted from JaCoCo's XML, nothing made up."""
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import coverage_report  # noqa: E402
@@ -55,7 +57,9 @@ class CoverageReportTest(unittest.TestCase):
         self.assertIsNone(modules["without-report"])
         self.assertEqual((60, 150), modules["with-report"]["totals"]["LINE"])
         text = coverage_report.markdown(modules, {})
-        self.assertIn("| with-report | 210 | 71.4 % | 20 | 75.0 % |", text)
+        self.assertIn("| with-report | 150 / 210 | 71.4 % | 15 / 20 | 75.0 % |", text)
+        self.assertIn("| **all modules with a report** | 150 / 210 | 71.4 % | 15 / 20 | 75.0 % |",
+                      text)
         self.assertIn("| without-report | - | no report | - | - |", text)
 
     def test_a_critical_package_sums_its_subpackages_and_nothing_else(self):
@@ -67,15 +71,20 @@ class CoverageReportTest(unittest.TestCase):
         self.assertEqual((5, 15), critical["space.seclume.secret"]["BRANCH"])
         self.assertFalse(critical["space.seclume.tls"]["found"])
         text = coverage_report.markdown(modules, critical)
-        self.assertIn("| `space.seclume.secret` | s | 90.9 % | 75.0 % |", text)
-        self.assertIn("| `space.seclume.tls` | t | no report | - |", text)
+        self.assertIn("| `space.seclume.secret` | s | 100 / 110 | 90.9 % | 15 / 20 | 75.0 % |", text)
+        self.assertIn("| `space.seclume.tls` | t | - | no report | - | - |", text)
 
     def test_the_json_carries_the_counts(self):
         out = self.root / "coverage.json"
-        coverage_report.main([str(self.root), "--json", str(out)])
+        # Not into the job's summary: this test's numbers are not the build's.
+        environment = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        with mock.patch.dict(os.environ, environment, clear=True):
+            coverage_report.main([str(self.root), "--json", str(out)])
         data = json.loads(out.read_text())
         self.assertEqual({"missed": 60, "covered": 150}, data["modules"]["with-report"]["line"])
         self.assertIsNone(data["modules"]["without-report"])
+        self.assertEqual({"missed": 60, "covered": 150}, data["total"]["line"])
+        self.assertEqual({"missed": 5, "covered": 15}, data["total"]["branch"])
         self.assertEqual({"missed": 10, "covered": 100},
                          data["critical"]["space.seclume.secret"]["line"])
 
