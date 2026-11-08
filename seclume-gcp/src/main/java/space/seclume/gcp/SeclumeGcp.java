@@ -86,7 +86,9 @@ public final class SeclumeGcp {
             // after a checkpoint dropped it - so it is the file's key, through
             // a provider that finds it there each time.
             Map<String, String> fileOptions = Map.copyOf(options);
-            PrivateKey privateKey = SeclumeKeys.privateKey(() -> new KeyInFile(fileOptions));
+            int maxLength = file.maxSecretLength();  // the key is a part of the file
+            PrivateKey privateKey = SeclumeKeys.privateKey(
+                    () -> new KeyInFile(fileOptions, maxLength));
             ServiceAccountCredentials.Builder builder = ServiceAccountCredentials.newBuilder()
                     .setClientEmail(field(json, text, "client_email"))
                     .setPrivateKey(privateKey)
@@ -114,9 +116,11 @@ public final class SeclumeGcp {
      */
     private static final class KeyInFile implements SecretProvider {
         private final Map<String, String> options;
+        private final int maxLength;
 
-        KeyInFile(Map<String, String> options) {
+        KeyInFile(Map<String, String> options, int maxLength) {
             this.options = options;
+            this.maxLength = maxLength;
         }
 
         @Override
@@ -129,8 +133,7 @@ public final class SeclumeGcp {
 
         @Override
         public int maxSecretLength() {
-            return Integer.parseInt(options.getOrDefault("max-length",
-                    options.getOrDefault("maxLength", "32768")));
+            return maxLength;
         }
     }
 
