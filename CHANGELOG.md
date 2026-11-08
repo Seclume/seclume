@@ -110,6 +110,11 @@ All notable changes to seclume are recorded here. Versions follow
   passwords (`MigrateNeverPrintsAPasswordTest`, 9 tests). The report's URL line masks more
   than `password=` and `secret=` now: a provider's nested `token-value=`, `share.1.value=` or
   `secret-id-value=`, a `user:password@` before the host, `%`-encoded names (`VerifyTest`).
+- **Mutation testing for the TLS client, the native plumbing and the pool, and a floor for the
+  rest.** `mutation.yml` puts faults into `space.seclume.tls`, `space.seclume.internal` and
+  `seclume-pool` as well. `crypto`, `secret`, `field` and `audit` have a floor now, their score
+  of 7 November less a point: a pull request whose tests notice fewer faults than that fails
+  the job. The notice gives both scores, of the mutants a test ran and of all of them.
 - **The database matrix, brought up to date (6 November 2026).** Checked against the official
   images: PostgreSQL (19 is still at rc1), MySQL, MongoDB, Redis, RabbitMQ, Kafka, OpenBao and
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's

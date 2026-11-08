@@ -1,6 +1,6 @@
 """PIT's verdict for one package, as annotations on the check.
 
-  pit_report.py <mutations.xml> <source root> <package>
+  pit_report.py <mutations.xml> <source root> <package> [floor]
 
 A notice with the score: of the mutants with a test that ran their line,
 how many a test noticed - and how many had no test that ran them at all.
@@ -9,7 +9,11 @@ and what PIT changed. A check takes ten warnings per step, so classes are
 packed into at most ten annotations, the classes with most survivors first;
 each names its file and its first surviving line.
 
-Exits 0: the annotations are the result, not a gate.
+Exits 0: the annotations are the result - unless a floor is given, a
+percentage the score of the mutants with a test must not fall below. A floor
+is the score a package had when it was set, rounded down and less a point for
+the variation between runs: it keeps a change from losing what the tests
+already notice, and is raised as they notice more.
 """
 import sys
 from collections import defaultdict
@@ -94,18 +98,27 @@ def escape(text):
     return text.replace("%", "%25").replace("\r", "").replace("\n", " ")
 
 
-def main(report, source_root, package):
+def main(report, source_root, package, floor=None):
     if not Path(report).exists():
         print(f"::error title=mutation ({package})::no PIT report at {report} - the run did not finish")
-        return
+        return 1
     mutations = read(report)
     killed, covered, uncovered, total = score(mutations)
     percent = 100.0 * killed / covered if covered else 0.0
+    overall = 100.0 * killed / total if total else 0.0
     print(f"::notice title=mutation ({package})::{killed} of {covered} mutants with a test killed "
-          f"({percent:.1f}%), {covered - killed} survived; {uncovered} of {total} on lines no test ran")
+          f"({percent:.1f}%), {covered - killed} survived; {uncovered} of {total} on lines no test ran"
+          f" - {killed} of all {total} killed ({overall:.1f}%)")
     for path, line, title, text in annotations(survivors_by_class(mutations), source_root):
         print(f"::warning file={path},line={line},title={escape(title)}::{escape(text)}")
+    if floor is not None and percent < floor:
+        print(f"::error title=mutation ({package})::the score of the mutants with a test is "
+              f"{percent:.1f}%, below the floor of {floor:g}% - a test stopped noticing a fault "
+              "it noticed before, or new code came without one")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], sys.argv[3])
+    sys.exit(main(sys.argv[1], sys.argv[2], sys.argv[3],
+                  float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None))
