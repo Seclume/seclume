@@ -95,11 +95,13 @@ class AccessLogRestartTest {
             }
             long signed = AccessLogVerifier.verify(file, key.publicKey()).signedUpTo();
             try (AccessLog unsigned = AccessLog.open(file, null, null)) {
-                for (int i = 0; i < 1500; i++) {
+                // More than a megabyte: the blocks are read and joined, not
+                // one line gathered up to the limit of a line
+                for (int i = 0; i < 6000; i++) {
                     unsigned.append("without.key", Map.of("i", Integer.toString(i), "pad", "x".repeat(i % 97)));
                 }
             }
-            assertTrue(Files.size(file) > 3 * (1 << 16), "the tail spans blocks");
+            assertTrue(Files.size(file) > 1 << 20, "the tail spans more than a megabyte");
             long reopened = AccessLogVerifier.verify(file, key.publicKey()).first()
                     + AccessLogVerifier.verify(file, key.publicKey()).entries();
             try (AccessLog log = AccessLog.open(file, key, null)) {
@@ -109,6 +111,54 @@ class AccessLogRestartTest {
             assertEquals(1, result.problems().size(), result.problems().toString());
             assertTrue(result.problems().get(0).contains("entries " + (signed + 1) + " to "
                     + (reopened - 1) + " were vouched for by no checkpoint"), result.problems().get(0));
+        }
+    }
+
+    /**
+     * A log no checkpoint of this key ever signed - written without one, now
+     * opened with it: the whole file is read for a checkpoint, none is found,
+     * and every entry before the opening is named.
+     */
+    @Test
+    void aLogThisKeyNeverSignedIsNamedWhole() throws IOException {
+        Path file = directory.resolve("access.jsonl");
+        try (PrivateSigningKey key = key()) {
+            try (AccessLog log = AccessLog.open(file, null, null)) {
+                log.append("unsigned", Map.of());
+            }
+            try (AccessLog log = AccessLog.open(file, key, null)) {
+                log.append("signed", Map.of());
+            }
+            AccessLogVerifier.Result result = AccessLogVerifier.verify(file, key.publicKey());
+            assertEquals(1, result.problems().size(), result.problems().toString());
+            assertTrue(result.problems().get(0).contains("entries 1 to 2 were vouched for by no "
+                    + "checkpoint"), result.problems().get(0));
+        }
+    }
+
+    /**
+     * A rotated file can begin with a checkpoint: it is the first line read,
+     * last, and it counts like any other.
+     */
+    @Test
+    void aFileThatBeginsWithACheckpointIsVouchedForFromIt() throws IOException {
+        Path whole = directory.resolve("whole.jsonl");
+        Path rotated = directory.resolve("rotated.jsonl");
+        try (PrivateSigningKey key = key()) {
+            try (AccessLog log = AccessLog.open(whole, key, null)) {
+                log.append("before", Map.of());
+            }
+            List<String> lines = Files.readAllLines(whole, StandardCharsets.US_ASCII);
+            String checkpoint = lines.get(lines.size() - 1);
+            assertTrue(checkpoint.contains("\"event\":\"checkpoint\""), checkpoint);
+            Files.writeString(rotated, checkpoint + "\n", StandardCharsets.US_ASCII);
+            try (AccessLog log = AccessLog.open(rotated, key, null)) {
+                log.append("after", Map.of());
+            }
+            String opened = Files.readAllLines(rotated, StandardCharsets.US_ASCII).get(1);
+            assertTrue(opened.contains("\"vouched\":\"" + AccessLogVerifier.fields(checkpoint)
+                    .get("seq") + "\""), opened);
+            assertEquals(List.of(), AccessLogVerifier.verify(rotated, key.publicKey()).problems());
         }
     }
 

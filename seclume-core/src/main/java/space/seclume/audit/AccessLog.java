@@ -484,12 +484,8 @@ public final class AccessLog implements AutoCloseable {
             while (end > 0) {
                 int n = (int) Math.min(end, block);
                 long start = end - n;
-                ByteBuffer view = buffer.asSlice(0, n).asByteBuffer();
-                in.position(start);
-                while (view.hasRemaining() && in.read(view) >= 0) {
-                    // read the block
-                }
-                StringBuilder text = new StringBuilder(n + carry.length());
+                readFully(in, buffer.asSlice(0, n).asByteBuffer(), start);
+                StringBuilder text = new StringBuilder(n);
                 for (int i = 0; i < n; i++) {
                     text.append((char) (buffer.get(ValueLayout.JAVA_BYTE, i) & 0xff));
                 }
@@ -503,7 +499,7 @@ public final class AccessLog implements AutoCloseable {
                     end = start;
                     continue;
                 }
-                carry = cut < 0 ? "" : text.substring(0, cut);
+                carry = text.substring(0, Math.max(cut, 0));
                 String[] lines = text.substring(cut + 1).split("\n");
                 for (int i = lines.length - 1; i >= 0; i--) {
                     long seq = vouchedBy(lines[i], key, fingerprint);
@@ -533,10 +529,21 @@ public final class AccessLog implements AutoCloseable {
             return 0;
         }
         String head = fields.get("head");
-        if (seq <= 0 || head.length() != 64 || !head.chars().allMatch(c -> Character.digit(c, 16) >= 0)) {
+        // Of the right length to be read as one; what it says - and its seq -
+        // only the signature can vouch for.
+        if (head.length() != 64) {
             return 0;
         }
         return AccessLogVerifier.signature(fields, seq, head, key, fingerprint) == null ? seq : 0;
+    }
+
+    /** {@code view} filled from {@code at} - or an exception: the file is shorter than it was. */
+    private static void readFully(FileChannel in, ByteBuffer view, long at) throws IOException {
+        while (view.hasRemaining()) {
+            if (in.read(view, at + view.position()) < 0) {
+                throw new java.io.EOFException("the access log became shorter while it was read");
+            }
+        }
     }
 
     /** The last complete entry's {@code seq} and {@code hash}, or {@code null} for an empty file. */
@@ -549,11 +556,7 @@ public final class AccessLog implements AutoCloseable {
         try (FileChannel in = FileChannel.open(file, StandardOpenOption.READ);
              Arena arena = Arena.ofConfined()) {
             MemorySegment tail = arena.allocate(window);
-            ByteBuffer view = tail.asByteBuffer();
-            in.position(size - window);
-            while (view.hasRemaining() && in.read(view) >= 0) {
-                // read the window
-            }
+            readFully(in, tail.asByteBuffer(), size - window);
             StringBuilder text = new StringBuilder(window);
             for (int i = 0; i < window; i++) {
                 text.append((char) (tail.get(ValueLayout.JAVA_BYTE, i) & 0xff));
