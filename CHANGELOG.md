@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Long secrets in a request head.** The HTTP/1.1 rewrite wrote into room for twice the head
+  and 64 KB; a head whose secrets came to more - a few JWTs or SAML assertions in headers, a long
+  Basic password - ended in an `IndexOutOfBoundsException` out of the socket's `write`. The room
+  now grows as the secrets are written, the smaller scope closed and wiped
+  (`LongSecretsTest`). Found in the third review round.
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
