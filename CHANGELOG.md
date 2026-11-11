@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The nightly benchmarks measure all four databases against their vendor drivers.** The
+  MySQL run had failed every night since the password went only over checked TLS: the benchmark
+  now tells seclume what Connector/J does by itself, against a container on the same machine.
+  PostgreSQL, SQL Server and Oracle over JDBC - a statement, rows, inserts, the pool - run
+  beside it, each ratio a notice on the run.
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
