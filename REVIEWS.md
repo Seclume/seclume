@@ -129,6 +129,9 @@ the admission webhook's server, the access log, `seclume-diff`, `seclume-http`,
 `seclume-mail`, `seclume-ldap`, `seclume-r2dbc`. Every finding was reproduced by a test that
 failed before its fix.
 
+The first run of the differential tests in CI (#286, run 42982946717) found no difference
+between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a test's own URL.
+
 ### Findings
 
 | # | Area | Finding | Severity | Fixed in |
@@ -143,12 +146,12 @@ failed before its fix.
 | 8 | Oracle | `getColumns` said `Y`/`N` for `IS_NULLABLE` and gave a character column's size in bytes. | low | #287 |
 | 9 | `seclume-http` | A request head whose secrets came to more than twice the head and 64 KB ended in an `IndexOutOfBoundsException` out of the socket's `write` (bounds-checked; nothing overwritten). | low | #288 |
 | 10 | `seclume-r2dbc` | On PostgreSQL a bind index was the i-th placeholder present, so in `$1 ... $3` index 1 bound `$3`, and `$01` and `$1` were two parameters. | low | #289 |
-| 11 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
+| 11 | PostgreSQL | The application's own `DISCARD ALL` or `DEALLOCATE ALL` dropped every prepared statement on the server, and the driver went on using its cached plans and those of open statements: each failed with `prepared statement "seclume_1" does not exist` until the connection was closed. | low | #291 |
+| 12 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
 
 ### Open
 
-- What `differential.yml` finds on its first runs, and making it a required check once it is
-  green (#286).
+- Making `differential.yml` a required check once it has been green for a while (#286).
 - `Differential.compareCatalog` passes over a column neither driver lists without a word -
   on Oracle every column, the names being upper case there. To be made a finding once the
   workflow runs.
