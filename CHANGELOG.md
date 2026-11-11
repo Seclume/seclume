@@ -5,13 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **The admission webhook keeps answering while connections say nothing.** It served on eight
-  threads with no limit on how long a request may take: eight connections that opened and said
-  nothing - from any pod that can reach the service - held them all, the API server's call
-  timed out after its five seconds, and with `failurePolicy: Ignore` every pod created meanwhile
-  was admitted without what the webhook adds. Each exchange has a virtual thread of its own
-  now, and a request that has not arrived in 10 seconds is closed
-  (`sun.net.httpserver.maxReqTime`, unless set; `AdmissionServerTest`).
+- **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
+  output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
+  bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
+  work `varbinary(4000)`, the DLL version `nvarchar(64)`: every distributed transaction failed
+  to open. All of them are 8000 bytes now (`LocalTdsXaTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
@@ -202,6 +200,13 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **The admission webhook keeps answering while connections say nothing.** It served on eight
+  threads with no limit on how long a request may take: eight connections that opened and said
+  nothing - from any pod that can reach the service - held them all, the API server's call
+  timed out after its five seconds, and with `failurePolicy: Ignore` every pod created meanwhile
+  was admitted without what the webhook adds. Each exchange has a virtual thread of its own
+  now, and a request that has not arrived in 10 seconds is closed
+  (`sun.net.httpserver.maxReqTime`, unless set; `AdmissionServerTest`).
 - **`seclume-verify --split` writes all of its shares or none, and owner-only on Windows
   too.** A split that failed at a later file - one already there - left the earlier shares on
   disk while the tool said "no shares written". On Windows a share took its directory's ACL,
