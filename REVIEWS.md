@@ -126,7 +126,7 @@ checkpoint (#261).
 Property and model tests of the parsers that decide where a secret goes, then the modules
 the last round named and the rest of the network-facing ones: `seclume-keys`, `seclume-jwt`,
 the admission webhook's server, the access log, `seclume-diff`, `seclume-http`,
-`seclume-mail`, `seclume-ldap`, `seclume-r2dbc`. Every finding was reproduced by a test that
+`seclume-mail`, `seclume-ldap`, `seclume-r2dbc`, `seclume-redis`, `seclume-kafka`. Every finding was reproduced by a test that
 failed before its fix.
 
 The first run of the differential tests in CI (#286, run 42982946717) found no difference
@@ -147,7 +147,9 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 | 9 | `seclume-http` | A request head whose secrets came to more than twice the head and 64 KB ended in an `IndexOutOfBoundsException` out of the socket's `write` (bounds-checked; nothing overwritten). | low | #288 |
 | 10 | `seclume-r2dbc` | On PostgreSQL a bind index was the i-th placeholder present, so in `$1 ... $3` index 1 bound `$3`, and `$01` and `$1` were two parameters. | low | #289 |
 | 11 | PostgreSQL | The application's own `DISCARD ALL` or `DEALLOCATE ALL` dropped every prepared statement on the server, and the driver went on using its cached plans and those of open statements: each failed with `prepared statement "seclume_1" does not exist` until the connection was closed. | low | #291 |
-| 12 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
+| 12 | `seclume-redis` | A server that does not know a command answers with its arguments: Redis 5 has no `HELLO`, and gave the password of Lettuce's `HELLO 3 AUTH user password` - written in from native memory - back in its error. Lettuce made a `String` of that line, the message of an exception; so did the login for Jedis of a server without `AUTH`. Errors that follow a password are now searched for it before the client reads them. | medium | #293 |
+| 13 | `seclume-kafka` | The CA certificates of a JKS or PKCS12 trust store were written to a file in the temporary directory and read again at every connection: a cleaner that removed it ended every reconnect, and a file someone else wrote under that name decided whom the client trusts. | low | #294 |
+| 14 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
 
 ### Open
 
@@ -177,6 +179,14 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
   the request line and HTTP/2's pseudo-headers are never rewritten; HTTP/2 header blocks are
   encoded again without indexing - a secret never indexed - so the server's dynamic table
   stays empty and cannot drift from the client's; Huffman-coded strings are refused.
+- **Redis**: the password is written only into the password argument of `AUTH` or
+  `HELLO ... AUTH`, the commands followed from the connection's first byte and stricter than
+  the server reads them; a placeholder that comes back as data is never replaced; anything
+  that cannot be followed ends the replacing for the connection.
+- **Kafka**: a placeholder is replaced only inside the auth bytes of a SaslAuthenticate
+  request that is whole in one buffer, both lengths written again, and taken once; PLAIN and
+  OAUTHBEARER refuse to run without seclume's TLS; the check of the broker's host name
+  cannot be switched off.
 - **R2DBC**: the `password` option is refused; the SQL lexer leaves literals, comments,
   E-strings, dollar quotes and Oracle's `q'...'` alone.
 
@@ -187,11 +197,15 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 - `seclume-http`: a placeholder in any header line is replaced, so a header an application
   fills from user input could carry one a user had seen - a placeholder is not a secret, but
   it is bound to one server and has a random 96-bit nonce per process.
+- `seclume-redis`: `redis://` sends `AUTH` without TLS, as Redis does; `rediss://` is for
+  anything beyond the loopback.
 - `seclume-r2dbc`: the factory provider puts the host and database name into the JDBC URL
   unencoded; both come from the application's configuration.
 
 ## The next review
 
-Not yet read with the same care: `seclume-ssh`, `seclume-jgit`, `seclume-grpc`, `seclume-kafka`,
-`seclume-redis`, the MongoDB driver, and the pool's session reset once it is made cheaper. A
+Not yet read with the same care: `seclume-ssh`, `seclume-jgit`, `seclume-grpc`, the MongoDB
+driver, `seclume-rabbitmq`, `seclume-nats`, `seclume-elasticsearch`, and - after the Redis
+finding - every other place where a server's error text becomes a `String`: whether it can
+carry back what was sent. A
 round adds a section here, findings and the sound alike.
