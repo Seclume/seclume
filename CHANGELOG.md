@@ -181,6 +181,11 @@ All notable changes to seclume are recorded here. Versions follow
   `chunked`, two lengths that differ, a length or chunk size that is not digits, a folded line, a
   space before a colon. Found by `HttpFramingModelTest`, a model of HTTP/1.1's framing run over
   random request sequences.
+- **Long secrets in a request head.** The HTTP/1.1 rewrite wrote into room for twice the head
+  and 64 KB; a head whose secrets came to more - a few JWTs or SAML assertions in headers, a long
+  Basic password - ended in an `IndexOutOfBoundsException` out of the socket's `write`. The room
+  now grows as the secrets are written, the smaller scope closed and wiped
+  (`LongSecretsTest`). Found in the third review round.
 - **`seclume-verify --print-pin` no longer logs in.** It connects with `tls=require` -
   encryption that checks nothing, because the server's key is what it wants to find out - and
   then went on to the whole login: the secret read from its provider and sent to whoever had
