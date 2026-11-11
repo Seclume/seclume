@@ -5,6 +5,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The application's own `DISCARD ALL` or `DEALLOCATE ALL` no longer breaks its prepared
+  statements.** Both drop every prepared statement of the session on the server; the driver kept
+  using the plans it had cached and those of statements still open, and every one of them failed
+  afterwards with `prepared statement "seclume_1" does not exist`. The driver now notices the
+  command tag, as pgjdbc does, and parses again under a new name (`LocalJdbcTest`). Found
+  measuring the pool's reset by hand.
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
