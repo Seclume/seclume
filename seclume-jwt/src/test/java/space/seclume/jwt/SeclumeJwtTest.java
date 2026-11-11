@@ -214,6 +214,29 @@ class SeclumeJwtTest {
         }
     }
 
+    /**
+     * ES256 is ECDSA on P-256, ES384 on P-384, ES512 on P-521 (RFC 7518,
+     * 3.4) - the algorithm names the curve. A P-256 key under ES512 signed a
+     * token whose signature verifiers that check the curve refuse and lax ones
+     * take; a P-384 key under ES256 failed on some signatures only. Each is
+     * refused at the first signature, naming the curve.
+     */
+    @Test
+    void anEcKeyOnAnotherCurveThanTheAlgorithmsIsRefused(@TempDir Path dir) throws Exception {
+        Assumptions.assumeTrue(space.seclume.crypto.PrivateSigningKey.available(), "no OpenSSL 3 or CNG here");
+        for (String[] wrong : new String[][] {{"ES512", "secp256r1"}, {"ES256", "secp384r1"},
+                {"ES384", "secp521r1"}}) {
+            KeyPairGenerator ecGenerator = KeyPairGenerator.getInstance("EC");
+            ecGenerator.initialize(new ECGenParameterSpec(wrong[1]));
+            Path key = file(dir, wrong[0] + "-" + wrong[1] + ".pem", pem(ecGenerator.generateKeyPair()));
+            try (SeclumeJwt jwt = SeclumeJwt.of(spec(wrong[0], key, ""))) {
+                IllegalStateException e = assertThrows(IllegalStateException.class,
+                        () -> jwt.sign(Map.of("sub", "a")), wrong[0] + " with " + wrong[1]);
+                assertTrue(e.getMessage().contains("curve"), e.getMessage());
+            }
+        }
+    }
+
     private static void check(String alg, Path key, KeyPair pair, Signature verifier)
             throws Exception {
         try (SeclumeJwt jwt = SeclumeJwt.of(spec(alg, key, "&kid=" + alg))) {

@@ -750,6 +750,50 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * The application's own {@code DISCARD ALL} or {@code DEALLOCATE ALL}
+     * drops every plan on the server - those the cache holds and those of
+     * statements still open. Found 11.11.2026 measuring the pool's reset by
+     * hand: every prepared statement after it failed with "prepared statement
+     * seclume_1 does not exist". pgjdbc notices the command tag; so does this
+     * now, and parses again.
+     */
+    @Test
+    void aDiscardAllOfTheApplicationsOwnIsNoticed() throws Exception {
+        for (String drop : List.of("discard all", "deallocate all", "DEALLOCATE PREPARE ALL")) {
+            try (Connection connection = connect();
+                 PreparedStatement open = connection.prepareStatement("select ?::int + 1")) {
+                runAndClose(connection, "select 41 + 1");             // a plan in the cache
+                open.setInt(1, 41);
+                try (ResultSet rows = open.executeQuery()) {          // and one in use
+                    assertTrue(rows.next());
+                }
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute(drop);
+                }
+                assertEquals(List.of(), plansOnTheServer(connection), drop);
+                runAndClose(connection, "select 41 + 1");
+                try (ResultSet rows = open.executeQuery()) {
+                    assertTrue(rows.next(), drop);
+                    assertEquals(42, rows.getInt(1), drop);
+                }
+                // Among other statements, too - its tag comes with theirs.
+                // (DISCARD ALL refuses that: several statements in one query
+                // are one transaction.)
+                if (drop.startsWith("discard")) {
+                    continue;
+                }
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("select 1; " + drop + "; select 2");
+                }
+                runAndClose(connection, "select 41 + 1");
+                try (ResultSet rows = open.executeQuery()) {
+                    assertTrue(rows.next(), drop + " among others");
+                }
+            }
+        }
+    }
+
     /** With the cache off, a closed plan is released as it was before. */
     @Test
     void theCacheCanBeSwitchedOff() throws Exception {
