@@ -129,7 +129,19 @@ Links are relative to `https://github.com/Seclume/seclume/blob/main/`.
 
 The current scores are in the summary of the latest
 [scorecard-report](https://github.com/Seclume/seclume/actions/workflows/scorecard-report.yml)
-run. Each check that stays below 10 is listed here with the reason, and whether it can be
-raised or is accepted.
+run. Measured so far: run 43021437797 of 11 November 2026 (Scorecard v5.6.0), on a pull
+request - where Scorecard runs the eleven checks that need only the files - **9.2 / 10**.
 
-*Filled in from the first run of `scorecard-report.yml`.*
+| Check | Score | Why | What follows |
+|---|---:|---|---|
+| Fuzzing | 0 | "project is not fuzzed": Scorecard knows OSS-Fuzz, ClusterFuzzLite and some languages' own fuzzers, and not Jazzer started from Maven, which is what `fuzz.yml` runs every night | open - a ClusterFuzzLite configuration around the same targets would be seen |
+| License | 9 | "license file detected" - on a pull request Scorecard reads the file only and cannot ask GitHub which licence it is | expected to be 10 on `main`; to be read from the first run there |
+| Packaging | not scored | "packaging workflow not detected": releases go to Maven Central from `release.yml`, which Scorecard does not recognise as publishing | accepted |
+| Binary-Artifacts, Dangerous-Workflow, Dependency-Update-Tool, Pinned-Dependencies, SAST, Security-Policy, Token-Permissions, Vulnerabilities | 10 | | |
+
+Not measured on a pull request, so not known yet: Branch-Protection, CI-Tests,
+CII-Best-Practices, Code-Review, Contributors, Maintained, Signed-Releases. They are in the
+first `scorecard-report` run on `main`, and this table is completed from it. Two of them can
+be told in advance to stay low for reasons that are not defects: Code-Review counts
+approvals by a second person, and this project has one maintainer; Maintained and
+Contributors count a repository's age and the organisations behind it.
