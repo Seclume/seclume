@@ -317,15 +317,26 @@ public final class PgConnection
     private final java.util.LinkedHashMap<String, Idle> idlePlans =
             new java.util.LinkedHashMap<>(16, 0.75f, true);
     private final int statementCacheSize;
+    /** The deallocation count the idle plans were last checked against. */
+    private long plansCheckedIn;
 
-    /** A parsed plan, with what the server said its columns are. */
-    private record Idle(String name, List<PgSession.Field> described) {
+    /**
+     * A parsed plan, with what the server said its columns are, and the
+     * session's {@link PgSession#deallocations()} when it was parsed.
+     */
+    private record Idle(String name, List<PgSession.Field> described, long parsedIn) {
     }
 
     /** Takes an idle plan for this SQL, or null when there is none. */
     private Idle takePlan(String sql) {
         if (statementCacheSize == 0) {
             return null;
+        }
+        if (plansCheckedIn != session.deallocations()) {
+            // A DISCARD ALL or DEALLOCATE ALL since: the server holds none of
+            // the plans parsed before it any more.
+            plansCheckedIn = session.deallocations();
+            idlePlans.values().removeIf(idle -> idle.parsedIn() != plansCheckedIn);
         }
         Idle plan = idlePlans.remove(sql);
         // Recorded by fingerprint, like everything else: a cache report that
@@ -342,13 +353,17 @@ public final class PgConnection
      * @param described what the statement returns, or null when it never ran -
      *                  in that case the plan is released rather than kept
      */
-    void releasePlan(String sql, String name, List<PgSession.Field> described)
+    void releasePlan(String sql, String name, List<PgSession.Field> described, long parsedIn)
             throws SQLException {
+        if (parsedIn != session.deallocations()) {
+            session.closeStatementLater(name);   // most likely dropped already; no harm
+            return;
+        }
         if (statementCacheSize == 0 || described == null) {
             session.closeStatementLater(name);
             return;
         }
-        Idle previous = idlePlans.put(sql, new Idle(name, described));
+        Idle previous = idlePlans.put(sql, new Idle(name, described, parsedIn));
         if (previous != null) {
             // Two statements on the same SQL were open at once; only one plan
             // is worth keeping.
@@ -429,7 +444,8 @@ public final class PgConnection
         PgPreparedStatement statement = idle == null
                 ? new PgPreparedStatement(this, sql,
                         newStatementName(), null)
-                : new PgPreparedStatement(this, sql, idle.name(), idle.described());
+                : new PgPreparedStatement(this, sql, idle.name(), idle.described(),
+                        idle.parsedIn());
         open.add(statement);
         return statement;
     }
@@ -532,7 +548,8 @@ public final class PgConnection
         PgCallableStatement prepared = idle == null
                 ? new PgCallableStatement(this, call,
                         newStatementName(), null)
-                : new PgCallableStatement(this, call, idle.name(), idle.described());
+                : new PgCallableStatement(this, call, idle.name(), idle.described(),
+                        idle.parsedIn());
         open.add(prepared);
         return prepared;
     }

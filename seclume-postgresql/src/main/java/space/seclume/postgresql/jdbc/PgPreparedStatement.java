@@ -65,6 +65,8 @@ class PgPreparedStatement extends PgStatement
     private List<Object[]> batch;
     private boolean prepared;
     private boolean released;
+    /** The session's deallocation count when the plan was parsed - see PgSession#deallocations. */
+    private long parsedIn;
 
     /**
      * @param cached what the server already said about this plan, when the
@@ -73,6 +75,12 @@ class PgPreparedStatement extends PgStatement
      */
     PgPreparedStatement(PgConnection connection, String sql, String name,
             List<PgSession.Field> cached) throws SQLException {
+        this(connection, sql, name, cached, 0);
+    }
+
+    /** @param parsedIn the deallocation count the cached plan was parsed at */
+    PgPreparedStatement(PgConnection connection, String sql, String name,
+            List<PgSession.Field> cached, long parsedIn) throws SQLException {
         super(connection);
         // PostgreSQL knows no question marks; $1, $2 ... are its placeholders.
         PgSqlRewriter.Rewritten rewritten = PgSqlRewriter.rewrite(sql);
@@ -88,6 +96,7 @@ class PgPreparedStatement extends PgStatement
             // go straight out.
             this.described = cached;
             this.prepared = true;
+            this.parsedIn = parsedIn;
         }
     }
 
@@ -102,8 +111,22 @@ class PgPreparedStatement extends PgStatement
      */
     private void prepare() throws SQLException {
         followLists();
+        PgSession session = connection.session();
+        // A reset the pool sent at the last return is answered first, so that
+        // the count below is the one this plan's Parse will meet.
+        session.settleDiscard();
+        if (prepared && parsedIn != session.deallocations()) {
+            // The application's DISCARD ALL or DEALLOCATE ALL took the plan.
+            // Parsed again under a new name; the Close is for a plan the
+            // server no longer has, which it does not mind.
+            session.closeStatementLater(name);
+            name = connection.newStatementName();
+            described = null;
+            prepared = false;
+        }
         if (!prepared) {
-            connection.session().parseLater(name, sql);
+            session.parseLater(name, sql);
+            parsedIn = session.deallocations();
             prepared = true;
         }
     }
@@ -121,7 +144,7 @@ class PgPreparedStatement extends PgStatement
             return;
         }
         if (prepared) {
-            connection.releasePlan(planSql, name, described);
+            connection.releasePlan(planSql, name, described, parsedIn);
         }
         planSql = wanted;
         sql = PgSqlRewriter.rewrite(wanted).sql();
@@ -891,7 +914,7 @@ class PgPreparedStatement extends PgStatement
                 // described is the condition, not a convenience: it is set once
                 // the statement has run, so a plan whose Parse failed is never
                 // offered to anybody.
-                connection.releasePlan(planSql, name, described);
+                connection.releasePlan(planSql, name, described, parsedIn);
             } catch (SQLException ignored) {
                 // On close the server plan is the lesser problem; it goes
                 // away with the connection at the latest anyway.

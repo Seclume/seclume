@@ -223,9 +223,8 @@ final class HttpFraming {
      * native memory; its length is the scope's.
      */
     static SecretScope rewrite(byte[] bytes, String server) throws IOException {
-        SecretScope out = SecretScope.allocateShared(bytes.length * 2 + 64 * 1024);
+        Room out = new Room(bytes.length + 1024);
         try {
-            MemorySegment w = out.segment();
             // The request line as it is: its target is where an application
             // puts what its users typed - a search, a path - and the
             // placeholder is no secret (the client holds it on the heap).
@@ -237,28 +236,75 @@ final class HttpFraming {
                 line++;
             }
             line = Math.min(line + 1, bytes.length);
-            MemorySegment.copy(bytes, 0, w, ValueLayout.JAVA_BYTE, 0, line);
-            int at = line;
+            out.put(bytes, 0, line);
             while (line < bytes.length) {
                 int end = line;
                 while (end < bytes.length && bytes[end] != '\n') {
                     end++;
                 }
                 end = Math.min(end + 1, bytes.length);
-                at = rewriteLine(bytes, line, end, w, at, server);
+                rewriteLine(bytes, line, end, out, server);
                 line = end;
             }
-            out.length(at);
-            return out;
+            return out.done();
         } catch (IOException | RuntimeException e) {
             out.close();
             throw e;
         }
     }
 
-    /** One header line, secrets written in. @return where the next line goes */
-    private static int rewriteLine(byte[] bytes, int from, int to, MemorySegment w, int at,
-            String server) throws IOException {
+    /**
+     * Native memory the rewritten head goes into, as large as it turns out to
+     * be: a secret can be far longer than its placeholder - a JWT, a SAML
+     * assertion. Grown into a new scope, the old one closed and so wiped.
+     */
+    private static final class Room implements AutoCloseable {
+        private SecretScope scope;
+        private int at;
+
+        Room(int size) {
+            scope = SecretScope.allocateShared(size);
+        }
+
+        private MemorySegment room(int more) {
+            long needed = (long) at + more;
+            if (needed > scope.segment().byteSize()) {
+                if (needed > Integer.MAX_VALUE / 2) {
+                    throw new IllegalStateException("a request head of " + needed + " bytes");
+                }
+                SecretScope bigger = SecretScope.allocateShared((int) Math.max(needed,
+                        2 * scope.segment().byteSize()));
+                MemorySegment.copy(scope.segment(), 0, bigger.segment(), 0, at);
+                scope.close();
+                scope = bigger;
+            }
+            return scope.segment();
+        }
+
+        void put(byte[] source, int from, int length) {
+            MemorySegment.copy(source, from, room(length), ValueLayout.JAVA_BYTE, at, length);
+            at += length;
+        }
+
+        void put(MemorySegment source, int length) {
+            MemorySegment.copy(source, 0, room(length), at, length);
+            at += length;
+        }
+
+        SecretScope done() {
+            scope.length(at);
+            return scope;
+        }
+
+        @Override
+        public void close() {
+            scope.close();
+        }
+    }
+
+    /** One header line, secrets written in, into {@code out}. */
+    private static void rewriteLine(byte[] bytes, int from, int to, Room out, String server)
+            throws IOException {
         int basic = basicValue(bytes, from, to);
         if (basic >= 0) {
             int valueEnd = to;
@@ -291,14 +337,10 @@ final class HttpFraming {
                                 found + secret.length(), plain.length - placeholderEnd);
                         int total = found + secret.length() + plain.length - placeholderEnd;
                         int written = Base64Off.encode(c, 0, total, base64.segment(), 0);
-                        MemorySegment.copy(bytes, from, w, ValueLayout.JAVA_BYTE, at,
-                                basic - from);
-                        at += basic - from;
-                        MemorySegment.copy(base64.segment(), 0, w, at, written);
-                        at += written;
-                        MemorySegment.copy(bytes, valueEnd, w, ValueLayout.JAVA_BYTE, at,
-                                to - valueEnd);
-                        return at + to - valueEnd;
+                        out.put(bytes, from, basic - from);
+                        out.put(base64.segment(), written);
+                        out.put(bytes, valueEnd, to - valueEnd);
+                        return;
                     }
                 }
             }
@@ -307,22 +349,18 @@ final class HttpFraming {
         while (true) {
             int found = indexOf(bytes, PREFIX, cursor);
             if (found < 0 || found >= to) {
-                MemorySegment.copy(bytes, cursor, w, ValueLayout.JAVA_BYTE, at, to - cursor);
-                return at + to - cursor;
+                out.put(bytes, cursor, to - cursor);
+                return;
             }
-            MemorySegment.copy(bytes, cursor, w, ValueLayout.JAVA_BYTE, at, found - cursor);
-            at += found - cursor;
+            out.put(bytes, cursor, found - cursor);
             int placeholderEnd = placeholderEnd(bytes, found);
             SecretProvider provider = provider(bytes, found, placeholderEnd, server);
             if (provider == null) {
                 // Not this server's secret: the placeholder goes as it is.
-                MemorySegment.copy(bytes, found, w, ValueLayout.JAVA_BYTE, at,
-                        placeholderEnd - found);
-                at += placeholderEnd - found;
+                out.put(bytes, found, placeholderEnd - found);
             } else {
                 try (SecretScope secret = SecretScope.fromProvider(provider)) {
-                    MemorySegment.copy(secret.segment(), 0, w, at, secret.length());
-                    at += secret.length();
+                    out.put(secret.segment(), secret.length());
                 }
             }
             cursor = placeholderEnd;
