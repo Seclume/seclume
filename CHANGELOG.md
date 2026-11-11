@@ -5,6 +5,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A JWT signing key must be on the curve its algorithm names.** ES256 is P-256, ES384 P-384,
+  ES512 P-521 (RFC 7518, 3.4), and only "an EC key" was checked: a P-256 key under ES512
+  signed tokens that a careful verifier refuses and a lax one takes, a P-384 key under ES256
+  failed on some signatures only. Another curve is refused at the first signature now.
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
