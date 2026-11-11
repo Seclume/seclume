@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The admission webhook keeps answering while connections say nothing.** It served on eight
+  threads with no limit on how long a request may take: eight connections that opened and said
+  nothing - from any pod that can reach the service - held them all, the API server's call
+  timed out after its five seconds, and with `failurePolicy: Ignore` every pod created meanwhile
+  was admitted without what the webhook adds. Each exchange has a virtual thread of its own
+  now, and a request that has not arrived in 10 seconds is closed
+  (`sun.net.httpserver.maxReqTime`, unless set; `AdmissionServerTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
