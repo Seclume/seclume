@@ -290,9 +290,10 @@ jobs:
       # The pool resets an Oracle session by logging in again (OraConnection.
       # resetSessionState): Pbkdf2Benchmark (SHA_512, 4096 rounds - the 12c
       # verifier) is the part of that which is the client's own work.
-      # ConnectBenchmark is left out here: run 42988358015 ended with
-      # ORA-12516 after about a hundred logins with seclume, where ojdbc's
-      # twelve hundred went through - to be looked into on its own.
+      # ConnectBenchmark is left out here: Oracle Free's listener does not
+      # keep up with one login after another. In run 42988358015 both drivers
+      # ended with ORA-12516 - seclume in its second iteration, ojdbc in its
+      # fifth - so neither has a measurement there.
       #
       # A JMH pattern is a regular expression found anywhere in the name:
       # "PoolBenchmark" was R2dbcPoolBenchmark too, which no job but r2dbc's
