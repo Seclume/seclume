@@ -5,11 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **Oracle's `getColumns` as JDBC describes a column.** `IS_NULLABLE` was the catalogue's
-  `Y` or `N` where JDBC says `YES` or `NO`, and the `COLUMN_SIZE` of a character column its
-  length in bytes - an `nvarchar2(64)` was 128 long - where JDBC says characters; the bytes are
-  `CHAR_OCTET_LENGTH`, as before (`LocalOracleJdbcTest.describesAColumnTheWayJdbcSays`). Found in
-  the third review round: the differential run never compared Oracle's catalogue with ojdbc's.
+- **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
+  output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
+  bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
+  work `varbinary(4000)`, the DLL version `nvarchar(64)`: every distributed transaction failed
+  to open. All of them are 8000 bytes now (`LocalTdsXaTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
@@ -110,6 +110,11 @@ All notable changes to seclume are recorded here. Versions follow
   reports a client that went on in the clear where a ClientHello belonged, and all four drivers'
   tests check it. Ignoring the refused encryption, not checking the certificate, or Oracle
   connecting without TCPS turns them red.
+- **Oracle's `getColumns` as JDBC describes a column.** `IS_NULLABLE` was the catalogue's
+  `Y` or `N` where JDBC says `YES` or `NO`, and the `COLUMN_SIZE` of a character column its
+  length in bytes - an `nvarchar2(64)` was 128 long - where JDBC says characters; the bytes are
+  `CHAR_OCTET_LENGTH`, as before (`LocalOracleJdbcTest.describesAColumnTheWayJdbcSays`). Found in
+  the third review round: the differential run never compared Oracle's catalogue with ojdbc's.
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to
