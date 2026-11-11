@@ -70,9 +70,11 @@ excluded. Coverage says a line ran, not that a test checked it - the mutation pr
 The core job's numbers are those of the tests that need no server, and most of a driver's code
 runs only with one. So `postgresql (18)`, `mysql (mysql:8.4, …)`, `sqlserver` (2022) and
 `oracle` run their tests with the agent too and upload what it recorded, with the classes it
-was recorded against, as `coverage-exec-<job>`; the `coverage` job merges those and the core
-job's module by module with JaCoCo's command line (`.github/scripts/coverage_merge.py`) and
-writes the same tables for all of them together - the `coverage-merged` artifact. Each row
+was recorded against, as `coverage-exec-<job>`; the `coverage` job merges all of them - every
+job's and every module's data - with JaCoCo's command line (`.github/scripts/coverage_merge.py`)
+and writes each module's report from that: the `coverage-merged` artifact. Code of one module
+that another module's tests run counts as run - the core's TLS client under the drivers' tests,
+the Vault PKI issuer under `seclume-keys'` - as it is checked there. Each row
 shows the counts beside the percentage, and the last one sums every module with a report.
 
 ## The wipe, and the paths where it gets lost
