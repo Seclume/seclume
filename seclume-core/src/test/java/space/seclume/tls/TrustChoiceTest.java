@@ -108,6 +108,27 @@ class TrustChoiceTest {
         assertTrue(refused.getMessage().contains(serverPin), refused.getMessage());
     }
 
+    /**
+     * The CA's certificates given themselves, not a file of them: trusted
+     * the same, with no file to read at the connection - the one they came
+     * from may be gone - and refused at once if there is no certificate in them.
+     */
+    @ParameterizedTest
+    @EnumSource(TlsStack.class)
+    void certificatesHeldInMemoryAreTrustedWithoutAFile(TlsStack stack) throws Exception {
+        Path copy = Files.copy(caFile, dir.resolve("ca-" + stack + ".pem"));
+        TrustChoice.Choice choice = TrustChoice.ofCertificates(Files.readString(copy), null);
+        Files.delete(copy);
+        handshakeWith(stack, choice);
+        TrustChoice.Choice pinned = TrustChoice.ofCertificates(Files.readString(caFile), serverPin);
+        assertArrayEquals(Base64.getDecoder().decode(serverPin.substring("sha256/".length())),
+                pinned.pin());
+        assertThrows(IllegalArgumentException.class,
+                () -> TrustChoice.ofCertificates("no certificate here", null));
+        assertThrows(IllegalArgumentException.class,
+                () -> TrustChoice.ofCertificates(Files.readString(caFile), "md5/abc"));
+    }
+
     @org.junit.jupiter.api.Test
     void aPinThatIsNotASha256IsRefusedAtOnce() {
         assertThrows(SQLException.class,
@@ -118,11 +139,14 @@ class TrustChoiceTest {
 
     /** A verifying handshake to the echo server, with the trust the options name. */
     private static void handshake(TlsStack stack, String options) throws Exception {
+        handshakeWith(stack, options == null ? null
+                : TrustChoice.of("jdbc:x://h/db?" + options, null));
+    }
+
+    private static void handshakeWith(TlsStack stack, TrustChoice.Choice choice) throws Exception {
         try (EchoServer server = EchoServer.start(serverContext);
              Transport socket = SocketTransport.connect(
                      InetAddress.getLoopbackAddress().getHostAddress(), server.port(), 10_000)) {
-            TrustChoice.Choice choice = options == null ? null
-                    : TrustChoice.of("jdbc:x://h/db?" + options, null);
             Transports.Opening<TlsLayer> open = () -> {
                 try {
                     return TlsLayers.start(stack, socket, HOSTNAME, server.port(), true);
