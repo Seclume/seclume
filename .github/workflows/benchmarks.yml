@@ -285,8 +285,12 @@ jobs:
           -Dbench.database=FREEPDB1 -Dbench.user=seclume_test
           -Dbench.password.file=.local-ora-password -Dbench.tls=off
           -jar seclume-bench/target/seclume-bench.jar
-          QueryBenchmark InsertBenchmark PoolBenchmark
+          QueryBenchmark InsertBenchmark PoolBenchmark ConnectBenchmark Pbkdf2Benchmark
           -rf json -rff seclume-bench/target/jmh-oracle.json -wi 3 -i 5 -f 1
+      # The pool resets an Oracle session by logging in again (OraConnection.
+      # resetSessionState): ConnectBenchmark is what a whole login costs with
+      # seclume and with ojdbc, Pbkdf2Benchmark (SHA_512, 4096 rounds - the 12c
+      # verifier) the part of it that is the client's own work.
       - name: The results, seclume beside the vendor
         if: always()
         run: python3 .github/scripts/jmh_notices.py seclume-bench/target/jmh-oracle.json oracle
