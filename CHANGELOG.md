@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Entries appended to an access log while it was closed are no longer signed by its next
+  checkpoint.** A log opened again continues its chain from its last line, and its next
+  checkpoint signs over everything before - also over entries that whoever could write the file
+  appended, correctly chained, while the application was down: they came out of
+  `AccessLogVerifier` vouched for. The `log.opened` entry of a log with a signing key now names
+  in `vouched` the last entry a checkpoint of that key had signed when the file was opened -
+  found from the end, under the next signature - and the verifier names the entries between as
+  vouched for by no checkpoint, whatever follows; after a crash that took the last checkpoint
+  too. Found in the third review round (`AccessLogRestartTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an

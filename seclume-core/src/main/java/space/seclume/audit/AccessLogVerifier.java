@@ -145,6 +145,14 @@ public final class AccessLogVerifier {
                 problems.add("line " + number + ": entry " + seq
                         + " does not follow the entry before it - one was removed or slipped in");
             }
+            if ("log.opened".equals(fields.get("event")) && expectedKey != null
+                    && fields.containsKey("vouched")
+                    && fields.getOrDefault("signing", "").endsWith(" " + expectedKey)) {
+                String problem = vouched(fields.get("vouched"), seq);
+                if (problem != null) {
+                    problems.add("line " + number + ": " + problem);
+                }
+            }
             if ("checkpoint".equals(fields.get("event"))) {
                 String head = fields.get("head");
                 if (!prev.equals(head)) {
@@ -165,7 +173,32 @@ public final class AccessLogVerifier {
         return new Result(first, entries, checkpoints, signedUpTo, prev, List.copyOf(problems));
     }
 
-    private static String signature(Map<String, String> fields, long seq, String head, PublicKey key,
+    /**
+     * What a {@code log.opened} at {@code seq} says of the entries before it:
+     * those after {@code vouched}, the last a checkpoint of the key had signed,
+     * the next checkpoint signs - though no one had when the log was opened.
+     */
+    private static String vouched(String vouched, long seq) {
+        long last;
+        try {
+            last = Long.parseLong(vouched);
+        } catch (NumberFormatException e) {
+            return "the log was opened again with a vouched that is no number: " + vouched;
+        }
+        if (last < 0 || last >= seq) {
+            return "the log was opened again as if vouched for up to entry " + last
+                    + ", which is not before it";
+        }
+        if (last < seq - 1) {
+            return "entries " + (last + 1) + " to " + (seq - 1) + " were vouched for by no checkpoint "
+                    + "when the log was opened again - written before a crash took the last "
+                    + "checkpoint, or by whoever could write the file; the checkpoint after "
+                    + "does not vouch for them";
+        }
+        return null;
+    }
+
+    static String signature(Map<String, String> fields, long seq, String head, PublicKey key,
             String expectedKey) {
         if (!expectedKey.equals(fields.get("key"))) {
             return "is signed by another key (" + fields.get("key") + ")";
