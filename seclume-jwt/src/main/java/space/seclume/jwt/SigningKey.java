@@ -205,6 +205,20 @@ final class SigningKey implements AutoCloseable {
                             + (family == Family.EC ? "an EC" : "an RSA") + " key, and the one "
                             + "given is not");
                 }
+                if (family == Family.EC) {
+                    // The algorithm names the curve too (RFC 7518, 3.4): P-256 for
+                    // ES256, P-384 for ES384, P-521 for ES512. Another curve signed
+                    // tokens a careful verifier refuses - or, a P-384 key under
+                    // ES256, failed on some signatures and not on others.
+                    int bits = curveBits(decoded);
+                    int wanted = ecField == 66 ? 521 : ecField * 8;
+                    if (bits != wanted) {
+                        decoded.close();
+                        throw new IllegalStateException(algorithm + " needs a key on the P-"
+                                + wanted + " curve, and the one given is on a curve of "
+                                + bits + " bits");
+                    }
+                }
                 privateKey = decoded;
             }
             if (!dropsAtCheckpoints) {
@@ -216,6 +230,19 @@ final class SigningKey implements AutoCloseable {
             }
         }
         return privateKey;
+    }
+
+    /** The size of the curve an EC key is on, read from its public half. */
+    private static int curveBits(PrivateSigningKey key) {
+        try {
+            java.security.interfaces.ECPublicKey ec = (java.security.interfaces.ECPublicKey)
+                    java.security.KeyFactory.getInstance("EC").generatePublic(
+                            new java.security.spec.X509EncodedKeySpec(key.publicKey()));
+            return ec.getParams().getCurve().getField().getFieldSize();
+        } catch (java.security.GeneralSecurityException | ClassCastException e) {
+            key.close();
+            throw new IllegalStateException("the curve of the EC key could not be read", e);
+        }
     }
 
     /** Before a checkpoint: the decoded key freed; the next signature decodes it again. */
