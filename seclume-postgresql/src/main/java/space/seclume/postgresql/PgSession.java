@@ -1081,7 +1081,7 @@ public final class PgSession implements AutoCloseable {
                         channel.endMessage();
                     }
                     case PgProtocol.COMMAND_COMPLETE -> {
-                        lastCommandTag = channel.message().readCString();
+                        lastCommandTag = commandComplete();
                         channel.endMessage();
                         if (handler != null && failure == null) {
                             try {
@@ -1160,7 +1160,7 @@ public final class PgSession implements AutoCloseable {
                                 + "use copyOut", "42601");
                     }
                     case PgProtocol.COMMAND_COMPLETE -> {
-                        lastCommandTag = channel.message().readCString();
+                        lastCommandTag = commandComplete();
                         channel.endMessage();
                     }
                     case PgProtocol.ERROR_RESPONSE -> {
@@ -1282,7 +1282,7 @@ public final class PgSession implements AutoCloseable {
                         }
                     }
                     case PgProtocol.COMMAND_COMPLETE -> {
-                        lastCommandTag = channel.message().readCString();
+                        lastCommandTag = commandComplete();
                         channel.endMessage();
                     }
                     case PgProtocol.ERROR_RESPONSE -> {
@@ -1928,7 +1928,7 @@ public final class PgSession implements AutoCloseable {
                     channel.endMessage();
                 }
                 case PgProtocol.COMMAND_COMPLETE -> {
-                    lastCommandTag = channel.message().readCString();
+                    lastCommandTag = commandComplete();
                     if (seen < expected) {
                         rememberPipelineCount(affectedRowsOf(lastCommandTag));
                         seen++;
@@ -2232,7 +2232,7 @@ public final class PgSession implements AutoCloseable {
                     channel.endMessage();
                 }
                 case PgProtocol.COMMAND_COMPLETE -> {
-                    lastCommandTag = channel.message().readCString();
+                    lastCommandTag = commandComplete();
                     if (index < from + expected && index < counts.length) {
                         counts[index++] = affectedRowsOf(lastCommandTag);
                     }
@@ -2378,7 +2378,7 @@ public final class PgSession implements AutoCloseable {
                     channel.endMessage();
                 }
                 case PgProtocol.COMMAND_COMPLETE -> {
-                    lastCommandTag = channel.message().readCString();
+                    lastCommandTag = commandComplete();
                     channel.endMessage();
                 }
                 case PgProtocol.PORTAL_SUSPENDED -> {
@@ -2430,6 +2430,28 @@ public final class PgSession implements AutoCloseable {
     private WireBuffer command(byte tag) throws SQLException {
         settleDiscard();
         return channel.begin(tag);
+    }
+
+    /**
+     * How many times the server has dropped every prepared statement of this
+     * session - a {@code DISCARD ALL} or {@code DEALLOCATE ALL}, the pool's
+     * or the application's own. A plan parsed before the last one is gone.
+     */
+    private long deallocations;
+
+    /** See {@link #deallocations}: a plan parsed at another count must be parsed again. */
+    public long deallocations() {
+        return deallocations;
+    }
+
+    /** A CommandComplete's tag - noting one that dropped every prepared statement. */
+    private String commandComplete() {
+        String tag = channel.message().readCString();
+        // DEALLOCATE PREPARE ALL answers DEALLOCATE ALL as well.
+        if (tag.equals("DISCARD ALL") || tag.equals("DEALLOCATE ALL")) {
+            deallocations++;
+        }
+        return tag;
     }
 
     /** Whether a {@code DISCARD ALL} sent at the last return still owes its answer. */

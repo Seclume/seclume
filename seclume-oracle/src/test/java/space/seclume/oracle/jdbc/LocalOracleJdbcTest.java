@@ -462,6 +462,47 @@ class LocalOracleJdbcTest {
     }
 
     /**
+     * A column as JDBC describes it, not as Oracle's catalogue stores it:
+     * {@code IS_NULLABLE} is {@code YES} or {@code NO} - the catalogue's
+     * {@code Y} and {@code N} came through as they were - and the size of a
+     * character column is in characters, its bytes are
+     * {@code CHAR_OCTET_LENGTH}; an {@code nvarchar2(64)} was 128 long.
+     * Found in the third review round, 11.11.2026: the differential run
+     * never compared Oracle's catalogue with ojdbc's.
+     */
+    @Test
+    void describesAColumnTheWayJdbcSays() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("begin execute immediate 'drop table zl_columns'; "
+                    + "exception when others then null; end;");
+            statement.execute("create table zl_columns (c_n nvarchar2(64) not null, "
+                    + "c_chars varchar2(10 char), c_bytes varchar2(12 byte), c_fixed char(3), "
+                    + "c_num number(10) not null)");
+            Map<String, List<Object>> columns = new java.util.LinkedHashMap<>();
+            try (ResultSet found = connection.getMetaData()
+                    .getColumns(null, null, "ZL_COLUMNS", null)) {
+                while (found.next()) {
+                    columns.put(found.getString("COLUMN_NAME"), List.of(
+                            found.getString("IS_NULLABLE"), found.getInt("NULLABLE"),
+                            found.getInt("COLUMN_SIZE")));
+                }
+            }
+            assertEquals(List.of("NO", DatabaseMetaData.columnNoNulls, 64), columns.get("C_N"));
+            assertEquals(List.of("YES", DatabaseMetaData.columnNullable, 10), columns.get("C_CHARS"));
+            assertEquals(List.of("YES", DatabaseMetaData.columnNullable, 12), columns.get("C_BYTES"));
+            assertEquals(List.of("YES", DatabaseMetaData.columnNullable, 3), columns.get("C_FIXED"));
+            assertEquals(List.of("NO", DatabaseMetaData.columnNoNulls, 10), columns.get("C_NUM"));
+            try (ResultSet found = connection.getMetaData()
+                    .getColumns(null, null, "ZL_COLUMNS", "C_N")) {
+                assertTrue(found.next());
+                assertEquals(128, found.getInt("CHAR_OCTET_LENGTH"), "AL16UTF16: two bytes each");
+            }
+            statement.execute("drop table zl_columns");
+        }
+    }
+
+    /**
      * DDL - and what it took to make it work.
      *
      * <p>A {@code create table} used to answer {@code ORA-01003, no statement

@@ -76,8 +76,33 @@ class PlaceholdersTest {
     void numbersBeyondAnIntAreStillOrderedByValue() {
         Placeholders.Parsed parsed = Placeholders.parse(
                 "select $99999999999, $10, $9, $010", Dialect.POSTGRESQL);
-        assertEquals(List.of("$9", "$10", "$010", "$99999999999"),
+        // $010 is $10, as PostgreSQL reads it: one parameter, written twice
+        assertEquals(List.of("$9", "$10", "$99999999999"),
                 List.copyOf(parsed.positions().keySet()));
+        assertArrayEquals(new int[] {2, 4}, parsed.positions().get("$10"));
+    }
+
+    /**
+     * Found in the third review round, 11.11.2026: an index was the n-th
+     * placeholder written, so in "$1 ... $3" index 1 bound $3 - and "$01"
+     * and "$1", one parameter to PostgreSQL, took two values. An index is
+     * now $(index+1), as PostgreSQL and its own R2DBC driver count, and one
+     * the statement does not have is refused.
+     */
+    @Test
+    void aPostgresIndexIsItsNumberEvenWithAGap() {
+        Placeholders.Parsed parsed = Placeholders.parse("update t set a = $1 where id = $3",
+                Dialect.POSTGRESQL);
+        assertEquals("$1", parsed.nameOf(0));
+        assertThrows(IndexOutOfBoundsException.class, () -> parsed.nameOf(1));
+        assertEquals("$3", parsed.nameOf(2));
+        assertThrows(IndexOutOfBoundsException.class, () -> parsed.nameOf(-1));
+        assertThrows(IndexOutOfBoundsException.class, () -> parsed.nameOf(Integer.MAX_VALUE));
+
+        Placeholders.Parsed padded = Placeholders.parse("select $01, $1, $002", Dialect.POSTGRESQL);
+        assertEquals(List.of("$1", "$2"), List.copyOf(padded.positions().keySet()));
+        assertArrayEquals(new int[] {1, 2}, padded.positions().get("$1"));
+        assertEquals("$2", padded.nameOf(1));
     }
 
     @Test
