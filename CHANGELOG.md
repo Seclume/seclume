@@ -138,6 +138,10 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **A JWT signing key must be on the curve its algorithm names.** ES256 is P-256, ES384 P-384,
+  ES512 P-521 (RFC 7518, 3.4), and only "an EC key" was checked: a P-256 key under ES512
+  signed tokens that a careful verifier refuses and a lax one takes, a P-384 key under ES256
+  failed on some signatures only. Another curve is refused at the first signature now.
 - **The constant-time measurement names the processor it ran on.** The nightly run found
   `ConstantTime.equals` leaking on 5 and 7 November (t = -11.5; 6.8, 15.3, 8.9 in three rounds)
   and not on the three nights between; locally it is quiet. A leak in the code would show every
