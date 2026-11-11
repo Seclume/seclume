@@ -67,7 +67,10 @@ final class TdsXaResource extends AbstractXaResource {
 
     @Override
     protected void begin(Xid xid) throws SQLException {
-        String[] answer = call("declare @rc int, @msg nvarchar(1024), @dllver nvarchar(64), "
+        // The message parameter of every sp_xa_* is 8000 bytes: the 2022 image
+        // of November 2026 refuses a smaller one (error 47204) - before
+        // starting anything, so that the branch was never opened.
+        String[] answer = call("declare @rc int, @msg nvarchar(4000), @dllver nvarchar(64), "
                 + "@cookie varbinary(4000), @uow varbinary(4000); "
                 + "exec master..sp_xa_start @rc output, @msg output, "
                 + raw(xid.getGlobalTransactionId()) + ", " + raw(xid.getBranchQualifier())
@@ -87,7 +90,7 @@ final class TdsXaResource extends AbstractXaResource {
 
     @Override
     protected void finish(Xid xid) throws SQLException {
-        String[] answer = call("declare @rc int, @msg nvarchar(1024), @uow varbinary(4000); "
+        String[] answer = call("declare @rc int, @msg nvarchar(4000), @uow varbinary(4000); "
                 + "exec master..sp_xa_end @rc output, @msg output, "
                 + raw(xid.getGlobalTransactionId()) + ", " + raw(xid.getBranchQualifier())
                 + ", " + TM_SUCCESS + ", " + xid.getFormatId() + ", @uow output; "
@@ -98,7 +101,7 @@ final class TdsXaResource extends AbstractXaResource {
 
     @Override
     protected void prepareBranch(Xid xid) throws SQLException {
-        check("xa_prepare", call("declare @rc int, @msg nvarchar(1024); "
+        check("xa_prepare", call("declare @rc int, @msg nvarchar(4000); "
                 + "exec master..sp_xa_prepare @rc output, @msg output, "
                 + raw(xid.getGlobalTransactionId()) + ", " + raw(xid.getBranchQualifier())
                 + ", " + xid.getFormatId() + "; "
@@ -116,7 +119,7 @@ final class TdsXaResource extends AbstractXaResource {
     }
 
     private void commit(Xid xid, int flags) throws SQLException {
-        check("xa_commit", call("declare @rc int, @msg nvarchar(1024); "
+        check("xa_commit", call("declare @rc int, @msg nvarchar(4000); "
                 + "exec master..sp_xa_commit @rc output, @msg output, "
                 + raw(xid.getGlobalTransactionId()) + ", " + raw(xid.getBranchQualifier())
                 + ", " + flags + ", " + xid.getFormatId() + "; "
@@ -126,7 +129,7 @@ final class TdsXaResource extends AbstractXaResource {
 
     @Override
     protected void rollbackBranch(Xid xid, boolean open) throws SQLException {
-        check("xa_rollback", call("declare @rc int, @msg nvarchar(1024); "
+        check("xa_rollback", call("declare @rc int, @msg nvarchar(4000); "
                 + "exec master..sp_xa_rollback @rc output, @msg output, "
                 + raw(xid.getGlobalTransactionId()) + ", " + raw(xid.getBranchQualifier())
                 + ", " + xid.getFormatId() + "; "
@@ -136,7 +139,7 @@ final class TdsXaResource extends AbstractXaResource {
 
     @Override
     protected Xid[] scan() throws SQLException {
-        String[] answer = call("declare @rc int, @msg nvarchar(1024), @xids varbinary(8000); "
+        String[] answer = call("declare @rc int, @msg nvarchar(4000), @xids varbinary(8000); "
                 + "exec master..sp_xa_recover @rc output, @msg output, "
                 + TM_START_SCAN + ", @xids output; "
                 + "select isnull(@rc, 0), isnull(@msg, ''), "
