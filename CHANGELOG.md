@@ -5,13 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **A certificate that comes between a checkpoint and the first use after the restore is not
-  kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
-  on its timer, after a checkpoint had freed the keys was installed with its key - in the image
-  when it came before the image was taken - and the first use after the restore installed one
-  more and forgot that pair without freeing it: its key stayed in OpenSSL's memory after close.
-  Such a pair's key is now freed at once; the first use asks for a new one as before. Found by
-  a flaky CI run (`SpiffeTest`).
+- **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
+  output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
+  bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
+  work `varbinary(4000)`, the DLL version `nvarchar(64)`: every distributed transaction failed
+  to open. All of them are 8000 bytes now (`LocalTdsXaTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
@@ -28,6 +26,13 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeKeys.privateKey(Supplier)` is the reloadable form of the latter. The access log's
   signing key no longer leaves its provider open (`ReloadableSigningKeyTest`,
   `CheckpointKeyTest`, `CheckpointSigningKeyTest`, `QuiesceTest`).
+- **A certificate that comes between a checkpoint and the first use after the restore is not
+  kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
+  on its timer, after a checkpoint had freed the keys was installed with its key - in the image
+  when it came before the image was taken - and the first use after the restore installed one
+  more and forgot that pair without freeing it: its key stayed in OpenSSL's memory after close.
+  Such a pair's key is now freed at once; the first use asks for a new one as before. Found by
+  a flaky CI run (`SpiffeTest`).
 - **An issued identity is asked for again after a restore, not a reason to refuse the
   checkpoint.** A Vault PKI certificate's key and a SPIFFE SVID's - for a database connection's
   client certificate or a server's key manager - were made in OpenSSL or fetched from the agent
