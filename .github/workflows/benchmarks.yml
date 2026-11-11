@@ -55,7 +55,7 @@ jobs:
           -Dbench.database=seclume_test -Dbench.user=seclume_test
           -Dbench.password.file=.local-mysql-password
           -jar seclume-bench/target/seclume-bench.jar
-          QueryBenchmark InsertBenchmark
+          QueryBenchmark InsertBenchmark PoolBenchmark
           -rf json -rff seclume-bench/target/jmh.json -wi 3 -i 5 -f 1
       - name: The results, seclume beside the vendor
         if: always()
