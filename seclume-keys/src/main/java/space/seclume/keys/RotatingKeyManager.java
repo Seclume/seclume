@@ -50,8 +50,23 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
     /** Closed: the keys are freed, and nothing is issued again. */
     private volatile boolean keysDestroyed;
 
-    /** Makes {@code manager} the one handshakes get from now on; the one before the last is freed. */
+    /** Inside {@link #afterRestore()}: the pair {@link #restore()} installs is the one wanted. */
+    private boolean restoring;
+
+    /**
+     * Makes {@code manager} the one handshakes get from now on; the one before
+     * the last is freed.
+     *
+     * <p>Not between a checkpoint that dropped the pairs and the first use
+     * after the restore: a pair that comes then - pushed by an agent, from a
+     * renewal on its timer - would be in the image, and the first use asks
+     * for a new one anyway; its key is freed at once. Nor after close.
+     */
     protected final synchronized void install(SeclumeKeyManager manager) {
+        if (keysDestroyed || (dropped && !restoring)) {
+            ((OpenSslPrivateKey) manager.getPrivateKey(SeclumeKeyManager.ALIAS)).destroy();
+            return;
+        }
         Generation next = new Generation("seclume-" + (++generations), manager);
         Generation retired = previous;
         previous = current;
@@ -136,7 +151,12 @@ abstract class RotatingKeyManager extends X509ExtendedKeyManager implements Auto
                 return;
             }
             try {
-                restore();
+                restoring = true;
+                try {
+                    restore();
+                } finally {
+                    restoring = false;
+                }
                 previous = null;            // the one before was freed already
                 dropped = false;
                 succeeded();
