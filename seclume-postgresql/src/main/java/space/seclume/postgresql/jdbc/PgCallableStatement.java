@@ -49,7 +49,12 @@ final class PgCallableStatement extends PgPreparedStatement implements OutParame
 
     PgCallableStatement(PgConnection connection, CallSyntax call, String name,
             List<PgSession.Field> cached) throws SQLException {
-        super(connection, statementFor(call), name, cached);
+        this(connection, call, name, cached, 0);
+    }
+
+    PgCallableStatement(PgConnection connection, CallSyntax call, String name,
+            List<PgSession.Field> cached, long parsedIn) throws SQLException {
+        super(connection, statementFor(call), name, cached, parsedIn);
         this.call = call;
     }
 

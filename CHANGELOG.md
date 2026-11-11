@@ -109,6 +109,12 @@ All notable changes to seclume are recorded here. Versions follow
   `prefer` against a server without TLS, as documented. Three hand-made faults in each
   driver's `negotiateTls` - `require` ignored, a failed handshake carried on, `verify-full` not
   checking - each turn it red.
+- **The application's own `DISCARD ALL` or `DEALLOCATE ALL` no longer breaks its prepared
+  statements.** Both drop every prepared statement of the session on the server; the driver kept
+  using the plans it had cached and those of statements still open, and every one of them failed
+  afterwards with `prepared statement "seclume_1" does not exist`. The driver now notices the
+  command tag, as pgjdbc does, and parses again under a new name (`LocalJdbcTest`). Found
+  measuring the pool's reset by hand.
 - **SQL Server and Oracle: the same test.** TDS 7.4 against a server whose PRELOGIN answer refuses
   encryption: refused, and nothing more goes to it - no LOGIN7, no ClientHello. TDS 8.0
   (`encrypt=strict`), on both stacks, with and without `trustServerCertificate`, against every
