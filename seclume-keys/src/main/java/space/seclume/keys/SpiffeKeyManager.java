@@ -63,6 +63,7 @@ final class SpiffeKeyManager extends RotatingKeyManager {
     private volatile Instant notBefore;
     private volatile Instant notAfter;
     private boolean closed;
+    private int pushes;
 
     /**
      * @param name   what it is listed and recorded as; {@code null} for the SPIFFE ID
@@ -111,6 +112,7 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                 space.seclume.jfr.Observed.beginCertificateRenewal();
         boolean fresh;
         synchronized (this) {
+            pushes++;
             if (closed) {
                 svid.key().close();
                 return;
@@ -178,6 +180,11 @@ final class SpiffeKeyManager extends RotatingKeyManager {
         bundle = svid.bundle();
         federated = svid.federatedBundles();
         return fresh;
+    }
+
+    /** How many SVIDs came down the stream - for tests. */
+    synchronized int pushes() {
+        return pushes;
     }
 
     /** Asks now; whether the agent had a new SVID. */

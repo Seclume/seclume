@@ -99,6 +99,80 @@ class AdmissionServerTest {
         }
     }
 
+    /**
+     * The webhook's failure policy is {@code Ignore}: when it does not answer
+     * within five seconds, the API server admits the pod without what it would
+     * have added. So a few connections that open and then say nothing - from
+     * any pod that can reach the service - must not hold every thread the
+     * server has and let pods through unprotected for as long as they stay.
+     */
+    @Test
+    void connectionsThatSayNothingDoNotStopTheWebhook() throws Exception {
+        assumeTrue(PrivateSigningKey.available(), "OpenSSL 3 on 64-bit Linux or CNG on Windows");
+        openssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+                "-nodes", "-days", "1", "-subj", "/CN=seclume-admission.seclume-system.svc",
+                "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+                "-keyout", "tls.key", "-out", "tls.crt");
+        SSLContext serving = SeclumeKeys.sslContext(directory.resolve("tls.crt"),
+                "provider=file&path=" + directory.resolve("tls.key"));
+        try (AdmissionServer server = AdmissionServer.start(
+                new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), serving,
+                Injection.Settings.of("img"))) {
+            java.util.List<java.net.Socket> silent = new java.util.ArrayList<>();
+            try {
+                // Twice the threads it has: some open TCP and send nothing, some
+                // finish TLS and then send half a request head.
+                for (int i = 0; i < 16; i++) {
+                    java.net.Socket socket = new java.net.Socket(InetAddress.getLoopbackAddress(),
+                            server.port());
+                    if (i % 2 == 1) {
+                        javax.net.ssl.SSLSocket tls = (javax.net.ssl.SSLSocket) trusting()
+                                .getSocketFactory().createSocket(socket, "127.0.0.1",
+                                        server.port(), true);
+                        tls.startHandshake();
+                        tls.getOutputStream().write("POST /mutate HTTP/1.1\r\nHost: x\r\n"
+                                .getBytes(StandardCharsets.US_ASCII));
+                        tls.getOutputStream().flush();
+                        socket = tls;
+                    }
+                    silent.add(socket);
+                }
+                HttpClient client = HttpClient.newBuilder().sslContext(trusting())
+                        .connectTimeout(java.time.Duration.ofSeconds(5)).build();
+                long start = System.nanoTime();
+                HttpResponse<String> answer = client.send(HttpRequest.newBuilder(
+                        URI.create("https://127.0.0.1:" + server.port() + "/mutate"))
+                        .timeout(java.time.Duration.ofSeconds(30))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(REVIEW)).build(),
+                        HttpResponse.BodyHandlers.ofString());
+                long seconds = (System.nanoTime() - start) / 1_000_000_000L;
+                assertEquals(200, answer.statusCode(), answer.body());
+                org.junit.jupiter.api.Assertions.assertTrue(seconds <= AdmissionServer.SLOWEST_REQUEST_SECONDS + 5,
+                        "the review waited " + seconds + " s behind connections that said nothing");
+                // And a connection that says nothing is not kept for ever.
+                java.net.Socket quiet = silent.get(0);
+                quiet.setSoTimeout((AdmissionServer.SLOWEST_REQUEST_SECONDS + 20) * 1000);
+                long waited = System.nanoTime();
+                int read;
+                try {
+                    read = quiet.getInputStream().read();
+                } catch (java.net.SocketException reset) {
+                    read = -1;
+                }
+                assertEquals(-1, read, "the silent connection got an answer");
+                long held = (System.nanoTime() - waited) / 1_000_000_000L;
+                org.junit.jupiter.api.Assertions.assertTrue(
+                        held <= AdmissionServer.SLOWEST_REQUEST_SECONDS + 15,
+                        "a silent connection was held " + held + " s");
+            } finally {
+                for (java.net.Socket socket : silent) {
+                    socket.close();
+                }
+            }
+        }
+    }
+
     @Test
     void whatIsNotAPodIsLetThroughUnchanged() {
         String answer = AdmissionServer.review("""
