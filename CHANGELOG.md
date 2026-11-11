@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Oracle's `getColumns` as JDBC describes a column.** `IS_NULLABLE` was the catalogue's
+  `Y` or `N` where JDBC says `YES` or `NO`, and the `COLUMN_SIZE` of a character column its
+  length in bytes - an `nvarchar2(64)` was 128 long - where JDBC says characters; the bytes are
+  `CHAR_OCTET_LENGTH`, as before (`LocalOracleJdbcTest.describesAColumnTheWayJdbcSays`). Found in
+  the third review round: the differential run never compared Oracle's catalogue with ojdbc's.
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
