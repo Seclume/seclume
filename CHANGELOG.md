@@ -5,6 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **An R2DBC bind index on PostgreSQL is its `$` number.** `bind(i, ...)` took the i-th of the
+  placeholders the statement has, so in `... $1 ... $3` index 1 bound `$3`, and `$01` and `$1` -
+  one parameter to PostgreSQL - were two. Index `i` is now `$(i+1)`, as PostgreSQL and its own
+  R2DBC driver count, one the statement does not have is refused, and leading zeros name the
+  same parameter (`PlaceholdersTest`). Found in the third review round.
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an

@@ -63,8 +63,10 @@ final class Placeholders {
     /**
      * The JDBC text, and for each placeholder - by its name, in the order
      * of first appearance - the JDBC positions (1-based) it was turned into.
+     * {@code numbered}: PostgreSQL's, where bind index {@code i} is
+     * {@code $(i+1)} whatever else the statement has.
      */
-    record Parsed(String sql, Map<String, int[]> positions, boolean compound) {
+    record Parsed(String sql, Map<String, int[]> positions, boolean compound, boolean numbered) {
 
         int count() {
             int count = 0;
@@ -76,6 +78,17 @@ final class Placeholders {
 
         /** The placeholder bound by index {@code i}, R2DBC's 0-based one. */
         String nameOf(int index) {
+            if (numbered) {
+                // By number, as PostgreSQL and its own R2DBC driver count: in
+                // "$1 ... $3" index 1 is $2, not the second one written.
+                String name = index < 0 || index == Integer.MAX_VALUE ? "" : "$" + (index + 1);
+                if (!positions.containsKey(name)) {
+                    throw new IndexOutOfBoundsException("bind index " + index + " is $"
+                            + ((long) index + 1) + ", which the statement does not have - it has "
+                            + positions.keySet());
+                }
+                return name;
+            }
             if (index < 0 || index >= positions.size()) {
                 throw new IndexOutOfBoundsException("bind index " + index + " - the statement has "
                         + positions.size() + " parameter(s)");
@@ -110,7 +123,8 @@ final class Placeholders {
             if (dialect == Dialect.POSTGRESQL && c == '$' && i + 1 < n
                     && Character.isDigit(sql.charAt(i + 1)) && !inIdentifier(sql, i)) {
                 next = digitsEnd(sql, i + 1);
-                name = sql.substring(i, next);                      // "$1"
+                // "$1"; and "$01" is $1 too, as PostgreSQL reads it
+                name = "$" + sql.substring(i + 1, next).replaceFirst("^0+(?=.)", "");
             } else if (dialect == Dialect.MYSQL && c == '?') {
                 name = Integer.toString(found.size());              // positional
             } else if (dialect == Dialect.SQLSERVER && c == '@' && i + 1 < n
@@ -142,7 +156,7 @@ final class Placeholders {
         } else {
             found.forEach((k, v) -> positions.put(k, toArray(v)));
         }
-        return new Parsed(out.toString(), positions, compound);
+        return new Parsed(out.toString(), positions, compound, dialect == Dialect.POSTGRESQL);
     }
 
     /** The end of a literal, quoted identifier or comment at {@code i}, or {@code i}. */
