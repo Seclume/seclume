@@ -5,11 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **The nightly benchmarks measure all four databases against their vendor drivers.** The
-  MySQL run had failed every night since the password went only over checked TLS: the benchmark
-  now tells seclume what Connector/J does by itself, against a container on the same machine.
-  PostgreSQL, SQL Server and Oracle over JDBC - a statement, rows, inserts, the pool - run
-  beside it, each ratio a notice on the run.
+- **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
+  output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
+  bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
+  work `varbinary(4000)`, the DLL version `nvarchar(64)`: every distributed transaction failed
+  to open. All of them are 8000 bytes now (`LocalTdsXaTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
@@ -123,6 +123,11 @@ All notable changes to seclume are recorded here. Versions follow
   and not on the three nights between; locally it is quiet. A leak in the code would show every
   night, one in a processor model only on that model, a noisy neighbour on no pattern at all -
   the message now says which model, so that the red nights can be told apart. Open until then.
+- **The nightly benchmarks measure all four databases against their vendor drivers.** The
+  MySQL run had failed every night since the password went only over checked TLS: the benchmark
+  now tells seclume what Connector/J does by itself, against a container on the same machine.
+  PostgreSQL, SQL Server and Oracle over JDBC - a statement, rows, inserts, the pool - run
+  beside it, each ratio a notice on the run.
 - **Quarkus refuses a datasource password at the start too, not only in the build.** The
   check that a seclume datasource has no `quarkus.datasource.password` - Agroal would keep it as
   a `String` for the application's life - ran only as a build step. The datasource password is a
