@@ -135,6 +135,13 @@ decoded by different code, and a driver can be right in one and wrong in the oth
 `DatabaseMetaData.getColumns`, which is what Hibernate and Flyway read before they will run at
 all.
 
+Where it runs: `.github/workflows/differential.yml`, one job per database, on every pull
+request that changes a driver, the core or the harness, and nightly. Until 11.11.2026 no CI
+job started a server for this module - its tests skip without one, and CI ran `PgBouncerTest`
+alone, so the runs below were made on developers' machines. Each job now fails when a test
+skipped for want of its server (`require_servers.py`), and its summary lists per class what
+passed, failed and was skipped (`differential_summary.py`).
+
 All four drivers now have an oracle. The runs have found **nineteen** real defects so far,
 none of which any existing test had caught:
 

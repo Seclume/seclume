@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **The differential tests run in CI.** `seclume-diff` - the same values through seclume and
+  through pgjdbc, Connector/J, mssql-jdbc and ojdbc - skips without a server, and no CI job
+  started one for it: of its test classes CI ran `PgBouncerTest` alone, while TESTING.md and
+  SECURITY-QUALITY.md said every pull request. `differential.yml` now runs the whole module
+  against PostgreSQL 18, MySQL 8.4, SQL Server 2022 and Oracle Free, on pull requests that
+  touch a driver, the core or the harness and nightly; a test that skipped for want of its job's
+  server fails the job, and the summary lists per class what passed, failed and was skipped
+  (`differential_summary.py`, tested by `test_differential_summary.py`). Found in the third
+  review round.
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
