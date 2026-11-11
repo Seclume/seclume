@@ -5,6 +5,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **A certificate that comes between a checkpoint and the first use after the restore is not
+  kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
+  on its timer, after a checkpoint had freed the keys was installed with its key - in the image
+  when it came before the image was taken - and the first use after the restore installed one
+  more and forgot that pair without freeing it: its key stayed in OpenSSL's memory after close.
+  Such a pair's key is now freed at once; the first use asks for a new one as before. Found by
+  a flaky CI run (`SpiffeTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
