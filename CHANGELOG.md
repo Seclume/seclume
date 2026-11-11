@@ -130,6 +130,11 @@ All notable changes to seclume are recorded here. Versions follow
   reports a client that went on in the clear where a ClientHello belonged, and all four drivers'
   tests check it. Ignoring the refused encryption, not checking the certificate, or Oracle
   connecting without TCPS turns them red.
+- **Oracle's `getColumns` as JDBC describes a column.** `IS_NULLABLE` was the catalogue's
+  `Y` or `N` where JDBC says `YES` or `NO`, and the `COLUMN_SIZE` of a character column its
+  length in bytes - an `nvarchar2(64)` was 128 long - where JDBC says characters; the bytes are
+  `CHAR_OCTET_LENGTH`, as before (`LocalOracleJdbcTest.describesAColumnTheWayJdbcSays`). Found in
+  the third review round: the differential run never compared Oracle's catalogue with ojdbc's.
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to

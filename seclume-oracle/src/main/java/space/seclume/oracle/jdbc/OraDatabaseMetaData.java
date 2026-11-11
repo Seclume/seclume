@@ -184,7 +184,9 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
                 select null as "TABLE_CAT", owner as "TABLE_SCHEM",
                        table_name as "TABLE_NAME", column_name as "COLUMN_NAME",
                        %s as "DATA_TYPE", data_type as "TYPE_NAME",
-                       nvl(data_precision, data_length) as "COLUMN_SIZE",
+                       case when data_type in ('CHAR', 'NCHAR', 'VARCHAR2', 'NVARCHAR2')
+                            then char_length
+                            else nvl(data_precision, data_length) end as "COLUMN_SIZE",
                        null as "BUFFER_LENGTH", data_scale as "DECIMAL_DIGITS",
                        10 as "NUM_PREC_RADIX",
                        case when nullable = 'Y' then 1 else 0 end as "NULLABLE",
@@ -192,7 +194,7 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
                        null as "SQL_DATA_TYPE", null as "SQL_DATETIME_SUB",
                        data_length as "CHAR_OCTET_LENGTH",
                        column_id as "ORDINAL_POSITION",
-                       nullable as "IS_NULLABLE",
+                       case when nullable = 'Y' then 'YES' else 'NO' end as "IS_NULLABLE",
                        null as "SCOPE_CATALOG", null as "SCOPE_SCHEMA",
                        null as "SCOPE_TABLE", null as "SOURCE_DATA_TYPE",
                        'NO' as "IS_AUTOINCREMENT", 'NO' as "IS_GENERATEDCOLUMN"
