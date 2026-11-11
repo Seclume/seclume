@@ -26,6 +26,13 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeKeys.privateKey(Supplier)` is the reloadable form of the latter. The access log's
   signing key no longer leaves its provider open (`ReloadableSigningKeyTest`,
   `CheckpointKeyTest`, `CheckpointSigningKeyTest`, `QuiesceTest`).
+- **A certificate that comes between a checkpoint and the first use after the restore is not
+  kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
+  on its timer, after a checkpoint had freed the keys was installed with its key - in the image
+  when it came before the image was taken - and the first use after the restore installed one
+  more and forgot that pair without freeing it: its key stayed in OpenSSL's memory after close.
+  Such a pair's key is now freed at once; the first use asks for a new one as before. Found by
+  a flaky CI run (`SpiffeTest`).
 - **An issued identity is asked for again after a restore, not a reason to refuse the
   checkpoint.** A Vault PKI certificate's key and a SPIFFE SVID's - for a database connection's
   client certificate or a server's key manager - were made in OpenSSL or fetched from the agent
@@ -81,6 +88,13 @@ All notable changes to seclume are recorded here. Versions follow
   twice, from two threads at once, from the wrong thread - against a model; `JdbcUrlPropertyTest`
   generates URLs in every vendor's spelling and arbitrary strings. Both are seeded and replay a
   failure with `-Dseclume.scope.seed=` and `-Dseclume.url.seed=`.
+- **An R2DBC bind index on PostgreSQL is its `$` number.** `bind(i, ...)` took the i-th of the
+  placeholders the statement has, so in `... $1 ... $3` index 1 bound `$3`, and `$01` and `$1` -
+  one parameter to PostgreSQL - were two. Index `i` is now `$(i+1)`, as PostgreSQL and its own
+  R2DBC driver count, one the statement does not have is refused, and leading zeros name the
+  same parameter (`PlaceholdersTest`). Found in the third review round. Parsing no longer runs
+  a regular expression per comparison of two parameters: 1.0 instead of 3.3 microseconds for a
+  statement with five.
 - **The password guards see environment variables.** Spring's, Micronaut's and Helidon's
   check for a password in the configuration matched property names only - `.password` - while
   the environment's property source lists its variables by their own names: a password in
@@ -102,6 +116,12 @@ All notable changes to seclume are recorded here. Versions follow
   `prefer` against a server without TLS, as documented. Three hand-made faults in each
   driver's `negotiateTls` - `require` ignored, a failed handshake carried on, `verify-full` not
   checking - each turn it red.
+- **The application's own `DISCARD ALL` or `DEALLOCATE ALL` no longer breaks its prepared
+  statements.** Both drop every prepared statement of the session on the server; the driver kept
+  using the plans it had cached and those of statements still open, and every one of them failed
+  afterwards with `prepared statement "seclume_1" does not exist`. The driver now notices the
+  command tag, as pgjdbc does, and parses again under a new name (`LocalJdbcTest`). Found
+  measuring the pool's reset by hand.
 - **SQL Server and Oracle: the same test.** TDS 7.4 against a server whose PRELOGIN answer refuses
   encryption: refused, and nothing more goes to it - no LOGIN7, no ClientHello. TDS 8.0
   (`encrypt=strict`), on both stacks, with and without `trustServerCertificate`, against every
@@ -110,6 +130,11 @@ All notable changes to seclume are recorded here. Versions follow
   reports a client that went on in the clear where a ClientHello belonged, and all four drivers'
   tests check it. Ignoring the refused encryption, not checking the certificate, or Oracle
   connecting without TCPS turns them red.
+- **Oracle's `getColumns` as JDBC describes a column.** `IS_NULLABLE` was the catalogue's
+  `Y` or `N` where JDBC says `YES` or `NO`, and the `COLUMN_SIZE` of a character column its
+  length in bytes - an `nvarchar2(64)` was 128 long - where JDBC says characters; the bytes are
+  `CHAR_OCTET_LENGTH`, as before (`LocalOracleJdbcTest.describesAColumnTheWayJdbcSays`). Found in
+  the third review round: the differential run never compared Oracle's catalogue with ojdbc's.
 - **A SCRAM server cannot ask for a cheap proof.** The iteration count is the server's to
   choose, and the client's proof is a PBKDF2 of the password with it: a server - or anybody in
   the middle - asking for one iteration got a proof that costs one hash per guessed password to
@@ -118,6 +143,10 @@ All notable changes to seclume are recorded here. Versions follow
   any proof is made, and `-Dseclume.scram.minIterations` lowers or raises it for the whole
   process. A refused server-first message no longer leaves a half-read state that a proof
   could be made from (`ScramMinimumIterationsTest`).
+- **A JWT signing key must be on the curve its algorithm names.** ES256 is P-256, ES384 P-384,
+  ES512 P-521 (RFC 7518, 3.4), and only "an EC key" was checked: a P-256 key under ES512
+  signed tokens that a careful verifier refuses and a lax one takes, a P-384 key under ES256
+  failed on some signatures only. Another curve is refused at the first signature now.
 - **The constant-time measurement names the processor it ran on.** The nightly run found
   `ConstantTime.equals` leaking on 5 and 7 November (t = -11.5; 6.8, 15.3, 8.9 in three rounds)
   and not on the three nights between; locally it is quiet. A leak in the code would show every
@@ -177,6 +206,11 @@ All notable changes to seclume are recorded here. Versions follow
   `chunked`, two lengths that differ, a length or chunk size that is not digits, a folded line, a
   space before a colon. Found by `HttpFramingModelTest`, a model of HTTP/1.1's framing run over
   random request sequences.
+- **Long secrets in a request head.** The HTTP/1.1 rewrite wrote into room for twice the head
+  and 64 KB; a head whose secrets came to more - a few JWTs or SAML assertions in headers, a long
+  Basic password - ended in an `IndexOutOfBoundsException` out of the socket's `write`. The room
+  now grows as the secrets are written, the smaller scope closed and wiped
+  (`LongSecretsTest`). Found in the third review round.
 - **`seclume-verify --print-pin` no longer logs in.** It connects with `tls=require` -
   encryption that checks nothing, because the server's key is what it wants to find out - and
   then went on to the whole login: the secret read from its provider and sent to whoever had
@@ -209,6 +243,13 @@ All notable changes to seclume are recorded here. Versions follow
   the constant-time measurements take up to three rounds and call code leaky only when every
   round says so, the negative control seen when one does; and the nightly, benchmark and TLS
   workflows run Maven through `mvnw-retry.sh` too.
+- **The admission webhook keeps answering while connections say nothing.** It served on eight
+  threads with no limit on how long a request may take: eight connections that opened and said
+  nothing - from any pod that can reach the service - held them all, the API server's call
+  timed out after its five seconds, and with `failurePolicy: Ignore` every pod created meanwhile
+  was admitted without what the webhook adds. Each exchange has a virtual thread of its own
+  now, and a request that has not arrived in 10 seconds is closed
+  (`sun.net.httpserver.maxReqTime`, unless set; `AdmissionServerTest`).
 - **`seclume-verify --split` writes all of its shares or none, and owner-only on Windows
   too.** A split that failed at a later file - one already there - left the earlier shares on
   disk while the tool said "no shares written". On Windows a share took its directory's ACL,

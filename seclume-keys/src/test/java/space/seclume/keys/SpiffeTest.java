@@ -337,6 +337,50 @@ class SpiffeTest {
     }
 
     /**
+     * Found by a flaky CI run, 11.11.2026: an SVID the agent pushes after a
+     * checkpoint freed the keys and before the first use after the restore
+     * was installed with its key - kept until that use, and in the image if
+     * it came before the image was taken. And that first use installed one
+     * more and forgot the pushed pair without freeing it: its key stayed in
+     * OpenSSL's memory after close.
+     */
+    @Test
+    void anSvidPushedBetweenTheCheckpointAndTheFirstUseIsNotKept() throws Exception {
+        AtomicReference<Svid> current = new AtomicReference<>(first);
+        try (FakeWorkloadApi agent = new FakeWorkloadApi(socket("pushed-at-checkpoint"),
+                () -> current.get().answer(ORDERS))) {
+            SpiffeKeyManager manager = (SpiffeKeyManager) SeclumeKeys.spiffeKeyManager(
+                    "socket=unix://" + agent.socket());
+            try {
+                // the stream's first message is the SVID in hand
+                waitFor(() -> agent.openStreams() == 1 && manager.pushes() == 1,
+                        "the stream was not opened");
+                space.seclume.internal.Checkpoint.wipeAll();
+                current.set(second);
+                agent.push();
+                waitFor(() -> manager.pushes() == 2, "the push did not arrive");
+                assertNoSpiffeKey("after the push that followed the checkpoint");
+
+                String alias = manager.chooseServerAlias("EC", null, null);
+                X509Certificate now = manager.getCertificateChain(alias)[0];
+                assertEquals(java.security.cert.CertificateFactory.getInstance("X.509")
+                        .generateCertificate(new java.io.ByteArrayInputStream(second.certificate()))
+                        .hashCode(), now.hashCode(), "the first use did not take the agent's SVID");
+                assertFalse(((OpenSslPrivateKey) manager.getPrivateKey(alias)).isDestroyed());
+            } finally {
+                manager.close();
+            }
+            assertNoSpiffeKey("after close");
+        }
+    }
+
+    private static void assertNoSpiffeKey(String when) {
+        for (String by : PrivateSigningKey.heldBy()) {
+            assertFalse(by.contains("Spiffe"), "a key is still held by " + by + " " + when);
+        }
+    }
+
+    /**
      * {@link SeclumeKeys#spiffe}: the key and the trust manager as factories -
      * as a Spring SSL bundle takes them - from one answer of the agent, listed
      * under the name they were given.
