@@ -51,6 +51,24 @@ public final class AdmissionServer implements AutoCloseable {
     /** Far beyond any pod; a request larger than this is not read. */
     static final int LARGEST = 4 << 20;
 
+    /** How long a request may take to arrive, head and body, and its answer to leave. */
+    static final int SLOWEST_REQUEST_SECONDS = 10;
+
+    static {
+        // The JDK's server has no limit by default on how long a request may
+        // take: a connection that opens and says nothing holds its thread
+        // until the client goes. Read once, when the server's classes load -
+        // which is after this. A value the operator set wins.
+        limit("sun.net.httpserver.maxReqTime");
+        limit("sun.net.httpserver.maxRspTime");
+    }
+
+    private static void limit(String property) {
+        if (System.getProperty(property) == null) {
+            System.setProperty(property, Integer.toString(SLOWEST_REQUEST_SECONDS));
+        }
+    }
+
     private final HttpsServer server;
     private final ExecutorService executor;
 
@@ -66,11 +84,14 @@ public final class AdmissionServer implements AutoCloseable {
         server.setHttpsConfigurator(new HttpsConfigurator(tls));
         server.createContext("/mutate", exchange -> mutate(exchange, settings));
         server.createContext("/healthz", exchange -> answer(exchange, 200, "text/plain", "ok\n"));
-        ExecutorService executor = Executors.newFixedThreadPool(8, runnable -> {
-            Thread thread = new Thread(runnable, "seclume-admission");
-            thread.setDaemon(true);
-            return thread;
-        });
+        // A virtual thread per exchange: a connection that is slow, or says
+        // nothing at all, holds its own and nobody else's. With eight threads,
+        // eight such connections - from any pod that can reach the service -
+        // left no thread for the API server, whose call then timed out after
+        // five seconds; and with failurePolicy Ignore the pod was admitted
+        // without what the webhook adds.
+        ExecutorService executor = Executors.newThreadPerTaskExecutor(
+                Thread.ofVirtual().name("seclume-admission-", 0).factory());
         server.setExecutor(executor);
         server.start();
         return new AdmissionServer(server, executor);
