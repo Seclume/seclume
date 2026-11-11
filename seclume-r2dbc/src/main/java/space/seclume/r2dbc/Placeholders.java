@@ -124,7 +124,7 @@ final class Placeholders {
                     && Character.isDigit(sql.charAt(i + 1)) && !inIdentifier(sql, i)) {
                 next = digitsEnd(sql, i + 1);
                 // "$1"; and "$01" is $1 too, as PostgreSQL reads it
-                name = "$" + sql.substring(i + 1, next).replaceFirst("^0+(?=.)", "");
+                name = "$" + withoutLeadingZeros(sql, i + 1, next);
             } else if (dialect == Dialect.MYSQL && c == '?') {
                 name = Integer.toString(found.size());              // positional
             } else if (dialect == Dialect.SQLSERVER && c == '@' && i + 1 < n
@@ -276,11 +276,21 @@ final class Placeholders {
         return end < 0 ? n : end + 2;
     }
 
-    /** Two runs of digits by their value, however long: $99999999999 is no int. */
-    private static int byNumber(String a, String b) {
-        String x = a.replaceFirst("^0+(?=.)", "");
-        String y = b.replaceFirst("^0+(?=.)", "");
+    /**
+     * Two runs of digits by their value, however long: $99999999999 is no int.
+     * Their leading zeros are gone already - see parse.
+     */
+    private static int byNumber(String x, String y) {
         return x.length() != y.length() ? Integer.compare(x.length(), y.length()) : x.compareTo(y);
+    }
+
+    /** The digits from {@code from} to {@code to} without leading zeros - "0" for all zeros. */
+    private static String withoutLeadingZeros(String sql, int from, int to) {
+        int start = from;
+        while (start < to - 1 && sql.charAt(start) == '0') {
+            start++;
+        }
+        return sql.substring(start, to);
     }
 
     private static int digitsEnd(String sql, int from) {
