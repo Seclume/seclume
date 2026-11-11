@@ -136,7 +136,7 @@ request - where Scorecard runs the eleven checks that need only the files - **9.
 |---|---:|---|---|
 | Fuzzing | 0 | "project is not fuzzed": Scorecard knows OSS-Fuzz, ClusterFuzzLite and some languages' own fuzzers, and not Jazzer started from Maven, which is what `fuzz.yml` runs every night | open - a ClusterFuzzLite configuration around the same targets would be seen |
 | License | 9 | "license file detected" - on a pull request Scorecard reads the file only and cannot ask GitHub which licence it is | expected to be 10 on `main`; to be read from the first run there |
-| Packaging | not scored | "packaging workflow not detected": releases go to Maven Central from `release.yml`, which Scorecard does not recognise as publishing | accepted |
+| Packaging | not scored | "packaging workflow not detected": no workflow in this repository publishes the releases; they are signed and uploaded by the maintainer ([SECURITY.md](SECURITY.md#verifying-a-release)) | accepted |
 | Binary-Artifacts, Dangerous-Workflow, Dependency-Update-Tool, Pinned-Dependencies, SAST, Security-Policy, Token-Permissions, Vulnerabilities | 10 | | |
 
 Not measured on a pull request, so not known yet: Branch-Protection, CI-Tests,
