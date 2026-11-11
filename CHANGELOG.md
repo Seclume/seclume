@@ -5,15 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **Entries appended to an access log while it was closed are no longer signed by its next
-  checkpoint.** A log opened again continues its chain from its last line, and its next
-  checkpoint signs over everything before - also over entries that whoever could write the file
-  appended, correctly chained, while the application was down: they came out of
-  `AccessLogVerifier` vouched for. The `log.opened` entry of a log with a signing key now names
-  in `vouched` the last entry a checkpoint of that key had signed when the file was opened -
-  found from the end, under the next signature - and the verifier names the entries between as
-  vouched for by no checkpoint, whatever follows; after a crash that took the last checkpoint
-  too. Found in the third review round (`AccessLogRestartTest`).
+- **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
+  output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
+  bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
+  work `varbinary(4000)`, the DLL version `nvarchar(64)`: every distributed transaction failed
+  to open. All of them are 8000 bytes now (`LocalTdsXaTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
@@ -63,6 +59,15 @@ All notable changes to seclume are recorded here. Versions follow
   listed only a cut at the end as what it cannot find. Now it says that the first entries are
   not there and how to check them, and several files given in order are verified as one chain
   (`AuditVerifyTest`).
+- **Entries appended to an access log while it was closed are no longer signed by its next
+  checkpoint.** A log opened again continues its chain from its last line, and its next
+  checkpoint signs over everything before - also over entries that whoever could write the file
+  appended, correctly chained, while the application was down: they came out of
+  `AccessLogVerifier` vouched for. The `log.opened` entry of a log with a signing key now names
+  in `vouched` the last entry a checkpoint of that key had signed when the file was opened -
+  found from the end, under the next signature - and the verifier names the entries between as
+  vouched for by no checkpoint, whatever follows; after a crash that took the last checkpoint
+  too. Found in the third review round (`AccessLogRestartTest`).
 - **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
   the secret and its padded Base64 only. The usual leak is neither: a wire log's
   `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into
