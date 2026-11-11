@@ -23,7 +23,9 @@ listed too, so that the next review knows what has been covered and how.
 - **medium** - the same, but only with a further precondition (a heap dump, a misconfiguration,
   a hostile server); or a protection the documentation promises does not hold;
 - **low** - robustness: a hostile or broken peer gets an exception instead of a refusal, a
-  resource is held too long, a limit is missing.
+  resource is held too long, a limit is missing;
+- **process** - nothing wrong in the shipped code, but a check the documentation counts on
+  does not run.
 
 ## Round 1 - 6 and 7 November 2026
 
@@ -119,8 +121,74 @@ checkpoint (#261).
   counts, never a value.
 - **`seclume-keys`**: `SeclumeKeys.privateKey` reads a key once and closes its provider.
 
+## Round 3 - 8 to 11 November 2026
+
+Property and model tests of the parsers that decide where a secret goes, then the modules
+the last round named and the rest of the network-facing ones: `seclume-keys`, `seclume-jwt`,
+the admission webhook's server, the access log, `seclume-diff`, `seclume-http`,
+`seclume-mail`, `seclume-ldap`, `seclume-r2dbc`. Every finding was reproduced by a test that
+failed before its fix.
+
+### Findings
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | `seclume-http` | A chunked body was recognised by `transfer-encoding: chunked` with exactly one space. `chunked` without one, after a tab, or after `gzip,` was taken for no body - and a request-like text in the body for the next head, with the secret written into it: into a document the server stores. Found by a model test. | high | #273 |
+| 2 | URLs in messages | `JdbcUrl.redact` hid only `?key=value`: a password in the authority (`app:pw@db`), Oracle's `scott/pw@`, SQL Server's `;password=`, MySQL's `(password=...)` came back verbatim in every "not a seclume URL" message and Spring Boot's diagnosis; `parse` took `user:pw@host` for a host. Found by a property test. | medium | #266 |
+| 3 | Admission webhook | The JDK's HTTP server has no request timeout and served on a fixed pool: a few connections that send nothing held every thread, the API server's calls timed out, and with `failurePolicy: Ignore` pods went in unchecked. | medium | #282 |
+| 4 | Access log | A log opened again continues its chain, and its next checkpoint signed over entries someone had appended, correctly chained, while the application was down; the verifier called them vouched for. `log.opened` now names the last signed entry and the verifier the ones after it. | medium | #284 |
+| 5 | `seclume-keys` | A Vault PKI or SPIFFE key replaced by a renewal was freed by a timer a minute later - and not at all by a checkpoint or a close in that minute: in the image, and in OpenSSL's memory after close. | medium | #263 |
+| 6 | `seclume-keys` | A pair pushed by the SPIFFE agent, or renewed on its timer, between a checkpoint and the first use after the restore was installed with its key; the restore then installed another and forgot that one without freeing it. Found by a flaky CI run. | low | #285 |
+| 7 | `seclume-jwt` | An EC key on another curve than the algorithm names (P-384 for `ES256`) signed tokens RFC 7518 forbids. | low | #283 |
+| 8 | Oracle | `getColumns` said `Y`/`N` for `IS_NULLABLE` and gave a character column's size in bytes. | low | #287 |
+| 9 | `seclume-http` | A request head whose secrets came to more than twice the head and 64 KB ended in an `IndexOutOfBoundsException` out of the socket's `write` (bounds-checked; nothing overwritten). | low | #288 |
+| 10 | `seclume-r2dbc` | On PostgreSQL a bind index was the i-th placeholder present, so in `$1 ... $3` index 1 bound `$3`, and `$01` and `$1` were two parameters. | low | #289 |
+| 11 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
+
+### Open
+
+- What `differential.yml` finds on its first runs, and making it a required check once it is
+  green (#286).
+- `Differential.compareCatalog` passes over a column neither driver lists without a word -
+  on Oracle every column, the names being upper case there. To be made a finding once the
+  workflow runs.
+
+### Reviewed, nothing found
+
+- **Key files** (`seclume-keys`): OpenSSL's decoder is given no passphrase callback that
+  could fall back to a prompt; `NativeKey` wipes what it decoded; the PEM and DER readers are
+  fuzzed (`KeyFilesFuzzTest`).
+- **JWT verification** (HMAC tokens only - a public key needs no secret handling): the
+  header's `alg` must be the key's own, so `none` and another algorithm are refused; `crit`
+  is refused; every part must be base64url as RFC 7515 writes it, so one token has one
+  spelling; the MAC is compared in constant time (`MessageDigest.isEqual`).
+- **Mail**: SMTP, IMAP and POP3 refuse a server without STARTTLS, and bytes it sent after its
+  answer to STARTTLS and before the handshake; a login over `tls=none` is refused at
+  configuration. Envelope addresses refuse line breaks and angle brackets; DATA makes every
+  line end CRLF and doubles a leading dot, so no message ends early (SMTP smuggling). IMAP's
+  `LOGIN` sends the password as a literal; POP3's `PASS` refuses one with a line break.
+- **LDAP**: StartTLS refuses a refusal and bytes before the handshake; the bind is rewritten
+  only for the placeholder's own bind DN on its own server, its BER lengths computed again and
+  any length JNDI does not write refused.
+- **HTTP**: a placeholder is bound to the certificate-checked `host:port` of its connection;
+  the request line and HTTP/2's pseudo-headers are never rewritten; HTTP/2 header blocks are
+  encoded again without indexing - a secret never indexed - so the server's dynamic table
+  stays empty and cannot drift from the client's; Huffman-coded strings are refused.
+- **R2DBC**: the `password` option is refused; the SQL lexer leaves literals, comments,
+  E-strings, dollar quotes and Oracle's `q'...'` alone.
+
+### Accepted residuals
+
+- `seclume-http`: only the first placeholder in one HTTP/2 field value or one Basic credential
+  is replaced; a second goes out as the placeholder, which the server refuses.
+- `seclume-http`: a placeholder in any header line is replaced, so a header an application
+  fills from user input could carry one a user had seen - a placeholder is not a secret, but
+  it is bound to one server and has a random 96-bit nonce per process.
+- `seclume-r2dbc`: the factory provider puts the host and database name into the JDBC URL
+  unencoded; both come from the application's configuration.
+
 ## The next review
 
-Not yet read with the same care: `seclume-keys` (key file parsing), the JWT signing key, the
-admission webhook's own TLS server, the access log's signing, `seclume-diff`. A round adds a
-section here, findings and the sound alike.
+Not yet read with the same care: `seclume-ssh`, `seclume-jgit`, `seclume-grpc`, `seclume-kafka`,
+`seclume-redis`, the MongoDB driver, and the pool's session reset once it is made cheaper. A
+round adds a section here, findings and the sound alike.
