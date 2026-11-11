@@ -194,7 +194,7 @@ class AccessLogRestartTest {
     /** An entry after the last line of {@code lines}, chained and hashed as the log does. */
     private static String forgedAfter(List<String> lines) {
         Map<String, String> last = AccessLogVerifier.fields(lines.get(lines.size() - 1));
-        long seq = Long.parseLong(last.get("seq")) + 1;
+        long seq = lines.size() + 1;                    // a line each, from 1
         String body = "{\"seq\":" + seq + ",\"time\":\"2026-11-11T00:00:00Z\","
                 + "\"event\":\"secret.read\",\"source\":\"someone else\",\"prev\":\""
                 + last.get("hash") + "\"";
