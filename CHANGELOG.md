@@ -5,13 +5,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
-- **An R2DBC bind index on PostgreSQL is its `$` number.** `bind(i, ...)` took the i-th of the
-  placeholders the statement has, so in `... $1 ... $3` index 1 bound `$3`, and `$01` and `$1` -
-  one parameter to PostgreSQL - were two. Index `i` is now `$(i+1)`, as PostgreSQL and its own
-  R2DBC driver count, one the statement does not have is refused, and leading zeros name the
-  same parameter (`PlaceholdersTest`). Found in the third review round. Parsing no longer runs
-  a regular expression per comparison of two parameters: 1.0 instead of 3.3 microseconds for a
-  statement with five.
+- **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
+  output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
+  bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
+  work `varbinary(4000)`, the DLL version `nvarchar(64)`: every distributed transaction failed
+  to open. All of them are 8000 bytes now (`LocalTdsXaTest`).
 - **Line and branch coverage, measured.** A `coverage` profile runs JaCoCo's agent in the test
   JVMs, and CI's `core` job uses it for its 25 modules: per-module and per-security-package
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
@@ -83,6 +81,13 @@ All notable changes to seclume are recorded here. Versions follow
   twice, from two threads at once, from the wrong thread - against a model; `JdbcUrlPropertyTest`
   generates URLs in every vendor's spelling and arbitrary strings. Both are seeded and replay a
   failure with `-Dseclume.scope.seed=` and `-Dseclume.url.seed=`.
+- **An R2DBC bind index on PostgreSQL is its `$` number.** `bind(i, ...)` took the i-th of the
+  placeholders the statement has, so in `... $1 ... $3` index 1 bound `$3`, and `$01` and `$1` -
+  one parameter to PostgreSQL - were two. Index `i` is now `$(i+1)`, as PostgreSQL and its own
+  R2DBC driver count, one the statement does not have is refused, and leading zeros name the
+  same parameter (`PlaceholdersTest`). Found in the third review round. Parsing no longer runs
+  a regular expression per comparison of two parameters: 1.0 instead of 3.3 microseconds for a
+  statement with five.
 - **The password guards see environment variables.** Spring's, Micronaut's and Helidon's
   check for a password in the configuration matched property names only - `.password` - while
   the environment's property source lists its variables by their own names: a password in
