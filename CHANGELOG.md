@@ -15,6 +15,14 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **MongoDB: a `hello` cannot raise the message limit above 48 MB.** The size of a reply is
+  checked against the server's `maxMessageSizeBytes` before the bytes for it are allocated -
+  and that number was taken from the `hello` as it came, which is answered before the login. A
+  peer that named 2 GB there and announced a reply of 2 GB had the client allocate them. The
+  limit is now what the server names and never more than the 48 MB every server has had; a
+  number that is none is refused (`MessageLimitTest`). And only the reply's own `cursor` keeps
+  its batch as bytes: a document named `cursor` inside the application's data - what a
+  `findAndModify` returns - came back with documents that could not be changed (`OpMsgTest`).
 - **Coverage of all the tests, wherever they ran.** One run each of the PostgreSQL, MySQL, SQL
   Server and Oracle jobs records coverage too, and the `coverage` job merges every job's and
   every module's data and reports each module from all of it - code of the core that the
