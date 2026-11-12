@@ -167,9 +167,10 @@ public final class SeclumeRedisSocketFactory implements JedisSocketFactory {
                 socket.send(out.asSlice(0, command.length()).asByteBuffer());
             }
         }
-        String answer = socket.readLine();
+        String answer = socket.readLine(secret);
         if (!answer.equals("+OK")) {
-            // An error line names the reason (WRONGPASS, NOAUTH); it never echoes the password.
+            // An error line names the reason (WRONGPASS, NOAUTH). A server that does
+            // not know AUTH may name its arguments; readLine has masked the password.
             throw new JedisConnectionException("Redis refused the login"
                     + (user == null ? "" : " of " + user) + ": " + answer);
         }

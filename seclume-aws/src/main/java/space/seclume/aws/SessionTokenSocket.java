@@ -59,8 +59,10 @@ final class SessionTokenSocket extends SSLSocket {
     private final ByteArrayOutputStream head = new ByteArrayOutputStream();
     private final ByteArrayOutputStream line = new ByteArrayOutputStream();
     private long remaining;
+    /** The last four bytes of the head so far - CR LF CR LF ends it. */
+    private int headTail;
 
-    private SessionTokenSocket(Socket plain, String host, int port, TlsLayer tls) {
+    SessionTokenSocket(Socket plain, String host, int port, TlsLayer tls) {
         this.plain = plain;
         this.host = host;
         this.port = port;
@@ -107,38 +109,58 @@ final class SessionTokenSocket extends SSLSocket {
         }
     };
 
+    private static final int BLANK_LINE = 0x0D0A0D0A;
+
+    /**
+     * Follows what the client writes, a run of bytes at a time: a head is
+     * kept until its blank line, everything else goes on to TLS as far as it
+     * reaches in this write - a chunk's size line is one record, not one for
+     * each of its bytes.
+     */
     private void consume(byte[] source, int offset, int length) throws IOException {
         int at = offset;
         int end = offset + length;
         while (at < end) {
             switch (state) {
                 case HEAD -> {
-                    head.write(source[at++]);
-                    if (endsWithBlankLine(head)) {
+                    int from = at;
+                    boolean ended = false;
+                    while (at < end && !ended) {
+                        headTail = (headTail << 8) | (source[at++] & 0xff);
+                        ended = headTail == BLANK_LINE;
+                    }
+                    head.write(source, from, at - from);
+                    if (ended) {
+                        headTail = 0;
                         sendHead();
                     }
                 }
-                case BODY, CHUNK_DATA -> {
+                case BODY, CHUNK_DATA, CHUNK_END -> {
                     int n = (int) Math.min(remaining, end - at);
                     tls.write(ByteBuffer.wrap(source, at, n));
                     at += n;
                     remaining -= n;
                     if (remaining == 0) {
-                        state = state == State.BODY ? State.HEAD : State.CHUNK_END;
-                        remaining = 2;
-                    }
-                }
-                case CHUNK_END -> {
-                    tls.write(ByteBuffer.wrap(source, at++, 1));
-                    if (--remaining == 0) {
-                        state = State.CHUNK_SIZE;
+                        switch (state) {
+                            case BODY -> state = State.HEAD;
+                            case CHUNK_DATA -> {
+                                state = State.CHUNK_END;
+                                remaining = 2;
+                            }
+                            default -> state = State.CHUNK_SIZE;
+                        }
                     }
                 }
                 case CHUNK_SIZE, TRAILER -> {
-                    byte b = source[at];
-                    tls.write(ByteBuffer.wrap(source, at++, 1));
-                    line.write(b);
-                    if (b == '\n') {
+                    int from = at;
+                    boolean ended = false;
+                    while (at < end && !ended) {
+                        byte b = source[at++];
+                        line.write(b);
+                        ended = b == '\n';
+                    }
+                    tls.write(ByteBuffer.wrap(source, from, at - from));
+                    if (ended) {
                         String text = line.toString(StandardCharsets.US_ASCII).trim();
                         line.reset();
                         if (state == State.TRAILER) {
@@ -161,16 +183,6 @@ final class SessionTokenSocket extends SSLSocket {
                 default -> throw new IllegalStateException(state.name());
             }
         }
-    }
-
-    private static boolean endsWithBlankLine(ByteArrayOutputStream head) {
-        int size = head.size();
-        if (size < 4) {
-            return false;
-        }
-        byte[] bytes = head.toByteArray();
-        return bytes[size - 4] == '\r' && bytes[size - 3] == '\n' && bytes[size - 2] == '\r'
-                && bytes[size - 1] == '\n';
     }
 
     /** The request head, with the token written where its placeholder is. */
@@ -278,7 +290,12 @@ final class SessionTokenSocket extends SSLSocket {
     /** A length the client wrote - not one, and the framing cannot be followed. */
     private static long number(String text, int radix) throws IOException {
         try {
-            return Long.parseLong(text, radix);
+            long value = Long.parseLong(text, radix);
+            if (value < 0) {
+                throw new IOException("the HTTP client wrote a length below zero: '" + text
+                        + "'");
+            }
+            return value;
         } catch (NumberFormatException e) {
             throw new IOException("the HTTP client wrote a length that is not a number: '"
                     + text + "'", e);

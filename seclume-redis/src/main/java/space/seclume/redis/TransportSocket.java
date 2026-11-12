@@ -3,6 +3,9 @@ package space.seclume.redis;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
@@ -11,6 +14,7 @@ import java.nio.ByteBuffer;
 
 import space.seclume.internal.SocketTransport;
 import space.seclume.internal.TlsLayer;
+import space.seclume.secret.SecretProvider;
 
 /**
  * A {@link Socket} for Jedis over a seclume connection - plain, or through
@@ -88,23 +92,66 @@ final class TransportSocket extends Socket {
         }
     }
 
-    /** One line of an answer, without its CRLF - for the login, before Jedis reads anything. */
-    String readLine() throws IOException {
-        StringBuilder line = new StringBuilder(); // seclume-allow: a server's status line, never a secret
-        int c;
-        while ((c = in.read()) >= 0 && c != '\n') {
-            if (c != '\r') {
-                line.append((char) c);
+    /**
+     * One line of an answer, without its CRLF - for the login, before Jedis
+     * reads anything. Read into native memory, and an error searched there
+     * for the secrets before it becomes a {@code String}: a server that does
+     * not know the command answers with its arguments, the password among
+     * them (see {@link RespReplyGuard}).
+     */
+    String readLine(SecretProvider... secrets) throws IOException {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment line = arena.allocate(LONGEST_LINE + 2);
+            ByteBuffer view = line.asByteBuffer();
+            int length = 0;
+            while (true) {
+                view.limit(length + 1).position(length);
+                int n = receive(view);
+                if (n < 0) {
+                    throw new IOException("Redis closed the connection during the login");
+                }
+                if (n == 0) {
+                    continue;
+                }
+                if (line.get(ValueLayout.JAVA_BYTE, length) == '\n') {
+                    break;
+                }
+                if (++length > LONGEST_LINE) {
+                    throw new IOException("an answer line longer than " + LONGEST_LINE
+                            + " bytes during the login");
+                }
             }
-            if (line.length() > 512) {
-                throw new IOException("an answer line longer than 512 bytes during the login");
+            if (length > 0 && line.get(ValueLayout.JAVA_BYTE, length - 1) == '\r') {
+                length--;
             }
+            int end = length;
+            if (end > 0 && line.get(ValueLayout.JAVA_BYTE, 0) == '-') {
+                RespReplyGuard.mask(new RespReplyGuard.Bytes() {
+                    @Override
+                    public int length() {
+                        return end;
+                    }
+
+                    @Override
+                    public byte get(int index) {
+                        return line.get(ValueLayout.JAVA_BYTE, index);
+                    }
+
+                    @Override
+                    public void set(int index, byte value) {
+                        line.set(ValueLayout.JAVA_BYTE, index, value);
+                    }
+                }, 1, end, secrets);
+            }
+            StringBuilder text = new StringBuilder(end); // seclume-allow: a server's status line, the secret masked out of it
+            for (int i = 0; i < end; i++) {
+                text.append((char) (line.get(ValueLayout.JAVA_BYTE, i) & 0xff));
+            }
+            return text.toString();
         }
-        if (c < 0) {
-            throw new IOException("Redis closed the connection during the login");
-        }
-        return line.toString();
     }
+
+    private static final int LONGEST_LINE = 512;
 
     private void check() throws IOException {
         if (closed) {
