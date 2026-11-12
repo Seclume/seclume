@@ -15,6 +15,12 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Oracle: `getColumns` names national character columns as a result set does.** The
+  catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
+  set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential
+  run began to compare Oracle's catalogue at all: it had looked the columns up in lower
+  case, found none in either driver, and counted that as agreement
+  (`LocalOracleJdbcTest.theCatalogueAndAResultSetNameTheSameType`).
 - **MongoDB: a `hello` that cannot be read no longer ends the monitor.** One thread looks at
   the servers. A `hello` with a field of another type than expected - `tags` that are not
   strings, a member that is no address - was an exception thrown through that thread, and no
