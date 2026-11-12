@@ -215,4 +215,29 @@ class LocalDriverTest {
             }
         }
     }
+
+    /**
+     * {@code $merge} with the target's name alone, the short form the server
+     * takes: the pipeline writes, and the results are read from the target.
+     */
+    @Test
+    void mergeIntoACollectionNamedByAString() {
+        try (MongoClient client = SeclumeMongoClients.create(url)) {
+            MongoCollection<Document> things = client.getDatabase("seclume_test")
+                    .getCollection(fresh());
+            MongoCollection<Document> target = client.getDatabase("seclume_test")
+                    .getCollection(fresh() + "_merged");
+            try {
+                things.insertMany(List.of(new Document("_id", 1), new Document("_id", 2)));
+                List<Document> merged = things.aggregate(List.of(
+                        new Document("$merge", target.getNamespace().getCollectionName())))
+                        .into(new ArrayList<>());
+                assertEquals(2, merged.size());
+                assertEquals(2, target.countDocuments());
+            } finally {
+                things.drop();
+                target.drop();
+            }
+        }
+    }
 }

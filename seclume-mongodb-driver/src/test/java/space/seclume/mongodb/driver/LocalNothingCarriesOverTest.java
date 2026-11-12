@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import com.mongodb.MongoSocketException;
 import com.mongodb.client.ClientSession;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
@@ -103,6 +104,51 @@ class LocalNothingCarriesOverTest {
                 assertFalse(idleCursors(client).contains(id),
                         "the cursor outlived its session and stays reachable under its lsid");
             } finally {
+                things.drop();
+            }
+        }
+    }
+
+    /**
+     * A {@code getMore} that got no answer says nothing about the cursor: the
+     * server still holds it, and {@code close()} has to kill it there.
+     */
+    @Test
+    void aCursorWhoseGetMoreGotNoAnswerIsKilledByClose() {
+        try (MongoClient client = SeclumeMongoClients.create(url)) {
+            MongoCollection<Document> things = client.getDatabase("seclume_test")
+                    .getCollection("zl_carry_" + new ObjectId().toHexString());
+            try {
+                List<Document> many = new ArrayList<>();
+                for (int i = 0; i < 40; i++) {
+                    many.add(new Document("_id", i));
+                }
+                things.insertMany(many);
+                MongoCursor<Document> cursor = things.find().batchSize(5).cursor();
+                long id;
+                try {
+                    cursor.next();
+                    id = cursor.getServerCursor().getId();
+                    client.getDatabase("admin").runCommand(new Document("configureFailPoint",
+                            "failCommand").append("mode", new Document("times", 1))
+                            .append("data", new Document("failCommands", List.of("getMore"))
+                                    .append("closeConnection", true)));
+                    assertThrows(MongoSocketException.class, () -> {
+                        while (cursor.hasNext()) {
+                            cursor.next();
+                        }
+                    });
+                    assertTrue(idleCursors(client).contains(id),
+                            "the fail point closed the connection before the getMore ran - "
+                                    + "the server's cursor is open, which is what is tested");
+                } finally {
+                    cursor.close();
+                }
+                assertFalse(idleCursors(client).contains(id),
+                        "close() left the cursor open on the server after a getMore without an answer");
+            } finally {
+                client.getDatabase("admin").runCommand(new Document("configureFailPoint",
+                        "failCommand").append("mode", "off"));
                 things.drop();
             }
         }
