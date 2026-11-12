@@ -128,7 +128,8 @@ the last round named and the rest of the network-facing ones: `seclume-keys`, `s
 the admission webhook's server, the access log, `seclume-diff`, `seclume-http`,
 `seclume-mail`, `seclume-ldap`, `seclume-r2dbc`, `seclume-redis`, `seclume-kafka`,
 `seclume-nats`, `seclume-rabbitmq`, `seclume-ssh`, `seclume-elasticsearch`, `seclume-grpc`,
-`seclume-jgit`, and of MongoDB the URL, the SRV lookup and the logins. Every finding was reproduced by a test that
+`seclume-jgit`, the cloud providers (`seclume-aws`, `seclume-azure`, `seclume-gcp`), and of
+MongoDB the URL, the SRV lookup and the logins. Every finding was reproduced by a test that
 failed before its fix.
 
 The first run of the differential tests in CI (#286, run 42982946717) found no difference
@@ -153,6 +154,8 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 | 13 | `seclume-kafka` | The CA certificates of a JKS or PKCS12 trust store were written to a file in the temporary directory and read again at every connection: a cleaner that removed it ended every reconnect, and a file someone else wrote under that name decided whom the client trusts. | low | #294 |
 | 14 | `seclume-nats` | Over `nats://` without TLS the `CONNECT` line, the password written into it in native memory, went to the socket's stream through a heap array that was left as it was. | low | #295 |
 | 15 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
+| 16 | `seclume-aws` | A source that answered with temporary credentials already within five minutes of their end - the instance metadata service, until it has the next - was asked again for every request. Each answer was a new generation, three are kept, and the fourth request closed the credentials the first had just been signed with: its head was refused, "credentials are gone". The core's `AwsInstanceRole` asked the metadata service for every use under its lock. | low | #296 |
+| 17 | `seclume-aws` | `SessionTokenSocket` copied a request's whole head for each byte of it (241 µs of CPU for 1500 bytes, 4.4 µs now) and wrote a chunked body's framing a TLS record per byte. | low | #296 |
 
 ### Open
 
@@ -203,6 +206,16 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
   be switched off, however the option is spelled.
 - **Elasticsearch, gRPC, JGit**: `https://` only; a placeholder's secret goes to the nodes
   named, or to the first server it is written for - a redirect's host gets the placeholder.
+- **AWS**: the secret key is read for one signature and wiped; the session token is hashed
+  into the canonical request from native memory and written by the socket into the value of
+  the one `X-Amz-Security-Token` header of a request head, never into a body, a trailer, the
+  request target or another header; two such headers are refused. The container endpoint is
+  asked without TLS only at a link-local or loopback address; STS's refusal is reported by
+  its status, not its body. A presigned URL with temporary credentials is refused.
+- **Azure**: the account key is decoded and used in native memory for one signature; the
+  string to sign is compared with the SDK's by a test.
+- **GCP**: the service account file is read into native memory, the key decoded by OpenSSL
+  from there; only its public fields become strings.
 - **R2DBC**: the `password` option is refused; the SQL lexer leaves literals, comments,
   E-strings, dollar quotes and Oracle's `q'...'` alone.
 
@@ -221,14 +234,18 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 - `mongodb+srv://`: a host of three labels under a public suffix (`db.co.uk`) lets any name
   under that suffix be a target, as the specification has it; the target's certificate is
   still checked.
+- `seclume-aws`: `SeclumeS3Presigner` puts the bucket name into the host unchecked; a name
+  with a `/` or `#` gives a URL signed for another host, which S3 never sees. The name comes
+  from the application.
+- `AwsInstanceRole.use` holds its lock while the caller works with the credentials - a KMS
+  or Secrets Manager call - so those calls of one role run one after another.
 - `seclume-r2dbc`: the factory provider puts the host and database name into the JDBC URL
   unencoded; both come from the application's configuration.
 
 ## The next review
 
 Not yet read with the same care: the rest of `seclume-mongodb-driver` - topology, sessions,
-cursors, some ten thousand lines - and the cloud providers (`seclume-aws`, `seclume-azure`,
-`seclume-gcp`). And one thing known and not yet fixed: `seclume-mail` makes its exceptions of
+cursors, some ten thousand lines. And one thing known and not yet fixed: `seclume-mail` makes its exceptions of
 the server's reply lines, the one after the password among them - an SMTP, POP3 or IMAP server
 that repeats a line it did not understand would bring the password back as Redis 5 did
 (#293). Read in the code, not reproduced; to be masked the same way. A
