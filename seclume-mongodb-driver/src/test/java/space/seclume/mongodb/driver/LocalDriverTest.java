@@ -240,4 +240,15 @@ class LocalDriverTest {
             }
         }
     }
+
+    /** Dropping the indexes of a collection that is not there is no error, as with the official driver. */
+    @Test
+    void droppingTheIndexesOfNoCollectionIsNoError() {
+        try (MongoClient client = SeclumeMongoClients.create(url)) {
+            MongoCollection<Document> never = client.getDatabase("seclume_test")
+                    .getCollection(fresh() + "_never");
+            never.dropIndexes();
+            never.dropIndex("nothing_1");
+        }
+    }
 }
