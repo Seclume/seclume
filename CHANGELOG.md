@@ -179,6 +179,15 @@ All notable changes to seclume are recorded here. Versions follow
   security-critical package, the number of tests and of security regression tests, mutation
   scores, the nightly fuzzing - each figure with the CI run it came from; what that round found,
   the platforms and JDKs tested, and what is not tested.
+- **OPENSSF.md: the Best Practices badge and Scorecard, criterion by criterion.** Every one of
+  the 67 criteria of the badge's passing level with the answer this repository supports and
+  where the evidence is, so that the form on bestpractices.dev can be filled from it and
+  checked against it - `crypto_call` unmet by design and said so. A second workflow,
+  `scorecard-report.yml`, runs Scorecard on every push to `main` and weekly and writes each
+  check's score and reason into the run's summary (`scorecard_summary.py`), a warning for
+  each below 10; `scorecard.yml` keeps uploading SARIF to code scanning and publishing the
+  result. The Scorecard badge is in the README. TLS.md no longer says the own TLS stack is
+  not the default - it has been since 30 September.
 - **`seclume-verify --migrate` prints no password, whatever form the URL writes it in.** The
   translation drops `password=`, but a URL has other places for one, and their contents went
   into the printed configuration: Connector/J's `user:password@host` stayed in the host list;

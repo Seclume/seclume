@@ -125,7 +125,7 @@ to TLS 1.2: PostgreSQL and MySQL, Oracle over a TCPS listener, and SQL Server on
 and `tds=8.0` (see below).
 
 **What the own stack is, and what it is not.** It is new code, and it has not been through an
-independent review. That is why it is not the default. It keeps the risky parts small:
+independent review. That is why it keeps the risky parts small:
 
 - The **server certificate** is checked by the JDK: its `X509TrustManager`, and `Signature`
   for CertificateVerify - RSA (PSS, and PKCS#1 for a TLS 1.2 ServerKeyExchange), ECDSA on
