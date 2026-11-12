@@ -15,6 +15,13 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **MongoDB: a batch too large for one message is cut without being encoded whole.** An
+  `insertMany` or `bulkWrite` beyond the server's 48 MB per message is sent in parts; to find
+  the part that fits, the whole batch was encoded, found too large, halved and encoded again -
+  for every part anew, starting from the limit each time. A hundred thousand documents of 1 kB
+  were encoded two and a half times over, and one of several gigabytes was written out in
+  memory before anything was sent. The encoding now stops where the limit is passed
+  (`OpMsgTest`), and the next part starts at the size that fitted.
 - **AWS: temporary credentials near their end no longer fail requests, and a request's head
   costs a fiftieth.** A credentials source may answer with a set that is already inside the
   five minutes before its expiry - the instance metadata service hands out the old one until it

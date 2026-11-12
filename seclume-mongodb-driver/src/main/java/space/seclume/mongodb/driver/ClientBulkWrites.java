@@ -98,8 +98,9 @@ final class ClientBulkWrites {
         List<WriteConcernError> concernErrors = new ArrayList<>();
         ServerAddress address = null;
         int at = 0;
+        int fitting = maxBatch;            // what fitted a message last time; see Writes.run
         while (at < ops.size()) {
-            int count = Math.min(maxBatch, ops.size() - at);
+            int count = Math.min(fitting, ops.size() - at);
             while (true) {
                 List<Op> batch = ops.subList(at, at + count);
                 try {
@@ -129,6 +130,7 @@ final class ClientBulkWrites {
                         throw tooLarge;
                     }
                     count = (count + 1) / 2;
+                    fitting = count;
                 }
             }
             at += count;
