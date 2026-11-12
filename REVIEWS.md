@@ -111,6 +111,7 @@ in round 1: what the drivers send under the default `tls=prefer`.
 | 24 | `seclume-redis` | The follower that finds the password's place looked at every byte a connection writes, a value's too: 351 µs of its own for a `SET` of 64 KiB, 0.5 µs now. | low | #302 |
 | 25 | `seclume-mongodb-driver` | A client `bulkWrite` without a session of the application's ran in a server session that was given back with the command's reply; a `getMore` for results that did not fit that reply named no session. Read in the code; the test is in the CI first, the fix follows it. | low | #303 |
 | 26 | `seclume-mongodb-driver` | A batch too large for one message was encoded whole to find that out, halved, and encoded again - from the limit for every part. | low | #304 |
+| 27 | `seclume-mongodb-driver` | `hasNext()` of a change stream looped on a cursor the server had closed - after the `invalidate` that follows a dropped collection - and never returned: a thread spinning on a CPU. Read in the code; the test is in the CI first, the fix follows it. | medium | #305 |
 
 ### Open
 
