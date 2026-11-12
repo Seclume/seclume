@@ -15,6 +15,13 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **MongoDB: a `hello` that cannot be read no longer ends the monitor.** One thread looks at
+  the servers. A `hello` with a field of another type than expected - `tags` that are not
+  strings, a member that is no address - was an exception thrown through that thread, and no
+  server was looked at again: a primary that stepped down stayed the primary for this client.
+  Such a `hello` now makes its server unknown, with the reason, and the monitor goes on
+  (`TopologyHelloTest`). And closing a client no longer waits `serverSelectionTimeoutMS` to
+  end its server sessions when no server is known.
 - **AWS: temporary credentials near their end no longer fail requests, and a request's head
   costs a fiftieth.** A credentials source may answer with a set that is already inside the
   five minutes before its expiry - the instance metadata service hands out the old one until it
