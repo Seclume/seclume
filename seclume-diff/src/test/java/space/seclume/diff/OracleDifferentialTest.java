@@ -218,7 +218,9 @@ class OracleDifferentialTest {
                         + "OracleTypes constants, outside java.sql.Types. seclume answers "
                         + "DOUBLE and REAL. A caller switching on java.sql.Types sees nothing "
                         + "it recognises in the vendor codes.")
-                .allow("c_float.columnType", "the same.");
+                .allow("c_float.columnType", "the same.")
+                .allow("c_double.getColumns.DATA_TYPE", "the same, in the catalogue.")
+                .allow("c_float.getColumns.DATA_TYPE", "the same, in the catalogue.");
     }
 
     static Path locate() {
