@@ -32,6 +32,12 @@ All notable changes to seclume are recorded here. Versions follow
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
+- **MongoDB: a client `bulkWrite` reads all of its results.** The per-operation results come in
+  a cursor. Without a session of the application's, the command ran in a server session of the
+  driver's that was given back with the command's reply; when the results did not fit that
+  reply, the `getMore` for the rest named no session, and the server refused it. The whole
+  bulk write now runs in one session, the reading of its results included
+  (`LocalSameAsOfficialTest.clientBulkWriteWhoseResultsNeedAGetMoreIsTheSame`).
 - **Mail: a password a server sends back is not read.** A server that answers a line it does
   not understand with that line - "unknown command: PASS ..." - gave the password, written to
   it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
