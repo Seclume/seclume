@@ -177,6 +177,51 @@ class SecretMaskerTest {
         }
     }
 
+    /**
+     * URL-safe Base64 is looked for at each of the three offsets on its own:
+     * this secret's Base64 has no {@code +} or {@code /} when it starts a
+     * text, and has one when a byte stands before it - as in a token's payload.
+     */
+    @Test
+    void urlSafeBase64InsideALongerTextIsMaskedAtEveryOffset() {
+        String secret = "-Lzmdmrf/;~B";
+        String own = Base64.getEncoder().encodeToString(secret.getBytes(StandardCharsets.UTF_8));
+        assertTrue(!own.contains("+") && !own.contains("/"), "the secret was chosen for that");
+        try (SecretMasker masker = new SecretMasker(Map.of("db",
+                new StaticSecretProvider(secret)))) {
+            for (String before : new String[] {"", "u", "us", "use", "user"}) {
+                byte[] bytes = (before + secret).getBytes(StandardCharsets.UTF_8);
+                for (String encoded : new String[] {
+                    Base64.getEncoder().encodeToString(bytes),
+                    Base64.getUrlEncoder().encodeToString(bytes),
+                    Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)}) {
+                    String masked = masker.mask("token " + encoded);
+                    assertTrue(masked.contains("[redacted:db]"),
+                            "'" + before + "': " + encoded + " -> " + masked);
+                }
+            }
+        }
+    }
+
+    /** One line with many secrets of many lengths, some of the same length: each is masked. */
+    @Test
+    void everyOneOfManySecretsIsMasked() {
+        Map<String, SecretProvider> providers = new LinkedHashMap<>();
+        StringBuilder line = new StringBuilder("start");
+        StringBuilder expected = new StringBuilder("start");
+        for (int i = 0; i < 30; i++) {
+            String secret = "pw-" + "x".repeat(i % 7) + "#" + (1000 + i);
+            providers.put("s" + i, new StaticSecretProvider(secret));
+            line.append(' ').append(secret);
+            expected.append(" [redacted:s").append(i).append(']');
+        }
+        try (SecretMasker masker = new SecretMasker(providers)) {
+            assertEquals(expected.toString(), masker.mask(line.toString()));
+            String clean = "nothing of it: pw-xx#99 and pw-#100";
+            assertSame(clean, masker.mask(clean));
+        }
+    }
+
     @Test
     void percentEncodedAsInAUrlOrAFormIsMasked() {
         try (SecretMasker masker = masker()) {
@@ -187,6 +232,12 @@ class SecretMaskerTest {
                     masker.mask("jdbc:x://h/db?password=" + rfc3986 + "&ssl=true"));
             assertEquals("user=a&password=[redacted:db]",
                     masker.mask("user=a&password=" + form));
+            // Some encoders write the hex digits in lower case.
+            String lower = java.util.regex.Pattern.compile("%[0-9A-F]{2}").matcher(rfc3986)
+                    .replaceAll(hex -> hex.group().toLowerCase(java.util.Locale.ROOT));
+            assertTrue(!lower.equals(rfc3986), "the secret has a character that is encoded");
+            assertEquals("?password=[redacted:db]&ssl=true",
+                    masker.mask("?password=" + lower + "&ssl=true"));
         }
     }
 
