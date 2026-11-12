@@ -15,6 +15,15 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Read/write split: a replica that is not in recovery no longer makes every read wait.**
+  With `readYourWrites`, a read waited until `pg_last_wal_replay_lsn()` reached the last write.
+  A server that is not in recovery - the primary configured as its own replica on a
+  developer's one server, or a standby promoted since - answers NULL there, or the position
+  its start-up recovery ended at: it never caught up, and every read after a write waited the
+  whole limit before it went to the primary. Such a server is asked for its own position now.
+  For MySQL, of two GTID sets noted by two connections the later one is kept, not the one
+  stored last. The routing connection passes on `beginRequest`, `endRequest` and the sharding
+  keys. `ReadWriteSplitRoutingTest` tests the split's decisions without a database.
 - **Oracle: `getColumns` names national character columns as a result set does.** The
   catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
   set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential
