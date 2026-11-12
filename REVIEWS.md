@@ -23,7 +23,9 @@ listed too, so that the next review knows what has been covered and how.
 - **medium** - the same, but only with a further precondition (a heap dump, a misconfiguration,
   a hostile server); or a protection the documentation promises does not hold;
 - **low** - robustness: a hostile or broken peer gets an exception instead of a refusal, a
-  resource is held too long, a limit is missing.
+  resource is held too long, a limit is missing;
+- **process** - nothing wrong in the shipped code, but a check the documentation counts on
+  does not run.
 
 ## Round 1 - 6 and 7 November 2026
 
@@ -119,8 +121,142 @@ checkpoint (#261).
   counts, never a value.
 - **`seclume-keys`**: `SeclumeKeys.privateKey` reads a key once and closes its provider.
 
+## Round 3 - 8 to 12 November 2026
+
+Property and model tests of the parsers that decide where a secret goes, then the modules
+the last round named and the rest of the network-facing ones: `seclume-keys`, `seclume-jwt`,
+the admission webhook's server, the access log, `seclume-diff`, `seclume-http`,
+`seclume-mail`, `seclume-ldap`, `seclume-r2dbc`, `seclume-redis`, `seclume-kafka`,
+`seclume-nats`, `seclume-rabbitmq`, `seclume-ssh`, `seclume-elasticsearch`, `seclume-grpc`,
+`seclume-jgit`, the cloud providers (`seclume-aws`, `seclume-azure`, `seclume-gcp`), and of
+MongoDB the URL, the SRV lookup and the logins, and of its driver the wire, the sessions,
+the topology, cursors, change streams and bulk writes. A finding was reproduced by a test
+that failed before its fix, with these exceptions, which have a test that passes with the
+fix and was not run against the code before it - there are no MongoDB libraries where the
+fixes were written: #19 and #20 (#299), #21 and #22 (#300), #26 (#304). #17, #23 and #24
+are about time, and were measured before and after.
+
+The first run of the differential tests in CI (#286, run 42982946717) found no difference
+between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a test's own URL.
+
+### Findings
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | `seclume-http` | A chunked body was recognised by `transfer-encoding: chunked` with exactly one space. `chunked` without one, after a tab, or after `gzip,` was taken for no body - and a request-like text in the body for the next head, with the secret written into it: into a document the server stores. Found by a model test. | high | #273 |
+| 2 | URLs in messages | `JdbcUrl.redact` hid only `?key=value`: a password in the authority (`app:pw@db`), Oracle's `scott/pw@`, SQL Server's `;password=`, MySQL's `(password=...)` came back verbatim in every "not a seclume URL" message and Spring Boot's diagnosis; `parse` took `user:pw@host` for a host. Found by a property test. | medium | #266 |
+| 3 | Admission webhook | The JDK's HTTP server has no request timeout and served on a fixed pool: a few connections that send nothing held every thread, the API server's calls timed out, and with `failurePolicy: Ignore` pods went in unchecked. | medium | #282 |
+| 4 | Access log | A log opened again continues its chain, and its next checkpoint signed over entries someone had appended, correctly chained, while the application was down; the verifier called them vouched for. `log.opened` now names the last signed entry and the verifier the ones after it. | medium | #284 |
+| 5 | `seclume-keys` | A Vault PKI or SPIFFE key replaced by a renewal was freed by a timer a minute later - and not at all by a checkpoint or a close in that minute: in the image, and in OpenSSL's memory after close. | medium | #263 |
+| 6 | `seclume-keys` | A pair pushed by the SPIFFE agent, or renewed on its timer, between a checkpoint and the first use after the restore was installed with its key; the restore then installed another and forgot that one without freeing it. Found by a flaky CI run. | low | #285 |
+| 7 | `seclume-jwt` | An EC key on another curve than the algorithm names (P-384 for `ES256`) signed tokens RFC 7518 forbids. | low | #283 |
+| 8 | Oracle | `getColumns` said `Y`/`N` for `IS_NULLABLE` and gave a character column's size in bytes. | low | #287 |
+| 9 | `seclume-http` | A request head whose secrets came to more than twice the head and 64 KB ended in an `IndexOutOfBoundsException` out of the socket's `write` (bounds-checked; nothing overwritten). | low | #288 |
+| 10 | `seclume-r2dbc` | On PostgreSQL a bind index was the i-th placeholder present, so in `$1 ... $3` index 1 bound `$3`, and `$01` and `$1` were two parameters. | low | #289 |
+| 11 | PostgreSQL | The application's own `DISCARD ALL` or `DEALLOCATE ALL` dropped every prepared statement on the server, and the driver went on using its cached plans and those of open statements: each failed with `prepared statement "seclume_1" does not exist` until the connection was closed. | low | #291 |
+| 12 | `seclume-redis` | A server that does not know a command answers with its arguments: Redis 5 has no `HELLO`, and gave the password of Lettuce's `HELLO 3 AUTH user password` - written in from native memory - back in its error. Lettuce made a `String` of that line, the message of an exception; so did the login for Jedis of a server without `AUTH`. Errors that follow a password are now searched for it before the client reads them. | medium | #293 |
+| 13 | `seclume-kafka` | The CA certificates of a JKS or PKCS12 trust store were written to a file in the temporary directory and read again at every connection: a cleaner that removed it ended every reconnect, and a file someone else wrote under that name decided whom the client trusts. | low | #294 |
+| 14 | `seclume-nats` | Over `nats://` without TLS the `CONNECT` line, the password written into it in native memory, went to the socket's stream through a heap array that was left as it was. | low | #295 |
+| 15 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
+| 16 | `seclume-aws` | A source that answered with temporary credentials already within five minutes of their end - the instance metadata service, until it has the next - was asked again for every request. Each answer was a new generation, three are kept, and the fourth request closed the credentials the first had just been signed with: its head was refused, "credentials are gone". The core's `AwsInstanceRole` asked the metadata service for every use under its lock. | low | #296 |
+| 17 | `seclume-aws` | `SessionTokenSocket` copied a request's whole head for each byte of it (241 µs of CPU for 1500 bytes, 4.4 µs now) and wrote a chunked body's framing a TLS record per byte. | low | #296 |
+| 18 | `seclume-mail` | The same as #12 for SMTP, POP3 and IMAP: a server that answers a line it did not understand with that line gave the password back, and every reply line became a `String`, a refusal the message of an exception. Lines that follow a credential are now searched for it in native memory, as it was sent and as it is, until the login is over. | medium | #298 |
+| 19 | `seclume-mongodb-driver` | The largest reply was whatever the `hello` named as `maxMessageSizeBytes` - answered before the login - and a reply's announced length is allocated once it is below that: a server naming 2 GB had the client allocate 2 GB for a 16-byte header. Capped at the 48 MB of every server. | low | #299 |
+| 20 | `seclume-mongodb-driver` | A document named `cursor` inside the application's data was read like the reply's cursor: its `firstBatch` documents came back immutable. | low | #299 |
+| 21 | `seclume-mongodb-driver` | The monitor - one thread for all servers - read a `hello` outside its `try`: one with a field of an unexpected type (`tags`, `hosts`, `electionId`, a member that is no address) threw through the thread and ended it. No server was looked at again for the life of the client. | medium | #300 |
+| 22 | `seclume-mongodb-driver` | `close()` waited `serverSelectionTimeoutMS` for a server to end its sessions on, when none was known. | low | #300 |
+| 23 | `seclume-http` | The same as #17 where every HTTP client goes through: the head collected so far was copied for each byte of it (316 µs for a head of 1491 bytes, 15 µs now), chunk framing went a TLS record per byte. | low | #301 |
+| 24 | `seclume-redis` | The follower that finds the password's place looked at every byte a connection writes, a value's too: 351 µs of its own for a `SET` of 64 KiB, 0.5 µs now. | low | #302 |
+| 25 | `seclume-mongodb-driver` | A client `bulkWrite` without a session of the application's ran in a server session that was given back with the command's reply; a `getMore` for results that did not fit that reply named no session, and the server refused it (error 13, in the CI with the test alone). | low | #303 |
+| 26 | `seclume-mongodb-driver` | A batch too large for one message was encoded whole to find that out, halved, and encoded again - from the limit for every part. | low | #304 |
+| 27 | `seclume-mongodb-driver` | `hasNext()` of a change stream looped on a cursor the server had closed - after the `invalidate` that follows a dropped collection - and never returned: a thread spinning on a CPU (the CI jobs with the test alone did not end). | medium | #305 |
+| 28 | `seclume-diff`, `seclume-oracle` | The differential run's comparison of the catalogue looked columns up in lower case; Oracle has them in upper case, neither driver had a row, and that counted as agreement. Compared at last, `getColumns` said `VARCHAR` for an `NVARCHAR2` column where the result set's metadata and ojdbc say `NVARCHAR`. | low | #309 |
+
+### Open
+
+- Making `differential.yml` a required check once it has been green for a while (#286).
+
+### Reviewed, nothing found
+
+- **Key files** (`seclume-keys`): OpenSSL's decoder is given no passphrase callback that
+  could fall back to a prompt; `NativeKey` wipes what it decoded; the PEM and DER readers are
+  fuzzed (`KeyFilesFuzzTest`).
+- **JWT verification** (HMAC tokens only - a public key needs no secret handling): the
+  header's `alg` must be the key's own, so `none` and another algorithm are refused; `crit`
+  is refused; every part must be base64url as RFC 7515 writes it, so one token has one
+  spelling; the MAC is compared in constant time (`MessageDigest.isEqual`).
+- **Mail**: SMTP, IMAP and POP3 refuse a server without STARTTLS, and bytes it sent after its
+  answer to STARTTLS and before the handshake; a login over `tls=none` is refused at
+  configuration. Envelope addresses refuse line breaks and angle brackets; DATA makes every
+  line end CRLF and doubles a leading dot, so no message ends early (SMTP smuggling). IMAP's
+  `LOGIN` sends the password as a literal; POP3's `PASS` refuses one with a line break.
+- **LDAP**: StartTLS refuses a refusal and bytes before the handshake; the bind is rewritten
+  only for the placeholder's own bind DN on its own server, its BER lengths computed again and
+  any length JNDI does not write refused.
+- **HTTP**: a placeholder is bound to the certificate-checked `host:port` of its connection;
+  the request line and HTTP/2's pseudo-headers are never rewritten; HTTP/2 header blocks are
+  encoded again without indexing - a secret never indexed - so the server's dynamic table
+  stays empty and cannot drift from the client's; Huffman-coded strings are refused.
+- **Redis**: the password is written only into the password argument of `AUTH` or
+  `HELLO ... AUTH`, the commands followed from the connection's first byte and stricter than
+  the server reads them; a placeholder that comes back as data is never replaced; anything
+  that cannot be followed ends the replacing for the connection.
+- **Kafka**: a placeholder is replaced only inside the auth bytes of a SaslAuthenticate
+  request that is whole in one buffer, both lengths written again, and taken once; PLAIN and
+  OAUTHBEARER refuse to run without seclume's TLS; the check of the broker's host name
+  cannot be switched off.
+- **NATS**: the placeholder is replaced only as the value of `"pass"` or `"auth_token"`
+  right after `{` or `,`, JSON-escaped in native memory; a password the application set
+  itself is refused; with TLS configured nothing is sent before the handshake.
+- **RabbitMQ**: always TLS; the PLAIN response has to be exactly `\0user\0placeholder` or
+  nothing is sent; both lengths are written again in native memory.
+- **SSH**: signatures are made in OpenSSL; SHA-1 `ssh-rsa` is not offered; the ECDSA
+  signature is converted correctly, P-521's long form included.
+- **MongoDB**: SCRAM-SHA-256 only, the server's signature checked, proof and command wiped
+  once sent; an SRV target has to lie within the URL's domain and be a plain host name, a
+  TXT record may set three options and plain values only; TLS and the host name check cannot
+  be switched off, however the option is spelled.
+- **Elasticsearch, gRPC, JGit**: `https://` only; a placeholder's secret goes to the nodes
+  named, or to the first server it is written for - a redirect's host gets the placeholder.
+- **AWS**: the secret key is read for one signature and wiped; the session token is hashed
+  into the canonical request from native memory and written by the socket into the value of
+  the one `X-Amz-Security-Token` header of a request head, never into a body, a trailer, the
+  request target or another header; two such headers are refused. The container endpoint is
+  asked without TLS only at a link-local or loopback address; STS's refusal is reported by
+  its status, not its body. A presigned URL with temporary credentials is refused.
+- **Azure**: the account key is decoded and used in native memory for one signature; the
+  string to sign is compared with the SDK's by a test.
+- **GCP**: the service account file is read into native memory, the key decoded by OpenSSL
+  from there; only its public fields become strings.
+- **R2DBC**: the `password` option is refused; the SQL lexer leaves literals, comments,
+  E-strings, dollar quotes and Oracle's `q'...'` alone.
+
+### Accepted residuals
+
+- `seclume-http`: only the first placeholder in one HTTP/2 field value or one Basic credential
+  is replaced; a second goes out as the placeholder, which the server refuses.
+- `seclume-http`: a placeholder in any header line is replaced, so a header an application
+  fills from user input could carry one a user had seen - a placeholder is not a secret, but
+  it is bound to one server and has a random 96-bit nonce per process.
+- `seclume-redis`: `redis://` sends `AUTH` without TLS, as Redis does; `rediss://` is for
+  anything beyond the loopback.
+- MongoDB: a login reply may be 48 MB before it is refused - from a server whose certificate
+  was checked; and the wire headers are written in the machine's byte order, right on x86 and
+  ARM only.
+- `mongodb+srv://`: a host of three labels under a public suffix (`db.co.uk`) lets any name
+  under that suffix be a target, as the specification has it; the target's certificate is
+  still checked.
+- `seclume-aws`: `SeclumeS3Presigner` puts the bucket name into the host unchecked; a name
+  with a `/` or `#` gives a URL signed for another host, which S3 never sees. The name comes
+  from the application.
+- `AwsInstanceRole.use` holds its lock while the caller works with the credentials - a KMS
+  or Secrets Manager call - so those calls of one role run one after another.
+- `seclume-r2dbc`: the factory provider puts the host and database name into the JDBC URL
+  unencoded; both come from the application's configuration.
+
 ## The next review
 
-Not yet read with the same care: `seclume-keys` (key file parsing), the JWT signing key, the
-admission webhook's own TLS server, the access log's signing, `seclume-diff`. A round adds a
-section here, findings and the sound alike.
+Not yet read line by line: `SeclumeCollection` and `Iterables` of `seclume-mongodb-driver`,
+the options of each command (some 2800 lines) - read so far for how they take sessions and
+cursors and for the checks of update and replacement documents, without a finding. A
+round adds a section here, findings and the sound alike.
