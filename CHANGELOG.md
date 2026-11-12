@@ -15,6 +15,18 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **AWS: temporary credentials near their end no longer fail requests, and a request's head
+  costs a fiftieth.** A credentials source may answer with a set that is already inside the
+  five minutes before its expiry - the instance metadata service hands out the old one until it
+  has the next. Asked again for every request, each answer became a new generation, and the
+  fourth request closed the one the first had just been signed with: "a session token
+  placeholder whose credentials are gone". A source is now asked at most every five seconds,
+  and when it cannot be reached, the set at hand is used for as long as it is valid
+  (`TemporaryCredentialsRefreshTest`; the same in the core's `AwsInstanceRole`, where it was a
+  round trip to the metadata service for every use, `AwsInstanceRoleRefreshTest`). And
+  `SessionTokenSocket` copied the whole request head for every byte of it and wrote a chunked
+  body's framing a TLS record per byte: a 1500 byte head took 241 µs of CPU, now 4.4 µs; a
+  chunked upload of 64 KiB in 8 chunks 78 records, now 27 (`SessionTokenFramingTest`).
 - **Coverage of all the tests, wherever they ran.** One run each of the PostgreSQL, MySQL, SQL
   Server and Oracle jobs records coverage too, and the `coverage` job merges every job's and
   every module's data and reports each module from all of it - code of the core that the
