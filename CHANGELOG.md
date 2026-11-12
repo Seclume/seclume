@@ -32,6 +32,11 @@ All notable changes to seclume are recorded here. Versions follow
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
+- **MongoDB: a change stream on a dropped collection ends.** After the `invalidate` event the
+  server closes the stream's cursor. `hasNext()` went on asking for the next event of a cursor
+  that was gone, in a loop that never returned and kept a CPU busy; iterating
+  `collection.watch()` did not end when the collection was dropped. It now returns `false`
+  (`LocalChangeStreamTest.aStreamOnADroppedCollectionEnds`).
 - **Mail: a password a server sends back is not read.** A server that answers a line it does
   not understand with that line - "unknown command: PASS ..." - gave the password, written to
   it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
