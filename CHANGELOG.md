@@ -66,6 +66,15 @@ All notable changes to seclume are recorded here. Versions follow
   listed only a cut at the end as what it cannot find. Now it says that the first entries are
   not there and how to check them, and several files given in order are verified as one chain
   (`AuditVerifyTest`).
+- **Entries appended to an access log while it was closed are no longer signed by its next
+  checkpoint.** A log opened again continues its chain from its last line, and its next
+  checkpoint signs over everything before - also over entries that whoever could write the file
+  appended, correctly chained, while the application was down: they came out of
+  `AccessLogVerifier` vouched for. The `log.opened` entry of a log with a signing key now names
+  in `vouched` the last entry a checkpoint of that key had signed when the file was opened -
+  found from the end, under the next signature - and the verifier names the entries between as
+  vouched for by no checkpoint, whatever follows; after a crash that took the last checkpoint
+  too. Found in the third review round (`AccessLogRestartTest`).
 - **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
   the secret and its padded Base64 only. The usual leak is neither: a wire log's
   `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into

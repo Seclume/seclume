@@ -61,10 +61,18 @@ import space.seclume.secret.SecretProvider;
  * a KMS, so that whoever can write the file cannot sign for it. Checkpoints are
  * written every {@code checkpointEvery}, and when the log is closed.
  *
+ * <p>A log opened again continues its chain, and its next checkpoint signs
+ * over everything before - so the {@code log.opened} entry names, in
+ * {@code vouched}, the last entry a checkpoint of its key had signed when the
+ * file was opened. What stood after it - written before a crash took the last
+ * checkpoint, or by whoever could write the file while the application was
+ * down - the verifier names as signed by no one, whatever checkpoint follows.
+ *
  * <h2>What it proves, and what not</h2>
  *
  * <p>An entry changed or removed in the middle breaks the chain; a forged
- * chain breaks at the next signature. Entries removed from the end - with the
+ * chain breaks at the next signature, and one appended while the log was
+ * closed is named by the {@code vouched} of the next {@code log.opened}. Entries removed from the end - with the
  * checkpoints after them - leave a shorter, valid log: that is noticed only
  * against a checkpoint kept somewhere else, which is what a {@link #addSink
  * sink} is for - OpenTelemetry, syslog, a SIEM receive every entry as it is
@@ -131,8 +139,10 @@ public final class AccessLog implements AutoCloseable {
         this.lock = taken;
         FileChannel opened;
         String[] last;
+        long vouched;
         try {
             last = lastEntry(file);
+            vouched = last == null || signer == null ? 0 : lastVouched(file, signer.publicKey(), signerKey);
             opened = FileChannel.open(file, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                     StandardOpenOption.APPEND);
         } catch (IOException | RuntimeException e) {
@@ -146,6 +156,13 @@ public final class AccessLog implements AutoCloseable {
         Map<String, String> start = new LinkedHashMap<>();
         start.put("pid", Long.toString(ProcessHandle.current().pid()));
         start.put("signing", signer == null ? "none" : signerAlgorithm + " " + signerKey);
+        if (signer != null) {
+            // The next checkpoint signs over everything before it - also over
+            // what stood after the last checkpoint of this key when the file was
+            // opened: written before a crash, or by whoever could write the file.
+            // Where that starts goes into this entry, under the next signature.
+            start.put("vouched", Long.toString(vouched));
+        }
         append("log.opened", start);
         if (signer != null && checkpointEvery != null && !checkpointEvery.isZero()
                 && !checkpointEvery.isNegative()) {
@@ -445,6 +462,90 @@ public final class AccessLog implements AutoCloseable {
         return said.length() > 200 ? said.substring(0, 200) + "..." : said;
     }
 
+    /**
+     * The {@code seq} of the last checkpoint in {@code file} that {@code publicKey}'s
+     * key signed and whose signature holds, 0 when there is none - read from
+     * the end, a block at a time.
+     */
+    private static long lastVouched(Path file, byte[] publicKey, String fingerprint)
+            throws IOException {
+        java.security.PublicKey key;
+        try {
+            key = AccessLogVerifier.publicKey(publicKey);
+        } catch (java.security.GeneralSecurityException e) {
+            return 0;                                   // nothing it signed can be told
+        }
+        int block = 1 << 16;
+        try (FileChannel in = FileChannel.open(file, StandardOpenOption.READ);
+             Arena arena = Arena.ofConfined()) {
+            MemorySegment buffer = arena.allocate(block);
+            long end = in.size();
+            String carry = "";                          // the start of a line in the block after
+            while (end > 0) {
+                int n = (int) Math.min(end, block);
+                long start = end - n;
+                readFully(in, buffer.asSlice(0, n).asByteBuffer(), start);
+                StringBuilder text = new StringBuilder(n);
+                for (int i = 0; i < n; i++) {
+                    text.append((char) (buffer.get(ValueLayout.JAVA_BYTE, i) & 0xff));
+                }
+                text.append(carry);
+                int cut = start == 0 ? -1 : text.indexOf("\n");
+                if (cut < 0 && start > 0) {
+                    if (text.length() > 1 << 20) {
+                        return 0;                       // no entry is that long
+                    }
+                    carry = text.toString();
+                    end = start;
+                    continue;
+                }
+                carry = text.substring(0, Math.max(cut, 0));
+                String[] lines = text.substring(cut + 1).split("\n");
+                for (int i = lines.length - 1; i >= 0; i--) {
+                    long seq = vouchedBy(lines[i], key, fingerprint);
+                    if (seq > 0) {
+                        return seq;
+                    }
+                }
+                end = start;
+            }
+            return 0;
+        }
+    }
+
+    /** The {@code seq} of {@code line} if it is a checkpoint that holds for {@code key}, else 0. */
+    private static long vouchedBy(String line, java.security.PublicKey key, String fingerprint) {
+        if (!line.contains("\"event\":\"checkpoint\"")) {
+            return 0;
+        }
+        Map<String, String> fields = AccessLogVerifier.fields(line);
+        if (fields == null || !"checkpoint".equals(fields.get("event")) || fields.get("head") == null) {
+            return 0;
+        }
+        long seq;
+        try {
+            seq = Long.parseLong(fields.getOrDefault("seq", ""));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+        String head = fields.get("head");
+        // Of the right length to be read as one; what it says - and its seq -
+        // only the signature can vouch for.
+        if (head.length() != 64) {
+            return 0;
+        }
+        return AccessLogVerifier.signature(fields, seq, head, key, fingerprint) == null ? seq : 0;
+    }
+
+    /** {@code view} filled from {@code at} - or an exception: the file is shorter than it was. */
+    private static void readFully(FileChannel in, ByteBuffer view, long at) throws IOException {
+        while (view.hasRemaining()) {
+            if (in.read(view, at + view.position()) < 0) {
+                throw new java.io.EOFException("the access log became shorter while it was read");
+            }
+        }
+    }
+
     /** The last complete entry's {@code seq} and {@code hash}, or {@code null} for an empty file. */
     private static String[] lastEntry(Path file) throws IOException {
         if (!Files.exists(file) || Files.size(file) == 0) {
@@ -455,11 +556,7 @@ public final class AccessLog implements AutoCloseable {
         try (FileChannel in = FileChannel.open(file, StandardOpenOption.READ);
              Arena arena = Arena.ofConfined()) {
             MemorySegment tail = arena.allocate(window);
-            ByteBuffer view = tail.asByteBuffer();
-            in.position(size - window);
-            while (view.hasRemaining() && in.read(view) >= 0) {
-                // read the window
-            }
+            readFully(in, tail.asByteBuffer(), size - window);
             StringBuilder text = new StringBuilder(window);
             for (int i = 0; i < window; i++) {
                 text.append((char) (tail.get(ValueLayout.JAVA_BYTE, i) & 0xff));
