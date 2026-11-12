@@ -15,6 +15,12 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Kubernetes: the token is bound to the API server the client was made for.**
+  `SeclumeKubernetes.client(url)` registered the token's placeholder without a server, so the
+  token went to whichever server the client's first request reached - another one, if the
+  client was pointed elsewhere before it. It is bound to the URL's host and port now; any
+  other server gets the placeholder
+  (`KubernetesClientTest.theTokenGoesOnlyToTheServerTheClientWasMadeFor`).
 - **Oracle: `getColumns` names national character columns as a result set does.** The
   catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
   set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential
