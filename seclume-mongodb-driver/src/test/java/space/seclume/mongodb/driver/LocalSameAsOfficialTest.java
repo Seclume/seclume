@@ -405,6 +405,50 @@ class LocalSameAsOfficialTest {
         assertEquals(clientBulk(official, base + "_o"), clientBulk(seclume, base + "_s"));
     }
 
+    /**
+     * The results of a client bulkWrite come in a cursor, and when they do not
+     * fit one reply - two upserts whose ids are half the largest document each
+     * - the rest takes a getMore (the bulk write specification's "handles a
+     * cursor requiring a getMore"). The cursor belongs to the session the
+     * command ran in: without one of the application's that is a session of
+     * the driver's, and the getMore has to name it too.
+     */
+    @Test
+    void clientBulkWriteWhoseResultsNeedAGetMoreIsTheSame() {
+        String base = "zl_cbwmore_" + new ObjectId().toHexString();
+        assertEquals(clientBulkWithLargeResults(official, base + "_o"),
+                clientBulkWithLargeResults(seclume, base + "_s"));
+    }
+
+    private static List<Object> clientBulkWithLargeResults(MongoClient client, String name) {
+        com.mongodb.MongoNamespace namespace = new com.mongodb.MongoNamespace("seclume_test", name);
+        int half = 16 * 1024 * 1024 / 2;
+        List<Object> seen = new ArrayList<>();
+        try {
+            var result = client.bulkWrite(List.of(
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.updateOne(namespace,
+                            Filters.eq("_id", "a".repeat(half)), Updates.set("x", 1),
+                            com.mongodb.client.model.bulk.ClientUpdateOneOptions
+                                    .clientUpdateOneOptions().upsert(true)),
+                    com.mongodb.client.model.bulk.ClientNamespacedWriteModel.updateOne(namespace,
+                            Filters.eq("_id", "b".repeat(half)), Updates.set("x", 1),
+                            com.mongodb.client.model.bulk.ClientUpdateOneOptions
+                                    .clientUpdateOneOptions().upsert(true))),
+                    com.mongodb.client.model.bulk.ClientBulkWriteOptions.clientBulkWriteOptions()
+                            .verboseResults(true));
+            seen.add(result.getUpsertedCount());
+            var updates = result.getVerboseResults().orElseThrow().getUpdateResults();
+            seen.add(new java.util.TreeMap<>(updates).keySet());
+            for (var update : new java.util.TreeMap<>(updates).values()) {
+                String id = update.getUpsertedId().orElseThrow().asString().getValue();
+                seen.add(id.charAt(0) + " x " + id.length());
+            }
+        } finally {
+            client.getDatabase("seclume_test").getCollection(name).drop();
+        }
+        return seen;
+    }
+
     private static List<Object> clientBulk(MongoClient client, String base) {
         com.mongodb.MongoNamespace a = new com.mongodb.MongoNamespace("seclume_test", base + "_a");
         com.mongodb.MongoNamespace b = new com.mongodb.MongoNamespace("seclume_test", base + "_b");
