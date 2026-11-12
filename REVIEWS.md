@@ -156,6 +156,7 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 | 15 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
 | 16 | `seclume-aws` | A source that answered with temporary credentials already within five minutes of their end - the instance metadata service, until it has the next - was asked again for every request. Each answer was a new generation, three are kept, and the fourth request closed the credentials the first had just been signed with: its head was refused, "credentials are gone". The core's `AwsInstanceRole` asked the metadata service for every use under its lock. | low | #296 |
 | 17 | `seclume-aws` | `SessionTokenSocket` copied a request's whole head for each byte of it (241 µs of CPU for 1500 bytes, 4.4 µs now) and wrote a chunked body's framing a TLS record per byte. | low | #296 |
+| 18 | `seclume-mail` | The same as #12 for SMTP, POP3 and IMAP: a server that answers a line it did not understand with that line gave the password back, and every reply line became a `String`, a refusal the message of an exception. Lines that follow a credential are now searched for it in native memory, as it was sent and as it is, until the login is over. | medium | #298 |
 
 ### Open
 
@@ -245,8 +246,5 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 ## The next review
 
 Not yet read with the same care: the rest of `seclume-mongodb-driver` - topology, sessions,
-cursors, some ten thousand lines. And one thing known and not yet fixed: `seclume-mail` makes its exceptions of
-the server's reply lines, the one after the password among them - an SMTP, POP3 or IMAP server
-that repeats a line it did not understand would bring the password back as Redis 5 did
-(#293). Read in the code, not reproduced; to be masked the same way. A
+cursors, some ten thousand lines. A
 round adds a section here, findings and the sound alike.
