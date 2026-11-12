@@ -72,6 +72,19 @@ All notable changes to seclume are recorded here. Versions follow
   that was gone, in a loop that never returned and kept a CPU busy; iterating
   `collection.watch()` did not end when the collection was dropped. It now returns `false`
   (`LocalChangeStreamTest.aStreamOnADroppedCollectionEnds`).
+- **MongoDB: a cursor whose `getMore` got no answer is killed when it is closed.** Every failed
+  `getMore` was taken as the server's refusal, and the cursor's id forgotten. After a lost
+  connection or a timeout on this side the server still holds the cursor, and `close()` did
+  nothing: it stayed open there until the server's idle timeout. Such a cursor is not read on -
+  the server may have sent a batch nobody received - but `close()` now sends `killCursors` for
+  it (`LocalNothingCarriesOverTest.aCursorWhoseGetMoreGotNoAnswerIsKilledByClose`).
+- **MongoDB: `$merge` with the target's name alone gives its results.** `{ $merge: "name" }`
+  is the short form the server accepts. The pipeline wrote, and reading the results back then
+  failed, because only the document form was expected
+  (`LocalDriverTest.mergeIntoACollectionNamedByAString`).
+- **MongoDB: dropping the indexes of a collection that is not there is no error.** `dropIndex`
+  and `dropIndexes` passed the server's NamespaceNotFound on, where `drop()` and the official
+  driver do not (`LocalDriverTest.droppingTheIndexesOfNoCollectionIsNoError`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
