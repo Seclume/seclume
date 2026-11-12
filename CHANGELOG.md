@@ -15,6 +15,12 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **HTTP: a request's head is scanned once.** `seclume-http` looked for the end of a head in a
+  copy of the head so far, made for every byte of it, and passed a chunked body's size lines,
+  CRLFs and trailers on a byte - a TLS record - at a time. The framing's own work per request,
+  measured locally: a head of 590 bytes 78 µs → 9.8 µs, of 1491 bytes 316 µs → 15 µs, of 3999
+  bytes 1645 µs → 43 µs; a chunked upload of 64 KiB in 8 chunks 78 TLS records → 27. The bytes
+  sent are the same (`HttpFramingRunsTest`, and the model test as before).
 - **AWS: temporary credentials near their end no longer fail requests, and a request's head
   costs a fiftieth.** A credentials source may answer with a set that is already inside the
   five minutes before its expiry - the instance metadata service hands out the old one until it

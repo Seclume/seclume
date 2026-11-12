@@ -46,8 +46,13 @@ final class HttpFraming {
     private enum State { HEAD, BODY, CHUNK_SIZE, CHUNK_DATA, CHUNK_END, TRAILER }
 
     private State state = State.HEAD;
-    private final ByteArrayOutputStream head = new ByteArrayOutputStream();
+    /** The head so far - an array of this object's own: a stream locks for every byte. */
+    private byte[] head = new byte[1024]; // seclume-allow: a request head with placeholders - no secret
+    private int headLength;
     private final ByteArrayOutputStream line = new ByteArrayOutputStream();
+    /** CR LF CR LF, and the last four bytes of the head so far. */
+    private static final int BLANK_LINE = 0x0D0A0D0A;
+    private int headTail;
     private long remaining;
 
     /** Whether the next byte belongs to a request head. */
@@ -57,7 +62,7 @@ final class HttpFraming {
 
     /** How many bytes of the head are held so far. */
     int held() {
-        return head.size();
+        return headLength;
     }
 
     /**
@@ -65,15 +70,22 @@ final class HttpFraming {
      * has come - the framing then follows its body - else null
      */
     byte[] headByte(byte b) throws IOException {
-        head.write(b);
-        if (head.size() > MAX_HEAD) {
+        if (headLength >= MAX_HEAD) {
             throw new IOException("a request head of more than " + MAX_HEAD + " bytes");
         }
-        if (!endsWithBlankLine()) {
+        if (headLength == head.length) {
+            head = java.util.Arrays.copyOf(head, head.length * 2);
+        }
+        head[headLength++] = b;
+        // The last four bytes, kept as they come: looked up in a copy of the
+        // head so far, each byte of a head cost a copy of all before it.
+        headTail = (headTail << 8) | (b & 0xff);
+        if (headTail != BLANK_LINE) {
             return null;
         }
-        byte[] bytes = head.toByteArray();
-        head.reset();
+        headTail = 0;
+        byte[] bytes = java.util.Arrays.copyOf(head, headLength);
+        headLength = 0;
         String text = new String(bytes, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT); // seclume-allow: a request head with placeholders - no secret
         frame(text);
         return bytes;
@@ -167,15 +179,26 @@ final class HttpFraming {
                 yield n;
             }
             case CHUNK_END -> {
-                if (--remaining == 0) {
+                int n = (int) Math.min(remaining, Math.min(most, source.remaining()));
+                remaining -= n;
+                if (remaining == 0) {
                     state = State.CHUNK_SIZE;
                 }
-                yield 1;
+                yield n;
             }
             case CHUNK_SIZE, TRAILER -> {
-                byte b = source.get(source.position());
-                line.write(b);
-                if (b == '\n') {
+                // The line as far as it has come, in one piece: a chunk's size
+                // is one record on the wire, not one for each of its digits.
+                int from = source.position();
+                int limit = from + Math.min(most, source.remaining());
+                int at = from;
+                boolean ended = false;
+                while (at < limit && !ended) {
+                    byte b = source.get(at++);
+                    line.write(b);
+                    ended = b == '\n';
+                }
+                if (ended) {
                     String text = line.toString(StandardCharsets.US_ASCII).trim();
                     line.reset();
                     if (state == State.TRAILER) {
@@ -194,20 +217,10 @@ final class HttpFraming {
                         }
                     }
                 }
-                yield 1;
+                yield at - from;
             }
             case HEAD -> throw new IllegalStateException("a head is taken byte by byte");
         };
-    }
-
-    private boolean endsWithBlankLine() {
-        int size = head.size();
-        if (size < 4) {
-            return false;
-        }
-        byte[] bytes = head.toByteArray();
-        return bytes[size - 4] == '\r' && bytes[size - 3] == '\n' && bytes[size - 2] == '\r'
-                && bytes[size - 1] == '\n';
     }
 
     // ---- what goes into a head --------------------------------------------------------
