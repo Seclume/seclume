@@ -91,22 +91,24 @@ class TopologyHelloTest {
 
     @Test
     void aHelloThatCannotBeReadMakesTheServerUnknownAndNothingElse() {
-        List<BsonDocument> unreadable = List.of(
-                primary(2).append("tags", new BsonDocument("dc", new BsonInt32(5))),
-                primary(2).append("hosts", new BsonString("db1.example:27017")),
-                primary(2).append("hosts", new BsonArray(List.of(new BsonInt32(27017)))),
-                primary(2).append("hosts", new BsonArray(List.of(
+        // What is wrong with each, put into a hello that is newer than the last good one.
+        List<java.util.function.UnaryOperator<BsonDocument>> unreadable = List.of(
+                h -> h.append("tags", new BsonDocument("dc", new BsonInt32(5))),
+                h -> h.append("hosts", new BsonString("db1.example:27017")),
+                h -> h.append("hosts", new BsonArray(List.of(new BsonInt32(27017)))),
+                h -> h.append("hosts", new BsonArray(List.of(
                         new BsonString("db3.example:not-a-port")))),
-                primary(2).append("electionId", new BsonString("the newest")),
-                primary(2).append("setName", new BsonInt32(0)),
-                primary(2).append("topologyVersion", new BsonInt32(7)),
-                primary(2).append("topologyVersion", new BsonDocument()),
-                primary(2).append("lastWrite", new BsonString("just now")));
+                h -> h.append("electionId", new BsonString("the newest")),
+                h -> h.append("setName", new BsonInt32(0)),
+                h -> h.append("topologyVersion", new BsonInt32(7)),
+                h -> h.append("topologyVersion", new BsonDocument()),
+                h -> h.append("lastWrite", new BsonString("just now")));
         long counter = 2;
-        for (BsonDocument hello : unreadable) {
+        for (java.util.function.UnaryOperator<BsonDocument> wrong : unreadable) {
             topology.heard(FIRST, primary(counter++), 1_000_000);
             assertEquals(ServerType.REPLICA_SET_PRIMARY, server(FIRST).getType());
 
+            BsonDocument hello = wrong.apply(primary(counter++));
             assertDoesNotThrow(() -> topology.heard(FIRST, hello, 1_000_000), hello.toJson());
 
             ServerDescription after = server(FIRST);
