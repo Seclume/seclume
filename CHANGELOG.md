@@ -15,6 +15,13 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **MongoDB: a `hello` that cannot be read no longer ends the monitor.** One thread looks at
+  the servers. A `hello` with a field of another type than expected - `tags` that are not
+  strings, a member that is no address - was an exception thrown through that thread, and no
+  server was looked at again: a primary that stepped down stayed the primary for this client.
+  Such a `hello` now makes its server unknown, with the reason, and the monitor goes on
+  (`TopologyHelloTest`). And closing a client no longer waits `serverSelectionTimeoutMS` to
+  end its server sessions when no server is known.
 - **AWS: temporary credentials near their end no longer fail requests, and a request's head
   costs a fiftieth.** A credentials source may answer with a set that is already inside the
   five minutes before its expiry - the instance metadata service hands out the old one until it
@@ -27,16 +34,25 @@ All notable changes to seclume are recorded here. Versions follow
   `SessionTokenSocket` copied the whole request head for every byte of it and wrote a chunked
   body's framing a TLS record per byte: a 1500 byte head took 241 µs of CPU, now 4.4 µs; a
   chunked upload of 64 KiB in 8 chunks 78 records, now 27 (`SessionTokenFramingTest`).
+- **MongoDB: a `hello` cannot raise the message limit above 48 MB.** The size of a reply is
+  checked against the server's `maxMessageSizeBytes` before the bytes for it are allocated -
+  and that number was taken from the `hello` as it came, which is answered before the login. A
+  peer that named 2 GB there and announced a reply of 2 GB had the client allocate them. The
+  limit is now what the server names and never more than the 48 MB every server has had; a
+  number that is none is refused (`MessageLimitTest`). And only the reply's own `cursor` keeps
+  its batch as bytes: a document named `cursor` inside the application's data - what a
+  `findAndModify` returns - came back with documents that could not be changed (`OpMsgTest`).
 - **Coverage of all the tests, wherever they ran.** One run each of the PostgreSQL, MySQL, SQL
   Server and Oracle jobs records coverage too, and the `coverage` job merges every job's and
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
-- **MongoDB: a change stream on a dropped collection ends.** After the `invalidate` event the
-  server closes the stream's cursor. `hasNext()` went on asking for the next event of a cursor
-  that was gone, in a loop that never returned and kept a CPU busy; iterating
-  `collection.watch()` did not end when the collection was dropped. It now returns `false`
-  (`LocalChangeStreamTest.aStreamOnADroppedCollectionEnds`).
+- **Redis: a value is not read byte by byte.** Every byte a Redis connection writes goes
+  through the follower that finds the password's place in `AUTH` and `HELLO`. It looked at
+  each one - at a value's too, at about 6 ns a byte. What is left of a bulk string nobody has
+  to look at is now passed over at once: a `SET` of 1 KiB 6.7 µs → 0.3 µs of the follower's own
+  work, of 64 KiB 351 µs → 0.5 µs (measured locally). What it finds is the same
+  (`RespPasswordSlotTest`, with random commands in random writes).
 - **Mail: a password a server sends back is not read.** A server that answers a line it does
   not understand with that line - "unknown command: PASS ..." - gave the password, written to
   it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
@@ -45,6 +61,11 @@ All notable changes to seclume are recorded here. Versions follow
   into native memory first and searched for it - as it was sent (base64) and as it is - and
   what is found is overwritten with `*` (`EchoMask` in the core, `EchoedCredentialTest`,
   `EchoMaskTest`). No protection from the server itself, which was given the password.
+- **MongoDB: a change stream on a dropped collection ends.** After the `invalidate` event the
+  server closes the stream's cursor. `hasNext()` went on asking for the next event of a cursor
+  that was gone, in a loop that never returned and kept a CPU busy; iterating
+  `collection.watch()` did not end when the collection was dropped. It now returns `false`
+  (`LocalChangeStreamTest.aStreamOnADroppedCollectionEnds`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held

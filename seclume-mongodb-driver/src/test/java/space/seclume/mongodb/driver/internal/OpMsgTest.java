@@ -93,6 +93,38 @@ class OpMsgTest {
         body.getDocument("cursor").put("changed", new BsonInt32(1));   // still a plain document
     }
 
+    /**
+     * Only the reply's own cursor: a document named cursor inside what the
+     * application stored - a findAndModify's value - is its data, read into
+     * documents that can be changed like any other.
+     */
+    @Test
+    void aDocumentNamedCursorFurtherInIsData() {
+        BsonDocument stored = new BsonDocument("_id", new BsonInt32(1))
+                .append("cursor", new BsonDocument("firstBatch",
+                        new BsonArray(List.of(new BsonDocument("a", new BsonInt32(1)))))
+                        .append("nextBatch",
+                                new BsonArray(List.of(new BsonDocument("b", new BsonInt32(2))))));
+        BsonDocument sent = new BsonDocument("value", stored)
+                .append("cursor", new BsonDocument("id", new BsonInt32(0))
+                        .append("firstBatch", new BsonArray(List.of(new BsonDocument("inner",
+                                new BsonDocument("cursor", new BsonDocument("firstBatch",
+                                        new BsonArray(List.of(new BsonDocument("c",
+                                                new BsonInt32(3)))))))))))
+                .append("ok", new BsonInt32(1));
+        BsonDocument body = OpMsg.parse(reply(9, 0, body(sent)), 9);
+
+        assertEquals(sent, body);
+        BsonDocument data = body.getDocument("value").getDocument("cursor");
+        assertTrue(!(data.getArray("firstBatch").get(0) instanceof org.bson.RawBsonDocument),
+                "the application's firstBatch");
+        assertTrue(!(data.getArray("nextBatch").get(0) instanceof org.bson.RawBsonDocument),
+                "the application's nextBatch");
+        data.getArray("firstBatch").get(0).asDocument().put("changed", new BsonInt32(1));
+        assertTrue(body.getDocument("cursor").getArray("firstBatch").get(0)
+                instanceof org.bson.RawBsonDocument, "the reply's own batch stays its bytes");
+    }
+
     @Test
     void aPlainReplyIsItsBody() {
         BsonDocument body = OpMsg.parse(reply(9, 0, body(new BsonDocument("ok",
