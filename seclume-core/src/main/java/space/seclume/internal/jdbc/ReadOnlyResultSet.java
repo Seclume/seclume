@@ -428,17 +428,20 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final byte getByte(int columnIndex) throws SQLException {
-        return (byte) getLong(columnIndex);
+        // Up to 255: an unsigned TINYINT read as a byte, as it always was.
+        return (byte) fitting(getLong(columnIndex), Byte.MIN_VALUE, 255, columnIndex, "a byte");
     }
 
     @Override
     public final short getShort(int columnIndex) throws SQLException {
-        return (short) getLong(columnIndex);
+        return (short) fitting(getLong(columnIndex), Short.MIN_VALUE, Short.MAX_VALUE,
+                columnIndex, "a short");
     }
 
     @Override
     public final int getInt(int columnIndex) throws SQLException {
-        return (int) getLong(columnIndex);
+        return (int) fitting(getLong(columnIndex), Integer.MIN_VALUE, Integer.MAX_VALUE,
+                columnIndex, "an int");
     }
 
     @Override
@@ -474,6 +477,22 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         } catch (NumberFormatException notANumber) {
             throw notANumber(columnIndex, "a number", notANumber);
         }
+    }
+
+    /**
+     * {@code value} if it is within the type asked for. A number cut to the
+     * type's bits is another number, with nothing to say so: 5,000,000,000
+     * read as an int would be 705,032,704. The value is left out of the
+     * message, as in {@link #notANumber}.
+     */
+    private static long fitting(long value, long least, long most, int columnIndex, String what)
+            throws SQLException {
+        if (value < least || value > most) {
+            throw new java.sql.SQLDataException("column " + columnIndex + " holds a number "
+                    + "that does not fit " + what + " - read it with getLong or getBigDecimal",
+                    "22003");
+        }
+        return value;
     }
 
     /**

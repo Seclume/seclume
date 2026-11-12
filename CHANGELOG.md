@@ -15,6 +15,20 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **JDBC: an integer that does not fit is refused, not cut.** `getInt`, `getShort` and
+  `getByte` - of a result set of any of the four drivers and of a call's OUT parameters - cast
+  the value to the type: 5,000,000,000 read with `getInt` was 705,032,704, with nothing to say
+  so. Now an `SQLDataException` with SQLSTATE 22003; the value is not in the message. `getByte`
+  still takes 128 to 255, an unsigned `TINYINT`'s bits (`NumericResultSetTest`,
+  `OutParametersTest`).
+- **JDBC: a query prepared with `prepareCall` takes `executeLargeUpdate` and `setObject` with
+  an `SQLType`.** `QueryAsCallable` left out the methods JDBC 4.2 added with a default body,
+  and that body throws "not implemented"; they go to the query now, as the same text prepared
+  with `prepareStatement` has them. `QueryAsCallableTest` checks every method of the interface:
+  delegated with its arguments, or refused.
+- **JDBC: OUT parameters.** Text that is no date, time or timestamp is an `SQLException`, not
+  an `IllegalArgumentException`; `setDate`, `setTime` and `setTimestamp` by name pass their
+  `Calendar` on instead of dropping it (`OutParametersTest`).
 - **Oracle: `getColumns` names national character columns as a result set does.** The
   catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
   set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential
