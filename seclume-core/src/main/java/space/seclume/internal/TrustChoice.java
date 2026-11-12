@@ -54,10 +54,43 @@ public final class TrustChoice {
     /**
      * One connection's trust.
      *
-     * @param rootCert a CA file, or null for the JVM's trust store
-     * @param pin      the SHA-256 of the server's public key, or null
+     * @param rootCert     a CA file, or null
+     * @param pin          the SHA-256 of the server's public key, or null
+     * @param certificates the CA certificates themselves, as PEM, or null -
+     *                     see {@link #ofCertificates}; with neither this nor
+     *                     a file, the JVM's trust store
      */
-    public record Choice(String rootCert, byte[] pin) {
+    public record Choice(String rootCert, byte[] pin, String certificates) {
+
+        /** A CA file or the JVM's trust store, and perhaps a pin. */
+        public Choice(String rootCert, byte[] pin) {
+            this(rootCert, pin, null);
+        }
+
+        /** Whether anything but the JVM's trust store was chosen to check a chain against. */
+        boolean namesAnchors() {
+            return rootCert != null || certificates != null;
+        }
+    }
+
+    /**
+     * Trust in the CA certificates of {@code pem} themselves, held in memory -
+     * for a caller that has them from somewhere a file path cannot name: a
+     * JKS or PKCS12 store, a configuration value. A file would be read again
+     * at every connection, which is right for one the operator keeps and
+     * wrong for a copy written to a temporary directory, where a cleaner
+     * removes it and anybody may put another in its place.
+     *
+     * @param pin {@code sha256/...} as {@code tlsPin} takes it, or null
+     * @throws IllegalArgumentException if {@code pem} holds no certificate
+     */
+    public static Choice ofCertificates(String pem, String pin) {
+        try {
+            store(null, pem);                                   // refused here, not at the first connection
+            return new Choice(null, pin == null ? null : parsePin(pin), pem);
+        } catch (IOException | GeneralSecurityException | SQLException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
     }
 
     /**
@@ -244,9 +277,9 @@ public final class TrustChoice {
     static CertificateTrust certificateTrust() throws IOException {
         Choice choice = current();
         try {
-            return choice == null || choice.rootCert() == null
+            return choice == null || !choice.namesAnchors()
                     ? CertificateTrust.ofDefaultTrustStore()
-                    : CertificateTrust.of(store(choice.rootCert()));
+                    : CertificateTrust.of(store(choice.rootCert(), choice.certificates()));
         } catch (GeneralSecurityException e) {
             throw new IOException("cannot read the trust store, so no certificate could be "
                     + "checked: " + e.getMessage(), e);
@@ -261,12 +294,12 @@ public final class TrustChoice {
     public static SSLContext sslContext() throws IOException {
         Choice choice = current();
         try {
-            if (choice == null || choice.rootCert() == null) {
+            if (choice == null || !choice.namesAnchors()) {
                 return SSLContext.getDefault();
             }
             TrustManagerFactory factory = TrustManagerFactory.getInstance(
                     TrustManagerFactory.getDefaultAlgorithm());
-            factory.init(store(choice.rootCert()));
+            factory.init(store(choice.rootCert(), choice.certificates()));
             SSLContext context = SSLContext.getInstance("TLSv1.3");
             context.init(null, factory.getTrustManagers(), null);
             return context;
@@ -317,11 +350,18 @@ public final class TrustChoice {
             java.util.Map.of("aws-rds", "aws-rds-global-bundle.pem");
 
     static KeyStore store(String path) throws IOException, GeneralSecurityException {
+        return store(path, null);
+    }
+
+    /** The anchors: the certificates of {@code pem} when given, else those of the file at {@code path}. */
+    static KeyStore store(String path, String pem) throws IOException, GeneralSecurityException {
         KeyStore store = KeyStore.getInstance(KeyStore.getDefaultType());
         store.load(null, null);
         int n = 0;
-        String bundled = BUNDLES.get(path);
-        try (InputStream in = bundled != null ? TrustChoice.class.getResourceAsStream(bundled)
+        String bundled = pem != null ? null : BUNDLES.get(path);
+        try (InputStream in = pem != null
+                ? new java.io.ByteArrayInputStream(pem.getBytes(java.nio.charset.StandardCharsets.US_ASCII)) // seclume-allow: CA certificates - public
+                : bundled != null ? TrustChoice.class.getResourceAsStream(bundled)
                 : Files.newInputStream(Path.of(path))) {
             if (in == null) {
                 throw new IOException("the bundled CA file " + bundled + " is missing");
@@ -332,7 +372,8 @@ public final class TrustChoice {
             }
         }
         if (n == 0) {
-            throw new GeneralSecurityException(path + " holds no certificate");
+            throw new GeneralSecurityException((pem != null ? "the trusted certificates given"
+                    : path) + " holds no certificate");
         }
         return store;
     }

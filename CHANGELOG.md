@@ -287,6 +287,14 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeSslSocketFactory.placeholder(spec, servers)` names the servers for a secret several
   take (`PlaceholderServerTest`, 8 tests: HTTP/1.1, Basic, HTTP/2, a cluster, a race of first
   requests).
+- **Kafka: the trusted certificates of a JKS or PKCS12 store stay in memory.**
+  `SeclumeSslEngineFactory` wrote them - and those of `ssl.truststore.certificates` - to a file
+  in the temporary directory, and that file was read again at every connection. A cleaner that
+  removed it after its days ended every reconnect, and whoever then wrote a file of that name -
+  the directory is everybody's - chose which broker this client trusts with its password. They
+  are read once and held (`TrustChoice.ofCertificates`); a PEM trust store named by its path is
+  still read at every connection, as `tlsRootCert` is (`TrustStoreInMemoryTest`,
+  `TrustChoiceTest`). Found in the third review round.
 - **The PostgreSQL and MySQL drivers on Windows and macOS against real servers.** Linux x64
   was the only platform whose CI talked to databases. `postgresql-platforms` and
   `mysql-platforms` run the drivers' tests on Windows (the image's PostgreSQL 17 and MySQL 8.4)

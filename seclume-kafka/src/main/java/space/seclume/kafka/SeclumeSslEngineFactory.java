@@ -2,7 +2,6 @@ package space.seclume.kafka;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
@@ -48,7 +47,10 @@ import space.seclume.internal.TrustChoice;
  * <p>The broker's certificate is always checked, its host name included:
  * against {@code ssl.truststore.location} (PEM, JKS or PKCS12) or
  * {@code ssl.truststore.certificates} when given, else against the JVM's trust
- * store; {@code seclume.tls.pin=sha256/...} pins the broker's key instead.
+ * store; {@code seclume.tls.pin=sha256/...} pins the broker's key instead. A
+ * PEM file is read at every connection, so a renewed CA is taken up; the
+ * certificates of a JKS or PKCS12 store and those given inline are read once
+ * and kept in memory.
  * TLS 1.3 only. Client certificates ({@code ssl.keystore.*}) are refused.
  */
 public final class SeclumeSslEngineFactory implements SslEngineFactory {
@@ -59,10 +61,14 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
     private static final AtomicBoolean CONFIGURED = new AtomicBoolean();
 
     private TrustChoice.Choice trust;
-    private Path madeTrustFile;
 
     /** For Kafka, which makes one per client from its class name. */
     public SeclumeSslEngineFactory() {
+    }
+
+    /** What a broker's certificate is checked against - for the tests. */
+    TrustChoice.Choice trust() {
+        return trust;
     }
 
     /** Whether any Kafka client in this JVM encrypts through this factory. */
@@ -86,12 +92,15 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
                         + "read by the JDK onto the heap");
             }
         }
-        String rootCert = trustFile(configs);
         String pin = string(configs, PIN);
-        if (rootCert != null || pin != null) {
+        String certificates = trustedCertificates(configs);
+        String file = certificates != null ? null : pemFile(configs);
+        if (certificates != null) {
+            trust = TrustChoice.ofCertificates(certificates, pin);
+        } else if (file != null || pin != null) {
             Properties named = new Properties();
-            if (rootCert != null) {
-                named.setProperty(TrustChoice.ROOT_CERT, rootCert);
+            if (file != null) {
+                named.setProperty(TrustChoice.ROOT_CERT, file);
             }
             if (pin != null) {
                 named.setProperty(TrustChoice.PIN, pin);
@@ -140,32 +149,32 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
 
     @Override
     public void close() {
-        if (madeTrustFile != null) {
-            try {
-                Files.deleteIfExists(madeTrustFile);
-            } catch (IOException ignored) {
-                // a temporary file of public certificates
-            }
-        }
+        // nothing is held but the trusted certificates, which are public
+    }
+
+    /** A PEM trust store's file - the operator's own, read at every connection as {@code tlsRootCert} is. */
+    private static String pemFile(Map<String, ?> configs) {
+        String type = string(configs, "ssl.truststore.type");
+        String location = string(configs, "ssl.truststore.location");
+        return location != null && (type == null || type.equalsIgnoreCase("PEM")) ? location : null;
     }
 
     /**
-     * The trust store as a file of PEM certificates, which is what
-     * {@code tlsRootCert} reads: a PEM file as it is, a JKS or PKCS12 store
-     * and inline certificates written out - CA certificates, public.
+     * The CA certificates of {@code ssl.truststore.certificates}, or of a
+     * JKS or PKCS12 store, as PEM - public, and kept in memory: null when
+     * there is neither. Not written out for {@code tlsRootCert} to read, as
+     * they were until 11.11.2026: a file in the temporary directory is one a
+     * cleaner removes and anybody else may write.
      */
-    private String trustFile(Map<String, ?> configs) {
+    private static String trustedCertificates(Map<String, ?> configs) {
         String type = string(configs, "ssl.truststore.type");
         String location = string(configs, "ssl.truststore.location");
         Object inline = configs.get("ssl.truststore.certificates");
         if (inline != null) {
-            return write(inline instanceof Password p ? p.value() : inline.toString());
+            return inline instanceof Password p ? p.value() : inline.toString();
         }
-        if (location == null) {
+        if (location == null || type == null || type.equalsIgnoreCase("PEM")) {
             return null;
-        }
-        if (type == null || type.equalsIgnoreCase("PEM")) {
-            return location;
         }
         Object password = configs.get("ssl.truststore.password");
         char[] storePassword = password == null ? null // seclume-allow: a trust store's integrity password, which Kafka's configuration holds as a String anyway
@@ -186,7 +195,7 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
             if (pem.isEmpty()) {
                 throw new IllegalArgumentException(location + " holds no certificate");
             }
-            return write(pem.toString());
+            return pem.toString();
         } catch (IOException | GeneralSecurityException e) {
             throw new IllegalArgumentException("cannot read the trust store " + location + ": "
                     + e.getMessage(), e);
@@ -194,18 +203,6 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
             if (storePassword != null) {
                 java.util.Arrays.fill(storePassword, '\0');
             }
-        }
-    }
-
-    private String write(String pem) {
-        try {
-            madeTrustFile = Files.createTempFile("seclume-kafka-trust", ".pem");
-            madeTrustFile.toFile().deleteOnExit();
-            Files.writeString(madeTrustFile, pem, StandardCharsets.US_ASCII);
-            return madeTrustFile.toString();
-        } catch (IOException e) {
-            throw new IllegalArgumentException("cannot write the trusted certificates out: "
-                    + e.getMessage(), e);
         }
     }
 
