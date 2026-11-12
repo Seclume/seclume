@@ -126,7 +126,9 @@ checkpoint (#261).
 Property and model tests of the parsers that decide where a secret goes, then the modules
 the last round named and the rest of the network-facing ones: `seclume-keys`, `seclume-jwt`,
 the admission webhook's server, the access log, `seclume-diff`, `seclume-http`,
-`seclume-mail`, `seclume-ldap`, `seclume-r2dbc`, `seclume-redis`, `seclume-kafka`. Every finding was reproduced by a test that
+`seclume-mail`, `seclume-ldap`, `seclume-r2dbc`, `seclume-redis`, `seclume-kafka`,
+`seclume-nats`, `seclume-rabbitmq`, `seclume-ssh`, `seclume-elasticsearch`, `seclume-grpc`,
+`seclume-jgit`, and of MongoDB the URL, the SRV lookup and the logins. Every finding was reproduced by a test that
 failed before its fix.
 
 The first run of the differential tests in CI (#286, run 42982946717) found no difference
@@ -149,7 +151,8 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 | 11 | PostgreSQL | The application's own `DISCARD ALL` or `DEALLOCATE ALL` dropped every prepared statement on the server, and the driver went on using its cached plans and those of open statements: each failed with `prepared statement "seclume_1" does not exist` until the connection was closed. | low | #291 |
 | 12 | `seclume-redis` | A server that does not know a command answers with its arguments: Redis 5 has no `HELLO`, and gave the password of Lettuce's `HELLO 3 AUTH user password` - written in from native memory - back in its error. Lettuce made a `String` of that line, the message of an exception; so did the login for Jedis of a server without `AUTH`. Errors that follow a password are now searched for it before the client reads them. | medium | #293 |
 | 13 | `seclume-kafka` | The CA certificates of a JKS or PKCS12 trust store were written to a file in the temporary directory and read again at every connection: a cleaner that removed it ended every reconnect, and a file someone else wrote under that name decided whom the client trusts. | low | #294 |
-| 14 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
+| 14 | `seclume-nats` | Over `nats://` without TLS the `CONNECT` line, the password written into it in native memory, went to the socket's stream through a heap array that was left as it was. | low | #295 |
+| 15 | `seclume-diff` | The differential tests against pgjdbc, Connector/J, mssql-jdbc and ojdbc skip without a server, and no CI job started one: of the module CI ran `PgBouncerTest` alone, while TESTING.md and SECURITY-QUALITY.md said every pull request. Oracle's `getColumns` was never compared, in addition (#8). | process | #286 |
 
 ### Open
 
@@ -187,6 +190,19 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
   request that is whole in one buffer, both lengths written again, and taken once; PLAIN and
   OAUTHBEARER refuse to run without seclume's TLS; the check of the broker's host name
   cannot be switched off.
+- **NATS**: the placeholder is replaced only as the value of `"pass"` or `"auth_token"`
+  right after `{` or `,`, JSON-escaped in native memory; a password the application set
+  itself is refused; with TLS configured nothing is sent before the handshake.
+- **RabbitMQ**: always TLS; the PLAIN response has to be exactly `\0user\0placeholder` or
+  nothing is sent; both lengths are written again in native memory.
+- **SSH**: signatures are made in OpenSSL; SHA-1 `ssh-rsa` is not offered; the ECDSA
+  signature is converted correctly, P-521's long form included.
+- **MongoDB**: SCRAM-SHA-256 only, the server's signature checked, proof and command wiped
+  once sent; an SRV target has to lie within the URL's domain and be a plain host name, a
+  TXT record may set three options and plain values only; TLS and the host name check cannot
+  be switched off, however the option is spelled.
+- **Elasticsearch, gRPC, JGit**: `https://` only; a placeholder's secret goes to the nodes
+  named, or to the first server it is written for - a redirect's host gets the placeholder.
 - **R2DBC**: the `password` option is refused; the SQL lexer leaves literals, comments,
   E-strings, dollar quotes and Oracle's `q'...'` alone.
 
@@ -199,13 +215,21 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
   it is bound to one server and has a random 96-bit nonce per process.
 - `seclume-redis`: `redis://` sends `AUTH` without TLS, as Redis does; `rediss://` is for
   anything beyond the loopback.
+- MongoDB: a login reply may be 48 MB before it is refused - from a server whose certificate
+  was checked; and the wire headers are written in the machine's byte order, right on x86 and
+  ARM only.
+- `mongodb+srv://`: a host of three labels under a public suffix (`db.co.uk`) lets any name
+  under that suffix be a target, as the specification has it; the target's certificate is
+  still checked.
 - `seclume-r2dbc`: the factory provider puts the host and database name into the JDBC URL
   unencoded; both come from the application's configuration.
 
 ## The next review
 
-Not yet read with the same care: `seclume-ssh`, `seclume-jgit`, `seclume-grpc`, the MongoDB
-driver, `seclume-rabbitmq`, `seclume-nats`, `seclume-elasticsearch`, and - after the Redis
-finding - every other place where a server's error text becomes a `String`: whether it can
-carry back what was sent. A
+Not yet read with the same care: the rest of `seclume-mongodb-driver` - topology, sessions,
+cursors, some ten thousand lines - and the cloud providers (`seclume-aws`, `seclume-azure`,
+`seclume-gcp`). And one thing known and not yet fixed: `seclume-mail` makes its exceptions of
+the server's reply lines, the one after the password among them - an SMTP, POP3 or IMAP server
+that repeats a line it did not understand would bring the password back as Redis 5 did
+(#293). Read in the code, not reproduced; to be masked the same way. A
 round adds a section here, findings and the sound alike.
