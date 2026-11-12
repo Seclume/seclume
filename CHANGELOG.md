@@ -15,6 +15,15 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
+  Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
+  second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a
+  secret that got one a byte further in went into the log readable, in a token's payload for
+  one. Percent-encoding is now also found with lower-case hex digits (`%2f`). A line is
+  scanned once per length of a form, not once per length and form: with ten secrets a
+  174-character line took 142 µs and takes 18.5 µs, with one 8.8 and 2.6 µs
+  (`SecretMaskerTest.urlSafeBase64InsideALongerTextIsMaskedAtEveryOffset`,
+  `everyOneOfManySecretsIsMasked`).
 - **Oracle: `getColumns` names national character columns as a result set does.** The
   catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
   set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential
