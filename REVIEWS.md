@@ -105,6 +105,8 @@ in round 1: what the drivers send under the default `tls=prefer`.
 | 7 | `seclume-crac` | Private keys in OpenSSL's or CNG's memory - a TLS server's or client's, a service account's, SSH and JWT signing keys - stayed for the life of the application and were not counted: a checkpoint was taken with them in the image while FEATURES.md said nothing secret was left. | medium | #261 |
 | 19 | `seclume-mongodb-driver` | The largest reply was whatever the `hello` named as `maxMessageSizeBytes` - answered before the login - and a reply's announced length is allocated once it is below that: a server naming 2 GB had the client allocate 2 GB for a 16-byte header. Capped at the 48 MB of every server. | low | #299 |
 | 20 | `seclume-mongodb-driver` | A document named `cursor` inside the application's data was read like the reply's cursor: its `firstBatch` documents came back immutable. | low | #299 |
+| 21 | `seclume-mongodb-driver` | The monitor - one thread for all servers - read a `hello` outside its `try`: one with a field of an unexpected type (`tags`, `hosts`, `electionId`, a member that is no address) threw through the thread and ended it. No server was looked at again for the life of the client. | medium | #300 |
+| 22 | `seclume-mongodb-driver` | `close()` waited `serverSelectionTimeoutMS` for a server to end its sessions on, when none was known. | low | #300 |
 
 ### Open
 
@@ -247,7 +249,7 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 
 ## The next review
 
-Not yet read with the same care: of `seclume-mongodb-driver` the topology (`Topology`, some
-1500 lines) and the API classes above it; `OpMsg`, `MongoSession`, `ServerPool` and
-`LogicalSession` are read. A
+Not yet read with the same care: of `seclume-mongodb-driver` the API classes above the
+topology (`SeclumeCollection`, `Iterables`, `ChangeStreams`, `ClientBulkWrites`); the wire
+(`OpMsg`), `MongoSession`, `ServerPool`, `LogicalSession` and `Topology` are read. A
 round adds a section here, findings and the sound alike.
