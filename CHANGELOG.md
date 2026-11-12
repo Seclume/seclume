@@ -61,6 +61,11 @@ All notable changes to seclume are recorded here. Versions follow
   into native memory first and searched for it - as it was sent (base64) and as it is - and
   what is found is overwritten with `*` (`EchoMask` in the core, `EchoedCredentialTest`,
   `EchoMaskTest`). No protection from the server itself, which was given the password.
+- **MongoDB: a change stream on a dropped collection ends.** After the `invalidate` event the
+  server closes the stream's cursor. `hasNext()` went on asking for the next event of a cursor
+  that was gone, in a loop that never returned and kept a CPU busy; iterating
+  `collection.watch()` did not end when the collection was dropped. It now returns `false`
+  (`LocalChangeStreamTest.aStreamOnADroppedCollectionEnds`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held

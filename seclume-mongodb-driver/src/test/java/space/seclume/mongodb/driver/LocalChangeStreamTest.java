@@ -122,6 +122,34 @@ class LocalChangeStreamTest {
     }
 
     /**
+     * A collection that is dropped ends the streams that watch it: a drop, an
+     * invalidate, and the server closes the cursor. hasNext() then says so -
+     * it does not go on asking a cursor that is gone, in a loop nothing ends.
+     */
+    @Test
+    @Timeout(60)
+    void aStreamOnADroppedCollectionEnds() {
+        try (MongoClient client = SeclumeMongoClients.create(url)) {
+            MongoCollection<Document> things = fresh(client);
+            List<OperationType> seen = new java.util.ArrayList<>();
+            try (MongoChangeStreamCursor<ChangeStreamDocument<Document>> stream = things.watch()
+                    .maxAwaitTime(200, TimeUnit.MILLISECONDS).cursor()) {
+                things.insertOne(new Document("_id", 1));
+                things.drop();
+                while (stream.hasNext()) {
+                    seen.add(stream.next().getOperationType());
+                }
+                assertEquals(List.of(OperationType.INSERT, OperationType.DROP,
+                        OperationType.INVALIDATE), seen);
+                assertNull(stream.tryNext(), "an event after the end");
+                assertNotNull(stream.getResumeToken());
+            } finally {
+                things.drop();
+            }
+        }
+    }
+
+    /**
      * The connection under the stream breaks on a getMore: the stream opens
      * again from its resume token, and every event comes once.
      */
