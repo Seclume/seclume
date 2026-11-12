@@ -42,7 +42,8 @@ final class Sasl {
                 MemorySegment.copy(user, 0, at, ValueLayout.JAVA_BYTE, 1, user.length);
                 at.set(ValueLayout.JAVA_BYTE, 1 + user.length, (byte) 0);
                 MemorySegment.copy(password.segment(), 0, at, 2 + user.length, password.length());
-                base64Line(wire, prefix, at, length);
+                wire.guard(password.segment(), password.length());
+                base64Line(wire, prefix, at, length, 2 + user.length);
             }
         }
     }
@@ -63,7 +64,8 @@ final class Sasl {
                 MemorySegment.copy(token.segment(), 0, at, head.length, token.length());
                 at.set(ValueLayout.JAVA_BYTE, head.length + token.length(), (byte) 1);
                 at.set(ValueLayout.JAVA_BYTE, head.length + token.length() + 1, (byte) 1);
-                base64Line(wire, prefix, at, length);
+                wire.guard(token.segment(), token.length());
+                base64Line(wire, prefix, at, length, head.length);
             }
         }
     }
@@ -71,7 +73,8 @@ final class Sasl {
     /** The password alone, base64, with CRLF - the second step of SMTP's LOGIN. */
     static void passwordBase64(MailWire wire) throws IOException {
         try (SecretScope password = SecretScope.fromProvider(wire.settings().secret)) {
-            base64Line(wire, "", password.segment(), password.length());
+            wire.guard(password.segment(), password.length());
+            base64Line(wire, "", password.segment(), password.length(), 0);
         }
     }
 
@@ -91,6 +94,7 @@ final class Sasl {
                 MemorySegment.copy(password.segment(), 0, out, head.length, password.length());
                 out.set(ValueLayout.JAVA_BYTE, head.length + password.length(), (byte) '\r');
                 out.set(ValueLayout.JAVA_BYTE, head.length + password.length() + 1, (byte) '\n');
+                wire.guard(password.segment(), password.length());
                 wire.write(out.asSlice(0, length).asByteBuffer());
             }
         }
@@ -138,6 +142,7 @@ final class Sasl {
                 MemorySegment.copy(password.segment(), 0, out, 0, password.length());
                 out.set(ValueLayout.JAVA_BYTE, password.length(), (byte) '\r');
                 out.set(ValueLayout.JAVA_BYTE, password.length() + 1, (byte) '\n');
+                wire.guard(password.segment(), password.length());
                 wire.write(out.asSlice(0, password.length() + 2).asByteBuffer());
             }
         }
@@ -162,10 +167,12 @@ final class Sasl {
 
     /**
      * {@code prefix}, then {@code length} bytes of {@code secret} in base64,
-     * then CRLF - built in native memory and written from there.
+     * then CRLF - built in native memory and written from there. The secret
+     * proper starts at {@code secretFrom}; what is before it - a user name -
+     * is public.
      */
-    private static void base64Line(MailWire wire, String prefix, MemorySegment secret, int length)
-            throws IOException {
+    private static void base64Line(MailWire wire, String prefix, MemorySegment secret, int length,
+            int secretFrom) throws IOException {
         byte[] head = prefix.getBytes(StandardCharsets.US_ASCII); // seclume-allow: the command prefix, e.g. 'AUTH PLAIN ' - the secret goes in after it, off-heap
         int encoded = Base64Off.encodedLength(length);
         try (SecretScope line = SecretScope.allocate(head.length + encoded + 2)) {
@@ -174,6 +181,12 @@ final class Sasl {
             int written = Base64Off.encode(secret, 0, length, out, head.length);
             out.set(ValueLayout.JAVA_BYTE, head.length + written, (byte) '\r');
             out.set(ValueLayout.JAVA_BYTE, head.length + written + 1, (byte) '\n');
+            // What goes out is searched for in what comes back - in this form
+            // too, from the first group of four that holds a byte of the secret:
+            // the base64 of "user=" or "auth=Bearer" is not a secret, and a
+            // server's own base64 answer may well hold the same words.
+            int from = secretFrom / 3 * 4;
+            wire.guard(out.asSlice(head.length + from, written - from), written - from);
             wire.write(out.asSlice(0, head.length + written + 2).asByteBuffer());
         }
     }
