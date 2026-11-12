@@ -67,8 +67,12 @@ final class Writes {
                 new org.bson.BsonInt32(100_000)).intValue();
         boolean acknowledged = acknowledged(command);
         int at = 0;
+        // As many per command as fitted last time: after a batch had to be
+        // cut to fit the server's message size, the next one starts at what
+        // fitted, not at the limit again to be encoded and cut once more.
+        int fitting = maxBatch;
         while (at < items.size()) {
-            int count = Math.min(items.size() - at, maxBatch);
+            int count = Math.min(items.size() - at, fitting);
             if (!acknowledged) {
                 // Unordered or not, nothing comes back to stop at: each batch goes.
                 int sent = count;
@@ -82,6 +86,7 @@ final class Writes {
                             throw tooLarge;
                         }
                         sent = (sent + 1) / 2;
+                        fitting = sent;
                     }
                 }
                 at += sent;
@@ -99,6 +104,7 @@ final class Writes {
                         throw tooLarge;            // one document alone too large: the server's limit
                     }
                     count = (count + 1) / 2;
+                    fitting = count;
                 }
             }
             read(reply, offset + at, into);
