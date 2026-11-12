@@ -15,6 +15,11 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Coverage of all the tests, wherever they ran.** One run each of the PostgreSQL, MySQL, SQL
+  Server and Oracle jobs records coverage too, and the `coverage` job merges every job's and
+  every module's data and reports each module from all of it - code of the core that the
+  drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
+  `coverage-merged` artifact). The core job's own tables stay as they were.
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
@@ -26,6 +31,10 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeKeys.privateKey(Supplier)` is the reloadable form of the latter. The access log's
   signing key no longer leaves its provider open (`ReloadableSigningKeyTest`,
   `CheckpointKeyTest`, `CheckpointSigningKeyTest`, `QuiesceTest`).
+- **NATS without TLS: no copy of the CONNECT line left on the heap.** The line, the password
+  written into it in native memory, went to the socket's stream through an array made for it
+  and left as it was. The array is wiped once the stream has had it
+  (`SocketStreamTransportTest`). Found in the third review round.
 - **A certificate that comes between a checkpoint and the first use after the restore is not
   kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
   on its timer, after a checkpoint had freed the keys was installed with its key - in the image
@@ -66,6 +75,15 @@ All notable changes to seclume are recorded here. Versions follow
   listed only a cut at the end as what it cannot find. Now it says that the first entries are
   not there and how to check them, and several files given in order are verified as one chain
   (`AuditVerifyTest`).
+- **Entries appended to an access log while it was closed are no longer signed by its next
+  checkpoint.** A log opened again continues its chain from its last line, and its next
+  checkpoint signs over everything before - also over entries that whoever could write the file
+  appended, correctly chained, while the application was down: they came out of
+  `AccessLogVerifier` vouched for. The `log.opened` entry of a log with a signing key now names
+  in `vouched` the last entry a checkpoint of that key had signed when the file was opened -
+  found from the end, under the next signature - and the verifier names the entries between as
+  vouched for by no checkpoint, whatever follows; after a crash that took the last checkpoint
+  too. Found in the third review round (`AccessLogRestartTest`).
 - **The log masker finds a secret in the forms it takes on its way into a line.** It looked for
   the secret and its padded Base64 only. The usual leak is neither: a wire log's
   `Authorization: Basic base64(user:password)`, where the password starts one or two bytes into
@@ -152,6 +170,11 @@ All notable changes to seclume are recorded here. Versions follow
   and not on the three nights between; locally it is quiet. A leak in the code would show every
   night, one in a processor model only on that model, a noisy neighbour on no pattern at all -
   the message now says which model, so that the red nights can be told apart. Open until then.
+- **The nightly benchmarks measure all four databases against their vendor drivers.** The
+  MySQL run had failed every night since the password went only over checked TLS: the benchmark
+  now tells seclume what Connector/J does by itself, against a container on the same machine.
+  PostgreSQL, SQL Server and Oracle over JDBC - a statement, rows, inserts, the pool - run
+  beside it, each ratio a notice on the run.
 - **Quarkus refuses a datasource password at the start too, not only in the build.** The
   check that a seclume datasource has no `quarkus.datasource.password` - Agroal would keep it as
   a `String` for the application's life - ran only as a build step. The datasource password is a
@@ -166,6 +189,15 @@ All notable changes to seclume are recorded here. Versions follow
   security-critical package, the number of tests and of security regression tests, mutation
   scores, the nightly fuzzing - each figure with the CI run it came from; what that round found,
   the platforms and JDKs tested, and what is not tested.
+- **OPENSSF.md: the Best Practices badge and Scorecard, criterion by criterion.** Every one of
+  the 67 criteria of the badge's passing level with the answer this repository supports and
+  where the evidence is, so that the form on bestpractices.dev can be filled from it and
+  checked against it - `crypto_call` unmet by design and said so. A second workflow,
+  `scorecard-report.yml`, runs Scorecard on every push to `main` and weekly and writes each
+  check's score and reason into the run's summary (`scorecard_summary.py`), a warning for
+  each below 10; `scorecard.yml` keeps uploading SARIF to code scanning and publishing the
+  result. The Scorecard badge is in the README. TLS.md no longer says the own TLS stack is
+  not the default - it has been since 30 September.
 - **`seclume-verify --migrate` prints no password, whatever form the URL writes it in.** The
   translation drops `password=`, but a URL has other places for one, and their contents went
   into the printed configuration: Connector/J's `user:password@host` stayed in the host list;
@@ -188,6 +220,15 @@ All notable changes to seclume are recorded here. Versions follow
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
   does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
   2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
+- **The differential tests run in CI.** `seclume-diff` - the same values through seclume and
+  through pgjdbc, Connector/J, mssql-jdbc and ojdbc - skips without a server, and no CI job
+  started one for it: of its test classes CI ran `PgBouncerTest` alone, while TESTING.md and
+  SECURITY-QUALITY.md said every pull request. `differential.yml` now runs the whole module
+  against PostgreSQL 18, MySQL 8.4, SQL Server 2022 and Oracle Free, on pull requests that
+  touch a driver, the core or the harness and nightly; a test that skipped for want of its job's
+  server fails the job, and the summary lists per class what passed, failed and was skipped
+  (`differential_summary.py`, tested by `test_differential_summary.py`). Found in the third
+  review round.
 - **`seclume-http` never takes a request body for a head.** The framing that decides where a
   credential may be written read a body as chunked only for `Transfer-Encoding: chunked` with
   one space. A client that wrote `transfer-encoding:chunked`, a tab, or `gzip, chunked` had its
@@ -288,6 +329,14 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeSslSocketFactory.placeholder(spec, servers)` names the servers for a secret several
   take (`PlaceholderServerTest`, 8 tests: HTTP/1.1, Basic, HTTP/2, a cluster, a race of first
   requests).
+- **Kafka: the trusted certificates of a JKS or PKCS12 store stay in memory.**
+  `SeclumeSslEngineFactory` wrote them - and those of `ssl.truststore.certificates` - to a file
+  in the temporary directory, and that file was read again at every connection. A cleaner that
+  removed it after its days ended every reconnect, and whoever then wrote a file of that name -
+  the directory is everybody's - chose which broker this client trusts with its password. They
+  are read once and held (`TrustChoice.ofCertificates`); a PEM trust store named by its path is
+  still read at every connection, as `tlsRootCert` is (`TrustStoreInMemoryTest`,
+  `TrustChoiceTest`). Found in the third review round.
 - **The PostgreSQL and MySQL drivers on Windows and macOS against real servers.** Linux x64
   was the only platform whose CI talked to databases. `postgresql-platforms` and
   `mysql-platforms` run the drivers' tests on Windows (the image's PostgreSQL 17 and MySQL 8.4)

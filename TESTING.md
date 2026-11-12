@@ -70,9 +70,11 @@ excluded. Coverage says a line ran, not that a test checked it - the mutation pr
 The core job's numbers are those of the tests that need no server, and most of a driver's code
 runs only with one. So `postgresql (18)`, `mysql (mysql:8.4, …)`, `sqlserver` (2022) and
 `oracle` run their tests with the agent too and upload what it recorded, with the classes it
-was recorded against, as `coverage-exec-<job>`; the `coverage` job merges those and the core
-job's module by module with JaCoCo's command line (`.github/scripts/coverage_merge.py`) and
-writes the same tables for all of them together - the `coverage-merged` artifact. Each row
+was recorded against, as `coverage-exec-<job>`; the `coverage` job merges all of them - every
+job's and every module's data - with JaCoCo's command line (`.github/scripts/coverage_merge.py`)
+and writes each module's report from that: the `coverage-merged` artifact. Code of one module
+that another module's tests run counts as run - the core's TLS client under the drivers' tests,
+the Vault PKI issuer under `seclume-keys'` - as it is checked there. Each row
 shows the counts beside the percentage, and the last one sums every module with a report.
 
 ## The wipe, and the paths where it gets lost
@@ -134,6 +136,13 @@ decoded by different code, and a driver can be right in one and wrong in the oth
 `getString`, `getObject`, `wasNull`, the whole `ResultSetMetaData`, and
 `DatabaseMetaData.getColumns`, which is what Hibernate and Flyway read before they will run at
 all.
+
+Where it runs: `.github/workflows/differential.yml`, one job per database, on every pull
+request that changes a driver, the core or the harness, and nightly. Until 11.11.2026 no CI
+job started a server for this module - its tests skip without one, and CI ran `PgBouncerTest`
+alone, so the runs below were made on developers' machines. Each job now fails when a test
+skipped for want of its server (`require_servers.py`), and its summary lists per class what
+passed, failed and was skipped (`differential_summary.py`).
 
 All four drivers now have an oracle. The runs have found **nineteen** real defects so far,
 none of which any existing test had caught:

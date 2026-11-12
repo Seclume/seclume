@@ -4,6 +4,7 @@
 
 [![Maven Central](https://img.shields.io/maven-central/v/space.seclume/seclume-core)](https://central.sonatype.com/namespace/space.seclume)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15186/badge)](https://www.bestpractices.dev/en/projects/15186)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Seclume/seclume/badge)](https://scorecard.dev/viewer/?uri=github.com/Seclume/seclume)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 Every heap dump of a Java application contains the credentials it logs in with: the database
@@ -417,7 +418,9 @@ tests at servers elsewhere. On every push, CI runs the same suite against Postgr
 YugabyteDB 2024.1. The four wire parsers are fuzzed: a sample runs in every build, and the
 whole corpus runs nightly. What the tests reach and catch - coverage per module, mutation
 scores, fuzzing, each figure with the CI run it came from - is in
-[SECURITY-QUALITY.md](SECURITY-QUALITY.md).
+[SECURITY-QUALITY.md](SECURITY-QUALITY.md). Where the project stands against the OpenSSF's two
+measures - every criterion of the Best Practices badge with its evidence, and the Scorecard
+checks still open - is in [OPENSSF.md](OPENSSF.md).
 
 ## Where the protocol knowledge came from
 

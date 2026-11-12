@@ -1,0 +1,40 @@
+# OpenSSF Scorecard once more, as JSON and not published: every check with
+# its score and reason in the job summary and the log (scorecard_summary.py),
+# so that what is still open is read on the run - scorecard.yml's SARIF goes
+# to the Security tab, which not everybody sees. A workflow of its own, so
+# that the one that publishes stays exactly as Scorecard verifies it.
+name: scorecard-report
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - '.github/workflows/scorecard-report.yml'
+      - '.github/scripts/scorecard_summary.py'
+  schedule:
+    - cron: '20 5 * * 1'
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  report:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.4.4
+        with:
+          results_file: results.json
+          results_format: json
+          publish_results: false
+      - name: Every check, its score and why
+        run: python3 .github/scripts/scorecard_summary.py results.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: scorecard-results
+          path: results.json
+          retention-days: 30

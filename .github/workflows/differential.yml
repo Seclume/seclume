@@ -1,0 +1,226 @@
+name: differential
+
+permissions:
+  contents: read
+
+# seclume-diff: the same values through seclume and through the vendor driver -
+# pgjdbc, Connector/J, mssql-jdbc, ojdbc - against one real server, and every
+# difference a finding (seclume-diff/src/test/java/space/seclume/diff/
+# Differential.java). Its tests skip without a server, and until 11.11.2026 no
+# job started one for them: of the module, CI ran PgBouncerTest alone. Here
+# each database's job runs the whole module against its server, and
+# require_servers.py fails the job if a test skipped for want of it.
+#
+# The passwords are the throwaway ones of containers made for one job, as in
+# ci.yml; a repository secret overrides them.
+
+on:
+  pull_request:
+    paths:
+      - 'seclume-diff/**'
+      - 'seclume-core/src/main/**'
+      - 'seclume-tck/src/main/**'
+      - 'seclume-postgresql/src/main/**'
+      - 'seclume-mysql/src/main/**'
+      - 'seclume-sqlserver/src/main/**'
+      - 'seclume-oracle/src/main/**'
+      - 'pom.xml'
+      - '.github/workflows/differential.yml'
+      - '.github/scripts/require_servers.py'
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: differential-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgresql:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: seclume_test
+          POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+          POSTGRES_DB: seclume_test
+          POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
+      # Only seclume-diff's tests: -am builds the modules it needs, and the
+      # filter keeps their own tests - ci.yml's business - from running again.
+      - name: seclume against pgjdbc
+        run: >-
+          .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test
+          -Dtest='space/seclume/diff/**/*' -Dsurefire.failIfNoSpecifiedTests=false
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py postgresql seclume-diff
+      - name: What ran
+        if: always()
+        run: python3 .github/scripts/differential_summary.py postgresql
+      - if: always()
+        run: rm -f .local-pg-password
+
+  mysql:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+          MYSQL_DATABASE: seclume_test
+          MYSQL_USER: seclume_test
+          MYSQL_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
+      - name: Server settings for the procedure tests
+        env:
+          MYSQL_PWD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
+        run: mysql -h 127.0.0.1 -P 3306 -u root -e "SET PERSIST log_bin_trust_function_creators = 1"
+      # The module's tests default to 3307, a developer's second server.
+      - name: seclume against Connector/J
+        run: >-
+          .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test
+          -Dtest='space/seclume/diff/**/*' -Dsurefire.failIfNoSpecifiedTests=false
+          -Dseclume.mysql.port=3306
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py mysql seclume-diff
+      - name: What ran
+        if: always()
+        run: python3 .github/scripts/differential_summary.py mysql
+      - if: always()
+        run: rm -f .local-mysql-password
+
+  sqlserver:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
+        ports: ['1433:1433']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      # No health check in the image: creating the database is the first login that has to work.
+      - name: Wait for SQL Server and create the test database
+        run: |
+          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
+          if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server container found"; exit 1; fi
+          pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          for i in $(seq 1 40); do
+            if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" \
+                -Q "if db_id('seclume_test') is null create database seclume_test"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error title=sqlserver::SQL Server never accepted a login"
+          exit 1
+      - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
+      - name: seclume against mssql-jdbc
+        run: >-
+          .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test
+          -Dtest='space/seclume/diff/**/*' -Dsurefire.failIfNoSpecifiedTests=false
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py sqlserver seclume-diff
+      - name: What ran
+        if: always()
+        run: python3 .github/scripts/differential_summary.py sqlserver
+      - if: always()
+        run: rm -f .local-mssql-password
+
+  # On the host's network, as in ci.yml: docker-proxy drops the urgent byte
+  # an Oracle break is.
+  oracle:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 75
+    env:
+      ORA_PASSWORD: ${{ secrets.ORA_TEST_PASSWORD || 'seclume-ci-password' }}
+    steps:
+      - name: Start Oracle Free on the host network
+        run: |
+          docker run -d --name oracle --network host \
+            -e ORACLE_PASSWORD="$ORA_PASSWORD" -e APP_USER=seclume_test \
+            -e APP_USER_PASSWORD="$ORA_PASSWORD" \
+            --health-cmd healthcheck.sh --health-interval 10s \
+            --health-timeout 10s --health-retries 60 \
+            gvenzl/oracle-free:23-slim
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Wait for Oracle
+        run: |
+          for i in $(seq 1 90); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' oracle)
+            [ "$s" = healthy ] && exit 0
+            sleep 10
+          done
+          docker logs oracle | tail -50
+          exit 1
+      - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
+      - name: seclume against ojdbc
+        run: |
+          unset ORA_PASSWORD
+          .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test \
+            -Dtest='space/seclume/diff/**/*' -Dsurefire.failIfNoSpecifiedTests=false
+      - name: No test skipped for want of this job's server
+        if: success() || failure()
+        run: python3 .github/scripts/require_servers.py oracle seclume-diff
+      - name: What ran
+        if: always()
+        run: python3 .github/scripts/differential_summary.py oracle
+      - if: always()
+        run: rm -f .local-oracle-password

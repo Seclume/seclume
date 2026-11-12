@@ -109,8 +109,19 @@ def main(report, source_root, package, floor=None):
     print(f"::notice title=mutation ({package})::{killed} of {covered} mutants with a test killed "
           f"({percent:.1f}%), {covered - killed} survived; {uncovered} of {total} on lines no test ran"
           f" - {killed} of all {total} killed ({overall:.1f}%)")
-    for path, line, title, text in annotations(survivors_by_class(mutations), source_root):
+    grouped = survivors_by_class(mutations)
+    for path, line, title, text in annotations(grouped, source_root):
         print(f"::warning file={path},line={line},title={escape(title)}::{escape(text)}")
+    # The annotations are capped; the log holds every survivor, one per line,
+    # so that the work of killing them can start from the run alone.
+    survivors = sum(len(found) for found in grouped.values())
+    if survivors:
+        print(f"::group::every survivor in {package} ({survivors})")
+        for found in grouped.values():
+            for m in found:
+                print(f"survivor {source_path(source_root, m)}:{m['line']} {m['method']} "
+                      f"{m['mutator']}: {m['description']}")
+        print("::endgroup::")
     if floor is not None and percent < floor:
         print(f"::error title=mutation ({package})::the score of the mutants with a test is "
               f"{percent:.1f}%, below the floor of {floor:g}% - a test stopped noticing a fault "
