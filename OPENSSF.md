@@ -129,19 +129,21 @@ Links are relative to `https://github.com/Seclume/seclume/blob/main/`.
 
 The current scores are in the summary of the latest
 [scorecard-report](https://github.com/Seclume/seclume/actions/workflows/scorecard-report.yml)
-run. Measured so far: run 43021437797 of 11 November 2026 (Scorecard v5.6.0), on a pull
-request - where Scorecard runs the eleven checks that need only the files - **9.2 / 10**.
+run. Measured: run 43152044699 of 12 November 2026 on `main` (commit 79c8ff0, Scorecard
+v5.6.0), all eighteen checks - **7.1 / 10**. The first run, on a pull request, where
+Scorecard runs only the eleven checks that need nothing but the files, had 9.2.
 
 | Check | Score | Why | What follows |
 |---|---:|---|---|
+| Code-Review | 0 | "Found 0/30 approved changesets": Scorecard counts approvals by a second person, and this project has one maintainer | accepted - it changes with a second reviewer, not with anything in the repository |
+| Contributors | 0 | "project has 0 contributing companies or organizations" | accepted - the same |
+| Maintained | 0 | "project was created within the last 90 days" | changes by itself when the repository is older than 90 days |
 | Fuzzing | 0 | "project is not fuzzed": Scorecard knows OSS-Fuzz, ClusterFuzzLite and some languages' own fuzzers, and not Jazzer started from Maven, which is what `fuzz.yml` runs every night | open - a ClusterFuzzLite configuration around the same targets would be seen |
-| License | 9 | "license file detected" - on a pull request Scorecard reads the file only and cannot ask GitHub which licence it is | expected to be 10 on `main`; to be read from the first run there |
+| CII-Best-Practices | 2 | "badge detected: InProgress": the Best Practices entry exists and is not yet passing | open - the answers above, entered on bestpractices.dev by a maintainer; passing is 5 |
+| Branch-Protection | not scored | "some github tokens can't read classic branch protection rules": the workflow's own token may not read them | open - Scorecard needs a fine-grained token that may read the repository's administration settings, given to the action as `repo_token` from a secret; a maintainer's decision |
 | Packaging | not scored | "packaging workflow not detected": no workflow in this repository publishes the releases; they are signed and published outside of it ([SECURITY.md](SECURITY.md#verifying-a-release)) | accepted |
-| Binary-Artifacts, Dangerous-Workflow, Dependency-Update-Tool, Pinned-Dependencies, SAST, Security-Policy, Token-Permissions, Vulnerabilities | 10 | | |
+| Signed-Releases | not scored | "no releases found": Scorecard looks at GitHub releases, and there are none; the releases are on Maven Central, signed | accepted, for as long as releases are not also made on GitHub |
+| Binary-Artifacts, CI-Tests, Dangerous-Workflow, Dependency-Update-Tool, License, Pinned-Dependencies, SAST, Security-Policy, Token-Permissions, Vulnerabilities | 10 | | |
 
-Not measured on a pull request, so not known yet: Branch-Protection, CI-Tests,
-CII-Best-Practices, Code-Review, Contributors, Maintained, Signed-Releases. They are in the
-first `scorecard-report` run on `main`, and this table is completed from it. Two of them can
-be told in advance to stay low for reasons that are not defects: Code-Review counts
-approvals by a second person, and this project has one maintainer; Maintained and
-Contributors count a repository's age and the organisations behind it.
+Checks that are not scored do not count; the four at 0 and the one at 2 are what separates
+7.1 from 10. Three of the zeros are about who works on the project and how old it is.
