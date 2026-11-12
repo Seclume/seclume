@@ -239,6 +239,14 @@ public final class Topology implements AutoCloseable {
         return topology;
     }
 
+    /**
+     * A topology nobody monitors, for the tests of what a {@code hello} does
+     * to it: they tell it what was heard ({@link #heard}).
+     */
+    static Topology unmonitored(MongoUrl url) {
+        return new Topology(url, new ConnectionString(url.driverConnectionString()));
+    }
+
     /** The URL's options, a {@code mongodb+srv://} URL's after its DNS lookups. */
     public ConnectionString options() {
         return options;
@@ -287,7 +295,11 @@ public final class Topology implements AutoCloseable {
 
     private void monitor() {
         while (!closed) {
-            rescan();
+            try {
+                rescan();
+            } catch (RuntimeException ignored) {
+                // records that name no address: what is known stays, as with a DNS that is down
+            }
             List<Server> now;
             lock.lock();
             try {
@@ -299,7 +311,13 @@ public final class Topology implements AutoCloseable {
                 if (closed) {
                     return;
                 }
-                check(server);
+                try {
+                    check(server);
+                } catch (RuntimeException e) {
+                    // Whatever it was: this thread is the only one that looks
+                    // at the servers, and it goes on looking.
+                    unusable(server, e);
+                }
             }
             lock.lock();
             try {
@@ -344,36 +362,85 @@ public final class Topology implements AutoCloseable {
                 server.monitorConnection.close();
                 server.monitorConnection = null;
             }
-            lock.lock();
-            try {
-                if (servers.get(server.pool.address()) == server) {
-                    server.description = unknown(server.pool.address(), e);
-                    server.hello = null;
-                    server.averageRttNanos = -1;
-                    server.pool.clear();
-                    changed.signalAll();
-                }
-            } finally {
-                lock.unlock();
-            }
+            unusable(server, e);
             return;
         }
+        try {
+            take(server, hello, rtt);
+        } catch (RuntimeException malformed) {
+            // A hello that cannot be read - a field of another type, a member
+            // that is no address: the server is not known, and says why. Thrown
+            // on, it ended this thread, and no server was looked at again.
+            if (server.monitorConnection != null) {
+                server.monitorConnection.close();
+                server.monitorConnection = null;
+            }
+            unusable(server, new com.mongodb.MongoInternalException("the hello of "
+                    + server.pool.address() + " could not be read: " + malformed, malformed));
+        }
+    }
+
+    /** The server is unknown from now on, for the reason given; its connections are not trusted. */
+    private void unusable(Server server, RuntimeException e) {
+        lock.lock();
+        try {
+            if (servers.get(server.pool.address()) == server) {
+                server.description = unknown(server.pool.address(), e);
+                server.hello = null;
+                server.averageRttNanos = -1;
+                server.pool.clear();
+                changed.signalAll();
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * What a server answered to {@code hello}, as the monitor takes it; for
+     * the tests. Never throws: a hello that cannot be read makes the server
+     * unknown.
+     */
+    void heard(ServerAddress address, BsonDocument hello, long rttNanos) {
+        Server server;
+        lock.lock();
+        try {
+            server = servers.get(address);
+        } finally {
+            lock.unlock();
+        }
+        if (server == null) {
+            return;
+        }
+        try {
+            take(server, hello, rttNanos);
+        } catch (RuntimeException malformed) {
+            unusable(server, new com.mongodb.MongoInternalException("the hello of " + address
+                    + " could not be read: " + malformed, malformed));
+        }
+    }
+
+    /** A hello into the topology; everything of it is read before anything is changed. */
+    private void take(Server server, BsonDocument hello, long rtt) {
         lock.lock();
         try {
             if (servers.get(server.pool.address()) != server) {
                 return;                                    // removed while it was asked
             }
-            if (older(hello.getDocument("topologyVersion", null), server.topologyVersion)) {
+            BsonDocument version = hello.getDocument("topologyVersion", null);
+            if (older(version, server.topologyVersion)) {
                 // Asked before an error told something newer - a primary that
                 // has stepped down, say: what it answered then is over.
                 return;
             }
-            server.topologyVersion = hello.getDocument("topologyVersion", null);
-            server.averageRttNanos = server.averageRttNanos < 0 ? rtt
+            long average = server.averageRttNanos < 0 ? rtt
                     : (long) (0.2 * rtt + 0.8 * server.averageRttNanos);
+            ServerDescription described = describe(server.pool.address(), hello, average);
+            members(described);                            // each of them an address, or none of it
+            server.topologyVersion = version;
+            server.averageRttNanos = average;
             server.hello = hello;
-            server.description = describe(server.pool.address(), hello,
-                    server.averageRttNanos);
+            server.description = described;
             apply(server);
             changed.signalAll();
         } finally {
@@ -657,6 +724,18 @@ public final class Topology implements AutoCloseable {
             Thread.currentThread().interrupt();
             throw new com.mongodb.MongoInterruptedException("interrupted while selecting a "
                     + "server", e);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** A server for a command if one is known this moment, or {@code null}. */
+    private ServerPool selectNow(ReadPreference preference) {
+        lock.lock();
+        try {
+            List<ServerDescription> eligible = eligible(preference);
+            return eligible.isEmpty() ? null
+                    : servers.get(inWindow(eligible).getAddress()).pool;
         } finally {
             lock.unlock();
         }
@@ -1441,8 +1520,12 @@ public final class Topology implements AutoCloseable {
                 for (LogicalSession session : ended) {
                     ids.add(session.lsid());
                 }
-                select(ReadPreference.primaryPreferred()).run("admin",
-                        new BsonDocument("endSessions", ids), null, null);
+                // A server that is known now, or none: closing does not wait
+                // serverSelectionTimeoutMS for a cluster that is not there.
+                ServerPool known = selectNow(ReadPreference.primaryPreferred());
+                if (known != null) {
+                    known.run("admin", new BsonDocument("endSessions", ids), null, null);
+                }
             } catch (RuntimeException ignored) {
                 // the server ends them after their timeout
             }

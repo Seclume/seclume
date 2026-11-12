@@ -15,12 +15,13 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
-- **MongoDB: a batch too large for one message is cut without being encoded whole.** An
-  `insertMany` or `bulkWrite` beyond the server's 48 MB per message is sent in parts; to find
-  the part that fits, the whole batch was encoded, found too large, halved and encoded again -
-  for every part anew, starting from the limit each time. So documents were encoded more than
-  once, and a batch of several gigabytes was written out in memory before anything was sent. The encoding now stops where the limit is passed
-  (`OpMsgTest`), and the next part starts at the size that fitted.
+- **MongoDB: a `hello` that cannot be read no longer ends the monitor.** One thread looks at
+  the servers. A `hello` with a field of another type than expected - `tags` that are not
+  strings, a member that is no address - was an exception thrown through that thread, and no
+  server was looked at again: a primary that stepped down stayed the primary for this client.
+  Such a `hello` now makes its server unknown, with the reason, and the monitor goes on
+  (`TopologyHelloTest`). And closing a client no longer waits `serverSelectionTimeoutMS` to
+  end its server sessions when no server is known.
 - **AWS: temporary credentials near their end no longer fail requests, and a request's head
   costs a fiftieth.** A credentials source may answer with a set that is already inside the
   five minutes before its expiry - the instance metadata service hands out the old one until it
@@ -33,11 +34,25 @@ All notable changes to seclume are recorded here. Versions follow
   `SessionTokenSocket` copied the whole request head for every byte of it and wrote a chunked
   body's framing a TLS record per byte: a 1500 byte head took 241 µs of CPU, now 4.4 µs; a
   chunked upload of 64 KiB in 8 chunks 78 records, now 27 (`SessionTokenFramingTest`).
+- **MongoDB: a `hello` cannot raise the message limit above 48 MB.** The size of a reply is
+  checked against the server's `maxMessageSizeBytes` before the bytes for it are allocated -
+  and that number was taken from the `hello` as it came, which is answered before the login. A
+  peer that named 2 GB there and announced a reply of 2 GB had the client allocate them. The
+  limit is now what the server names and never more than the 48 MB every server has had; a
+  number that is none is refused (`MessageLimitTest`). And only the reply's own `cursor` keeps
+  its batch as bytes: a document named `cursor` inside the application's data - what a
+  `findAndModify` returns - came back with documents that could not be changed (`OpMsgTest`).
 - **Coverage of all the tests, wherever they ran.** One run each of the PostgreSQL, MySQL, SQL
   Server and Oracle jobs records coverage too, and the `coverage` job merges every job's and
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
+- **Redis: a value is not read byte by byte.** Every byte a Redis connection writes goes
+  through the follower that finds the password's place in `AUTH` and `HELLO`. It looked at
+  each one - at a value's too, at about 6 ns a byte. What is left of a bulk string nobody has
+  to look at is now passed over at once: a `SET` of 1 KiB 6.7 µs → 0.3 µs of the follower's own
+  work, of 64 KiB 351 µs → 0.5 µs (measured locally). What it finds is the same
+  (`RespPasswordSlotTest`, with random commands in random writes).
 - **Mail: a password a server sends back is not read.** A server that answers a line it does
   not understand with that line - "unknown command: PASS ..." - gave the password, written to
   it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
@@ -61,6 +76,12 @@ All notable changes to seclume are recorded here. Versions follow
   written into it in native memory, went to the socket's stream through an array made for it
   and left as it was. The array is wiped once the stream has had it
   (`SocketStreamTransportTest`). Found in the third review round.
+- **MongoDB: a batch too large for one message is cut without being encoded whole.** An
+  `insertMany` or `bulkWrite` beyond the server's 48 MB per message is sent in parts; to find
+  the part that fits, the whole batch was encoded, found too large, halved and encoded again -
+  for every part anew, starting from the limit each time. So documents were encoded more than
+  once, and a batch of several gigabytes was written out in memory before anything was sent. The encoding now stops where the limit is passed
+  (`OpMsgTest`), and the next part starts at the size that fitted.
 - **A certificate that comes between a checkpoint and the first use after the restore is not
   kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
   on its timer, after a checkpoint had freed the keys was installed with its key - in the image
