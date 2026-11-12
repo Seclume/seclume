@@ -438,7 +438,7 @@ public final class OpMsg {
         ByteBuffer slice = in.duplicate().position(at).limit(at + size).slice()
                 .order(ByteOrder.LITTLE_ENDIAN);
         try (BsonBinaryReader reader = new BsonBinaryReader(slice)) {
-            BsonDocument document = new ReplyReader(reader, slice).document(false);
+            BsonDocument document = new ReplyReader(reader, slice).document(TOP);
             if (reader.getBsonInput().getPosition() != size) {
                 throw refused("a document of " + size + " bytes that ends after "
                         + reader.getBsonInput().getPosition());
@@ -460,6 +460,10 @@ public final class OpMsg {
      * into documents here, they were read twice, and a find of many documents
      * paid for it (24 % behind the official driver, which reads them once).
      * {@link #checkBounds} has walked every length of them before.
+     *
+     * <p>Only the reply's own {@code cursor}: a document of that name further
+     * in - in what a {@code findAndModify} returns, say - is the
+     * application's data and read like any other.
      */
     private static final class ReplyReader {
 
@@ -471,7 +475,8 @@ public final class OpMsg {
             this.bytes = bytes;
         }
 
-        BsonDocument document(boolean cursor) {
+        BsonDocument document(int where) {
+            boolean cursor = where == CURSOR;
             BsonDocument document = new BsonDocument();
             reader.readStartDocument();
             while (reader.readBsonType() != BsonType.END_OF_DOCUMENT) {
@@ -481,7 +486,8 @@ public final class OpMsg {
                         && (name.equals("firstBatch") || name.equals("nextBatch"))) {
                     document.put(name, batch());
                 } else if (type == BsonType.DOCUMENT) {
-                    document.put(name, document(!cursor && name.equals("cursor")));
+                    document.put(name, document(where == TOP && name.equals("cursor")
+                            ? CURSOR : ELSEWHERE));
                 } else {
                     document.put(name, CODEC_VALUES.decode(reader, CONTEXT));
                 }
@@ -515,6 +521,11 @@ public final class OpMsg {
             return batch;
         }
     }
+
+    /** Where in a reply a document stands: the body, its {@code cursor}, anywhere else. */
+    private static final int TOP = 0;
+    private static final int CURSOR = 1;
+    private static final int ELSEWHERE = 2;
 
     private static final org.bson.codecs.BsonValueCodec CODEC_VALUES =
             new org.bson.codecs.BsonValueCodec();
