@@ -37,6 +37,7 @@ final class Pop3Login {
         try {
             Pop3Login login = new Pop3Login(wire);
             MailEvents.login("pop3", settings, login::login);
+            wire.unguard();
             return wire;
         } catch (IOException | RuntimeException e) {
             wire.close();

@@ -20,6 +20,14 @@ All notable changes to seclume are recorded here. Versions follow
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
+- **Mail: a password a server sends back is not read.** A server that answers a line it does
+  not understand with that line - "unknown command: PASS ..." - gave the password, written to
+  it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
+  line and put the refusal into its exception's message, for SMTP, POP3 and IMAP alike. From
+  the moment a credential is written until the login is over, the server's lines are now read
+  into native memory first and searched for it - as it was sent (base64) and as it is - and
+  what is found is overwritten with `*` (`EchoMask` in the core, `EchoedCredentialTest`,
+  `EchoMaskTest`). No protection from the server itself, which was given the password.
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
