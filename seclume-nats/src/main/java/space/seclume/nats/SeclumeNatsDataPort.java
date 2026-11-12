@@ -3,8 +3,6 @@ package space.seclume.nats;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.lang.foreign.MemorySegment;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -88,7 +86,7 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
         if (this.socket == null || this.in == null || this.out == null) {
             throw new IOException("NATS socket was not opened");
         }
-        this.transport = new PlainSocketTransport(this.socket, this.in, this.out);
+        this.transport = new SocketStreamTransport(this.socket, this.in, this.out);
         this.closed = false;
         this.handshakeDone = settings == null
                 || (settings.mode != NatsSettings.AuthMode.PASSWORD
@@ -300,72 +298,5 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
     @Override
     public void flush() {
         // Every write goes directly to the socket or TLS record layer.
-    }
-
-    private static final class PlainSocketTransport implements Transport {
-
-        private final Socket socket;
-        private final InputStream in;
-        private final OutputStream out;
-
-        PlainSocketTransport(Socket socket, InputStream in, OutputStream out) {
-            this.socket = socket;
-            this.in = in;
-            this.out = out;
-        }
-
-        @Override
-        public int read(ByteBuffer into) throws IOException {
-            int rem = into.remaining();
-            if (rem == 0) {
-                return 0;
-            }
-            if (into.hasArray()) {
-                int n = in.read(into.array(), into.arrayOffset() + into.position(), rem);
-                if (n > 0) {
-                    into.position(into.position() + n);
-                }
-                return n;
-            }
-            byte[] buf = new byte[Math.min(rem, 16 * 1024)];
-            int n = in.read(buf, 0, buf.length);
-            if (n > 0) {
-                into.put(buf, 0, n);
-            }
-            return n;
-        }
-
-        @Override
-        public int write(ByteBuffer from) throws IOException {
-            int rem = from.remaining();
-            if (rem == 0) {
-                return 0;
-            }
-            if (from.hasArray()) {
-                out.write(from.array(), from.arrayOffset() + from.position(), rem);
-                out.flush();
-                from.position(from.limit());
-                return rem;
-            }
-            byte[] buf = new byte[rem];
-            from.get(buf);
-            out.write(buf);
-            out.flush();
-            return rem;
-        }
-
-        @Override
-        public boolean isOpen() {
-            return !socket.isClosed();
-        }
-
-        @Override
-        public void close() {
-            try {
-                socket.close();
-            } catch (IOException ignored) {
-                // On close an error has no consequences.
-            }
-        }
     }
 }

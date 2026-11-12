@@ -26,6 +26,10 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeKeys.privateKey(Supplier)` is the reloadable form of the latter. The access log's
   signing key no longer leaves its provider open (`ReloadableSigningKeyTest`,
   `CheckpointKeyTest`, `CheckpointSigningKeyTest`, `QuiesceTest`).
+- **NATS without TLS: no copy of the CONNECT line left on the heap.** The line, the password
+  written into it in native memory, went to the socket's stream through an array made for it
+  and left as it was. The array is wiped once the stream has had it
+  (`SocketStreamTransportTest`). Found in the third review round.
 - **A certificate that comes between a checkpoint and the first use after the restore is not
   kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
   on its timer, after a checkpoint had freed the keys was installed with its key - in the image
