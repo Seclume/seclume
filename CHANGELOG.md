@@ -89,6 +89,12 @@ All notable changes to seclume are recorded here. Versions follow
   more and forgot that pair without freeing it: its key stayed in OpenSSL's memory after close.
   Such a pair's key is now freed at once; the first use asks for a new one as before. Found by
   a flaky CI run (`SpiffeTest`).
+- **MongoDB: a client `bulkWrite` reads all of its results.** The per-operation results come in
+  a cursor. Without a session of the application's, the command ran in a server session of the
+  driver's that was given back with the command's reply; when the results did not fit that
+  reply, the `getMore` for the rest named no session, and the server refused it. The whole
+  bulk write now runs in one session, the reading of its results included
+  (`LocalSameAsOfficialTest.clientBulkWriteWhoseResultsNeedAGetMoreIsTheSame`).
 - **An issued identity is asked for again after a restore, not a reason to refuse the
   checkpoint.** A Vault PKI certificate's key and a SPIFFE SVID's - for a database connection's
   client certificate or a server's key manager - were made in OpenSSL or fetched from the agent
