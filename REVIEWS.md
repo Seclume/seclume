@@ -109,6 +109,8 @@ in round 1: what the drivers send under the default `tls=prefer`.
 | 22 | `seclume-mongodb-driver` | `close()` waited `serverSelectionTimeoutMS` for a server to end its sessions on, when none was known. | low | #300 |
 | 23 | `seclume-http` | The same as #17 where every HTTP client goes through: the head collected so far was copied for each byte of it (316 µs for a head of 1491 bytes, 15 µs now), chunk framing went a TLS record per byte. | low | #301 |
 | 24 | `seclume-redis` | The follower that finds the password's place looked at every byte a connection writes, a value's too: 351 µs of its own for a `SET` of 64 KiB, 0.5 µs now. | low | #302 |
+| 25 | `seclume-mongodb-driver` | A client `bulkWrite` without a session of the application's ran in a server session that was given back with the command's reply; a `getMore` for results that did not fit that reply named no session. Read in the code; the test is in the CI first, the fix follows it. | low | #303 |
+| 26 | `seclume-mongodb-driver` | A batch too large for one message was encoded whole to find that out, halved, and encoded again - from the limit for every part. | low | #304 |
 
 ### Open
 
@@ -251,7 +253,7 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 
 ## The next review
 
-Not yet read with the same care: of `seclume-mongodb-driver` the API classes above the
-topology (`SeclumeCollection`, `Iterables`, `ChangeStreams`, `ClientBulkWrites`); the wire
-(`OpMsg`), `MongoSession`, `ServerPool`, `LogicalSession` and `Topology` are read. A
+Not yet read with the same care: of `seclume-mongodb-driver` the two largest API classes,
+`SeclumeCollection` and `Iterables` (the options of each command, some 2800 lines); the
+wire, the sessions, the topology, cursors, change streams and the bulk writes are read. A
 round adds a section here, findings and the sound alike.
