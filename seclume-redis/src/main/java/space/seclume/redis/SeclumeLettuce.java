@@ -61,6 +61,12 @@ import space.seclume.internal.SeclumeSslEngine;
  *       buffer over native memory.
  * </ul>
  *
+ * <p>And on the way back: a server that does not know {@code HELLO} - Redis 5,
+ * and what copies it - answers with the command's arguments, the password
+ * among them, and Lettuce makes a {@code String} of that line. An error among
+ * the answers that follow a password is searched for it before Lettuce reads
+ * it, and the password in it replaced by {@code *}.
+ *
  * <p>Every connection opened through the client's resources - to the initial
  * seed nodes, to cluster shards discovered on topology refresh or redirect,
  * to Sentinels and to the master or replica Sentinel names - checks the
@@ -225,6 +231,10 @@ public final class SeclumeLettuce {
                             ctx.pipeline().addBefore(ctx.name(), "seclume-password",
                                     new RespPasswordHandler(rewriter));
                         }
+                        // After the TLS on the way in: what the server answers
+                        // to the password, before Lettuce reads it.
+                        ctx.pipeline().addBefore(ctx.name(), "seclume-replies",
+                                new RespReplyHandler(rewriter.replies()));
                         ctx.connect(remoteAddress, localAddress, promise);
                         ctx.pipeline().remove(this);
                     }

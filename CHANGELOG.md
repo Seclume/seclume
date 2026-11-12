@@ -15,11 +15,31 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **AWS: temporary credentials near their end no longer fail requests, and a request's head
+  costs a fiftieth.** A credentials source may answer with a set that is already inside the
+  five minutes before its expiry - the instance metadata service hands out the old one until it
+  has the next. Asked again for every request, each answer became a new generation, and the
+  fourth request closed the one the first had just been signed with: "a session token
+  placeholder whose credentials are gone". A source is now asked at most every five seconds,
+  and when it cannot be reached, the set at hand is used for as long as it is valid
+  (`TemporaryCredentialsRefreshTest`; the same in the core's `AwsInstanceRole`, where it was a
+  round trip to the metadata service for every use, `AwsInstanceRoleRefreshTest`). And
+  `SessionTokenSocket` copied the whole request head for every byte of it and wrote a chunked
+  body's framing a TLS record per byte: a 1500 byte head took 241 µs of CPU, now 4.4 µs; a
+  chunked upload of 64 KiB in 8 chunks 78 records, now 27 (`SessionTokenFramingTest`).
 - **Coverage of all the tests, wherever they ran.** One run each of the PostgreSQL, MySQL, SQL
   Server and Oracle jobs records coverage too, and the `coverage` job merges every job's and
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
+- **Mail: a password a server sends back is not read.** A server that answers a line it does
+  not understand with that line - "unknown command: PASS ..." - gave the password, written to
+  it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
+  line and put the refusal into its exception's message, for SMTP, POP3 and IMAP alike. From
+  the moment a credential is written until the login is over, the server's lines are now read
+  into native memory first and searched for it - as it was sent (base64) and as it is - and
+  what is found is overwritten with `*` (`EchoMask` in the core, `EchoedCredentialTest`,
+  `EchoMaskTest`). No protection from the server itself, which was given the password.
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
@@ -309,6 +329,16 @@ All notable changes to seclume are recorded here. Versions follow
   refuses it. An unknown placeholder no longer ends the connection, and a BindRequest whose BER
   lengths run past it is refused rather than read past. `LdapPlaceholderSlotTest` (12 tests,
   without a server; 6 fail on the old socket).
+- **Redis: a password a server gives back in an error does not reach the client.** A server
+  that does not know a command answers with its arguments: Redis 5 has no `HELLO`, and to
+  Lettuce's `HELLO 3 AUTH user password` - the password written in from native memory - it
+  says ``unknown command `HELLO`, with args beginning with: `3`, `AUTH`, `user`, `password` ``.
+  Lettuce made a `String` of that line, the message of an exception; the login for Jedis did
+  the same with a server that does not know `AUTH`. The answers are now followed from the
+  connection's first byte, and in the errors among the sixteen that follow a password, the
+  password - or the beginning of it where the server cut its line - is replaced by `*` before
+  the client reads it; values are never touched (`RespReplyGuard`, `EchoedPasswordTest`,
+  `RespReplyGuardTest`). Found in the third review round.
 - **An HTTP placeholder's secret goes to one server.** The TLS sockets of seclume-http
   (JGit, Kubernetes, gRPC, Elasticsearch, `SeclumeSslSocketFactory`) wrote the secret into any
   request that carried its placeholder, whatever host the connection went to - and a client

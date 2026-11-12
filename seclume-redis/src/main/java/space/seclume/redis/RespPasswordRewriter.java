@@ -49,6 +49,8 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
     private final Binding[] bindings;
     /** The server, for the event that says the password was written in. */
     private final String where;
+    /** What the server answers once a password went out: looked at before the client sees it. */
+    private final RespReplyGuard replies;
 
     RespPasswordRewriter(String placeholder, SecretProvider secret) {
         this(placeholder, secret, null, null, "");
@@ -67,10 +69,17 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
             Binding sentinel = new Binding(sentinelPlaceholder.getBytes(StandardCharsets.US_ASCII),
                     sentinelSecret);
             this.bindings = new Binding[] {main, sentinel};
+            this.replies = new RespReplyGuard(secret, sentinelSecret);
         } else {
             this.bindings = new Binding[] {main};
+            this.replies = new RespReplyGuard(secret);
         }
         this.where = where;
+    }
+
+    /** The guard of this connection's answers - see {@link RespReplyGuard}. */
+    RespReplyGuard replies() {
+        return replies;
     }
 
     /** A new random placeholder. */
@@ -162,6 +171,8 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
             }
             space.seclume.jfr.Observed.secretUse("redis", where, "AUTH");
             Step step = Step.replace(total, bulk(binding.secret));
+            // A server that does not know the command answers with its arguments.
+            replies.arm();
             // What follows is the CRLF the client wrote after the placeholder.
             state = State.DATA_CR;
             return step;

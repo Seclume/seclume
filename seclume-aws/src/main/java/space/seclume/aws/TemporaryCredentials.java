@@ -25,18 +25,33 @@ import space.seclume.secret.SecretUnavailableException;
  * placeholder. A request signed a moment before a refresh is therefore sent
  * with the token it was signed with, not the new one; the last few
  * generations are kept for that.
+ *
+ * <p><b>Not asked more often than every few seconds.</b> A source may answer
+ * with a set that is already inside those five minutes - the instance
+ * metadata service hands out the old one until it has the next, a clock runs
+ * ahead - and asked again for every request, each answer would be a new
+ * generation and push out the one a request signed a moment ago is about to
+ * be sent with. So whatever a source answered is lived with for
+ * {@value #RETRY_SECONDS} seconds; and when it cannot be reached, the set at
+ * hand is used for as long as it is valid.
  */
 abstract class TemporaryCredentials {
 
     static final String TOKEN_PREFIX = "seclume-aws-session-token-";
     private static final long MARGIN_SECONDS = 300;
     private static final int KEPT = 3;
+    /** How long a source is left alone after it was asked. */
+    static final long RETRY_SECONDS = 5;
+    private static final System.Logger LOG =
+            System.getLogger(TemporaryCredentials.class.getName());
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce for the placeholder - public
     private static final Map<String, Generation> BY_PLACEHOLDER = new ConcurrentHashMap<>();
 
     private final Deque<Generation> generations = new ArrayDeque<>();
     private long next;
+    /** The source is not asked again before this, whatever it answered. */
+    private Instant askAgain = Instant.MIN;
 
     /** One set of credentials. */
     static final class Generation implements AutoCloseable {
@@ -79,20 +94,44 @@ abstract class TemporaryCredentials {
     /** A short name for messages and events - {@code instance}, {@code web-identity}. */
     abstract String name();
 
+    /** The time - a test's, where it has one. */
+    Instant now() {
+        return Instant.now();
+    }
+
     /** The current generation, fetched first if there is none or it is about to expire. */
     synchronized Generation current() {
+        Instant now = now();
         Generation latest = generations.peekLast();
-        if (latest == null || Instant.now().isAfter(latest.expires.minusSeconds(MARGIN_SECONDS))) {
-            Fetched fetched = fetch();
-            String placeholder = TOKEN_PREFIX + NONCE + "-" + (++next) + "-"
-                    + System.identityHashCode(this);
-            latest = new Generation(fetched.accessKeyId(), placeholder, fetched.expires(),
-                    fetched.secretKey(), fetched.token());
-            BY_PLACEHOLDER.put(placeholder, latest);
-            generations.addLast(latest);
-            while (generations.size() > KEPT) {
-                generations.removeFirst().close();
+        boolean due = latest == null
+                || now.isAfter(latest.expires.minusSeconds(MARGIN_SECONDS));
+        if (!due || (latest != null && now.isBefore(askAgain))) {
+            return latest;
+        }
+        Fetched fetched;
+        try {
+            fetched = fetch();
+        } catch (RuntimeException e) {
+            if (latest == null || !now.isBefore(latest.expires)) {
+                throw e;
             }
+            // What is at hand is good for a while yet: a request need not
+            // fail because its successor could not be fetched this time.
+            askAgain = now.plusSeconds(RETRY_SECONDS);
+            LOG.log(System.Logger.Level.WARNING, "the next " + name() + " credentials could "
+                    + "not be fetched; the current ones are used until " + latest.expires
+                    + ": " + e.getMessage());
+            return latest;
+        }
+        askAgain = now.plusSeconds(RETRY_SECONDS);
+        String placeholder = TOKEN_PREFIX + NONCE + "-" + (++next) + "-"
+                + System.identityHashCode(this);
+        latest = new Generation(fetched.accessKeyId(), placeholder, fetched.expires(),
+                fetched.secretKey(), fetched.token());
+        BY_PLACEHOLDER.put(placeholder, latest);
+        generations.addLast(latest);
+        while (generations.size() > KEPT) {
+            generations.removeFirst().close();
         }
         return latest;
     }

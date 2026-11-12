@@ -50,7 +50,12 @@ import space.seclume.internal.TrustChoice;
  * the role may call. Every token on the way (IMDSv2, container authorization,
  * web identity JWT) travels the same way.
  *
- * <p>Kept until five minutes before they expire, then fetched again.
+ * <p>Kept until five minutes before they expire, then fetched again - but a
+ * source is not asked more often than every {@value #RETRY_SECONDS} seconds.
+ * The metadata service may hand out the old credentials until it has the
+ * next, already inside those five minutes: asked for every use, that was a
+ * round trip to it under this object's lock each time. And when the source
+ * cannot be reached, what is at hand is used for as long as it is valid.
  */
 public final class AwsInstanceRole {
 
@@ -59,6 +64,9 @@ public final class AwsInstanceRole {
     /** ECS container credentials endpoint when a relative URI is given. */
     static final String ECS_CONTAINER_HOST = "http://169.254.170.2";
     private static final long MARGIN_SECONDS = 300;
+    /** How long a source is left alone after it was asked. */
+    static final long RETRY_SECONDS = 5;
+    private static final System.Logger LOG = System.getLogger(AwsInstanceRole.class.getName());
     private static final int KEY_ROOM = 256;
     private static final int TOKEN_ROOM = 8 * 1024;
 
@@ -69,24 +77,33 @@ public final class AwsInstanceRole {
                            SecretScope sessionToken) {
     }
 
+    /** Where the credentials come from; package-private for the refresh's tests. */
     @FunctionalInterface
-    private interface Source {
+    interface Source {
         Fetched fetch();
     }
 
     private final Source source;
+    private final java.time.Clock clock;
 
     private String accessKeyId;
     private SecretScope secretKey;
     private SecretScope sessionToken;
     private Instant expires = Instant.EPOCH;
+    /** The source is not asked again before this, whatever it answered. */
+    private Instant askAgain = Instant.MIN;
 
     AwsInstanceRole(String host, int port, int timeoutMillis) {
         this(() -> fetchImds(host, port, timeoutMillis));
     }
 
     private AwsInstanceRole(Source source) {
+        this(source, java.time.Clock.systemUTC());
+    }
+
+    AwsInstanceRole(Source source, java.time.Clock clock) {
         this.source = source;
+        this.clock = clock;
         // The role's keys are cached until they near their expiry; a
         // checkpoint image must not carry them.
         space.seclume.internal.Checkpoint.register(this, AwsInstanceRole::close);
@@ -257,8 +274,22 @@ public final class AwsInstanceRole {
      * from this object's native memory and are good only during the call.
      */
     public synchronized <T> T use(Use<T> use) {
-        if (secretKey == null || Instant.now().isAfter(expires.minusSeconds(MARGIN_SECONDS))) {
-            refresh();
+        Instant now = clock.instant();
+        if (secretKey == null) {
+            refresh(now);
+        } else if (now.isAfter(expires.minusSeconds(MARGIN_SECONDS)) && !now.isBefore(askAgain)) {
+            try {
+                refresh(now);
+            } catch (RuntimeException e) {
+                if (!now.isBefore(expires)) {
+                    throw e;
+                }
+                // What is at hand is good for a while yet.
+                askAgain = now.plusSeconds(RETRY_SECONDS);
+                LOG.log(System.Logger.Level.WARNING, "the next AWS credentials could not be "
+                        + "fetched; the current ones are used until " + expires + ": "
+                        + e.getMessage());
+            }
         }
         return use.with(accessKeyId, view(secretKey), view(sessionToken));
     }
@@ -291,8 +322,9 @@ public final class AwsInstanceRole {
         };
     }
 
-    private void refresh() {
+    private void refresh(Instant now) {
         Fetched fetched = source.fetch();
+        askAgain = now.plusSeconds(RETRY_SECONDS);
         close();
         accessKeyId = fetched.accessKeyId();
         secretKey = fetched.secretKey();

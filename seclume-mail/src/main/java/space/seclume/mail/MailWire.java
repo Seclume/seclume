@@ -1,15 +1,19 @@
 package space.seclume.mail;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 
+import space.seclume.internal.EchoMask;
 import space.seclume.internal.SocketTransport;
 import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
 import space.seclume.internal.jdbc.TlsStack;
+import space.seclume.secret.SecretScope;
 
 /**
  * One connection to a mail server, the same for SMTP, IMAP and POP3: the
@@ -28,6 +32,11 @@ import space.seclume.internal.jdbc.TlsStack;
  *       taken as the first answers of the encrypted session (CVE-2011-0411
  *       and its many relatives). {@link #startTls} refuses the connection
  *       when there are any.
+ *   <li><b>A credential that comes back is not read.</b> A server may answer a
+ *       line it did not understand with that line. From the moment a
+ *       credential is written until the login is over, every line of the
+ *       server's is read into native memory first and searched for it
+ *       ({@link #guard}, {@link EchoMask}); only then is it a {@code String}.
  * </ul>
  *
  * <p>Not thread-safe; one protocol exchange at a time.
@@ -47,6 +56,10 @@ final class MailWire implements AutoCloseable {
     private TlsLayer tls;
     private final ByteBuffer incoming = ByteBuffer.allocateDirect(16 * 1024).flip();
     private boolean open = true;
+    /** What was sent and must not come back as a String - copies, wiped by {@link #unguard}. */
+    private final java.util.List<SecretScope> guarded = new java.util.ArrayList<>();
+    /** Where a line is held while it is searched. */
+    private SecretScope held;
 
     private MailWire(MailSettings settings, SocketTransport transport) {
         this.settings = settings;
@@ -131,8 +144,49 @@ final class MailWire implements AutoCloseable {
         }
     }
 
-    /** One line without its CRLF - the server's words, never a secret. */
+    /**
+     * From now on the server's lines are searched for these {@code length}
+     * bytes of {@code secret} before they are read - a credential as it was
+     * just written, or as it is. A copy is kept until {@link #unguard}.
+     */
+    void guard(MemorySegment secret, int length) {
+        if (length <= 0) {
+            return;
+        }
+        SecretScope copy = SecretScope.allocate(length);
+        MemorySegment.copy(secret, 0, copy.segment(), 0, length);
+        copy.length(length);
+        guarded.add(copy);
+        if (held == null) {
+            held = SecretScope.allocate(MAX_LINE);
+        }
+    }
+
+    /** Whether the server's lines are being searched. */
+    boolean guarding() {
+        return !guarded.isEmpty();
+    }
+
+    /** The login is over: the copies are wiped, and lines are read as they come. */
+    void unguard() {
+        for (SecretScope copy : guarded) {
+            copy.close();
+        }
+        guarded.clear();
+        if (held != null) {
+            held.close();
+            held = null;
+        }
+    }
+
+    /**
+     * One line without its CRLF - the server's words. After a credential was
+     * written, with whatever of it the server sent back overwritten.
+     */
     String readLine() throws IOException {
+        if (!guarded.isEmpty()) {
+            return readGuardedLine();
+        }
         StringBuilder line = new StringBuilder(); // seclume-allow: a server reply, protocol text
         while (true) {
             while (incoming.hasRemaining()) {
@@ -154,11 +208,45 @@ final class MailWire implements AutoCloseable {
         }
     }
 
+    private String readGuardedLine() throws IOException {
+        MemorySegment bytes = held.segment();
+        int length = 0;
+        try {
+            while (true) {
+                while (incoming.hasRemaining()) {
+                    byte b = incoming.get();
+                    if (b == '\n') {
+                        if (length > 0 && bytes.get(ValueLayout.JAVA_BYTE, length - 1) == '\r') {
+                            length--;
+                        }
+                        for (SecretScope secret : guarded) {
+                            EchoMask.mask(bytes, length, secret.segment(), secret.length());
+                        }
+                        StringBuilder line = new StringBuilder(length); // seclume-allow: a server reply, searched for the credential first
+                        for (int i = 0; i < length; i++) {
+                            line.append((char) (bytes.get(ValueLayout.JAVA_BYTE, i) & 0xff));
+                        }
+                        return line.toString();
+                    }
+                    if (length >= MAX_LINE) {
+                        throw new MailException(-1, "a line from " + settings.host
+                                + " longer than " + MAX_LINE + " bytes");
+                    }
+                    bytes.set(ValueLayout.JAVA_BYTE, length++, b);
+                }
+                fill();
+            }
+        } finally {
+            bytes.asSlice(0, Math.min(length + 1L, MAX_LINE)).fill((byte) 0);
+        }
+    }
+
     /**
      * Raw bytes, for the protocol library the connection is handed to: what
      * is buffered first, then the connection. -1 at the end.
      */
     int read(ByteBuffer into) throws IOException {
+        unguard();
         if (!incoming.hasRemaining()) {
             incoming.clear();
             int n = tls != null ? tls.read(incoming) : transport.read(incoming);
@@ -198,6 +286,7 @@ final class MailWire implements AutoCloseable {
             return;
         }
         open = false;
+        unguard();
         if (tls != null) {
             try {
                 tls.close();
