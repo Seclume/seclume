@@ -764,4 +764,25 @@ class MyStatement implements Statement, MySession.RowHandler {
                 space.seclume.QueryFingerprint.Dialect.MYSQL);
     }
 
+    // ---- quoting: JDBC's defaults are standard SQL's, see MyQuoting --------
+
+    @Override
+    public String enquoteLiteral(String value) throws SQLException {
+        return MyQuoting.literal(value, connection.session().noBackslashEscapes());
+    }
+
+    @Override
+    public String enquoteNCharLiteral(String value) throws SQLException {
+        return "N" + enquoteLiteral(value);
+    }
+
+    @Override
+    public String enquoteIdentifier(String identifier, boolean alwaysQuote) throws SQLException {
+        return MyQuoting.identifier(identifier, alwaysQuote);
+    }
+
+    @Override
+    public boolean isSimpleIdentifier(String identifier) throws SQLException {
+        return MyQuoting.simple(identifier);
+    }
 }

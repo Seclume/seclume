@@ -15,6 +15,16 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **MySQL: `enquoteLiteral` escapes a backslash.** The driver left `Statement.enquoteLiteral`
+  to JDBC's default, which doubles single quotes and nothing else. MySQL reads a backslash as
+  an escape, so a value of `\' or 1=1 -- ` became `'\'' or 1=1 -- '` - a string of one quote,
+  and the rest SQL: an injection through the method an application calls to prevent one. The
+  driver's own doubles the backslash too, unless the session has `NO_BACKSLASH_ESCAPES`, which
+  the server reports with every answer. `enquoteIdentifier` uses backticks - in double quotes
+  MySQL reads a string, not a name (`MyQuotingTest`,
+  `LocalMySqlTest.anEnquotedLiteralIsOneValueToTheServerInBothModes`).
+- **MySQL, Oracle, SQL Server: `executeLargeUpdate()` of a callable statement.** Left to
+  JDBC's default, which throws "not implemented"; it answers as `executeUpdate()` does.
 - **Oracle: `getColumns` names national character columns as a result set does.** The
   catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
   set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential

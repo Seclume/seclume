@@ -256,6 +256,12 @@ final class TdsCallableStatement extends TdsStatement implements ParameterSetter
         return run == null ? 0 : Math.max(run.getUpdateCount(), 0);
     }
 
+    /** JDBC's default refuses this ("not implemented"); a call counts as its executeUpdate does. */
+    @Override
+    public long executeLargeUpdate() throws SQLException {
+        return executeUpdate();
+    }
+
     @Override
     public ResultSet executeQuery() throws SQLException {
         if (!execute(false)) {
