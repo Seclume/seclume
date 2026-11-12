@@ -71,7 +71,30 @@ final class ClientBulkWrites {
                       boolean multi) {
     }
 
+    /**
+     * In the application's session, or in one of the driver's for the whole
+     * of it: the results come in a cursor, a cursor belongs to the session
+     * its command ran in, and a {@code getMore} for the rest of them has to
+     * name that session. Left to each command, the driver's session was given
+     * back as soon as the command had its reply - before the results were
+     * read - and the {@code getMore} named none.
+     */
     static ClientBulkWriteResult run(Topology topology, LogicalSession session,
+            CodecRegistry registry, WriteConcern writeConcern,
+            List<? extends ClientNamespacedWriteModel> models, ClientBulkWriteOptions given) {
+        boolean acknowledged = writeConcern == null || writeConcern.isAcknowledged();
+        if (session != null || !acknowledged) {
+            return runIn(topology, session, registry, writeConcern, models, given);
+        }
+        LogicalSession own = topology.acquire(false, false);
+        try {
+            return runIn(topology, own, registry, writeConcern, models, given);
+        } finally {
+            topology.release(own);
+        }
+    }
+
+    private static ClientBulkWriteResult runIn(Topology topology, LogicalSession session,
             CodecRegistry registry, WriteConcern writeConcern,
             List<? extends ClientNamespacedWriteModel> models, ClientBulkWriteOptions given) {
         if (models.isEmpty()) {
@@ -98,8 +121,9 @@ final class ClientBulkWrites {
         List<WriteConcernError> concernErrors = new ArrayList<>();
         ServerAddress address = null;
         int at = 0;
+        int fitting = maxBatch;            // what fitted a message last time; see Writes.run
         while (at < ops.size()) {
-            int count = Math.min(maxBatch, ops.size() - at);
+            int count = Math.min(fitting, ops.size() - at);
             while (true) {
                 List<Op> batch = ops.subList(at, at + count);
                 try {
@@ -129,6 +153,7 @@ final class ClientBulkWrites {
                         throw tooLarge;
                     }
                     count = (count + 1) / 2;
+                    fitting = count;
                 }
             }
             at += count;

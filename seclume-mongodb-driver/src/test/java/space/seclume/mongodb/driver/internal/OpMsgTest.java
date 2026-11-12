@@ -66,6 +66,40 @@ class OpMsgTest {
     }
 
     /**
+     * A batch too large for one message is found too large when it is, not
+     * after all of it was encoded: the caller cuts it in two and tries again,
+     * and a hundred thousand documents are not written out each time to learn
+     * that the first thousand were already too many.
+     */
+    @Test
+    void aSequenceOverTheLimitIsGivenUpWhereItGoesOver() {
+        BsonDocument document = new BsonDocument("x", new BsonString("y".repeat(1000)));
+        int[] asked = {0};
+        List<BsonDocument> many = new java.util.AbstractList<>() {
+            @Override
+            public BsonDocument get(int index) {
+                asked[0]++;
+                return document;
+            }
+
+            @Override
+            public int size() {
+                return 100_000;
+            }
+        };
+        BsonMaximumSizeExceededException tooLarge = assertThrows(
+                BsonMaximumSizeExceededException.class,
+                () -> OpMsg.encode(1, new BsonDocument("insert", new BsonString("t")), "db",
+                        "documents", many, 50_000));
+        assertTrue(asked[0] >= 48 && asked[0] <= 51, "documents encoded: " + asked[0]);
+        assertTrue(tooLarge.getMessage().contains("of its 100000 documents"),
+                tooLarge.getMessage());
+        // And one that fits still goes whole.
+        assertEquals(20, OpMsg.encode(1, new BsonDocument("insert", new BsonString("t")), "db",
+                "documents", many.subList(0, 20), 50_000).remaining() / 1000);
+    }
+
+    /**
      * A cursor's batch stays bytes, a RawBsonDocument per document, equal to
      * what was sent; the rest of the reply - the cursor document itself, an
      * array of the same name outside a cursor - is read as before and can be

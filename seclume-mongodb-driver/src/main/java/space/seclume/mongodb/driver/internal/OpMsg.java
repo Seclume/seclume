@@ -103,8 +103,19 @@ public final class OpMsg {
             int sizeAt = out.getPosition();
             out.writeInt32(0);
             out.writeCString(sequenceId);
+            int written = 0;
             for (BsonDocument document : sequence) {
                 writeDocument(out, document);
+                written++;
+                if (out.getPosition() > maxMessageSize) {
+                    // Here, not after the last one: a batch that is cut in two
+                    // and tried again is not first encoded to its end - a
+                    // hundred thousand documents, gigabytes - to find out.
+                    throw new BsonMaximumSizeExceededException("the command is more than "
+                            + maxMessageSize + " bytes after " + written + " of its "
+                            + sequence.size() + " documents; the server takes no larger "
+                            + "message");
+                }
             }
             out.writeInt32(sizeAt, out.getPosition() - sizeAt);
         }
