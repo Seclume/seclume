@@ -210,6 +210,15 @@ All notable changes to seclume are recorded here. Versions follow
   SQL Server were current. MariaDB's 13.1 release candidate joins the matrix, as PostgreSQL's
   does, so that a protocol change shows up before the release; YugabyteDB 2026.1.2.0 becomes
   2026.1.3.0 and CockroachDB 26.2.10 becomes 26.2.11.
+- **The differential tests run in CI.** `seclume-diff` - the same values through seclume and
+  through pgjdbc, Connector/J, mssql-jdbc and ojdbc - skips without a server, and no CI job
+  started one for it: of its test classes CI ran `PgBouncerTest` alone, while TESTING.md and
+  SECURITY-QUALITY.md said every pull request. `differential.yml` now runs the whole module
+  against PostgreSQL 18, MySQL 8.4, SQL Server 2022 and Oracle Free, on pull requests that
+  touch a driver, the core or the harness and nightly; a test that skipped for want of its job's
+  server fails the job, and the summary lists per class what passed, failed and was skipped
+  (`differential_summary.py`, tested by `test_differential_summary.py`). Found in the third
+  review round.
 - **`seclume-http` never takes a request body for a head.** The framing that decides where a
   credential may be written read a body as chunked only for `Transfer-Encoding: chunked` with
   one space. A client that wrote `transfer-encoding:chunked`, a tab, or `gzip, chunked` had its
