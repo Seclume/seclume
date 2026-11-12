@@ -237,18 +237,27 @@ class EchoedPasswordTest {
             if (header == null || !header.startsWith("*")) {
                 return null;
             }
-            int count = Integer.parseInt(header.substring(1));
+            int count = number(header.substring(1));
             List<String> command = new ArrayList<>(count);
             for (int i = 0; i < count; i++) {
                 String length = line(in);
                 if (length == null || !length.startsWith("$")) {
                     return null;
                 }
-                byte[] value = in.readNBytes(Integer.parseInt(length.substring(1)));
+                byte[] value = in.readNBytes(number(length.substring(1)));
                 line(in);
                 command.add(new String(value, StandardCharsets.UTF_8));
             }
             return command.isEmpty() ? null : command;
+        }
+
+        /** A length the client sent - or the connection ends, as a server would end it. */
+        private static int number(String text) throws IOException {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException e) {
+                throw new IOException("not a length: " + text, e);
+            }
         }
 
         private static String line(InputStream in) throws IOException {
