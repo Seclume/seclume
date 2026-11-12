@@ -309,6 +309,16 @@ All notable changes to seclume are recorded here. Versions follow
   refuses it. An unknown placeholder no longer ends the connection, and a BindRequest whose BER
   lengths run past it is refused rather than read past. `LdapPlaceholderSlotTest` (12 tests,
   without a server; 6 fail on the old socket).
+- **Redis: a password a server gives back in an error does not reach the client.** A server
+  that does not know a command answers with its arguments: Redis 5 has no `HELLO`, and to
+  Lettuce's `HELLO 3 AUTH user password` - the password written in from native memory - it
+  says ``unknown command `HELLO`, with args beginning with: `3`, `AUTH`, `user`, `password` ``.
+  Lettuce made a `String` of that line, the message of an exception; the login for Jedis did
+  the same with a server that does not know `AUTH`. The answers are now followed from the
+  connection's first byte, and in the errors among the sixteen that follow a password, the
+  password - or the beginning of it where the server cut its line - is replaced by `*` before
+  the client reads it; values are never touched (`RespReplyGuard`, `EchoedPasswordTest`,
+  `RespReplyGuardTest`). Found in the third review round.
 - **An HTTP placeholder's secret goes to one server.** The TLS sockets of seclume-http
   (JGit, Kubernetes, gRPC, Elasticsearch, `SeclumeSslSocketFactory`) wrote the secret into any
   request that carried its placeholder, whatever host the connection went to - and a client
