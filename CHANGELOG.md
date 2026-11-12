@@ -47,6 +47,12 @@ All notable changes to seclume are recorded here. Versions follow
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
+- **Redis: a value is not read byte by byte.** Every byte a Redis connection writes goes
+  through the follower that finds the password's place in `AUTH` and `HELLO`. It looked at
+  each one - at a value's too, at about 6 ns a byte. What is left of a bulk string nobody has
+  to look at is now passed over at once: a `SET` of 1 KiB 6.7 µs → 0.3 µs of the follower's own
+  work, of 64 KiB 351 µs → 0.5 µs (measured locally). What it finds is the same
+  (`RespPasswordSlotTest`, with random commands in random writes).
 - **Mail: a password a server sends back is not read.** A server that answers a line it does
   not understand with that line - "unknown command: PASS ..." - gave the password, written to
   it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
