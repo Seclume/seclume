@@ -103,6 +103,8 @@ in round 1: what the drivers send under the default `tls=prefer`.
 | 5 | Quarkus | The datasource password was refused only at build time, but it is a runtime property: the environment, a `config/application.properties`, a mounted secret were never checked. | medium | #255 |
 | 6 | `seclume-verify --split` | A split that failed at a later file left the earlier shares on disk while saying "no shares written"; on Windows a share took its directory's ACL; the shares were held in memory that is neither locked nor kept out of core dumps. | medium | #257 |
 | 7 | `seclume-crac` | Private keys in OpenSSL's or CNG's memory - a TLS server's or client's, a service account's, SSH and JWT signing keys - stayed for the life of the application and were not counted: a checkpoint was taken with them in the image while FEATURES.md said nothing secret was left. | medium | #261 |
+| 19 | `seclume-mongodb-driver` | The largest reply was whatever the `hello` named as `maxMessageSizeBytes` - answered before the login - and a reply's announced length is allocated once it is below that: a server naming 2 GB had the client allocate 2 GB for a 16-byte header. Capped at the 48 MB of every server. | low | #299 |
+| 20 | `seclume-mongodb-driver` | A document named `cursor` inside the application's data was read like the reply's cursor: its `firstBatch` documents came back immutable. | low | #299 |
 
 ### Open
 
@@ -245,6 +247,7 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 
 ## The next review
 
-Not yet read with the same care: the rest of `seclume-mongodb-driver` - topology, sessions,
-cursors, some ten thousand lines. A
+Not yet read with the same care: of `seclume-mongodb-driver` the topology (`Topology`, some
+1500 lines) and the API classes above it; `OpMsg`, `MongoSession`, `ServerPool` and
+`LogicalSession` are read. A
 round adds a section here, findings and the sound alike.
