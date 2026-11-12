@@ -434,6 +434,13 @@ final class ChangeStreams {
         public boolean hasNext() {
             while (buffered == null) {
                 buffered = tryNextRaw();
+                if (buffered == null && cursor.getServerCursor() == null
+                        && cursor.available() == 0) {
+                    // The server closed the cursor - after an invalidate, when
+                    // the collection was dropped - or close() did: nothing
+                    // comes any more, and asking again would never end.
+                    return false;
+                }
             }
             return true;
         }

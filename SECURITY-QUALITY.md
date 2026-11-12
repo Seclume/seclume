@@ -157,6 +157,101 @@ seven hostile servers on both TLS stacks (`TlsNeverFallsBackTest`,
 [#268](https://github.com/Seclume/seclume/pull/268)). Three faults put into each driver's TLS
 negotiation are each detected.
 
+## State, 12 November 2026
+
+Measured on `main` at
+[`38ca730`](https://github.com/Seclume/seclume/commit/38ca730), in
+[run 43183826393](https://github.com/Seclume/seclume/actions/runs/43183826393) (jobs `core` and
+`coverage`), next to the baseline above. Nothing here is estimated; where there is no run yet,
+it says so.
+
+### Coverage
+
+The baseline is the `core` job alone. Since [#278](https://github.com/Seclume/seclume/pull/278)
+the `coverage` job merges the data of the database jobs - the drivers against their servers -
+with the core job's, so the second column is all the tests that record coverage, wherever they
+ran. Both differences are in it: more tests, and tests counted that ran before but were not
+recorded.
+
+| | Baseline, lines | 12 November, lines | Baseline, branches | 12 November, branches |
+|---|---:|---:|---:|---:|
+| **All modules with a report** | 31272 / 55618 = 56.2 % (29 modules) | 47030 / 65738 = **71.5 %** | 14694 / 28056 = 52.4 % | 21666 / 33127 = **65.4 %** |
+| seclume-core | 68.0 % | 16334 / 21148 = 77.2 % | 64.3 % | 7777 / 10752 = 72.3 % |
+| seclume-postgresql | 30.3 % | 3043 / 4303 = 70.7 % | 27.4 % | 1254 / 1946 = 64.4 % |
+| seclume-mysql | 46.4 % | 2438 / 3593 = 67.9 % | 36.4 % | 969 / 1724 = 56.2 % |
+| seclume-sqlserver | 27.1 % | 3597 / 5172 = 69.5 % | 21.8 % | 1570 / 2656 = 59.1 % |
+| seclume-oracle | 34.4 % | 4596 / 6656 = 69.1 % | 31.4 % | 2059 / 3302 = 62.4 % |
+| seclume-pool | 57.5 % | 1310 / 1837 = 71.3 % | 60.8 % | 696 / 923 = 75.4 % |
+| seclume-heapdump | 92.2 % | 1289 / 1380 = 93.4 % | 85.5 % | 779 / 880 = 88.5 % |
+
+The security-critical packages:
+
+| Package | Baseline, lines | 12 November, lines | Baseline, branches | 12 November, branches |
+|---|---:|---:|---:|---:|
+| `space.seclume.secret` | 66.0 % | 3554 / 4384 = 81.1 % | 61.6 % | 1644 / 2249 = 73.1 % |
+| `space.seclume.internal` | 52.4 % | 4208 / 6228 = 67.6 % | 55.7 % | 2337 / 3408 = 68.6 % |
+| `space.seclume.crypto` | 73.6 % | 3008 / 4079 = 73.7 % | 65.0 % | 899 / 1370 = 65.6 % |
+| `space.seclume.tls` | 78.2 % | 2775 / 3470 = 80.0 % | 67.9 % | 1215 / 1736 = 70.0 % |
+| `space.seclume.field` | 87.2 % | 775 / 823 = 94.2 % | 88.3 % | 415 / 452 = 91.8 % |
+| `space.seclume.audit` | 94.0 % | 422 / 457 = 92.3 % | 88.5 % | 246 / 286 = 86.0 % |
+| `space.seclume.pool` | 57.5 % | 1310 / 1837 = 71.3 % | 60.8 % | 696 / 923 = 75.4 % |
+| `space.seclume.heapdump` | 92.2 % | 1289 / 1380 = 93.4 % | 85.5 % | 779 / 880 = 88.5 % |
+
+What is still not covered, by the job's own list of the least tested classes: the Windows
+classes on a Linux runner (`CngSigningKey` 0 / 286 lines, `WindowsStoreClientIdentity`
+0 / 233, `DpapiSecretProvider` 0 / 122, `Sspi` 20 / 191 - they need Windows, and no
+Windows job's coverage is in the merge), and in the drivers' shared JDBC code `QueryAsCallable` (8 / 281) and
+`OutParameters` (17 / 287). `crypto` did not move for the first reason. `audit` has more code
+than at the baseline (457 lines, 385 then) and a lower share of it covered. Modules still
+without a report: `seclume-kafka`, `seclume-micronaut`, `seclume-helidon`, and the three that
+are not library code.
+
+### Tests
+
+| | Baseline | 12 November | Source |
+|---|---:|---:|---|
+| Tests run by the `core` job | 6045, of them 674 skipped | 6135, of them 679 skipped | Surefire's totals per module, summed |
+| Security regression tests in the gate | 51 | 51 | [`.github/security-gate.json`](.github/security-gate.json) |
+| Fuzz test classes | 31, of them 12 with `@FuzzTest` methods (21 methods) | 31, 12, 21 | the repository |
+| Coverage-guided fuzz targets, nightly | 16 | 16 | [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml) |
+
+The core job's count grew little because most of what was added since runs elsewhere: in the
+database jobs, the brokers' jobs and the MongoDB jobs, which this count does not sum. The
+gate did not grow: the regression tests of the findings since the baseline run in every build,
+but none of them was added to the gate's list. That is open.
+
+### Mutation score
+
+No scheduled run since the baseline - `mutation.yml` runs on Saturdays. A run on `main` was
+started by hand on 12 November
+([43224031993](https://github.com/Seclume/seclume/actions/runs/43224031993)); its scores go
+here when it has finished. Until then the baseline's are the latest measured ones.
+
+### Fuzzing
+
+The nightly `fuzz` run since the baseline:
+
+| Night | Run | Result |
+|---|---|---|
+| 9 Nov | [42599479454](https://github.com/Seclume/seclume/actions/runs/42599479454) | green |
+| 10 Nov | [42798094688](https://github.com/Seclume/seclume/actions/runs/42798094688) | green |
+| 11 Nov | [42998264173](https://github.com/Seclume/seclume/actions/runs/42998264173) | green |
+| 12 Nov | [43198332453](https://github.com/Seclume/seclume/actions/runs/43198332453) | green |
+
+### Native sanitizers
+
+Not run at the baseline. Now: OpenSSL's libcrypto built with AddressSanitizer and
+UndefinedBehaviorSanitizer, and the tests of the modules that call it run against that build
+([`sanitizers.yml`](.github/workflows/sanitizers.yml)). Green in the scheduled
+[run 43205613209](https://github.com/Seclume/seclume/actions/runs/43205613209) of 12 November
+on `main`. A control - a call that reads 64 bytes of 8 - has to be stopped by the sanitizer
+in every run, or the job fails.
+
+### Findings
+
+What reading the code found since the baseline, each with its severity, its test and its
+pull request, is in [REVIEWS.md](REVIEWS.md).
+
 ## Platforms and JDKs
 
 | | Tested | How |

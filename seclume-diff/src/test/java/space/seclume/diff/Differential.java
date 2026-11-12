@@ -213,15 +213,22 @@ final class Differential {
         java.util.Map<String, java.util.Map<String, String>> mine = catalog(seclume, fields);
         java.util.Map<String, java.util.Map<String, String>> theirs = catalog(vendor, fields);
 
+        if (mine.isEmpty() && theirs.isEmpty()) {
+            // Neither driver found the table at all - under the name as it is
+            // written here or folded to upper case. Then nothing below
+            // compares anything, and a run that compared nothing must not
+            // look like one that found the drivers agreeing.
+            report(new Finding("<table>", "getColumns", "-", "both", "<no rows for " + table
+                    + ">", "<no rows for " + table + ">"));
+            return;
+        }
         for (Column column : columns) {
-            String name = column.name();
+            String name = column.name().toLowerCase(java.util.Locale.ROOT);
             java.util.Map<String, String> a = mine.get(name);
             java.util.Map<String, String> b = theirs.get(name);
             if (a == null && b == null) {
-                // Neither driver has a row for it. That is a question about
-                // the catalogue's name matching - Oracle folds unquoted names
-                // to upper case - and not a disagreement between the two, so
-                // it is not a finding.
+                // The table is there and neither driver has this column: the
+                // same answer from both, and not what this compares.
                 continue;
             }
             if (a == null || b == null) {
@@ -244,15 +251,28 @@ final class Differential {
 
     private java.util.Map<String, java.util.Map<String, String>> catalog(Connection connection,
             List<String> fields) throws SQLException {
+        java.util.Map<String, java.util.Map<String, String>> rows = catalog(connection, fields,
+                table);
+        if (rows.isEmpty()) {
+            // Oracle folds an unquoted name to upper case and looks a pattern
+            // up as it is given: the table created as diff_x is DIFF_X there.
+            rows = catalog(connection, fields, table.toUpperCase(java.util.Locale.ROOT));
+        }
+        return rows;
+    }
+
+    /** The catalogue's rows for a table of this name, by column name in lower case. */
+    private static java.util.Map<String, java.util.Map<String, String>> catalog(
+            Connection connection, List<String> fields, String name) throws SQLException {
         java.util.Map<String, java.util.Map<String, String>> rows = new java.util.LinkedHashMap<>();
-        try (ResultSet columns = connection.getMetaData()
-                .getColumns(null, null, table, null)) {
+        try (ResultSet columns = connection.getMetaData().getColumns(null, null, name, null)) {
             while (columns.next()) {
                 java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
                 for (String field : fields) {
                     values.put(field, columns.getString(field));
                 }
-                rows.put(columns.getString("COLUMN_NAME"), values);
+                rows.put(columns.getString("COLUMN_NAME").toLowerCase(java.util.Locale.ROOT),
+                        values);
             }
         }
         return rows;

@@ -15,6 +15,12 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Oracle: `getColumns` names national character columns as a result set does.** The
+  catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
+  set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential
+  run began to compare Oracle's catalogue at all: it had looked the columns up in lower
+  case, found none in either driver, and counted that as agreement
+  (`LocalOracleJdbcTest.theCatalogueAndAResultSetNameTheSameType`).
 - **MongoDB: a `hello` that cannot be read no longer ends the monitor.** One thread looks at
   the servers. A `hello` with a field of another type than expected - `tags` that are not
   strings, a member that is no address - was an exception thrown through that thread, and no
@@ -61,6 +67,11 @@ All notable changes to seclume are recorded here. Versions follow
   into native memory first and searched for it - as it was sent (base64) and as it is - and
   what is found is overwritten with `*` (`EchoMask` in the core, `EchoedCredentialTest`,
   `EchoMaskTest`). No protection from the server itself, which was given the password.
+- **MongoDB: a change stream on a dropped collection ends.** After the `invalidate` event the
+  server closes the stream's cursor. `hasNext()` went on asking for the next event of a cursor
+  that was gone, in a loop that never returned and kept a CPU busy; iterating
+  `collection.watch()` did not end when the collection was dropped. It now returns `false`
+  (`LocalChangeStreamTest.aStreamOnADroppedCollectionEnds`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
@@ -72,10 +83,22 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeKeys.privateKey(Supplier)` is the reloadable form of the latter. The access log's
   signing key no longer leaves its provider open (`ReloadableSigningKeyTest`,
   `CheckpointKeyTest`, `CheckpointSigningKeyTest`, `QuiesceTest`).
+- **HTTP: a request's head is scanned once.** `seclume-http` looked for the end of a head in a
+  copy of the head so far, made for every byte of it, and passed a chunked body's size lines,
+  CRLFs and trailers on a byte - a TLS record - at a time. The framing's own work per request,
+  measured locally: a head of 590 bytes 78 µs → 9.8 µs, of 1491 bytes 316 µs → 15 µs, of 3999
+  bytes 1645 µs → 43 µs; a chunked upload of 64 KiB in 8 chunks 78 TLS records → 27. The bytes
+  sent are the same (`HttpFramingRunsTest`, and the model test as before).
 - **NATS without TLS: no copy of the CONNECT line left on the heap.** The line, the password
   written into it in native memory, went to the socket's stream through an array made for it
   and left as it was. The array is wiped once the stream has had it
   (`SocketStreamTransportTest`). Found in the third review round.
+- **MongoDB: a batch too large for one message is cut without being encoded whole.** An
+  `insertMany` or `bulkWrite` beyond the server's 48 MB per message is sent in parts; to find
+  the part that fits, the whole batch was encoded, found too large, halved and encoded again -
+  for every part anew, starting from the limit each time. So documents were encoded more than
+  once, and a batch of several gigabytes was written out in memory before anything was sent. The encoding now stops where the limit is passed
+  (`OpMsgTest`), and the next part starts at the size that fitted.
 - **A certificate that comes between a checkpoint and the first use after the restore is not
   kept.** An SVID the SPIFFE agent pushed down the open stream, or a Vault PKI or SPIFFE renewal
   on its timer, after a checkpoint had freed the keys was installed with its key - in the image
@@ -83,6 +106,12 @@ All notable changes to seclume are recorded here. Versions follow
   more and forgot that pair without freeing it: its key stayed in OpenSSL's memory after close.
   Such a pair's key is now freed at once; the first use asks for a new one as before. Found by
   a flaky CI run (`SpiffeTest`).
+- **MongoDB: a client `bulkWrite` reads all of its results.** The per-operation results come in
+  a cursor. Without a session of the application's, the command ran in a server session of the
+  driver's that was given back with the command's reply; when the results did not fit that
+  reply, the `getMore` for the rest named no session, and the server refused it. The whole
+  bulk write now runs in one session, the reading of its results included
+  (`LocalSameAsOfficialTest.clientBulkWriteWhoseResultsNeedAGetMoreIsTheSame`).
 - **An issued identity is asked for again after a restore, not a reason to refuse the
   checkpoint.** A Vault PKI certificate's key and a SPIFFE SVID's - for a database connection's
   client certificate or a server's key manager - were made in OpenSSL or fetched from the agent

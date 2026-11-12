@@ -503,6 +503,45 @@ class LocalOracleJdbcTest {
     }
 
     /**
+     * The catalogue and a result set say the same type for the same column.
+     * For national character columns they did not: {@code getColumns} said
+     * VARCHAR and CHAR where the result set says NVARCHAR and NCHAR. Found
+     * when the differential run began to compare Oracle's catalogue with
+     * ojdbc's, 12.11.2026.
+     */
+    @Test
+    void theCatalogueAndAResultSetNameTheSameType() throws Exception {
+        try (Connection connection = connect();
+             Statement statement = connection.createStatement()) {
+            statement.execute("begin execute immediate 'drop table zl_types'; "
+                    + "exception when others then null; end;");
+            statement.execute("create table zl_types (c_nv nvarchar2(20), c_nc nchar(4), "
+                    + "c_ncl nclob, c_v varchar2(20), c_c char(4), c_cl clob, c_raw raw(8), "
+                    + "c_d date, c_ts timestamp, c_bd binary_double, c_bf binary_float)");
+            Map<String, Integer> catalogue = new java.util.LinkedHashMap<>();
+            try (ResultSet found = connection.getMetaData()
+                    .getColumns(null, null, "ZL_TYPES", null)) {
+                while (found.next()) {
+                    catalogue.put(found.getString("COLUMN_NAME"), found.getInt("DATA_TYPE"));
+                }
+            }
+            Map<String, Integer> described = new java.util.LinkedHashMap<>();
+            try (ResultSet none = statement.executeQuery("select * from zl_types")) {
+                ResultSetMetaData meta = none.getMetaData();
+                for (int i = 1; i <= meta.getColumnCount(); i++) {
+                    described.put(meta.getColumnName(i), meta.getColumnType(i));
+                }
+            }
+            assertEquals(11, catalogue.size(), catalogue.toString());
+            assertEquals(described, catalogue);
+            assertEquals(java.sql.Types.NVARCHAR, catalogue.get("C_NV"));
+            assertEquals(java.sql.Types.NCHAR, catalogue.get("C_NC"));
+            assertEquals(java.sql.Types.VARCHAR, catalogue.get("C_V"));
+            statement.execute("drop table zl_types");
+        }
+    }
+
+    /**
      * DDL - and what it took to make it work.
      *
      * <p>A {@code create table} used to answer {@code ORA-01003, no statement

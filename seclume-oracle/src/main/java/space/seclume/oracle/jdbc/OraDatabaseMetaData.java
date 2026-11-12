@@ -45,6 +45,12 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
      * the scale: no decimals and few digits is an integer, anything else is a
      * decimal. A {@code NUMBER} without a declared scale is reported as
      * {@code NUMERIC}, which is the honest answer rather than a guess.
+     *
+     * <p>A national character column is {@code NCHAR} or {@code NVARCHAR}, as
+     * a result set's own description of the same column says
+     * ({@code OracleColumn.sqlType}); the catalogue said {@code CHAR} and
+     * {@code VARCHAR} for them, and a caller that reads a column's type
+     * here and binds by it lost the national character set.
      */
     private static final String SQL_TYPE_CASE = """
             case
@@ -55,9 +61,9 @@ final class OraDatabaseMetaData implements DatabaseMetaData {
                  when data_type = 'BINARY_FLOAT' then 7
                  when data_type = 'BINARY_DOUBLE' then 8
                  when data_type = 'CHAR' then 1
-                 when data_type = 'NCHAR' then 1
+                 when data_type = 'NCHAR' then -15
                  when data_type = 'VARCHAR2' then 12
-                 when data_type = 'NVARCHAR2' then 12
+                 when data_type = 'NVARCHAR2' then -9
                  when data_type = 'CLOB' then 2005
                  when data_type = 'NCLOB' then 2011
                  when data_type = 'BLOB' then 2004
