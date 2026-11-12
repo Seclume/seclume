@@ -1,6 +1,7 @@
 package space.seclume.mongodb.driver;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -311,6 +312,56 @@ class LocalReplicaSetTest {
                 things.drop();
             }
         }
+    }
+
+    /**
+     * A {@code getMore} that got no answer says nothing about the cursor: the
+     * server still holds it, and {@code close()} has to kill it there.
+     */
+    @Test
+    void aCursorWhoseGetMoreGotNoAnswerIsKilledByClose() {
+        try (MongoClient client = all("")) {
+            MongoCollection<Document> things = fresh(client);
+            try {
+                List<Document> many = new ArrayList<>();
+                for (int i = 0; i < 40; i++) {
+                    many.add(new Document("_id", i));
+                }
+                things.insertMany(many);
+                MongoCursor<Document> cursor = things.find().batchSize(5).cursor();
+                long id;
+                try {
+                    cursor.next();
+                    id = cursor.getServerCursor().getId();
+                    failNext(client, "getMore", 1);
+                    assertThrows(MongoSocketException.class, () -> {
+                        while (cursor.hasNext()) {
+                            cursor.next();
+                        }
+                    });
+                    assertTrue(idleCursors(client).contains(id),
+                            "the fail point closed the connection before the getMore ran - "
+                                    + "the server's cursor is open, which is what is tested");
+                } finally {
+                    cursor.close();
+                }
+                assertFalse(idleCursors(client).contains(id),
+                        "close() left the cursor open on the server after a getMore without an answer");
+            } finally {
+                off(client);
+                things.drop();
+            }
+        }
+    }
+
+    private static List<Long> idleCursors(MongoClient client) {
+        List<Long> ids = new ArrayList<>();
+        client.getDatabase("admin").aggregate(List.of(
+                new Document("$currentOp", new Document("idleCursors", true)),
+                new Document("$match", new Document("type", "idleCursor"))))
+                .forEach(op -> ids.add(op.get("cursor", Document.class)
+                        .get("cursorId", Number.class).longValue()));
+        return ids;
     }
 
     private static void failNext(MongoClient client, String command, int times) {
