@@ -35,24 +35,38 @@ class CoverageMergeTest(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def test_every_job_that_recorded_a_module_goes_into_its_report(self):
+    def test_every_job_that_recorded_a_module_is_kept_and_a_module_only_compiled_too(self):
         modules = coverage_merge.plan(self.artifacts)
-        self.assertEqual({"seclume-core", "seclume-pool", "seclume-postgresql"}, set(modules))
+        self.assertEqual({"seclume-core", "seclume-pool", "seclume-postgresql", "seclume-oracle"},
+                         set(modules))
         self.assertEqual(["core", "postgresql"], modules["seclume-core"]["jobs"])
         self.assertEqual(2, len(modules["seclume-core"]["exec"]))
         self.assertIn("coverage-exec-core", str(modules["seclume-core"]["classes"]))
-        self.assertNotIn("seclume-oracle", modules)
+        # Compiled in the oracle job, no tests of its own there: its code may
+        # still have run under another module's.
+        self.assertEqual([], modules["seclume-oracle"]["exec"])
+        self.assertIsNotNone(modules["seclume-oracle"]["classes"])
 
-    def test_a_module_without_sources_here_gets_no_report(self):
+    def test_every_modules_data_goes_into_every_modules_report(self):
         modules = coverage_merge.plan(self.artifacts)
         steps = coverage_merge.commands(modules, self.repository, "cli.jar")
-        self.assertEqual({"seclume-core", "seclume-postgresql"}, set(steps))
-        merge, report = steps["seclume-core"]
+        # One merge of all four files, then a report for each module with sources here.
+        self.assertEqual([None, "seclume-core", "seclume-postgresql"], list(steps))
+        (merge,) = steps[None]
         self.assertEqual(["java", "-jar", "cli.jar", "merge"], merge[:4])
-        self.assertEqual(2, sum(1 for part in merge if part.endswith("jacoco.exec")))
+        self.assertEqual(4, sum(1 for part in merge if part.endswith("jacoco.exec")))
+        destination = merge[merge.index("--destfile") + 1]
+        (report,) = steps["seclume-postgresql"]
+        self.assertEqual(destination, report[4], "the report reads the merge of everything")
         self.assertIn("--classfiles", report)
         self.assertTrue(report[report.index("--xml") + 1].endswith(
-            "seclume-core/target/site/jacoco/jacoco.xml"))
+            "seclume-postgresql/target/site/jacoco/jacoco.xml"))
+
+    def test_nothing_recorded_means_no_report(self):
+        empty = self.root / "empty"
+        (empty / "coverage-exec-core" / "seclume-core" / "target" / "classes").mkdir(parents=True)
+        self.assertEqual({}, coverage_merge.commands(coverage_merge.plan(empty),
+                                                     self.repository, "cli.jar"))
 
     def test_a_failed_merge_fails_the_step_and_a_mismatch_is_counted(self):
         calls = []
@@ -77,7 +91,7 @@ class CoverageMergeTest(unittest.TestCase):
         with contextlib.redirect_stdout(printed):
             self.assertEqual(0, coverage_merge.main(
                 [str(self.artifacts), str(self.repository), "cli.jar"], run=mismatching))
-        self.assertIn("::warning title=coverage::4 classes", printed.getvalue())
+        self.assertIn("::warning title=coverage::3 classes", printed.getvalue())
 
 
 if __name__ == "__main__":

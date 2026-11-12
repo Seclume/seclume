@@ -15,6 +15,11 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Coverage of all the tests, wherever they ran.** One run each of the PostgreSQL, MySQL, SQL
+  Server and Oracle jobs records coverage too, and the `coverage` job merges every job's and
+  every module's data and reports each module from all of it - code of the core that the
+  drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
+  `coverage-merged` artifact). The core job's own tables stay as they were.
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held

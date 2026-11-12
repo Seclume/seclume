@@ -37,14 +37,25 @@ def ratio(pair):
     return None if total == 0 else covered / total
 
 
-def read_report(path):
-    """The module's totals and its packages' totals from one jacoco.xml."""
+def read_report(path, classes=None):
+    """The module's totals and its packages' totals from one jacoco.xml - and,
+    into {@code classes} if given, each top-level class's lines and branches,
+    its nested classes summed into it."""
     # JaCoCo's report names a DTD; nothing is fetched or resolved here.
     root = ET.parse(path).getroot()
     packages = {}
     for package in root.findall("package"):
         name = package.get("name").replace("/", ".")
         packages[name] = counters(package)
+        if classes is None:
+            continue
+        for element in package.findall("class"):
+            simple = element.get("name").rsplit("/", 1)[-1].split("$")[0]
+            own = counters(element)
+            entry = classes.setdefault(f"{name}.{simple}", {"LINE": (0, 0), "BRANCH": (0, 0)})
+            for kind in ("LINE", "BRANCH"):
+                missed, covered = own.get(kind, (0, 0))
+                entry[kind] = (entry[kind][0] + missed, entry[kind][1] + covered)
     return counters(root), packages
 
 
@@ -56,8 +67,9 @@ def collect(repository):
         if not (pom.parent / "src" / "main" / "java").is_dir():
             continue
         if report.is_file():
-            totals, packages = read_report(report)
-            modules[module] = {"totals": totals, "packages": packages}
+            classes = {}
+            totals, packages = read_report(report, classes)
+            modules[module] = {"totals": totals, "packages": packages, "classes": classes}
         else:
             modules[module] = None
     return modules
@@ -136,7 +148,32 @@ def markdown(modules, critical, title="Coverage (JaCoCo)"):
         lines.append(f"| `{name}` | {data['why']} | {counted(data['LINE'])} | "
                      f"{percent(data['LINE'])} | {counted(data['BRANCH'])} | "
                      f"{percent(data['BRANCH'])} |")
+    gaps = untested(modules, critical)
+    if gaps:
+        lines += ["", "### Where the critical packages are least tested", "",
+                  "The classes with the most lines no test ran - where a test is worth the most.",
+                  "", "| Class | Lines not run | Lines covered | Branches covered |",
+                  "|---|---:|---:|---:|"]
+        for name, data in gaps:
+            lines.append(f"| `{name}` | {data['LINE'][0]} | {counted(data['LINE'])} | "
+                         f"{counted(data['BRANCH'])} |")
     return "\n".join(lines) + "\n"
+
+
+def untested(modules, critical, per_package=5):
+    """Per critical package, its classes with the most lines not run, most first."""
+    result = []
+    for prefix in critical:
+        found = []
+        for data in modules.values():
+            for name, counts in ((data or {}).get("classes") or {}).items():
+                package = name.rsplit(".", 1)[0]
+                if (package == prefix or package.startswith(prefix + ".")) \
+                        and counts["LINE"][0] > 0:
+                    found.append((name, counts))
+        found.sort(key=lambda item: (-item[1]["LINE"][0], item[0]))
+        result += found[:per_package]
+    return result
 
 
 def as_json(modules, critical):
