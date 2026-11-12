@@ -83,6 +83,12 @@ All notable changes to seclume are recorded here. Versions follow
   `SeclumeKeys.privateKey(Supplier)` is the reloadable form of the latter. The access log's
   signing key no longer leaves its provider open (`ReloadableSigningKeyTest`,
   `CheckpointKeyTest`, `CheckpointSigningKeyTest`, `QuiesceTest`).
+- **HTTP: a request's head is scanned once.** `seclume-http` looked for the end of a head in a
+  copy of the head so far, made for every byte of it, and passed a chunked body's size lines,
+  CRLFs and trailers on a byte - a TLS record - at a time. The framing's own work per request,
+  measured locally: a head of 590 bytes 78 µs → 9.8 µs, of 1491 bytes 316 µs → 15 µs, of 3999
+  bytes 1645 µs → 43 µs; a chunked upload of 64 KiB in 8 chunks 78 TLS records → 27. The bytes
+  sent are the same (`HttpFramingRunsTest`, and the model test as before).
 - **NATS without TLS: no copy of the CONNECT line left on the heap.** The line, the password
   written into it in native memory, went to the socket's stream through an array made for it
   and left as it was. The array is wiped once the stream has had it
