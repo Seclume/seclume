@@ -14,6 +14,20 @@ import coverage_report  # noqa: E402
 REPORT = """<?xml version="1.0" encoding="UTF-8"?>
 <report name="m">
   <package name="space/seclume/secret">
+    <class name="space/seclume/secret/Scope" sourcefilename="Scope.java">
+      <counter type="LINE" missed="7" covered="40"/>
+      <counter type="BRANCH" missed="3" covered="9"/>
+    </class>
+    <class name="space/seclume/secret/Scope$Inner" sourcefilename="Scope.java">
+      <counter type="LINE" missed="2" covered="10"/>
+    </class>
+    <class name="space/seclume/secret/Provider" sourcefilename="Provider.java">
+      <counter type="LINE" missed="1" covered="40"/>
+      <counter type="BRANCH" missed="2" covered="6"/>
+    </class>
+    <class name="space/seclume/secret/Done" sourcefilename="Done.java">
+      <counter type="LINE" missed="0" covered="5"/>
+    </class>
     <counter type="LINE" missed="10" covered="90"/>
     <counter type="BRANCH" missed="5" covered="15"/>
   </package>
@@ -21,6 +35,9 @@ REPORT = """<?xml version="1.0" encoding="UTF-8"?>
     <counter type="LINE" missed="0" covered="10"/>
   </package>
   <package name="space/seclume/other">
+    <class name="space/seclume/other/Big" sourcefilename="Big.java">
+      <counter type="LINE" missed="50" covered="50"/>
+    </class>
     <counter type="LINE" missed="50" covered="50"/>
   </package>
   <counter type="LINE" missed="60" covered="150"/>
@@ -73,6 +90,19 @@ class CoverageReportTest(unittest.TestCase):
         text = coverage_report.markdown(modules, critical)
         self.assertIn("| `space.seclume.secret` | s | 100 / 110 | 90.9 % | 15 / 20 | 75.0 % |", text)
         self.assertIn("| `space.seclume.tls` | t | - | no report | - | - |", text)
+
+    def test_the_least_tested_classes_of_a_critical_package_are_named(self):
+        modules = coverage_report.collect(self.root)
+        critical = coverage_report.critical_packages(modules, [
+            {"package": "space.seclume.secret", "why": "secrets"}])
+        gaps = coverage_report.untested(modules, critical)
+        # Nested classes summed into their class, fully run ones and other packages left out.
+        self.assertEqual(["space.seclume.secret.Scope", "space.seclume.secret.Provider"],
+                         [name for name, _ in gaps])
+        self.assertEqual((9, 50), gaps[0][1]["LINE"])
+        text = coverage_report.markdown(modules, critical)
+        self.assertIn("| `space.seclume.secret.Scope` | 9 | 50 / 59 | 9 / 12 |", text)
+        self.assertNotIn("Big", text)
 
     def test_the_json_carries_the_counts(self):
         out = self.root / "coverage.json"

@@ -96,6 +96,8 @@ class PitReportTest(unittest.TestCase):
         self.assertIn("3 of 4 mutants with a test killed (75.0%)", text)
         self.assertIn("3 of all 5 killed (60.0%)", text)
         self.assertIn("below the floor of 75.1%", text)
+        self.assertIn("::group::every survivor in tls (1)", text)
+        self.assertIn("survivor src/space/seclume/tls/A.java:4 ", text)
 
 
 if __name__ == "__main__":

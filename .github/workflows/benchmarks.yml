@@ -55,12 +55,15 @@ jobs:
           -Dbench.database=seclume_test -Dbench.user=seclume_test
           -Dbench.password.file=.local-mysql-password
           -jar seclume-bench/target/seclume-bench.jar
-          QueryBenchmark InsertBenchmark
+          'bench\.(Query|Insert|Pool|PacedPool)Benchmark'
           -rf json -rff seclume-bench/target/jmh.json -wi 3 -i 5 -f 1
+      - name: The results, seclume beside the vendor
+        if: always()
+        run: python3 .github/scripts/jmh_notices.py seclume-bench/target/jmh.json mysql
       - name: Record what it was
         run: >
           java
-          -Dbench.url="jdbc:seclume:mysql://127.0.0.1:3306/seclume_test?user=seclume_test&provider=file&path=.local-mysql-password"
+          -Dbench.url="jdbc:seclume:mysql://127.0.0.1:3306/seclume_test?user=seclume_test&provider=file&path=.local-mysql-password&allowCleartextOverUnverifiedTls=true"
           -cp seclume-bench/target/seclume-bench.jar
           space.seclume.bench.BenchRecord
           seclume-bench/target/BENCHMARKS.md seclume-bench/target/jmh.json
@@ -134,3 +137,175 @@ jobs:
           retention-days: 90
       - if: always()
         run: rm -f .local-pg-password
+
+  # The other three databases over JDBC: a statement, rows, inserts and the
+  # pool, seclume beside the vendor driver (and HikariCP over it) in the same
+  # run. Notices with the ratio on the run; no baseline gate yet - these
+  # ratios are being measured for the first time on this runner.
+  postgresql:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: seclume_test
+          POSTGRES_DB: seclume_test
+          POSTGRES_PASSWORD: seclume-CI-password-1
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -h 127.0.0.1 -U seclume_test"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - run: printf '%s' 'seclume-CI-password-1' > .local-pg-password
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-bench -am -DskipTests package
+      # The service image has no TLS: both sides go without it.
+      - name: Measure
+        run: >
+          java -Dbench.db=postgresql -Dbench.host=127.0.0.1 -Dbench.port=5432
+          -Dbench.database=seclume_test -Dbench.user=seclume_test
+          -Dbench.password.file=.local-pg-password -Dbench.tls=off
+          -jar seclume-bench/target/seclume-bench.jar
+          'bench\.(Query|Insert|Pool|PacedPool)Benchmark'
+          -rf json -rff seclume-bench/target/jmh-postgresql.json -wi 3 -i 5 -f 1
+      - name: The results, seclume beside the vendor
+        if: always()
+        run: python3 .github/scripts/jmh_notices.py seclume-bench/target/jmh-postgresql.json postgresql
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: benchmarks-postgresql
+          path: seclume-bench/target/jmh-postgresql.json
+          retention-days: 90
+      - if: always()
+        run: rm -f .local-pg-password
+
+  sqlserver:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: seclume-CI-password-1
+        ports: ['1433:1433']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Wait for SQL Server and create the database
+        run: |
+          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
+          for i in $(seq 1 40); do
+            if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b \
+                -P 'seclume-CI-password-1' -Q "if db_id('seclume_test') is null create database seclume_test"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+      - run: printf '%s' 'seclume-CI-password-1' > .local-mssql-password
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-bench -am -DskipTests package
+      - name: Measure
+        run: >
+          java -Dbench.db=sqlserver -Dbench.host=127.0.0.1 -Dbench.port=1433
+          -Dbench.database=seclume_test -Dbench.user=sa
+          -Dbench.password.file=.local-mssql-password
+          -jar seclume-bench/target/seclume-bench.jar
+          'bench\.(Query|Insert|Pool|PacedPool)Benchmark'
+          -rf json -rff seclume-bench/target/jmh-sqlserver.json -wi 3 -i 5 -f 1
+      - name: The results, seclume beside the vendor
+        if: always()
+        run: python3 .github/scripts/jmh_notices.py seclume-bench/target/jmh-sqlserver.json sqlserver
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: benchmarks-sqlserver
+          path: seclume-bench/target/jmh-sqlserver.json
+          retention-days: 90
+      - if: always()
+        run: rm -f .local-mssql-password
+
+  oracle:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - name: Start Oracle Free on the host network
+        run: |
+          docker run -d --name oracle --network host \
+            -e ORACLE_PASSWORD=seclume-ci-password -e APP_USER=seclume_test \
+            -e APP_USER_PASSWORD=seclume-ci-password \
+            --health-cmd healthcheck.sh --health-interval 10s \
+            --health-timeout 10s --health-retries 60 \
+            gvenzl/oracle-free:23-slim
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-bench -am -DskipTests package
+      - name: Wait for Oracle
+        run: |
+          for i in $(seq 1 90); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' oracle)" = healthy ] && exit 0
+            sleep 10
+          done
+          docker logs oracle | tail -50
+          exit 1
+      - run: printf '%s' 'seclume-ci-password' > .local-ora-password
+      # Oracle Free has no TCPS listener: both sides go without TLS.
+      - name: Measure
+        run: >
+          java -Dbench.db=oracle -Dbench.host=127.0.0.1 -Dbench.port=1521
+          -Dbench.database=FREEPDB1 -Dbench.user=seclume_test
+          -Dbench.password.file=.local-ora-password -Dbench.tls=off
+          -jar seclume-bench/target/seclume-bench.jar
+          'bench\.(Query|Insert|Pool|PacedPool|Pbkdf2)Benchmark'
+          -rf json -rff seclume-bench/target/jmh-oracle.json -wi 3 -i 5 -f 1
+      # The pool resets an Oracle session by logging in again (OraConnection.
+      # resetSessionState): Pbkdf2Benchmark (SHA_512, 4096 rounds - the 12c
+      # verifier) is the part of that which is the client's own work.
+      # ConnectBenchmark is left out here: Oracle Free's listener does not
+      # keep up with one login after another. In run 42988358015 both drivers
+      # ended with ORA-12516 - seclume in its second iteration, ojdbc in its
+      # fifth - so neither has a measurement there.
+      #
+      # A JMH pattern is a regular expression found anywhere in the name:
+      # "PoolBenchmark" was R2dbcPoolBenchmark too, which no job but r2dbc's
+      # can run. Hence the package before each name.
+      - name: The results, seclume beside the vendor
+        if: always()
+        run: python3 .github/scripts/jmh_notices.py seclume-bench/target/jmh-oracle.json oracle
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: benchmarks-oracle
+          path: seclume-bench/target/jmh-oracle.json
+          retention-days: 90
+      - if: always()
+        run: rm -f .local-ora-password

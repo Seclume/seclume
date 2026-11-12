@@ -51,12 +51,18 @@ class LogRedactionTest {
         try (AnnotationConfigApplicationContext on = context(properties)) {
             assertEquals("calling with [redacted:seclume.heapdump.secrets.api]",
                     SecretMasker.maskInstalled("calling with an-api-key-0123456789"));
-            // Two forms per secret - UTF-16 and Base64. The data sources other
-            // tests in this JVM made are registered too, for as long as the
-            // garbage collector leaves them, so the count is two or more.
+            // Every form of the configured secret is looked for. How many forms
+            // a secret has depends on its text (a URL-safe Base64 only where it
+            // differs, an escaped form only where escaping changes it), and the
+            // data sources other tests in this JVM made are registered too, for
+            // as long as the garbage collector leaves them - so the count is at
+            // least the configured secret's own, and its parity says nothing.
             int forms = on.getBean(SeclumeLogRedactionAutoConfiguration.LogRedaction.class)
                     .masker().forms();
-            assertTrue(forms >= 2 && forms % 2 == 0, "two per secret, the configured one among them: " + forms);
+            int own = new SecretMasker(java.util.Map.of("seclume.heapdump.secrets.api",
+                    new space.seclume.secret.FileSecretProvider(key, 64))).forms();
+            assertTrue(own >= 2, "the configured secret has its forms: " + own);
+            assertTrue(forms >= own, "the configured secret's " + own + " forms among " + forms);
             assertTrue(on.getBean(RedactionSecrets.class).labels().contains("seclume.heapdump.secrets.api"),
                     on.getBean(RedactionSecrets.class).labels().toString());
         }

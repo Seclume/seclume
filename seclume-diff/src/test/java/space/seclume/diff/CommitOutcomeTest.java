@@ -67,8 +67,12 @@ class CommitOutcomeTest {
         return List.of(
                 new Database("PostgreSQL", "postgresql", 5432, "seclume_test", "seclume_test",
                         ".local-pg-password", "&tls=off", "create table " + TABLE + " (n int)"),
+                // tls=off: the fault proxy reads the answers to cut the right
+                // one. caching_sha2_password's full login then needs the
+                // server's key - asked for here, on a test's own loopback.
                 new Database("MySQL", "mysql", 3307, "seclume_test", "seclume_test",
-                        ".local-mysql-password", "&tls=off", "create table " + TABLE + " (n int)"),
+                        ".local-mysql-password", "&tls=off&allowPublicKeyRetrieval=true",
+                        "create table " + TABLE + " (n int)"),
                 new Database("SQL Server", "sqlserver", 1433, "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true",
                         "create table " + TABLE + " (n int)"),
