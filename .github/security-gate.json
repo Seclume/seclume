@@ -91,7 +91,13 @@
        "skips": {"windows-x64": "--in-target reads through /proc/<pid>/root, which only Linux has",
                  "macos-arm64": "--in-target reads through /proc/<pid>/root, which only Linux has"}},
       {"test": "space.seclume.heapcheck.CommandLineTest", "module": "seclume-heapcheck",
-       "property": "heapcheck refuses a secret as an argument and fails rather than reporting a heap it could not read"}
+       "property": "heapcheck refuses a secret as an argument and fails rather than reporting a heap it could not read"},
+      {"test": "space.seclume.internal.JdbcUrlPropertyTest", "module": "seclume-core",
+       "property": "no password of any JDBC URL shape is named in a message or taken for a host or port"},
+      {"test": "space.seclume.audit.AccessLogRestartTest", "module": "seclume-core",
+       "property": "an access log continued after a restart is verified across the restart, and entries nobody vouched for are named"},
+      {"test": "space.seclume.internal.EchoMaskTest", "module": "seclume-core",
+       "property": "a secret a server sends back is overwritten before the reply is read, whole or cut at either end"}
     ],
     "postgresql": [
       {"test": "space.seclume.postgresql.ConnectFailureWipeTest", "module": "seclume-postgresql",
@@ -103,7 +109,9 @@
       {"test": "space.seclume.spring.CbomEndpointTest", "module": "seclume-spring-boot-starter",
        "property": "/actuator/cbom serves the inventory as CycloneDX, a secret read by its provider only"},
       {"test": "space.seclume.spring.FieldEncryptionAutoConfigurationTest", "module": "seclume-spring-boot-starter",
-       "property": "the starter's key ring is wiped when the context closes, and a bad configuration leaves nothing in memory"}
+       "property": "the starter's key ring is wiped when the context closes, and a bad configuration leaves nothing in memory"},
+      {"test": "space.seclume.postgresql.TlsNeverFallsBackTest", "module": "seclume-postgresql",
+       "property": "no TLS mode falls back to an unencrypted or unauthenticated connection, against hostile servers on both TLS stacks"}
     ],
     "mysql": [
       {"test": "space.seclume.mysql.LoginFailureWipeTest", "module": "seclume-mysql",
@@ -111,7 +119,9 @@
       {"test": "space.seclume.mysql.wire.ReceiveBufferWipeTest", "module": "seclume-mysql",
        "property": "received bytes are wiped once read"},
       {"test": "space.seclume.mysql.jdbc.LocalEncryptedColumnTest", "module": "seclume-mysql",
-       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"},
+      {"test": "space.seclume.mysql.TlsNeverFallsBackTest", "module": "seclume-mysql",
+       "property": "no TLS mode falls back to an unencrypted or unauthenticated connection, against hostile servers on both TLS stacks"}
     ],
     "sqlserver": [
       {"test": "space.seclume.sqlserver.LoginFailureWipeTest", "module": "seclume-sqlserver",
@@ -119,7 +129,9 @@
       {"test": "space.seclume.sqlserver.tds.ReceiveBufferWipeTest", "module": "seclume-sqlserver",
        "property": "received bytes are wiped once read"},
       {"test": "space.seclume.sqlserver.jdbc.LocalEncryptedColumnTest", "module": "seclume-sqlserver",
-       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"},
+      {"test": "space.seclume.sqlserver.tds.TlsNeverFallsBackTest", "module": "seclume-sqlserver",
+       "property": "no TLS mode falls back to an unencrypted or unauthenticated connection, against hostile servers on both TLS stacks"}
     ],
     "oracle": [
       {"test": "space.seclume.oracle.LoginFailureWipeTest", "module": "seclume-oracle",
@@ -127,7 +139,9 @@
       {"test": "space.seclume.oracle.net.ReceiveBufferWipeTest", "module": "seclume-oracle",
        "property": "received bytes are wiped once read"},
       {"test": "space.seclume.oracle.jdbc.LocalEncryptedColumnTest", "module": "seclume-oracle",
-       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"}
+       "property": "the server holds only ciphertext; a heap dump after a read holds neither the value nor the key"},
+      {"test": "space.seclume.oracle.TlsNeverFallsBackTest", "module": "seclume-oracle",
+       "property": "no TLS mode falls back to an unencrypted or unauthenticated connection, against hostile servers on both TLS stacks"}
     ]
   }
 }
