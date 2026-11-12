@@ -1447,7 +1447,15 @@ final class SeclumeCollection<T> implements MongoCollection<T> {
                     .append("index", index);
             Bsons.maxTimeIfSet(command, options.getMaxTime(TimeUnit.MILLISECONDS));
             Bsons.writeConcern(command, writeConcern);
-            primary(s, db(), command);
+            try {
+                primary(s, db(), command);
+            } catch (MongoCommandException e) {
+                // A collection that is not there has no index to drop - no
+                // error, as for drop() and as the official driver answers.
+                if (e.getErrorCode() != NAMESPACE_NOT_FOUND) {
+                    throw e;
+                }
+            }
         }
     }
 }
