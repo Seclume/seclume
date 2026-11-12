@@ -182,8 +182,7 @@ class EchoedPasswordTest {
         }
 
         private void serve(Socket client) {
-            try (client) {
-                InputStream in = new BufferedInputStream(client.getInputStream());
+            try (client; InputStream in = new BufferedInputStream(client.getInputStream())) {
                 OutputStream out = client.getOutputStream();
                 String expected = password();
                 while (true) {
