@@ -122,16 +122,50 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
 
     /** Follows bytes that are written as they are - a write without the placeholder. */
     void observe(ByteBuffer plain) {
-        for (int i = plain.position(); i < plain.limit(); i++) {
-            step(plain.get(i));
+        int i = plain.position();
+        int to = plain.limit();
+        while (i < to) {
+            int passed = pass(to - i);
+            if (passed > 0) {
+                i += passed;
+            } else {
+                step(plain.get(i++));
+            }
         }
+    }
+
+    /**
+     * Inside a bulk string none of whose bytes is looked at - a value, a key,
+     * what is left of a long command name: as many of the next
+     * {@code available} bytes as belong to it, passed over at once. A value
+     * of a megabyte is a million bytes nobody has to read one by one. 0 where
+     * the next byte has to be looked at.
+     */
+    private int pass(int available) {
+        if (state != State.DATA
+                || (index == 0 && nameLength < name.length)
+                || (index == 2 && thirdLength < third.length)) {
+            return 0;
+        }
+        int n = (int) Math.min(left, available);
+        left -= n;
+        if (left == 0) {
+            state = State.DATA_CR;
+        }
+        return n;
     }
 
     @Override
     public Step next(ByteBuffer plain) throws IOException {
         int from = plain.position();
         int to = Math.min(plain.limit(), from + SeclumeSslEngine.MAX_PLAINTEXT);
-        for (int i = from; i < to; i++) {
+        int i = from;
+        while (i < to) {
+            int passed = pass(to - i);
+            if (passed > 0) {
+                i += passed;
+                continue;
+            }
             if (state == State.BULK && passwordSlot()) {
                 if (i > from) {
                     return Step.unchanged(i - from);      // up to the password's header
@@ -141,7 +175,7 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
                     return replaced;
                 }
             }
-            step(plain.get(i));
+            step(plain.get(i++));
         }
         return Step.unchanged(to - from);
     }
