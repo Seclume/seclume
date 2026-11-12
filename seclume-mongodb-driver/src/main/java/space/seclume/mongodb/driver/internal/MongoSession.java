@@ -256,7 +256,7 @@ public final class MongoSession implements AutoCloseable {
                             .toList()
                     + "; seclume logs in with SCRAM-SHA-256 only");
         }
-        maxMessageSize = intOf(reply.get("maxMessageSizeBytes"), DEFAULT_MAX_MESSAGE_SIZE);
+        maxMessageSize = messageLimit(reply, address);
         if (reply.get("compression") instanceof org.bson.BsonArray offered) {
             java.util.EnumSet<OpMsg.Compressor> both = java.util.EnumSet.noneOf(
                     OpMsg.Compressor.class);
@@ -306,6 +306,27 @@ public final class MongoSession implements AutoCloseable {
             return "Darwin";
         }
         return "unknown";
+    }
+
+    /**
+     * The largest message, either way, from a {@code hello}'s
+     * {@code maxMessageSizeBytes} - and never more than the 48 MB every
+     * server has had for it. The {@code hello} is answered before anyone has
+     * logged in, and its number is what a reply's announced length is checked
+     * against before that many bytes are allocated: taken as it came, a peer
+     * that names 2 GB there and then announces a reply of 2 GB had the client
+     * allocate them. A number that is none is refused.
+     */
+    static int messageLimit(BsonDocument hello, ServerAddress address) {
+        BsonValue announced = hello.get("maxMessageSizeBytes");
+        if (announced == null) {
+            return DEFAULT_MAX_MESSAGE_SIZE;
+        }
+        if (!announced.isNumber() || announced.asNumber().longValue() < 1) {
+            throw new MongoClientException("the server at " + address + " announces messages "
+                    + "of at most " + announced + " bytes (maxMessageSizeBytes)");
+        }
+        return (int) Math.min(announced.asNumber().longValue(), DEFAULT_MAX_MESSAGE_SIZE);
     }
 
     private static int intOf(BsonValue value, int otherwise) {
@@ -719,8 +740,7 @@ public final class MongoSession implements AutoCloseable {
         MongoSession session = new MongoSession(detached.address(), detached.stream(),
                 detached.tls());
         session.hello = detached.hello();
-        session.maxMessageSize = intOf(detached.hello().get("maxMessageSizeBytes"),
-                DEFAULT_MAX_MESSAGE_SIZE);
+        session.maxMessageSize = messageLimit(detached.hello(), detached.address());
         return session;
     }
 
