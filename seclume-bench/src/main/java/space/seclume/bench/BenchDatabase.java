@@ -219,6 +219,12 @@ public final class BenchDatabase {
                 // public key, and asking an unauthenticated server for one is
                 // off by default in this driver.
                 source.setAllowPublicKeyRetrieval(true);
+                // And what Connector/J does with sslMode=REQUIRED: the password
+                // goes over TLS whose certificate is not checked when the server
+                // asks for it (caching_sha2_password's full path). seclume does
+                // that only when told to - and is told to here, against a
+                // container on the same machine, so that both sides log in.
+                source.setAllowCleartextOverUnverifiedTls(true);
                 source.setTls(tls ? "require" : "off");
                 yield source;
             }

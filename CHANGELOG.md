@@ -170,6 +170,11 @@ All notable changes to seclume are recorded here. Versions follow
   and not on the three nights between; locally it is quiet. A leak in the code would show every
   night, one in a processor model only on that model, a noisy neighbour on no pattern at all -
   the message now says which model, so that the red nights can be told apart. Open until then.
+- **The nightly benchmarks measure all four databases against their vendor drivers.** The
+  MySQL run had failed every night since the password went only over checked TLS: the benchmark
+  now tells seclume what Connector/J does by itself, against a container on the same machine.
+  PostgreSQL, SQL Server and Oracle over JDBC - a statement, rows, inserts, the pool - run
+  beside it, each ratio a notice on the run.
 - **Quarkus refuses a datasource password at the start too, not only in the build.** The
   check that a seclume datasource has no `quarkus.datasource.password` - Agroal would keep it as
   a `String` for the application's life - ran only as a build step. The datasource password is a
