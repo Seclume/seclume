@@ -2,6 +2,7 @@ package space.seclume.http;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -114,6 +115,7 @@ class HttpFramingRunsTest {
             for (byte b : bytes) {
                 complete = framing.headByte(b);
             }
+            assertNotNull(complete, "the head's last byte ends it");
             assertEquals(bytes.length, complete.length);
         }
         long millis = (System.nanoTime() - start) / 1_000_000;
