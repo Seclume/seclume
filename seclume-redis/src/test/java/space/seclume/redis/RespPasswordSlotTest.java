@@ -176,6 +176,128 @@ class RespPasswordSlotTest {
         assertEquals(stream, sent(stream.substring(0, middle), stream.substring(middle)));
     }
 
+    // ---- values passed over in runs -------------------------------------------
+
+    /**
+     * A value is not read byte by byte: what is left of it in a write is
+     * passed over at once. The command after it is found all the same -
+     * wherever the writes fall, and whatever the value holds.
+     */
+    @Test
+    void anAuthAfterLongValuesIsFoundWhereverTheWritesFall() throws Exception {
+        String looksLikeMore = "\r\n*2\r\n$4\r\nAUTH\r\n$" + placeholder.length() + "\r\n"
+                + placeholder + "\r\n";
+        String stream = command("SET", "k".repeat(300), "v".repeat(40_000))
+                + command("MSET", "a", looksLikeMore, "b", "")
+                + command("AUTH", "orders", placeholder)
+                + command("SET", "after", placeholder);
+        String expected = stream.replace(command("AUTH", "orders", placeholder),
+                command("AUTH", "orders", PASSWORD));
+        int header = stream.indexOf(command("AUTH", "orders", placeholder))
+                + command("AUTH", "orders").length();
+        for (int size : new int[] {1, 2, 3, 5, 7, 64, 1000, 16_384, 16_385, 100_000}) {
+            aConnection();
+            java.util.List<String> writes = new java.util.ArrayList<>();
+            int at = 0;
+            while (at < header) {
+                int end = Math.min(header, at + size);
+                writes.add(stream.substring(at, end));
+                at = end;
+            }
+            writes.add(stream.substring(header));      // the password's bulk string, whole
+            assertEquals(expected, sent(writes.toArray(String[]::new)), "writes of " + size);
+        }
+    }
+
+    @Test
+    void aNameThatOnlyBeginsLikeAuthIsNotAuth() throws Exception {
+        for (String stream : List.of(
+                command("AUTHENTICATE", placeholder),
+                command("AUTHXX", "orders", placeholder),
+                command("AUTH42", placeholder),
+                command("HELLOWORLD", "3", "AUTH", "orders", placeholder),
+                command("HELLO", "3", "AUTHXX", "orders", placeholder),
+                command("HELLO", "3", "AUTHENTICATION", "orders", placeholder))) {
+            assertEquals(stream, sent(stream), stream);
+            assertEquals(stream, sent(stream), "and once more on the same connection");
+            aConnection();
+        }
+    }
+
+    /**
+     * Whatever commands come before, of whatever sizes and in whatever writes:
+     * the AUTH after them gets the password, nothing else does - the same
+     * whether the bytes before it went through next() or, on the Netty path,
+     * through observe().
+     */
+    @Test
+    void randomCommandsInRandomWrites() throws Exception {
+        java.util.Random random = new java.util.Random(20261112);
+        String alphabet = "abAUTH*$\r\n:-+ 0123456789";
+        for (int round = 0; round < 300; round++) {
+            StringBuilder before = new StringBuilder();
+            int commands = random.nextInt(6);
+            for (int c = 0; c < commands; c++) {
+                String[] arguments = new String[1 + random.nextInt(5)];
+                for (int i = 0; i < arguments.length; i++) {
+                    int length = switch (random.nextInt(6)) {
+                        case 0 -> 0;
+                        case 1 -> 20_000 + random.nextInt(30_000);
+                        case 2 -> 4 + random.nextInt(3);
+                        default -> random.nextInt(40);
+                    };
+                    StringBuilder argument = new StringBuilder(length);
+                    for (int j = 0; j < length; j++) {
+                        argument.append(alphabet.charAt(random.nextInt(alphabet.length())));
+                    }
+                    arguments[i] = argument.toString();
+                }
+                // Not a login of its own: these are the commands around the one that is.
+                if (arguments[0].equalsIgnoreCase("AUTH")
+                        || arguments[0].equalsIgnoreCase("HELLO")) {
+                    arguments[0] = "GET";
+                }
+                before.append(command(arguments));
+            }
+            String[] login = random.nextBoolean() ? new String[] {"AUTH", placeholder}
+                    : random.nextBoolean() ? new String[] {"auth", "orders", placeholder}
+                    : new String[] {"HELLO", "3", "AUTH", "orders", placeholder};
+            String auth = command(login);
+            login[login.length - 1] = PASSWORD;
+            String loggedIn = command(login);
+            String after = command("SET", "k", placeholder);
+            String stream = before + auth + after;
+            String expected = before + loggedIn + after;
+            int header = before.length() + auth.indexOf("$" + placeholder.length() + "\r\n"
+                    + placeholder);
+
+            aConnection();
+            java.util.List<String> writes = new java.util.ArrayList<>();
+            int at = 0;
+            while (at < header) {
+                int end = Math.min(header, at + 1 + random.nextInt(
+                        random.nextBoolean() ? 9 : 30_000));
+                writes.add(stream.substring(at, end));
+                at = end;
+            }
+            writes.add(stream.substring(header));
+            String got = sent(writes.toArray(String[]::new));
+            assertEquals(expected, got, "round " + round);
+
+            // The same with everything before the login only observed.
+            aConnection();
+            at = 0;
+            while (at < before.length()) {
+                int end = Math.min(before.length(), at + 1 + random.nextInt(30_000));
+                rewriter.observe(ByteBuffer.wrap(stream.substring(at, end)
+                        .getBytes(StandardCharsets.US_ASCII)));
+                at = end;
+            }
+            assertEquals(loggedIn + after, sent(auth + after),
+                    "observed, round " + round);
+        }
+    }
+
     /** What the rewriter sends for these writes, each one through next(). */
     private String sent(String... writes) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();

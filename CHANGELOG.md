@@ -15,6 +15,13 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **MongoDB: a `hello` that cannot be read no longer ends the monitor.** One thread looks at
+  the servers. A `hello` with a field of another type than expected - `tags` that are not
+  strings, a member that is no address - was an exception thrown through that thread, and no
+  server was looked at again: a primary that stepped down stayed the primary for this client.
+  Such a `hello` now makes its server unknown, with the reason, and the monitor goes on
+  (`TopologyHelloTest`). And closing a client no longer waits `serverSelectionTimeoutMS` to
+  end its server sessions when no server is known.
 - **AWS: temporary credentials near their end no longer fail requests, and a request's head
   costs a fiftieth.** A credentials source may answer with a set that is already inside the
   five minutes before its expiry - the instance metadata service hands out the old one until it
@@ -40,12 +47,12 @@ All notable changes to seclume are recorded here. Versions follow
   every module's data and reports each module from all of it - code of the core that the
   drivers' or `seclume-keys`' tests run counts as run (`coverage_merge.py`, the
   `coverage-merged` artifact). The core job's own tables stay as they were.
-- **MongoDB: a client `bulkWrite` reads all of its results.** The per-operation results come in
-  a cursor. Without a session of the application's, the command ran in a server session of the
-  driver's that was given back with the command's reply; when the results did not fit that
-  reply, the `getMore` for the rest named no session, and the server refused it. The whole
-  bulk write now runs in one session, the reading of its results included
-  (`LocalSameAsOfficialTest.clientBulkWriteWhoseResultsNeedAGetMoreIsTheSame`).
+- **Redis: a value is not read byte by byte.** Every byte a Redis connection writes goes
+  through the follower that finds the password's place in `AUTH` and `HELLO`. It looked at
+  each one - at a value's too, at about 6 ns a byte. What is left of a bulk string nobody has
+  to look at is now passed over at once: a `SET` of 1 KiB 6.7 µs → 0.3 µs of the follower's own
+  work, of 64 KiB 351 µs → 0.5 µs (measured locally). What it finds is the same
+  (`RespPasswordSlotTest`, with random commands in random writes).
 - **Mail: a password a server sends back is not read.** A server that answers a line it does
   not understand with that line - "unknown command: PASS ..." - gave the password, written to
   it from native memory, back in its refusal; `seclume-mail` made a `String` of every reply
@@ -76,6 +83,12 @@ All notable changes to seclume are recorded here. Versions follow
   more and forgot that pair without freeing it: its key stayed in OpenSSL's memory after close.
   Such a pair's key is now freed at once; the first use asks for a new one as before. Found by
   a flaky CI run (`SpiffeTest`).
+- **MongoDB: a client `bulkWrite` reads all of its results.** The per-operation results come in
+  a cursor. Without a session of the application's, the command ran in a server session of the
+  driver's that was given back with the command's reply; when the results did not fit that
+  reply, the `getMore` for the rest named no session, and the server refused it. The whole
+  bulk write now runs in one session, the reading of its results included
+  (`LocalSameAsOfficialTest.clientBulkWriteWhoseResultsNeedAGetMoreIsTheSame`).
 - **An issued identity is asked for again after a restore, not a reason to refuse the
   checkpoint.** A Vault PKI certificate's key and a SPIFFE SVID's - for a database connection's
   client certificate or a server's key manager - were made in OpenSSL or fetched from the agent
