@@ -25,6 +25,15 @@ All notable changes to seclume are recorded here. Versions follow
   depends on, sources and tests, and the build (`pit_inputs.py`); the pull request cannot change
   its result. The weekly and the manual runs run everything (`test_pit_shard.py`,
   `test_pit_inputs.py`, `test_pit_report.py`).
+- **MySQL: a binary `DATETIME` is read from its fields, not rendered as text and parsed back.**
+  `getTimestamp`, `getDate` and `getTime` on a `DATETIME` or `TIMESTAMP` read through a
+  PreparedStatement wrote the value as text and parsed it again. They take the fields now
+  (`ReadOnlyResultSet.localDateTimeAt`), cut to the column's declared digits as the text is; the
+  zero date and fields java.time does not have go the text way as before, and `getObject`
+  conversions are unchanged. Prepared scan of ten thousand rows on MariaDB 10.11, client CPU:
+  5.3-6.4 to 4.4-4.8 ms (`BinaryTemporalFieldsTest` against the text in five zones and an
+  Arabic locale; `LocalMySqlTest.aBinaryDatetimeIsTheValueItsTextIs`, Statement against
+  PreparedStatement).
 - **JDBC: a timestamp without an offset and a short decimal are read once.**
   `getTimestamp` on a value without an offset - PostgreSQL's `timestamp`, MySQL's `DATETIME` as
   text - read its digits looking for an offset, made two more Strings looking again, and then

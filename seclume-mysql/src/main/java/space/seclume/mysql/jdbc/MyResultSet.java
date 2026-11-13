@@ -118,6 +118,21 @@ public final class MyResultSet extends ReadOnlyResultSet implements space.seclum
         };
     }
 
+    /**
+     * A binary {@code DATETIME} or {@code TIMESTAMP} straight from its
+     * bytes: rendering it as text for {@code getTimestamp} to parse back was
+     * most of what a prepared scan of one cost.
+     */
+    @Override
+    protected java.time.LocalDateTime localDateTimeAt(int column) {
+        if (!block.isBinary()) {
+            return null;
+        }
+        int type = block.fields().get(column).type();
+        return type == MyTypes.DATETIME || type == MyTypes.TIMESTAMP
+                ? BinaryValues.localDateTime(block, column) : null;
+    }
+
     /** Without a {@code String} and without {@code parseLong} - straight from the bytes. */
     @Override
     protected long longAt(int column) throws SQLException {

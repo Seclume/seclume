@@ -144,6 +144,57 @@ class LocalMySqlTest {
     }
 
     /**
+     * A DATETIME read through a PreparedStatement - the binary protocol,
+     * whose fields getTimestamp, getDate and getTime now take as they are -
+     * gives the values the same rows give as text through a Statement:
+     * every precision, a fraction cut to the declared digits, midnight, the
+     * last instant of a year and a date before 1582.
+     */
+    @Test
+    void aBinaryDatetimeIsTheValueItsTextIs() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            statement.execute("drop temporary table if exists seclume_dt");
+            statement.execute("create temporary table seclume_dt (id int primary key, a datetime, "
+                    + "b datetime(3), c datetime(6), d timestamp(6) null)");
+            statement.execute("insert into seclume_dt values"
+                    + " (1, '2026-09-24 13:14:15', '2026-09-24 13:14:15.123', '2026-09-24 13:14:15.123456',"
+                    + " '2026-09-24 13:14:15.000001'),"
+                    + " (2, '2026-01-01 00:00:00', '2026-01-01 00:00:00.000', '2026-12-31 23:59:59.999999', null),"
+                    + " (3, '1000-03-01 12:00:00', '1582-10-10 00:00:00.5', '9999-12-31 23:59:59.999999',"
+                    + " '2038-01-19 03:14:07.999999')");
+            String query = "select a, b, c, d from seclume_dt order by id";
+            java.util.List<String> text = new java.util.ArrayList<>();
+            try (ResultSet rows = statement.executeQuery(query)) {
+                while (rows.next()) {
+                    text.add(read(rows));
+                }
+            }
+            java.util.List<String> binary = new java.util.ArrayList<>();
+            try (PreparedStatement prepared = connection.prepareStatement(query);
+                 ResultSet rows = prepared.executeQuery()) {
+                while (rows.next()) {
+                    binary.add(read(rows));
+                }
+            }
+            assertEquals(3, text.size());
+            assertEquals(text, binary);
+            assertTrue(binary.get(0).contains("2026-09-24 13:14:15.123 "), binary.get(0));
+        }
+    }
+
+    /** Every temporal getter of every column of the row, as text. */
+    private static String read(ResultSet rows) throws SQLException {
+        StringBuilder all = new StringBuilder();
+        for (int column = 1; column <= 4; column++) {
+            java.sql.Timestamp stamp = rows.getTimestamp(column);
+            all.append(stamp).append(' ').append(stamp == null ? "" : stamp.getNanos()).append(' ')
+                    .append(rows.getDate(column)).append(' ').append(rows.getTime(column)).append(' ')
+                    .append(rows.getObject(column, java.time.LocalDateTime.class)).append(" | ");
+        }
+        return all.toString();
+    }
+
+    /**
      * The server itself reads the literal: whatever the value, it comes back
      * as it went in, in both modes - and a value written to break out of JDBC's
      * standard quoting does not.
