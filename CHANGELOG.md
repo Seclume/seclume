@@ -44,6 +44,11 @@ All notable changes to seclume are recorded here. Versions follow
   For MySQL, of two GTID sets noted by two connections the later one is kept, not the one
   stored last. The routing connection passes on `beginRequest`, `endRequest` and the sharding
   keys. `ReadWriteSplitRoutingTest` tests the split's decisions without a database.
+- **CI: the read/write split runs against real replicas.** `ReadWriteSplitTest` and
+  `ReadWriteSplitMySqlTest` need a primary and a replica and skipped themselves in every
+  build, because no job had either. The new `replication` job starts a PostgreSQL primary with
+  a streaming standby and a MySQL primary with a GTID replica, runs both, and fails if a test
+  was skipped (`.github/scripts/require_replication_tests.py`).
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a
