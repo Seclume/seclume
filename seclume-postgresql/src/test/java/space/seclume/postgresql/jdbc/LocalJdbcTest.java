@@ -1794,4 +1794,40 @@ class LocalJdbcTest {
             }
         }
     }
+
+    /**
+     * The session reuses the result formats it asked for when a prepared
+     * statement hands in the same column list again. Two statements with
+     * binary-read columns in different places, taken in turn, must each be
+     * decoded in their own formats, every time.
+     */
+    @Test
+    void resultFormatsReusedAcrossExecutionsAreEachStatementsOwn() throws Exception {
+        try (Connection connection = connect();
+             PreparedStatement first = connection.prepareStatement("select ?::int4 + 1, 'text' || ?, ?::int8 * 2");
+             PreparedStatement second = connection.prepareStatement("select 'a' || ?, ?::int8 + 7, ?::float8 / 2")) {
+            for (int round = 0; round < 6; round++) {
+                first.setInt(1, round);
+                first.setString(2, "r" + round);
+                first.setLong(3, round);
+                try (ResultSet rows = first.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals(round + 1, rows.getInt(1));
+                    assertEquals(String.valueOf(round + 1), rows.getString(1));
+                    assertEquals("textr" + round, rows.getString(2));
+                    assertEquals(round * 2L, rows.getLong(3));
+                }
+                second.setString(1, "b" + round);
+                second.setLong(2, round);
+                second.setDouble(3, round);
+                try (ResultSet rows = second.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("ab" + round, rows.getString(1));
+                    assertEquals(round + 7L, rows.getLong(2));
+                    assertEquals(String.valueOf(round + 7), rows.getString(2));
+                    assertEquals(round / 2.0, rows.getDouble(3));
+                }
+            }
+        }
+    }
 }

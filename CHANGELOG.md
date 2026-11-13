@@ -25,6 +25,16 @@ All notable changes to seclume are recorded here. Versions follow
   depends on, sources and tests, and the build (`pit_inputs.py`); the pull request cannot change
   its result. The weekly and the manual runs run everything (`test_pit_shard.py`,
   `test_pit_inputs.py`, `test_pit_report.py`).
+- **PostgreSQL and MySQL: less garbage per execution.** MySQL compared each column description
+  with the last one through a `MemorySegment` made for it at every execution, and built a new
+  list of the same columns; the segments are made once and the list is handed out again when
+  every column is the same. PostgreSQL built the result formats of a prepared statement - a list
+  and new column descriptions - at every execution; they are kept for the list that asked for
+  them. A PostgreSQL result set made two scratch arrays even when it read no text. Allocated per
+  operation: MySQL lookup 1143-1228 to 783-788 bytes and `select 1` 569-578 to 400-405;
+  PostgreSQL lookup 1371-1396 to 1176-1192 and `select 1` 905-910 to 682-685
+  (`LocalMySqlTest.columnDescriptionsReusedAcrossExecutionsAreEachStatementsOwn`,
+  `LocalJdbcTest.resultFormatsReusedAcrossExecutionsAreEachStatementsOwn`).
 - **SQL Server and Oracle: a date and time is read from its fields, not rendered and parsed back.**
   `getTimestamp`, `getDate` and `getTime` on a SQL Server `datetime2`, `datetime` or
   `smalldatetime`, and on an Oracle `DATE` or `TIMESTAMP`, wrote the bytes as text and parsed it

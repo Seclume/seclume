@@ -144,6 +144,53 @@ class LocalMySqlTest {
     }
 
     /**
+     * The session hands out the column list of the last execution again
+     * when the server described the same columns in the same bytes. Three
+     * statements of the same width - names, types, both differing - taken
+     * in turn must each be read with their own columns, every time.
+     */
+    @Test
+    void columnDescriptionsReusedAcrossExecutionsAreEachStatementsOwn() throws Exception {
+        try (Connection connection = connect();
+             PreparedStatement numbers = connection.prepareStatement("select ? as a, ? + 1 as b");
+             PreparedStatement words = connection.prepareStatement("select concat('w', ?) as a, ? as c");
+             PreparedStatement renamed = connection.prepareStatement("select ? as x, ? + 1 as y")) {
+            for (int round = 0; round < 4; round++) {
+                numbers.setInt(1, round);
+                numbers.setInt(2, round);
+                try (ResultSet rows = numbers.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("a", rows.getMetaData().getColumnLabel(1));
+                    assertEquals("b", rows.getMetaData().getColumnLabel(2));
+                    assertEquals(round + 1, rows.getInt("b"));
+                }
+                words.setString(1, "v" + round);
+                words.setString(2, "c" + round);
+                try (ResultSet rows = words.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("c", rows.getMetaData().getColumnLabel(2));
+                    // Text, not the numbers' description: VARCHAR on MariaDB,
+                    // LONGVARCHAR on MySQL 8 and later.
+                    assertEquals("java.lang.String", rows.getMetaData().getColumnClassName(1));
+                    assertEquals("wv" + round, rows.getString("a"));
+                    assertEquals("c" + round, rows.getString("c"));
+                }
+                renamed.setInt(1, round);
+                renamed.setInt(2, round);
+                try (ResultSet rows = renamed.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("x", rows.getMetaData().getColumnLabel(1));
+                    assertEquals(round + 1, rows.getInt("y"));
+                }
+                try (ResultSet rows = numbers.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("b", rows.getMetaData().getColumnLabel(2), "the same statement again");
+                }
+            }
+        }
+    }
+
+    /**
      * A DECIMAL read through a PreparedStatement - the binary protocol,
      * which carries it as text and is now read without a String - is the
      * value and the scale the same rows give through a Statement: zero,
