@@ -893,4 +893,37 @@ class LocalMySqlTest {
             }
         }
     }
+
+    /**
+     * A statement that sets session state is noted whether it is sent as text,
+     * prepared, batched or pipelined - a pool that renews a broken connection
+     * asks for it, and without it renewed one that had lost this state.
+     */
+    @Test
+    void sessionStateSetByAPreparedStatementIsNoted() throws Exception {
+        try (Connection connection = connect()) {
+            space.seclume.SessionReset session = connection.unwrap(space.seclume.SessionReset.class);
+            try (PreparedStatement select = connection.prepareStatement("select ?")) {
+                select.setString(1, "x");
+                select.executeQuery().close();
+            }
+            assertFalse(session.sessionStateChanged(), "a prepared select set nothing");
+            try (PreparedStatement set = connection.prepareStatement("set @seclume_tenant = ?")) {
+                set.setString(1, "7");
+                set.execute();
+            }
+            assertTrue(session.sessionStateChanged(), "a prepared SET left no trace");
+        }
+        try (Connection connection = connect()) {
+            space.seclume.SessionReset session = connection.unwrap(space.seclume.SessionReset.class);
+            try (PreparedStatement set = connection.prepareStatement("set @seclume_tenant = ?")) {
+                set.setString(1, "7");
+                set.addBatch();
+                set.setString(1, "8");
+                set.addBatch();
+                set.executeBatch();
+            }
+            assertTrue(session.sessionStateChanged(), "a prepared SET in a batch left no trace");
+        }
+    }
 }

@@ -104,6 +104,7 @@ final class MyPreparedStatement extends MyStatement
                 throw new SQLException("the statement has " + statement.parameterCount()
                         + " parameters but only " + parameters.count() + " were set");
             }
+            connection.sessionState().note(sql);
             return session.pipelineExecute(statement, parameters, sql);
         }
         runPrepared();
@@ -116,12 +117,14 @@ final class MyPreparedStatement extends MyStatement
 
     private void runPreparedNow() throws SQLException {
         checkOpen();
-        MySession.Prepared statement = prepare();
+        String text = space.seclume.internal.jdbc.InLists.apply(sql, lists,
+                space.seclume.internal.jdbc.InLists.Dialect.MYSQL);
+        MySession.Prepared statement = connection.session().prepareCached(text);
         if (parameters.count() < statement.parameterCount()) {
             throw new SQLException("the statement has " + statement.parameterCount()
                     + " parameters but only " + parameters.count() + " were set");
         }
-        executePrepared(connection.session(), statement, parameters);
+        executePrepared(connection.session(), statement, parameters, text);
     }
 
     // ---- parameters ------------------------------------------------------
@@ -177,6 +180,8 @@ final class MyPreparedStatement extends MyStatement
         if (batch == null || batch.isEmpty()) {
             return super.executeLargeBatch();
         }
+        // Noted like every statement that runs - see collect.
+        connection.sessionState().note(sql);
         closeResult();
         List<Object[]> rows = batch;
         if (connection.rewriteBatchedInserts() && rows.size() > 1 && lists == null) {

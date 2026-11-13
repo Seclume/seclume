@@ -262,8 +262,12 @@ class MyStatement implements Statement, MySession.RowHandler {
     }
 
     /** Runs a prepared plan; the rows arrive in binary. */
-    void executePrepared(MySession session, MySession.Prepared statement, MyParameters parameters)
-            throws SQLException {
+    void executePrepared(MySession session, MySession.Prepared statement, MyParameters parameters,
+            String sql) throws SQLException {
+        // The text goes to the session state and the recording like any
+        // other: without it a prepared "SET @tenant = ?" left no trace, and a
+        // pool that renews a broken connection did so without it.
+        collectingSql = sql;
         // A fetch size means: the server keeps the rows and hands them out in
         // blocks. The execute then brings the descriptions and nothing else,
         // so the first block is fetched right here.

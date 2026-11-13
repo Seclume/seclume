@@ -37,6 +37,11 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     /** The statement being read, for the message of a result-limit failure. */
     private String collectingSql;
 
+    /** The text of what runs next, for the session state, the recording and the limit's message. */
+    final void collectingSql(String sql) {
+        collectingSql = sql;
+    }
+
     /** Where this statement was made, when the connection traces that - see OpenStatements. */
     final StackTraceElement[] createdAt;
 

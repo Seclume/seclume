@@ -221,6 +221,7 @@ class PgPreparedStatement extends PgStatement
             throw new SQLException("the statement has " + expectedParameters
                     + " parameters but only " + parameters.count() + " were set");
         }
+        connection.sessionState().note(originalSql);
         return session.pipelineBindAndExecute(name, parameters, sql);
     }
 
@@ -303,6 +304,8 @@ class PgPreparedStatement extends PgStatement
         if (batch == null || batch.isEmpty()) {
             return super.executeLargeBatch();
         }
+        // Noted like every statement that runs - see collect.
+        connection.sessionState().note(originalSql);
         if (connection.rewriteBatchedInserts() && batch.size() > 1) {
             InsertBatch shape = InsertBatch.parse(originalSql);
             if (shape != null && shape.parameters() == expectedParameters) {
