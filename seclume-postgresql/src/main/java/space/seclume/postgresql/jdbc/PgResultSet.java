@@ -36,9 +36,16 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
      * caller asked for. The rule about heap arrays is about passwords, and one
      * has no business being in a result set.
      */
-    private byte[] scratch = new byte[64]; // seclume-allow: user payload on its way to a String, not a secret
+    private byte[] scratch = NONE; // seclume-allow: user payload on its way to a String, not a secret
     /** The same, for the values BigDecimal reads out of a char[]. */
-    private char[] characters = new char[64]; // seclume-allow: user payload on its way to a number, not a secret
+    private char[] characters = NO_CHARACTERS; // seclume-allow: user payload on its way to a number, not a secret
+    /**
+     * Empty until the first value needs one: a one-row lookup made both
+     * arrays for every result set, and since a short decimal needs no
+     * char[] at all, most never used the second.
+     */
+    private static final byte[] NONE = new byte[0]; // seclume-allow: empty, holds nothing
+    private static final char[] NO_CHARACTERS = new char[0]; // seclume-allow: empty, holds nothing
 
 
     private int row;
@@ -172,7 +179,7 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
         int offset = block.offset(row, column);
         int length = block.length(row, column);
         if (scratch.length < length) {
-            scratch = new byte[Math.max(length, scratch.length * 2)]; // seclume-allow: user payload on its way to a String, not a secret
+            scratch = new byte[Math.max(Math.max(length, 64), scratch.length * 2)]; // seclume-allow: user payload on its way to a String, not a secret
         }
         java.lang.foreign.MemorySegment.copy(block.data().segment(),
                 java.lang.foreign.ValueLayout.JAVA_BYTE, offset, scratch, 0, length);
@@ -253,7 +260,7 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
     protected java.math.BigDecimal decimalAt(int column) {
         int length = block.length(row, column);
         if (characters.length < length) {
-            characters = new char[Math.max(length, characters.length * 2)]; // seclume-allow: user payload on its way to a number, not a secret
+            characters = new char[Math.max(Math.max(length, 64), characters.length * 2)]; // seclume-allow: user payload on its way to a number, not a secret
         }
         return space.seclume.internal.jdbc.TextNumber.bigDecimal(block.data(),
                 block.offset(row, column), length, characters);

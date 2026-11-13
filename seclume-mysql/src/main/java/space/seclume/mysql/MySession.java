@@ -2261,6 +2261,10 @@ public final class MySession implements AutoCloseable {
     /** The last column descriptions this session read, raw and decoded - see below. */
     private byte[][] seenColumns = new byte[0][]; // seclume-allow: column descriptions, never a secret
     private Field[] seenFields = new Field[0];
+    /** The seen bytes as segments, made once: one per column per execution was most of a lookup's garbage. */
+    private java.lang.foreign.MemorySegment[] seenSegments = new java.lang.foreign.MemorySegment[0];
+    /** The list the last description returned, handed out again when nothing in it changed. */
+    private List<Field> lastFields = List.of();
 
     private List<Field> readFieldDescriptions(int count) throws SQLException, IOException {
         if (count == 0) {
@@ -2282,11 +2286,12 @@ public final class MySession implements AutoCloseable {
                     "the server announced a result of " + count + " columns, which is not a "
                     + "result set"));
         }
-        List<Field> list = new ArrayList<>(count);
         if (seenColumns.length < count) {
             seenColumns = java.util.Arrays.copyOf(seenColumns, count);
             seenFields = java.util.Arrays.copyOf(seenFields, count);
+            seenSegments = java.util.Arrays.copyOf(seenSegments, count);
         }
+        boolean allSeen = true;
         for (int i = 0; i < count; i++) {
             channel.nextPacket();
             WireBuffer in = channel.packet();
@@ -2298,12 +2303,11 @@ public final class MySession implements AutoCloseable {
             int length = channel.packetRemaining();
             byte[] seen = seenColumns[i];
             if (seen != null && seen.length == length && java.lang.foreign.MemorySegment.mismatch(
-                    in.segment(), start, start + length,
-                    java.lang.foreign.MemorySegment.ofArray(seen), 0, length) == -1) {
+                    in.segment(), start, start + length, seenSegments[i], 0, length) == -1) {
                 channel.endPacket();
-                list.add(seenFields[i]);
                 continue;
             }
+            allSeen = false;
             byte[] bytes = new byte[length]; // seclume-allow: a column description - names and types, never a secret
             java.lang.foreign.MemorySegment.copy(in.segment(),
                     java.lang.foreign.ValueLayout.JAVA_BYTE, start, bytes, 0, length);
@@ -2323,14 +2327,31 @@ public final class MySession implements AutoCloseable {
             Field field = new Field(schema, table, name, originalName, charset, columnLength,
                     type, flags, decimals);
             seenColumns[i] = bytes;
+            seenSegments[i] = java.lang.foreign.MemorySegment.ofArray(bytes);
             seenFields[i] = field;
-            list.add(field);
         }
         if (!MyCapabilities.has(capabilities, MyCapabilities.DEPRECATE_EOF)) {
             channel.nextPacket();                             // das EOF nach den Spalten
             channel.endPacket();
         }
-        return List.copyOf(list);
+        if (allSeen && sameFields(count)) {
+            return lastFields;
+        }
+        lastFields = List.of(java.util.Arrays.copyOf(seenFields, count));
+        return lastFields;
+    }
+
+    /** Whether the last list holds exactly the first {@code count} seen fields. */
+    private boolean sameFields(int count) {
+        if (lastFields.size() != count) {
+            return false;
+        }
+        for (int i = 0; i < count; i++) {
+            if (lastFields.get(i) != seenFields[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void skipFieldDescriptions(int count) throws SQLException, IOException {
