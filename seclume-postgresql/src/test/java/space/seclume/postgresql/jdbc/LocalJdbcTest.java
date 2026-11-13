@@ -611,6 +611,29 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * A session value that ends like the dollar quote's tag is still the value.
+     * Review round 4: {@code x$seclume} closed the quote one character early,
+     * and the statement failed with a syntax error.
+     */
+    @Test
+    void aSessionValueEndingLikeTheQuoteTagIsSetAsItIs() throws Exception {
+        try (Connection connection = connect()) {
+            space.seclume.SessionContext context =
+                    connection.unwrap(space.seclume.SessionContext.class);
+            for (String value : List.of("x$seclume", "$seclume$", "a$seclume$b$seclume1",
+                    "it's \\ a value")) {
+                context.setSessionContext("app.seclume_value", value);
+                try (Statement statement = connection.createStatement();
+                     ResultSet result = statement.executeQuery(
+                             "select current_setting('app.seclume_value')")) {
+                    assertTrue(result.next());
+                    assertEquals(value, result.getString(1));
+                }
+            }
+        }
+    }
+
     /** An error from the server arrives as a SQLException with a SQLState. */
     @Test
     void serverErrorsReachTheApplication() throws Exception {

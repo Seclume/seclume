@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **PostgreSQL: a session value that ends like its quote's tag is set as it is.**
+  `SessionContext` values are dollar-quoted, so that no server setting changes what they mean;
+  the tag was chosen only so that the value did not contain it. A value ending in `$seclume`
+  made a tag together with the closing tag's first `$`: `x$seclume` closed the quote after `x`,
+  and the `seclume$` left over failed the statement. The tag is now one that first occurs where
+  the closing tag starts (`ContextValuesTest`, with 20 000 random values of tag-like text and
+  the old choice as its control; `LocalJdbcTest.aSessionValueEndingLikeTheQuoteTagIsSetAsItIs`).
+  Found in the fourth review round.
 - **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
   output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
   bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
