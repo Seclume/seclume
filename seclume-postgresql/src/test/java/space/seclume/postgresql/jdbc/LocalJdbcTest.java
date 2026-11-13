@@ -611,6 +611,69 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * A pattern is a value, whatever {@code standard_conforming_strings} says.
+     * Review round 4: with it off, {@code \' or true --} ended the literal it
+     * was put in, and {@code getTables} answered with every table there is.
+     *
+     * <p>Checked with the setting on, and off where the server still has
+     * that: PostgreSQL 19 refuses {@code off} ("non-standard string literals
+     * are not supported"), so there no literal can be read that way.
+     */
+    @Test
+    void metaDataPatternsStayValuesWithStandardConformingStringsOff() throws Exception {
+        try (Connection connection = connect()) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("drop table if exists seclume_meta_quote");
+                statement.execute("create table seclume_meta_quote (id int primary key)");
+            }
+            try {
+                metaDataPatternsStayValues(connection, "on");
+                boolean off;
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("set standard_conforming_strings = off");
+                    off = true;
+                } catch (SQLException refused) {
+                    assertTrue(refused.getMessage().contains(
+                            "non-standard string literals are not supported"), refused.getMessage());
+                    off = false;
+                }
+                if (off) {
+                    metaDataPatternsStayValues(connection, "off");
+                }
+            } finally {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("set standard_conforming_strings = on");
+                    statement.execute("drop table seclume_meta_quote");
+                }
+            }
+        }
+    }
+
+    private static void metaDataPatternsStayValues(Connection connection, String setting)
+            throws SQLException {
+        DatabaseMetaData meta = connection.getMetaData();
+        try (ResultSet result = meta.getTables(null, "public", "\\' or true --", null)) {
+            boolean matched = result.next();
+            assertFalse(matched, matched ? "standard_conforming_strings " + setting
+                    + ": the pattern matched a table: " + result.getString("TABLE_SCHEM") + "."
+                    + result.getString("TABLE_NAME") : null);
+        }
+        try (ResultSet result = meta.getColumns(null, "\\' or true --", null, null)) {
+            assertFalse(result.next(), "the pattern matched a column, " + setting);
+        }
+        try (ResultSet result = meta.getPrimaryKeys(null, "public",
+                "seclume_meta_quote' or 'x' = 'x")) {
+            assertFalse(result.next(), "the name matched a key, " + setting);
+        }
+        // An escaped LIKE pattern still means what JDBC says it means.
+        try (ResultSet result = meta.getTables(null, "public", "seclume\\_meta\\_quote", null)) {
+            assertTrue(result.next(), setting);
+            assertEquals("seclume_meta_quote", result.getString("TABLE_NAME"));
+            assertFalse(result.next(), setting);
+        }
+    }
+
     /** An error from the server arrives as a SQLException with a SQLState. */
     @Test
     void serverErrorsReachTheApplication() throws Exception {

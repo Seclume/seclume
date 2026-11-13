@@ -16,6 +16,16 @@ All notable changes to seclume are recorded here. Versions follow
   that differ, a length that is not digits, a folded line, a space before a colon - before a
   byte of it is sent; a head is at most 64 KiB (`SessionTokenFramingTest`). Found in the fourth
   review round.
+- **PostgreSQL: a catalogue pattern is a value whatever `standard_conforming_strings` says.**
+  `DatabaseMetaData` put the application's schema and table names and patterns into `'...'`
+  with the quotes doubled. With `standard_conforming_strings` off - a role's, a database's or
+  a session's setting - a backslash escapes the quote after it, so a pattern such as
+  `\' or true --` ended its literal and the rest ran as SQL: `getTables` with it listed every
+  table of every schema. Every such literal is now an escape string, `E'...'`, with backslashes
+  and quotes doubled, which the server reads the same way under either setting
+  (`MetaDataLiteralTest` against a model of PostgreSQL's lexer, with the old quoting as its
+  control; `LocalJdbcTest.metaDataPatternsStayValuesWithStandardConformingStringsOff`). Found in
+  the fourth review round.
 - **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
   output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
   bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
