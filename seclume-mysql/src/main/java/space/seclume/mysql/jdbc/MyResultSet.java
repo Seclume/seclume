@@ -162,10 +162,14 @@ public final class MyResultSet extends ReadOnlyResultSet implements space.seclum
             return java.math.BigDecimal.valueOf(longAt(column));
         }
         if (block.isBinary()) {
-            // The binary protocol sends a decimal as text inside the row, but
-            // everything around it is binary - stringAt knows which, this does
-            // not.
-            return super.decimalAt(column);
+            // The binary protocol sends a DECIMAL as text inside the row, as
+            // the text protocol does: the same bytes, read the same way, with
+            // no String in between. Any other type is binary there, and
+            // stringAt knows how to write it.
+            int type = block.fields().get(column).type();
+            return type == MyTypes.NEWDECIMAL || type == MyTypes.DECIMAL
+                    ? block.bigDecimalAt(block.offset(column), block.length(column))
+                    : super.decimalAt(column);
         }
         return block.bigDecimalAt(block.offset(column), block.length(column));
     }

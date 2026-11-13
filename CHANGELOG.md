@@ -25,6 +25,12 @@ All notable changes to seclume are recorded here. Versions follow
   depends on, sources and tests, and the build (`pit_inputs.py`); the pull request cannot change
   its result. The weekly and the manual runs run everything (`test_pit_shard.py`,
   `test_pit_inputs.py`, `test_pit_report.py`).
+- **MySQL: a binary `DECIMAL` is read from its digits, not from a String.** The binary protocol
+  carries a `DECIMAL` as text inside the row, as the text protocol does, but `getBigDecimal`
+  made a String of it and parsed that; it reads the bytes the way the text protocol's values
+  are read now (`TextNumber`). Prepared scan of ten thousand rows on MariaDB 10.11, client CPU:
+  3.3-3.9 to 2.7-3.0 ms (`LocalMySqlTest.aBinaryDecimalIsTheValueItsTextIs`, Statement against
+  PreparedStatement up to `DECIMAL(65,30)`).
 - **MySQL: a binary `DATETIME` is read from its fields, not rendered as text and parsed back.**
   `getTimestamp`, `getDate` and `getTime` on a `DATETIME` or `TIMESTAMP` read through a
   PreparedStatement wrote the value as text and parsed it again. They take the fields now
