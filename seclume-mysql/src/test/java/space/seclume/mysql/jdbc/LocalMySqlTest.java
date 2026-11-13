@@ -144,15 +144,6 @@ class LocalMySqlTest {
     }
 
     /**
-     * {@code getTables} with a type filter - the call Hibernate makes.
-     *
-     * <p>It found nothing for a while, and the reason is a vocabulary: JDBC
-     * says {@code TABLE}, MySQL's {@code information_schema} says
-     * {@code BASE TABLE}. An application with {@code ddl-auto=validate} then
-     * refused to start with "missing table" for a table that was right there -
-     * and no driver test noticed, because none of them passed a type filter.
-     */
-    /**
      * The server itself reads the literal: whatever the value, it comes back
      * as it went in, in both modes - and a value written to break out of JDBC's
      * standard quoting does not.
@@ -199,6 +190,15 @@ class LocalMySqlTest {
         }
     }
 
+    /**
+     * {@code getTables} with a type filter - the call Hibernate makes.
+     *
+     * <p>It found nothing for a while, and the reason is a vocabulary: JDBC
+     * says {@code TABLE}, MySQL's {@code information_schema} says
+     * {@code BASE TABLE}. An application with {@code ddl-auto=validate} then
+     * refused to start with "missing table" for a table that was right there -
+     * and no driver test noticed, because none of them passed a type filter.
+     */
     @Test
     void getTablesFindsATableWithAndWithoutATypeFilter() throws Exception {
         try (Connection connection = connect()) {
