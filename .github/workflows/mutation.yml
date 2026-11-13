@@ -111,11 +111,19 @@ jobs:
           org.pitest:pitest-maven:mutationCoverage
           "-DtargetClasses=$TARGETS"
           -DtargetTests='space.seclume.*'
+      # In a directory named for the shard: download-artifact puts a single
+      # artifact's files straight into its path and several into one directory
+      # each, so the report would look in two places for one shard and four.
+      - name: The shard's report, where the package's check looks for it
+        if: always() && steps.inputs.outputs.state == 'changed'
+        run: |
+          mkdir -p "pit-out/pit-${{ matrix.package }}-${{ matrix.shard }}"
+          cp ${{ matrix.module }}/target/pit-reports/mutations.xml "pit-out/pit-${{ matrix.package }}-${{ matrix.shard }}/" || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.inputs.outputs.state == 'changed'
         with:
           name: pit-${{ matrix.package }}-${{ matrix.shard }}
-          path: ${{ matrix.module }}/target/pit-reports/mutations.xml
+          path: pit-out/
           retention-days: 7
           if-no-files-found: warn
 
@@ -165,6 +173,7 @@ jobs:
         with:
           pattern: pit-${{ matrix.package }}-*
           path: pit
+          merge-multiple: true
       - name: The score, and the survivors
         if: steps.inputs.outputs.state == 'changed'
         run: |
