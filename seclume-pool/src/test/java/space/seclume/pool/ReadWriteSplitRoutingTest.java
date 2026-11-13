@@ -3,6 +3,7 @@ package space.seclume.pool;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -235,7 +236,9 @@ class ReadWriteSplitRoutingTest {
         connection.setReadOnly(true);
         connection.setAutoCommit(false);
         connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
-        connection.createStatement().close();
+        try (Statement statement = connection.createStatement()) {
+            assertNotNull(statement);
+        }
         assertEquals(List.of("setAutoCommit[false]", "setTransactionIsolation[4]",
                 "setReadOnly[true]", "createStatement[]"), replica.calls);
         assertTrue(connection.toString().endsWith("replica"), connection.toString());
@@ -255,7 +258,9 @@ class ReadWriteSplitRoutingTest {
     @Test
     void anythingElseGoesToThePrimary() throws Exception {
         try (Connection connection = split.getConnection()) {
-            connection.prepareStatement("insert into t values (1)").close();
+            try (PreparedStatement statement = connection.prepareStatement("insert into t values (1)")) {
+                assertNotNull(statement);
+            }
             assertTrue(connection.toString().endsWith("primary"), connection.toString());
         }
         assertEquals(List.of("setAutoCommit[true]", "setReadOnly[false]",
@@ -320,7 +325,9 @@ class ReadWriteSplitRoutingTest {
     private void write() throws SQLException {
         try (Connection connection = split.getConnection()) {
             connection.setAutoCommit(false);
-            connection.createStatement().close();
+            try (Statement statement = connection.createStatement()) {
+                assertNotNull(statement);
+            }
             connection.commit();
         }
     }
@@ -328,7 +335,9 @@ class ReadWriteSplitRoutingTest {
     private String read() throws SQLException {
         try (Connection connection = split.getConnection()) {
             connection.setReadOnly(true);
-            connection.createStatement().close();
+            try (Statement statement = connection.createStatement()) {
+                assertNotNull(statement);
+            }
             return connection.toString();
         }
     }
@@ -349,7 +358,9 @@ class ReadWriteSplitRoutingTest {
         assertTrue(read().endsWith("replica"), "caught up");
         primary.current = "1/0";
         try (Connection autoCommit = split.getConnection()) {
-            autoCommit.createStatement().close();      // in auto-commit: noted when given back
+            try (Statement statement = autoCommit.createStatement()) { // in auto-commit: noted when given back
+                assertNotNull(statement);
+            }
         }
         assertTrue(read().endsWith("primary"));
         replica.replayed = "1/0";
