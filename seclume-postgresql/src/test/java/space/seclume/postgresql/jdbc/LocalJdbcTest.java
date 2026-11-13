@@ -611,6 +611,48 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * A pattern is a value, whatever {@code standard_conforming_strings} says.
+     * Review round 4: with it off, {@code \' or true --} ended the literal it
+     * was put in, and {@code getTables} answered with every table there is.
+     */
+    @Test
+    void metaDataPatternsStayValuesWithStandardConformingStringsOff() throws Exception {
+        try (Connection connection = connect()) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("drop table if exists seclume_meta_quote");
+                statement.execute("create table seclume_meta_quote (id int primary key)");
+                statement.execute("set standard_conforming_strings = off");
+            }
+            try {
+                DatabaseMetaData meta = connection.getMetaData();
+                try (ResultSet result = meta.getTables(null, "public", "\\' or true --", null)) {
+                    assertFalse(result.next(), "the pattern matched a table: "
+                            + result.getString("TABLE_SCHEM") + "." + result.getString("TABLE_NAME"));
+                }
+                try (ResultSet result = meta.getColumns(null, "\\' or true --", null, null)) {
+                    assertFalse(result.next(), "the pattern matched a column");
+                }
+                try (ResultSet result = meta.getPrimaryKeys(null, "public",
+                        "seclume_meta_quote' or 'x' = 'x")) {
+                    assertFalse(result.next(), "the name matched a key");
+                }
+                // An escaped LIKE pattern still means what JDBC says it means.
+                try (ResultSet result = meta.getTables(null, "public",
+                        "seclume\\_meta\\_quote", null)) {
+                    assertTrue(result.next());
+                    assertEquals("seclume_meta_quote", result.getString("TABLE_NAME"));
+                    assertFalse(result.next());
+                }
+            } finally {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("set standard_conforming_strings = on");
+                    statement.execute("drop table seclume_meta_quote");
+                }
+            }
+        }
+    }
+
     /** An error from the server arrives as a SQLException with a SQLState. */
     @Test
     void serverErrorsReachTheApplication() throws Exception {

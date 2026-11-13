@@ -68,9 +68,24 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
         return SQL_TYPE_CASE.replace("a.atttypid", oidColumn);
     }
 
-    /** A literal for a query - single quotes doubled. */
-    private static String literal(String value) {
-        return "'" + value.replace("'", "''") + "'";
+    /**
+     * A literal for a query: an escape string constant, {@code E'...'}, its
+     * backslashes and single quotes doubled.
+     *
+     * <p>Not a plain {@code '...'} with the quotes doubled. Whether a
+     * backslash in that is a character or an escape is the server's
+     * {@code standard_conforming_strings}, which a role, a database or a
+     * statement may turn off: then {@code \'} is a quote that does not end
+     * the literal, the doubled quote after it does, and the rest of a pattern
+     * the application passed to {@code getTables} or {@code getColumns} -
+     * {@code \' or true --}, say - was SQL (found in the fourth review
+     * round). An escape string reads its backslashes the same way under
+     * every setting, and so means exactly the value it was made from.
+     * {@link space.seclume.internal.jdbc.ContextValues#dollarQuoted} makes the
+     * same choice for session values.
+     */
+    static String literal(String value) {
+        return "E'" + value.replace("\\", "\\\\").replace("'", "''") + "'";
     }
 
     /** A pattern such as {@code %} or {@code null} as a LIKE condition. */
