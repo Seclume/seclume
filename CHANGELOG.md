@@ -12,7 +12,8 @@ All notable changes to seclume are recorded here. Versions follow
   those of some 25 modules (MongoDB, MySQL, Oracle, SQL Server, AWS, NATS ...) without their
   servers. `.github/scripts/mvnw-own-tests.sh` builds and installs what MODULES need without
   tests, then tests MODULES alone. `seclume-r2dbc`, whose tests ran only that way, is named in
-  the PostgreSQL jobs now. The jobs on Windows, macOS and Linux on ARM are unchanged: there
+  the PostgreSQL jobs now; the unit tests of the MongoDB modules, Redis and Elasticsearch, whose
+  coverage came from those runs, run in the core job, once. The jobs on Windows, macOS and Linux on ARM are unchanged: there
   the other modules' tests are tests on another platform (`test_mvnw_own_tests.py`).
 - **AWS: the session token is not written into a chunked body however its coding is spelled.**
   `SessionTokenSocket` recognised a chunked body only by `transfer-encoding: chunked` with

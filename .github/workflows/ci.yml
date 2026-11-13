@@ -565,7 +565,7 @@ jobs:
       # own for the heap proof), so it needs nothing started beside it.
       # With JaCoCo (-Pcoverage): which code these tests ran, module by module -
       # the numbers SECURITY-QUALITY.md publishes come from here.
-      - run: .github/scripts/mvnw-own-tests.sh -B -Pcoverage -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-jpa,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: .github/scripts/mvnw-own-tests.sh -B -Pcoverage -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-jpa,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac,seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-reactive,seclume-redis,seclume-elasticsearch -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # Every test that carries a security claim ran and passed - none
