@@ -169,7 +169,9 @@ class LocalMySqlTest {
                 try (ResultSet rows = words.executeQuery()) {
                     assertTrue(rows.next());
                     assertEquals("c", rows.getMetaData().getColumnLabel(2));
-                    assertEquals(Types.VARCHAR, rows.getMetaData().getColumnType(1));
+                    // Text, not the numbers' description: VARCHAR on MariaDB,
+                    // LONGVARCHAR on MySQL 8 and later.
+                    assertEquals("java.lang.String", rows.getMetaData().getColumnClassName(1));
                     assertEquals("wv" + round, rows.getString("a"));
                     assertEquals("c" + round, rows.getString("c"));
                 }
