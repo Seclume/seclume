@@ -43,6 +43,15 @@ All notable changes to seclume are recorded here. Versions follow
   MySQL `YEAR`-as-date text, Oracle's `TIMESTAMP WITH TIME ZONE` and `INTERVAL DAY TO SECOND`
   text and the `ORA-nnnnn` numbers in error messages pin `Locale.ROOT` for the same reason.
   Found in the fourth review round.
+- **Temporal getters refuse an unreadable value with a `SQLException`.** A MySQL zero date
+  (`0000-00-00 00:00:00`), PostgreSQL's `infinity` and `-infinity`, a year past 9999 or text
+  that is no date reached `getTimestamp`, `getDate`, `getTime`, `getObject` and
+  `getObject(i, LocalDateTime.class)` and its siblings as the `IllegalArgumentException` or
+  `DateTimeParseException` of `Timestamp.valueOf` and `java.time` - past an application's
+  `catch (SQLException e)`, which JDBC promises is enough. They now end in a `SQLDataException`
+  with SQLSTATE 22007 and the original as its cause, for all four drivers; an unreadable UUID
+  likewise (`UnreadableTemporalTest`, which fails on the code before). Found in the fourth review
+  round.
 - **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
   output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
   bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
