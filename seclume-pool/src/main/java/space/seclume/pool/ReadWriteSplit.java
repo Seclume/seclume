@@ -498,6 +498,46 @@ public final class ReadWriteSplit implements DataSource {
             return target;
         }
 
+        // The interface's default methods: left out they compile, and do
+        // nothing or refuse - whatever the connection behind would have done.
+
+        @Override
+        public void beginRequest() throws SQLException {
+            if (target != null) {
+                target.beginRequest();           // a hint; no reason to choose a server for it
+            }
+        }
+
+        @Override
+        public void endRequest() throws SQLException {
+            if (target != null) {
+                target.endRequest();
+            }
+        }
+
+        @Override
+        public boolean setShardingKeyIfValid(java.sql.ShardingKey key, java.sql.ShardingKey superKey,
+                int timeout) throws SQLException {
+            return target().setShardingKeyIfValid(key, superKey, timeout);
+        }
+
+        @Override
+        public boolean setShardingKeyIfValid(java.sql.ShardingKey key, int timeout)
+                throws SQLException {
+            return target().setShardingKeyIfValid(key, timeout);
+        }
+
+        @Override
+        public void setShardingKey(java.sql.ShardingKey key, java.sql.ShardingKey superKey)
+                throws SQLException {
+            target().setShardingKey(key, superKey);
+        }
+
+        @Override
+        public void setShardingKey(java.sql.ShardingKey key) throws SQLException {
+            target().setShardingKey(key);
+        }
+
         @Override
         public void close() throws SQLException {
             if (closed) {
@@ -532,8 +572,12 @@ public final class ReadWriteSplit implements DataSource {
             case MYSQL -> {
                 String executed = one(primary, "select @@global.gtid_executed");
                 if (executed != null && !executed.isBlank()) {
-                    // Cumulative on the primary: the latest read holds the ones before.
-                    writtenGtids.set(executed.replace("\n", "").trim());
+                    // Cumulative on the primary: a later read holds the ones
+                    // before. Two connections note theirs in any order, so
+                    // the set with more transactions stays - not the one
+                    // that happened to be stored last.
+                    String noted = executed.replace("\n", "").trim();
+                    writtenGtids.accumulateAndGet(noted, ReadWriteSplit::later);
                 }
             }
         }
@@ -562,6 +606,18 @@ public final class ReadWriteSplit implements DataSource {
         };
     }
 
+    /**
+     * How far the server a read goes to is. A standby: what it has replayed.
+     * A server that is not in recovery - the primary itself configured as the
+     * replica, as on a developer's one server, or a standby promoted since -
+     * answers NULL there, or the position its recovery ended at when it
+     * started; it is at its own position. Asked the plain way, such a server
+     * never caught up with a write, and every read waited the whole limit
+     * before it went to the primary.
+     */
+    static final String REPLAYED = "select case when pg_is_in_recovery() "
+            + "then pg_last_wal_replay_lsn() else pg_current_wal_lsn() end";
+
     private static boolean caughtUpWal(Connection replica, long position, Duration wait)
             throws SQLException {
         if (position == 0) {
@@ -569,7 +625,7 @@ public final class ReadWriteSplit implements DataSource {
         }
         long deadline = System.nanoTime() + wait.toNanos();
         while (true) {
-            if (parseLsn(one(replica, "select pg_last_wal_replay_lsn()")) >= position) {
+            if (parseLsn(one(replica, REPLAYED)) >= position) {
                 return true;
             }
             if (System.nanoTime() - deadline >= 0) {
@@ -582,6 +638,38 @@ public final class ReadWriteSplit implements DataSource {
                 return false;
             }
         }
+    }
+
+    /** Of two executed GTID sets of one primary, the later one: the one with more transactions. */
+    static String later(String one, String other) {
+        if (one == null) {
+            return other;
+        }
+        return transactions(other) > transactions(one) ? other : one;
+    }
+
+    /**
+     * How many transactions a GTID set names: {@code uuid:1-5:7,uuid2:3} is 7.
+     * A part that is no number or range of numbers - the tag of a tagged GTID
+     * - counts nothing.
+     */
+    static long transactions(String gtids) {
+        long count = 0;
+        for (String source : gtids.split(",")) {
+            String[] parts = source.trim().split(":");
+            for (int i = 1; i < parts.length; i++) {
+                String part = parts[i];
+                int dash = part.indexOf('-');
+                try {
+                    count += dash < 0 ? (Long.parseLong(part) >= 0 ? 1 : 0)
+                            : Long.parseLong(part.substring(dash + 1))
+                                    - Long.parseLong(part.substring(0, dash)) + 1;
+                } catch (NumberFormatException tag) {
+                    // a tag, or nothing this reads: no transactions counted
+                }
+            }
+        }
+        return count;
     }
 
     private enum Dialect { POSTGRESQL, MYSQL }

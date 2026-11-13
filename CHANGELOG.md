@@ -35,6 +35,15 @@ All notable changes to seclume are recorded here. Versions follow
 - **JDBC: OUT parameters.** Text that is no date, time or timestamp is an `SQLException`, not
   an `IllegalArgumentException`; `setDate`, `setTime` and `setTimestamp` by name pass their
   `Calendar` on instead of dropping it (`OutParametersTest`).
+- **Read/write split: a replica that is not in recovery no longer makes every read wait.**
+  With `readYourWrites`, a read waited until `pg_last_wal_replay_lsn()` reached the last write.
+  A server that is not in recovery - the primary configured as its own replica on a
+  developer's one server, or a standby promoted since - answers NULL there, or the position
+  its start-up recovery ended at: it never caught up, and every read after a write waited the
+  whole limit before it went to the primary. Such a server is asked for its own position now.
+  For MySQL, of two GTID sets noted by two connections the later one is kept, not the one
+  stored last. The routing connection passes on `beginRequest`, `endRequest` and the sharding
+  keys. `ReadWriteSplitRoutingTest` tests the split's decisions without a database.
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a
