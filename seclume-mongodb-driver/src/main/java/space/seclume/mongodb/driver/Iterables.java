@@ -728,8 +728,10 @@ final class Iterables {
 
         private String[] writtenTo(BsonArray stages) {
             BsonDocument last = stages.get(stages.size() - 1).asDocument();
+            // $merge takes the target's name alone, or a document with it in "into".
             BsonValue to = last.containsKey("$out") ? last.get("$out")
-                    : last.getDocument("$merge").get("into");
+                    : last.get("$merge").isDocument() ? last.getDocument("$merge").get("into")
+                    : last.get("$merge");
             if (to.isString()) {
                 return new String[] {database, to.asString().getValue()};
             }

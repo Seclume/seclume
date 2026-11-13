@@ -8,7 +8,6 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 
 import space.seclume.crypto.HashAlgorithm;
 import space.seclume.crypto.Hmac;
@@ -41,7 +40,8 @@ import space.seclume.secret.SecretScope;
  *       base64(user:password)} whatever the user; the one or two characters
  *       at its edges that it shares with its neighbours stay;</li>
  *   <li>percent-encoded, as in a URL or a form ({@code p%40ss}, and
- *       {@code URLEncoder}'s {@code +} for a blank);</li>
+ *       {@code URLEncoder}'s {@code +} for a blank), with the hex digits in
+ *       upper or in lower case;</li>
  *   <li>JSON-escaped ({@code \"} and {@code \\}, line breaks and tabs).</li>
  * </ul>
  * Secrets shorter than
@@ -74,9 +74,54 @@ public final class SecretMasker implements AutoCloseable {
     private record Form(String label, int length, long fingerprint, byte[] tag) {
     }
 
+    /**
+     * The forms as a line is scanned for them: one pass per length, longest
+     * first, and at each window only the forms of that length - a line costs
+     * its length times the number of lengths, not times the number of forms
+     * again.
+     *
+     * @param forms   longest first
+     * @param base    the fingerprints' multiplier, of the key they were made with
+     * @param lengths the distinct lengths, longest first
+     * @param powers  {@code base} to the power of each length less one
+     * @param first   where in {@code forms} each length's forms begin; one more at the end
+     */
+    private record Index(List<Form> forms, long base, int[] lengths, long[] powers, int[] first) {
+        static final Index EMPTY = new Index(List.of(), 1, new int[0], new long[0], new int[1]);
+
+        static Index of(List<Form> sorted, long base) {
+            List<Form> forms = List.copyOf(sorted);
+            int distinct = 0;
+            for (int i = 0; i < forms.size(); i++) {
+                if (i == 0 || forms.get(i).length() != forms.get(i - 1).length()) {
+                    distinct++;
+                }
+            }
+            int[] lengths = new int[distinct];
+            long[] powers = new long[distinct];
+            int[] first = new int[distinct + 1];
+            int at = -1;
+            for (int i = 0; i < forms.size(); i++) {
+                int length = forms.get(i).length();
+                if (i == 0 || length != forms.get(i - 1).length()) {
+                    at++;
+                    lengths[at] = length;
+                    first[at] = i;
+                    long power = 1;
+                    for (int k = 1; k < length; k++) {
+                        power *= base;
+                    }
+                    powers[at] = power;
+                }
+            }
+            first[distinct] = forms.size();
+            return new Index(forms, base, lengths, powers, first);
+        }
+    }
+
     private final java.util.function.Supplier<Map<String, SecretProvider>> providers;
     private volatile SecretScope key;
-    private volatile List<Form> forms = List.of();
+    private volatile Index index = Index.EMPTY;
     private volatile boolean closed;
     /** Wiped for a checkpoint; the next {@link #mask} makes a new key and reads the secrets. */
     private volatile boolean forgotten;
@@ -120,7 +165,7 @@ public final class SecretMasker implements AutoCloseable {
         if (closed || forgotten) {
             return;
         }
-        forms = List.of();
+        index = Index.EMPTY;
         key.close();
         forgotten = true;
     }
@@ -148,7 +193,7 @@ public final class SecretMasker implements AutoCloseable {
 
     /** How many forms are looked for - several per secret long enough, see the class. */
     public int forms() {
-        return forms.size();
+        return index.forms().size();
     }
 
     /** Reads every secret again and keeps its fingerprints instead of the old ones. */
@@ -167,7 +212,7 @@ public final class SecretMasker implements AutoCloseable {
         }
         // Longest first: where two overlap, the longer one wins.
         next.sort(Comparator.comparingInt(Form::length).reversed());
-        forms = List.copyOf(next);
+        index = Index.of(next, base());
     }
 
     /** The secret's forms - itself as UTF-16, its Base64 - kept as fingerprints and tags. */
@@ -197,6 +242,10 @@ public final class SecretMasker implements AutoCloseable {
                 int count = percent(utf8, length, form, escaped.segment());
                 if (count >= 0) {
                     mine.add(form(label, escaped.segment(), count));
+                    // And with the hex digits in lower case, as some encoders write them.
+                    if (lowerHex(escaped.segment(), count)) {
+                        mine.add(form(label, escaped.segment(), count));
+                    }
                 }
             }
         }
@@ -246,7 +295,9 @@ public final class SecretMasker implements AutoCloseable {
                         }
                     }
                     if (!differs) {
-                        return;
+                        // This offset reads the same in both alphabets; the next
+                        // one has other characters, and may not.
+                        continue;
                     }
                 }
                 if (shift == 0) {
@@ -285,6 +336,29 @@ public final class SecretMasker implements AutoCloseable {
             }
         }
         return changed ? at : -1;
+    }
+
+    /**
+     * Makes the hex digits of every {@code %XX} in {@code text} lower case;
+     * whether that changed any. A {@code %} in percent-encoded text is always
+     * the start of one - a literal one is {@code %25}.
+     */
+    static boolean lowerHex(MemorySegment text, int count) {
+        boolean changed = false;
+        for (int i = 0; i + 2 < count; i++) {
+            if (text.get(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * i) != '%') {
+                continue;
+            }
+            for (int k = 1; k <= 2; k++) {
+                char c = text.get(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * (i + k));
+                if (c >= 'A' && c <= 'F') {
+                    text.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * (i + k), (char) (c + 32));
+                    changed = true;
+                }
+            }
+            i += 2;
+        }
+        return changed;
     }
 
     /**
@@ -352,47 +426,46 @@ public final class SecretMasker implements AutoCloseable {
         if (forgotten && text != null && !closed) {
             restore();
         }
-        List<Form> now = forms;
+        Index scanned = index;
+        List<Form> now = scanned.forms();
         if (text == null || now.isEmpty() || closed) {
             return text;
         }
-        TreeSet<Integer> lengths = new TreeSet<>(Comparator.reverseOrder());
-        for (Form form : now) {
-            if (form.length() <= text.length()) {
-                lengths.add(form.length());
+        int size = text.length();
+        long base = scanned.base();
+        List<int[]> hits = null;
+        for (int l = 0; l < scanned.lengths().length; l++) {
+            int length = scanned.lengths()[l];
+            if (length > size) {
+                continue;
             }
-        }
-        if (lengths.isEmpty()) {
-            return text;
-        }
-        long base = base();
-        List<int[]> hits = new ArrayList<>();
-        for (int length : lengths) {
-            long power = 1;
-            for (int i = 1; i < length; i++) {
-                power *= base;
-            }
+            long power = scanned.powers()[l];
+            int from = scanned.first()[l];
+            int to = scanned.first()[l + 1];
             long rolling = 0;
             for (int i = 0; i < length; i++) {
                 rolling = rolling * base + text.charAt(i);
             }
             for (int start = 0; ; start++) {
-                for (int f = 0; f < now.size(); f++) {
+                for (int f = from; f < to; f++) {
                     Form form = now.get(f);
-                    if (form.length() == length && form.fingerprint() == rolling
-                            && !covered(hits, start, start + length)
+                    if (form.fingerprint() == rolling
+                            && (hits == null || !covered(hits, start, start + length))
                             && confirmed(text, start, form)) {
+                        if (hits == null) {
+                            hits = new ArrayList<>();
+                        }
                         hits.add(new int[] {start, start + length, f});
                     }
                 }
-                if (start + length >= text.length()) {
+                if (start + length >= size) {
                     break;
                 }
                 rolling = (rolling - text.charAt(start) * power) * base
                         + text.charAt(start + length);
             }
         }
-        if (hits.isEmpty()) {
+        if (hits == null) {
             return text;
         }
         hits.sort(Comparator.comparingInt(hit -> hit[0]));
@@ -518,7 +591,7 @@ public final class SecretMasker implements AutoCloseable {
             return;
         }
         closed = true;
-        forms = List.of();
+        index = Index.EMPTY;
         if (installed == this) {
             installed = null;
         }
