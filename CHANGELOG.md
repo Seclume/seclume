@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **SQL Server and Oracle: a date and time is read from its fields, not rendered and parsed back.**
+  `getTimestamp`, `getDate` and `getTime` on a SQL Server `datetime2`, `datetime` or
+  `smalldatetime`, and on an Oracle `DATE` or `TIMESTAMP`, wrote the bytes as text and parsed it
+  again; `getObject` of a SQL Server one did the same. They take the fields now - those the text
+  was written from, the fraction to the column's scale - and anything the text has to say (a
+  year past 9999, an invalid byte, a zoned type) goes the text way as before. Per value, measured
+  over two million: `datetime2(7)` 237-300 to 104-142 ns, Oracle `TIMESTAMP` 233-370 to 81-119 ns
+  (`TdsTemporalFieldsTest`, `OracleDateFieldsTest` against the text in five zones; against the
+  servers `LocalSqlServerTest.aDatetimeReadFromItsFieldsIsTheValueItsTextIs` and
+  `LocalOracleJdbcTest.aDateReadFromItsFieldsIsTheValueItsTextIs`, which run in CI).
 - **MySQL: a binary `DECIMAL` is read from its digits, not from a String.** The binary protocol
   carries a `DECIMAL` as text inside the row, as the text protocol does, but `getBigDecimal`
   made a String of it and parsed that; it reads the bytes the way the text protocol's values

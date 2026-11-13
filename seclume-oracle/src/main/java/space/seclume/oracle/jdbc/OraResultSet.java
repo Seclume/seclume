@@ -350,6 +350,21 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
         };
     }
 
+    /**
+     * A {@code DATE} or {@code TIMESTAMP} from its bytes, for getTimestamp,
+     * getDate and getTime: rendering it as text to parse it back is what they
+     * cost before. The zoned timestamps keep {@link #temporalAt}.
+     */
+    @Override
+    protected java.time.LocalDateTime localDateTimeAt(int column) {
+        int type = block.column(column).type();
+        if (type != OracleColumn.TYPE_DATE && type != OracleColumn.TYPE_TIMESTAMP) {
+            return null;
+        }
+        return space.seclume.oracle.net.OracleDate.localDateTime(block.data().segment(),
+                block.offset(column), block.length(column));
+    }
+
     /** Uppercase hex, the way Oracle and ojdbc render a raw. */
     private String hex(int at, int length) {
         StringBuilder text = new StringBuilder(length * 2); // seclume-allow: user payload requested as text, not a secret
