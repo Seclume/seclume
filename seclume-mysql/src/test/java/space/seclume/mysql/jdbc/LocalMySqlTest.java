@@ -144,6 +144,55 @@ class LocalMySqlTest {
     }
 
     /**
+     * A DECIMAL read through a PreparedStatement - the binary protocol,
+     * which carries it as text and is now read without a String - is the
+     * value and the scale the same rows give through a Statement: zero,
+     * negatives, eighteen digits and more, and the widest MySQL has.
+     */
+    @Test
+    void aBinaryDecimalIsTheValueItsTextIs() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            statement.execute("drop temporary table if exists seclume_dec");
+            statement.execute("create temporary table seclume_dec (id int primary key, a decimal(12,2), "
+                    + "b decimal(65,30), c decimal(18,0), d decimal(19,4) null)");
+            statement.execute("insert into seclume_dec values"
+                    + " (1, 0.00, 0, 0, null),"
+                    + " (2, -1234567890.12, -12345678901234567890123456789012345.123456789012345678901234567890,"
+                    + " 999999999999999999, 123456789012345.6789),"
+                    + " (3, 0.01, 0.000000000000000000000000000001, -999999999999999999, -0.0001)");
+            String query = "select a, b, c, d from seclume_dec order by id";
+            java.util.List<String> text = new java.util.ArrayList<>();
+            try (ResultSet rows = statement.executeQuery(query)) {
+                while (rows.next()) {
+                    text.add(decimals(rows));
+                }
+            }
+            java.util.List<String> binary = new java.util.ArrayList<>();
+            try (PreparedStatement prepared = connection.prepareStatement(query);
+                 ResultSet rows = prepared.executeQuery()) {
+                while (rows.next()) {
+                    binary.add(decimals(rows));
+                }
+            }
+            assertEquals(3, text.size());
+            assertEquals(text, binary);
+            assertTrue(binary.get(1).contains("-12345678901234567890123456789012345.123456789012345678901234567890/30"),
+                    binary.get(1));
+        }
+    }
+
+    /** Each column's BigDecimal with its scale, and getObject's. */
+    private static String decimals(ResultSet rows) throws SQLException {
+        StringBuilder all = new StringBuilder();
+        for (int column = 1; column <= 4; column++) {
+            java.math.BigDecimal value = rows.getBigDecimal(column);
+            all.append(value).append('/').append(value == null ? "" : value.scale()).append(' ')
+                    .append(rows.getObject(column)).append(" | ");
+        }
+        return all.toString();
+    }
+
+    /**
      * A DATETIME read through a PreparedStatement - the binary protocol,
      * whose fields getTimestamp, getDate and getTime now take as they are -
      * gives the values the same rows give as text through a Statement:
@@ -167,6 +216,13 @@ class LocalMySqlTest {
             try (ResultSet rows = statement.executeQuery(query)) {
                 while (rows.next()) {
                     text.add(read(rows));
+                    // And the text protocol's own value is what its text says.
+                    for (int column = 1; column <= 4; column++) {
+                        String value = rows.getString(column);
+                        if (value != null) {
+                            assertEquals(java.sql.Timestamp.valueOf(value), rows.getTimestamp(column), value);
+                        }
+                    }
                 }
             }
             java.util.List<String> binary = new java.util.ArrayList<>();

@@ -1757,4 +1757,41 @@ class LocalJdbcTest {
                 assertEquals(value, rows.getString(1), "N, " + setting);
             }
         }
-    }}
+    }
+
+    /**
+     * A {@code timestamp} is the Timestamp its text is, through the direct
+     * path of getTimestamp, and getDate and getTime take the same fields;
+     * infinity, a BC date and a year past 9999 answer with an SQLException.
+     * The same test passes against the code before that path.
+     */
+    @Test
+    void aTimestampIsTheValueItsText() throws Exception {
+        String[] values = {"2026-09-24 13:14:15", "2026-09-24 13:14:15.123456", "2026-01-01 00:00:00",
+            "1582-10-10 12:00:00", "1000-03-01 00:00:00.5", "9999-12-31 23:59:59.999999", "2024-02-29 23:59:59.1"};
+        try (Connection connection = connect();
+             PreparedStatement both = connection.prepareStatement("select ?::timestamp, (?::timestamp)::text");
+             PreparedStatement one = connection.prepareStatement("select ?::timestamp")) {
+            for (String value : values) {
+                both.setString(1, value);
+                both.setString(2, value);
+                try (ResultSet rows = both.executeQuery()) {
+                    assertTrue(rows.next());
+                    String text = rows.getString(2);
+                    java.sql.Timestamp expected = java.sql.Timestamp.valueOf(text);
+                    assertEquals(expected, rows.getTimestamp(1), value);
+                    assertEquals(expected.getNanos(), rows.getTimestamp(1).getNanos(), value);
+                    assertEquals(java.sql.Date.valueOf(text.substring(0, 10)), rows.getDate(1), value);
+                    assertEquals(java.sql.Time.valueOf(text.substring(11, 19)), rows.getTime(1), value);
+                }
+            }
+            for (String odd : new String[] {"infinity", "-infinity", "0044-03-15 12:00:00 BC", "12026-01-01 00:00:00"}) {
+                one.setString(1, odd);
+                try (ResultSet rows = one.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertThrows(SQLException.class, () -> rows.getTimestamp(1), odd);
+                }
+            }
+        }
+    }
+}
