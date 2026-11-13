@@ -1080,4 +1080,15 @@ class PgStatement implements Statement, PgSession.RowHandler {
                 space.seclume.QueryFingerprint.Dialect.POSTGRESQL);
     }
 
+    /** JDBC's own doubles the quotes alone - see {@link PgQuoting}. */
+    @Override
+    public String enquoteLiteral(String value) throws SQLException {
+        return PgQuoting.literal(value);
+    }
+
+    /** {@code N'...'} where the value needs no escape string; PostgreSQL has no {@code N E'...'}. */
+    @Override
+    public String enquoteNCharLiteral(String value) throws SQLException {
+        return value.indexOf('\\') < 0 ? "N" + PgQuoting.literal(value) : PgQuoting.literal(value);
+    }
 }
