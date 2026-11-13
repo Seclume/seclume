@@ -10,11 +10,20 @@ permissions:
 # code that keeps secrets off the heap and encrypts columns that is the
 # difference that matters.
 #
-# One package per job: crypto, secret, field and audit; the own TLS client
+# One package per check: crypto, secret, field and audit; the own TLS client
 # (tls); native memory, locking and transports (internal); and the pool.
 # pit_report.py writes the score as a notice and the
 # survivors, class by class with line, mutator and what was changed, as
 # warnings - so a pull request shows which lines its tests leave unchecked.
+#
+# The long packages run in shards: pit_shard.py gives each top-level class to
+# one shard, by size, and the check of the package scores the shards'
+# mutants together against its floor - the same mutants against the same
+# tests as one job, in a quarter of the time for tls (1.4 to 2.6 hours
+# alone). On a pull request a package runs only when something it depends on
+# differs from main (pit_inputs.py: its module and the modules that module
+# depends on, sources and tests, and the build); otherwise the pull request
+# cannot change its result. The weekly run and a manual one run everything.
 on:
   pull_request:
     paths:
@@ -28,7 +37,7 @@ on:
       - 'seclume-pool/src/main/java/space/seclume/pool/**'
       - 'seclume-pool/src/test/**'
       - '.github/workflows/mutation.yml'
-      - '.github/scripts/pit_report.py'
+      - '.github/scripts/pit_*.py'
   workflow_dispatch:
   schedule:
     - cron: '41 20 * * 6'
@@ -39,32 +48,45 @@ concurrency:
 
 jobs:
   pit:
-    name: mutation (${{ matrix.package }})
+    name: mutation (${{ matrix.package }}, ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-26.04
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        # A floor is the score of the mutants with a test that the package had
-        # when it was set (SECURITY-QUALITY.md: run 42427494528 for the first
-        # four, run 43224031993 for tls, internal and pool), rounded down and
-        # less one point - a mutant that times out on one run and not on the
-        # next moves a score by a few tenths. Below it the job fails.
+        # A shard count follows a package's time in one job (13 November
+        # 2026): tls 1.4-2.6 h, internal 85 min, crypto 46, pool 31, secret 16,
+        # field 11, audit 6.
         include:
-          - {package: crypto, module: seclume-core, floor: '91'}
-          - {package: secret, module: seclume-core, floor: '86'}
-          - {package: field, module: seclume-core, floor: '96'}
-          - {package: audit, module: seclume-core, floor: '90'}
-          # tls from the lowest of seven runs (87.3 % to 90.5 %), not from one:
-          # its socket tests time a mutant out on a slow runner and not on a
-          # fast one - 81 timeouts in one run, 116 in another - and a timeout
-          # counts as killed.
-          - {package: tls, module: seclume-core, floor: '86'}
-          - {package: internal, module: seclume-core, floor: '79'}
-          - {package: pool, module: seclume-pool, floor: '68'}
+          - {package: crypto, module: seclume-core, shard: 1, shards: 2}
+          - {package: crypto, module: seclume-core, shard: 2, shards: 2}
+          - {package: secret, module: seclume-core, shard: 1, shards: 1}
+          - {package: field, module: seclume-core, shard: 1, shards: 1}
+          - {package: audit, module: seclume-core, shard: 1, shards: 1}
+          - {package: tls, module: seclume-core, shard: 1, shards: 4}
+          - {package: tls, module: seclume-core, shard: 2, shards: 4}
+          - {package: tls, module: seclume-core, shard: 3, shards: 4}
+          - {package: tls, module: seclume-core, shard: 4, shards: 4}
+          - {package: internal, module: seclume-core, shard: 1, shards: 3}
+          - {package: internal, module: seclume-core, shard: 2, shards: 3}
+          - {package: internal, module: seclume-core, shard: 3, shards: 3}
+          - {package: pool, module: seclume-pool, shard: 1, shards: 2}
+          - {package: pool, module: seclume-pool, shard: 2, shards: 2}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Whether its inputs differ from main
+        id: inputs
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            state=$(python3 .github/scripts/pit_inputs.py "${{ github.event.pull_request.base.sha }}" ${{ matrix.module }})
+          else
+            state=changed
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        if: steps.inputs.outputs.state == 'changed'
         with:
           java-version: '25'
           distribution: temurin
@@ -72,16 +94,88 @@ jobs:
       # A module after the core needs the core installed first, so that PIT
       # runs in that module alone and not over the core's tests as well.
       - name: What the module needs
-        if: matrix.module != 'seclume-core'
+        if: steps.inputs.outputs.state == 'changed' && matrix.module != 'seclume-core'
         run: .github/scripts/mvnw-retry.sh -B -pl ${{ matrix.module }} -am install -DskipTests
-      - name: Mutants in space.seclume.${{ matrix.package }}
+      - name: The shard's classes
+        id: classes
+        if: steps.inputs.outputs.state == 'changed'
+        run: >-
+          echo "targets=$(python3 .github/scripts/pit_shard.py ${{ matrix.module }}/src/main/java
+          space.seclume.${{ matrix.package }} ${{ matrix.shard }} ${{ matrix.shards }})" >> "$GITHUB_OUTPUT"
+      - name: Mutants in space.seclume.${{ matrix.package }}, shard ${{ matrix.shard }} of ${{ matrix.shards }}
+        if: steps.inputs.outputs.state == 'changed'
+        env:
+          TARGETS: ${{ steps.classes.outputs.targets }}
         run: >-
           .github/scripts/mvnw-retry.sh -B -Pmutation -pl ${{ matrix.module }} test-compile
           org.pitest:pitest-maven:mutationCoverage
-          -DtargetClasses='space.seclume.${{ matrix.package }}.*'
+          "-DtargetClasses=$TARGETS"
           -DtargetTests='space.seclume.*'
+      # In a directory named for the shard: download-artifact puts a single
+      # artifact's files straight into its path and several into one directory
+      # each, so the report would look in two places for one shard and four.
+      - name: The shard's report, where the package's check looks for it
+        if: always() && steps.inputs.outputs.state == 'changed'
+        run: |
+          mkdir -p "pit-out/pit-${{ matrix.package }}-${{ matrix.shard }}"
+          cp ${{ matrix.module }}/target/pit-reports/mutations.xml "pit-out/pit-${{ matrix.package }}-${{ matrix.shard }}/" || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.inputs.outputs.state == 'changed'
+        with:
+          name: pit-${{ matrix.package }}-${{ matrix.shard }}
+          path: pit-out/
+          retention-days: 7
+          if-no-files-found: warn
+
+  report:
+    name: mutation (${{ matrix.package }})
+    needs: pit
+    if: always()
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # A floor is the score of the mutants with a test that the package had
+        # when it was set (SECURITY-QUALITY.md: run 42427494528 for the first
+        # four, run 43224031993 for tls, internal and pool), rounded down and
+        # less one point - a mutant that times out on one run and not on the
+        # next moves a score by a few tenths. Below it the check fails.
+        include:
+          - {package: crypto, module: seclume-core, shards: 2, floor: '91'}
+          - {package: secret, module: seclume-core, shards: 1, floor: '86'}
+          - {package: field, module: seclume-core, shards: 1, floor: '96'}
+          - {package: audit, module: seclume-core, shards: 1, floor: '90'}
+          # tls from the lowest of seven runs (87.3 % to 90.5 %), not from one:
+          # its socket tests time a mutant out on a slow runner and not on a
+          # fast one - 81 timeouts in one run, 116 in another - and a timeout
+          # counts as killed.
+          - {package: tls, module: seclume-core, shards: 4, floor: '86'}
+          - {package: internal, module: seclume-core, shards: 3, floor: '79'}
+          - {package: pool, module: seclume-pool, shards: 2, floor: '68'}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Whether its inputs differ from main
+        id: inputs
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            state=$(python3 .github/scripts/pit_inputs.py "${{ github.event.pull_request.base.sha }}" ${{ matrix.module }})
+          else
+            state=changed
+          fi
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = unchanged ]; then
+            echo "::notice title=mutation (${{ matrix.package }})::nothing ${{ matrix.module }} depends on differs from main: the same mutants against the same tests as there, not run again"
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.inputs.outputs.state == 'changed'
+        with:
+          pattern: pit-${{ matrix.package }}-*
+          path: pit
+          merge-multiple: true
       - name: The score, and the survivors
-        if: always()
-        run: >-
-          python3 .github/scripts/pit_report.py ${{ matrix.module }}/target/pit-reports/mutations.xml
-          ${{ matrix.module }}/src/main/java '${{ matrix.package }}' '${{ matrix.floor }}'
+        if: steps.inputs.outputs.state == 'changed'
+        run: |
+          reports=$(for i in $(seq 1 ${{ matrix.shards }}); do printf '%s' "${sep:-}pit/pit-${{ matrix.package }}-$i/mutations.xml"; sep=,; done)
+          python3 .github/scripts/pit_report.py "$reports" ${{ matrix.module }}/src/main/java '${{ matrix.package }}' '${{ matrix.floor }}'

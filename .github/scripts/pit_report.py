@@ -1,6 +1,9 @@
 """PIT's verdict for one package, as annotations on the check.
 
-  pit_report.py <mutations.xml> <source root> <package> [floor]
+  pit_report.py <mutations.xml>[,<mutations.xml>...] <source root> <package> [floor]
+
+Several reports, comma-separated, are the shards of one package: their
+mutants are scored together.
 
 A notice with the score: of the mutants with a test that ran their line,
 how many a test noticed - and how many had no test that ran them at all.
@@ -99,10 +102,12 @@ def escape(text):
 
 
 def main(report, source_root, package, floor=None):
-    if not Path(report).exists():
-        print(f"::error title=mutation ({package})::no PIT report at {report} - the run did not finish")
-        return 1
-    mutations = read(report)
+    mutations = []
+    for one in report.split(","):
+        if not Path(one).exists():
+            print(f"::error title=mutation ({package})::no PIT report at {one} - the run did not finish")
+            return 1
+        mutations += read(one)
     killed, covered, uncovered, total = score(mutations)
     percent = 100.0 * killed / covered if covered else 0.0
     overall = 100.0 * killed / total if total else 0.0
