@@ -59,7 +59,7 @@ class JdbcUrlPropertyTest {
                 JdbcUrlPropertyTest::query, JdbcUrlPropertyTest::sqlServer,
                 JdbcUrlPropertyTest::sqlServerBraced, JdbcUrlPropertyTest::userInfo,
                 JdbcUrlPropertyTest::oracle, JdbcUrlPropertyTest::oracleQuoted,
-                JdbcUrlPropertyTest::mySqlKeyValue);
+                JdbcUrlPropertyTest::mySqlKeyValue, JdbcUrlPropertyTest::ezConnectLogin);
         Random random = new Random(SEED);
         for (int round = 0; round < ROUNDS; round++) {
             Case one = families.get(random.nextInt(families.size())).apply(random);
@@ -243,6 +243,20 @@ class JdbcUrlPropertyTest {
         };
         return new Case("jdbc:oracle:thin:" + pick(random, WORDS) + "/" + secret + "@" + address,
                 secret);
+    }
+
+    /**
+     * Oracle's EZConnect, {@code thin:@//host}, with a {@code user:password@}
+     * typed into its authority: the {@code @} before the {@code //} made it
+     * look like Oracle's {@code user/password@}, and nothing was hidden
+     * (JdbcUrlRedactEdgeTest, 13.11.2026). Added to the families then.
+     */
+    private static Case ezConnectLogin(Random random) {
+        String secret = secret(random, "-._~!$&'()*+,;=:");
+        String tail = random.nextBoolean() ? "" : "?" + String.join("&", options(random));
+        String scheme = pick(random, new String[] {"jdbc:oracle:thin:@", "jdbc:oracle:thin:@tcp:"});
+        return new Case(scheme + "//" + pick(random, WORDS) + ":" + secret + "@" + hostPort(random)
+                + "/" + pick(random, WORDS) + tail, secret);
     }
 
     private static Case oracleQuoted(Random random) {
