@@ -488,13 +488,6 @@ class OraStatement implements Statement, TtcResult.RowHandler {
      */
     private boolean streaming;
 
-    /**
-     * Brings the next block of rows into the block the result set reads from.
-     *
-     * <p>The rows are copied into the block as they arrive, so here the block
-     * is simply emptied and filled again - the memory of one block, not of the
-     * whole result.
-     */
     /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
     boolean mayFetchNextBlock() throws SQLException {
         if (!streaming || block == null) {
@@ -503,6 +496,13 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         return connection.session().hasMoreRows();
     }
 
+    /**
+     * Brings the next block of rows into the block the result set reads from.
+     *
+     * <p>The rows are copied into the block as they arrive, so here the block
+     * is simply emptied and filled again - the memory of one block, not of the
+     * whole result.
+     */
     boolean fetchNextBlock() throws SQLException {
         if (!streaming || block == null) {
             return false;

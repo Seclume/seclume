@@ -639,12 +639,6 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         updateCount = -1;
     }
 
-    /**
-     * Brings the next block into the block the result set reads from.
-     *
-     * <p>The end is recognised by a short block: the server sends fewer rows
-     * than were asked for only when there are no more.
-     */
     /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
     boolean mayFetchNextBlock() throws SQLException {
         if (lazy) {
@@ -653,6 +647,12 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         return streaming && block != null && cursor != 0 && lastBlock >= fetchSize;
     }
 
+    /**
+     * Brings the next block into the block the result set reads from.
+     *
+     * <p>The end is recognised by a short block: the server sends fewer rows
+     * than were asked for only when there are no more.
+     */
     boolean fetchNextBlock() throws SQLException {
         if (lazy) {
             return resumeLazy();

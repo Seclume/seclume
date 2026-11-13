@@ -260,14 +260,6 @@ class PgStatement implements Statement, PgSession.RowHandler {
         streaming = prepared && blockSize() > 0 && !connection.getAutoCommit();
     }
 
-    /**
-     * Brings the next block of rows into the block the result set reads from.
-     *
-     * <p>The buffer is swapped, not copied: what the session read into becomes
-     * the memory of the result again, and the memory the result had - whose
-     * rows are read and done with - goes back to the session. A million rows
-     * therefore cost the memory of one block, not of a million rows.
-     */
     /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
     boolean mayFetchNextBlock() throws SQLException {
         if (!streaming || block == null) {
@@ -278,6 +270,14 @@ class PgStatement implements Statement, PgSession.RowHandler {
         return connection.session().isPortalSuspended();
     }
 
+    /**
+     * Brings the next block of rows into the block the result set reads from.
+     *
+     * <p>The buffer is swapped, not copied: what the session read into becomes
+     * the memory of the result again, and the memory the result had - whose
+     * rows are read and done with - goes back to the session. A million rows
+     * therefore cost the memory of one block, not of a million rows.
+     */
     boolean fetchNextBlock() throws SQLException {
         if (!streaming || block == null) {
             return false;
