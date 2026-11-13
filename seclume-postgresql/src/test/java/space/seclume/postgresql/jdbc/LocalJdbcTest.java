@@ -1555,49 +1555,47 @@ class LocalJdbcTest {
      * The server reads the literal: whatever the value, it comes back as it
      * went in, with standard_conforming_strings on and off - and a value
      * written to break out of quotes that are only doubled does not.
+     *
+     * <p>PostgreSQL 19 refuses {@code off} ("non-standard string literals are
+     * not supported"); there only {@code on} is checked, and the refusal must
+     * be that one.
      */
     @Test
     void anEnquotedLiteralIsOneValueToTheServerInBothSettings() throws Exception {
-        String[] values = {"plain", "it's", "\\", "\\' or 1=1 -- ", "ends with \\", "a\\'b",
-            "'; select 2; -- ", "ümlaut \\ and ' both"};
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            for (String setting : new String[] {"on", "off"}) {
-                statement.execute("set standard_conforming_strings = " + setting);
+            enquotedLiteralsComeBack(statement, "on");
+            boolean off;
+            try {
+                statement.execute("set standard_conforming_strings = off");
                 statement.execute("set escape_string_warning = off");
-                for (String value : values) {
-                    try (ResultSet rows = statement.executeQuery(
-                            "select" + statement.enquoteLiteral(value) + ", 'after'")) {
-                        assertTrue(rows.next());
-                        assertEquals(value, rows.getString(1), "standard_conforming_strings " + setting);
-                        assertEquals("after", rows.getString(2));
-                        assertFalse(rows.next());
-                    }
-                    try (ResultSet rows = statement.executeQuery(
-                            "select " + statement.enquoteNCharLiteral(value))) {
-                        assertTrue(rows.next());
-                        assertEquals(value, rows.getString(1), "N, " + setting);
-                    }
-                }
+                off = true;
+            } catch (SQLException refused) {
+                assertTrue(refused.getMessage().contains(
+                        "non-standard string literals are not supported"), refused.getMessage());
+                off = false;
+            }
+            if (off) {
+                enquotedLiteralsComeBack(statement, "off");
             }
         }
     }
 
-    /** The catalogue's own queries take a name with a backslash and a quote as a name. */
-    @Test
-    void aTableNameWithABackslashAndAQuoteIsOnlyAName() throws Exception {
-        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            statement.execute("set standard_conforming_strings = off");
-            statement.execute("set escape_string_warning = off");
-            String hostile = "\\' or true -- ";
-            try (ResultSet tables = connection.getMetaData().getTables(null, null, hostile, null)) {
-                assertFalse(tables.next(), "the pattern matched: it was read as SQL");
+    private static void enquotedLiteralsComeBack(Statement statement, String setting)
+            throws SQLException {
+        String[] values = {"plain", "it's", "\\", "\\' or 1=1 -- ", "ends with \\", "a\\'b",
+            "'; select 2; -- ", "ümlaut \\ and ' both"};
+        for (String value : values) {
+            try (ResultSet rows = statement.executeQuery(
+                    "select" + statement.enquoteLiteral(value) + ", 'after'")) {
+                assertTrue(rows.next());
+                assertEquals(value, rows.getString(1), "standard_conforming_strings " + setting);
+                assertEquals("after", rows.getString(2));
+                assertFalse(rows.next());
             }
-            try (ResultSet columns = connection.getMetaData().getColumns(null, hostile, hostile,
-                    hostile)) {
-                assertFalse(columns.next());
-            }
-            try (ResultSet keys = connection.getMetaData().getPrimaryKeys(null, hostile, hostile)) {
-                assertFalse(keys.next());
+            try (ResultSet rows = statement.executeQuery(
+                    "select " + statement.enquoteNCharLiteral(value))) {
+                assertTrue(rows.next());
+                assertEquals(value, rows.getString(1), "N, " + setting);
             }
         }
     }

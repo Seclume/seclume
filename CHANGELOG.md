@@ -15,14 +15,15 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
-- **PostgreSQL: literals mean the same whatever `standard_conforming_strings` is.**
-  `enquoteLiteral` was JDBC's default and the catalogue queries of `DatabaseMetaData` used the
-  same quoting: single quotes doubled, nothing else. With `standard_conforming_strings = off` -
-  a setting a session, a role or a database can still have - PostgreSQL reads a backslash
-  there as an escape, and `\' or true -- ` as a `getTables` pattern matched every table: the
-  rest of the value was SQL. A value with a backslash is written as an escape string `E'...'`
-  now, as libpq's `PQescapeLiteral` does (`LocalJdbcTest.anEnquotedLiteralIsOneValueToTheServerInBothSettings`,
-  `aTableNameWithABackslashAndAQuoteIsOnlyAName`).
+- **PostgreSQL: `enquoteLiteral` means the same whatever `standard_conforming_strings` is.**
+  It was JDBC's default: single quotes doubled, nothing else. With
+  `standard_conforming_strings = off` - a setting a session, a role or a database can have up
+  to PostgreSQL 18 - the server reads a backslash there as an escape, and `\' or 1=1 -- `
+  ended the literal: the rest of the value was SQL. A value with a backslash is written as an
+  escape string `E'...'` now, as libpq's `PQescapeLiteral` does; `enquoteNCharLiteral` too
+  (`LocalJdbcTest.anEnquotedLiteralIsOneValueToTheServerInBothSettings`, which checks `off`
+  where the server still allows it - PostgreSQL 19 refuses it). The catalogue queries of
+  `DatabaseMetaData` had the same flaw; that fix is #323.
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a
