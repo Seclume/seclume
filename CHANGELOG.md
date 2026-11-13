@@ -68,6 +68,16 @@ All notable changes to seclume are recorded here. Versions follow
   `isLast()` says so with `SQLFeatureNotSupportedException` there instead of a guess
   (`BlockResultSetTest`, `LocalJdbcTest.aResultReadInBlocksCountsItsRowsAcrossThem`,
   `LocalMySqlTest.aFetchSizeReadsTheResultInBlocks`).
+- **Session state: a statement's text is judged once, not at every execution.** Each
+  execution ran the text through the expressions that look for a `SET`, a temporary table or
+  a session function - and the filter in front of them let any text with an underscore
+  through, which is nearly every text with a table or column name in it. For
+  `select id, name, amount, created from zb_rows where id = ?` that was 3.2 µs per
+  execution, for a join over `order_items` 9.9 µs. The last text judged to set nothing is
+  remembered weakly, so a prepared statement run again costs about 1 ns; the filter now looks
+  for the words the forms contain, and a text seen for the first time takes 137 and 513 ns.
+  A one-row lookup through the PostgreSQL driver against a local server, five runs each:
+  client CPU time 13.0-15.3 µs before, 9.1-10.8 µs after (`SessionStateTest`).
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a

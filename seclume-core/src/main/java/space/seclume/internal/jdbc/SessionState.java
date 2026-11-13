@@ -36,6 +36,17 @@ public final class SessionState {
 
     private volatile boolean changed;
     private volatile boolean irreversible;
+    /**
+     * The last text judged to set nothing - weakly, so that it lives no
+     * longer than whoever passed it. A prepared statement passes the same
+     * String every time it runs, and judging it again each time was a
+     * quarter of the client's time for a one-row lookup: most statements have
+     * an underscore in a name, and then the expression runs over all of it.
+     */
+    private volatile java.lang.ref.WeakReference<String> harmless;
+
+    private static final int CHANGES = 1;
+    private static final int IRREVERSIBLE_TOO = 2;
 
     /** One per connection, noting from its first statement on. */
     public SessionState() {
@@ -46,42 +57,56 @@ public final class SessionState {
         if (sql == null || (changed && irreversible)) {
             return;
         }
+        java.lang.ref.WeakReference<String> last = harmless;
+        if (last != null && last.get() == sql) {
+            return;                              // this very text, judged before: nothing
+        }
+        int verdict = verdict(sql);
+        if (verdict == 0) {
+            harmless = new java.lang.ref.WeakReference<>(sql);
+            return;
+        }
+        changed = true;
+        if ((verdict & IRREVERSIBLE_TOO) != 0) {
+            irreversible = true;
+        }
+    }
+
+    /** What one text sets: nothing, {@link #CHANGES}, and perhaps {@link #IRREVERSIBLE_TOO}. */
+    private static int verdict(String sql) {
         // Every statement of a batch, not only the first: "select 1; set role
         // admin" sets a role as surely as "set role admin" does. A missed one
         // hands the next borrower the rights or the tenant of the previous
         // (found in review, 25.09.2026).
         // One statement unless there is a semicolon somewhere: then the text is
         // judged whole, without working out which characters are code.
+        int verdict = 0;
         if (sql.indexOf(';') < 0) {
-            judge(sql);
-            if (mayContain(sql) && ANYWHERE.matcher(sql).find()) {
-                changed = true;
+            verdict = judge(sql);
+        } else {
+            boolean[] code = CallSyntax.codeMask(sql);
+            int from = 0;
+            for (int i = 0; i <= sql.length(); i++) {
+                if (i < sql.length() && !(code[i] && sql.charAt(i) == ';')) {
+                    continue;
+                }
+                verdict |= judge(sql.substring(from, i));
+                from = i + 1;
             }
-            return;
-        }
-        boolean[] code = CallSyntax.codeMask(sql);
-        int from = 0;
-        for (int i = 0; i <= sql.length(); i++) {
-            if (i < sql.length() && !(code[i] && sql.charAt(i) == ';')) {
-                continue;
-            }
-            judge(sql.substring(from, i));
-            from = i + 1;
         }
         if (mayContain(sql) && ANYWHERE.matcher(sql).find()) {
-            changed = true;
+            verdict |= CHANGES;
         }
+        return verdict;
     }
 
     /** One statement's leading words. */
-    private void judge(String statement) {
+    private static int judge(String statement) {
         String start = leading(statement);
         if (mayLead(start) && LEADING.matcher(start).find()) {
-            changed = true;
-            if (IRREVERSIBLE.matcher(start).find()) {
-                irreversible = true;
-            }
+            return IRREVERSIBLE.matcher(start).find() ? CHANGES | IRREVERSIBLE_TOO : CHANGES;
         }
+        return 0;
     }
 
     /**
@@ -113,11 +138,29 @@ public final class SessionState {
     }
 
     /**
-     * Every form {@link #ANYWHERE} looks for has an underscore, a {@code #} or
-     * an {@code @} in it; a statement without any of the three cannot match.
+     * A word that each form {@link #ANYWHERE} looks for has in it - every one
+     * of them with an underscore - unless the form is the {@code #} or the
+     * {@code @x :=} one. Only a filter, and a strict one: an underscore alone
+     * let nearly every statement through, since most names have one, and the
+     * expression then took 3 to 10 microseconds over a select of one row.
      */
+    private static final String[] ANYWHERE_WORDS = {"set_config", "dbms_", "sp_set",
+        "context_info", "advisory_lock", "get_lock"};
+
     private static boolean mayContain(String sql) {
-        return sql.indexOf('_') >= 0 || sql.indexOf('#') >= 0 || sql.indexOf('@') >= 0;
+        if (sql.indexOf('#') >= 0 || (sql.indexOf('@') >= 0 && sql.contains(":="))) {
+            return true;
+        }
+        for (int underscore = sql.indexOf('_'); underscore >= 0;
+                underscore = sql.indexOf('_', underscore + 1)) {
+            for (String word : ANYWHERE_WORDS) {
+                int start = underscore - word.indexOf('_');
+                if (start >= 0 && sql.regionMatches(true, start, word, 0, word.length())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Whether a statement since the last {@link #clear()} set something. */
