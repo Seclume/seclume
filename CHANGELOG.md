@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Mutation testing in shards, and on a pull request only where it can change something.**
+  The long packages run in parallel shards - tls in four, internal in three, crypto and the
+  pool in two - and each package's check scores its shards' mutants together against the same
+  floor: the same mutants against the same tests as one job. tls took 1.4 to 2.6 hours in one.
+  `pit_shard.py` gives each top-level class, with its nested classes, to one shard by size, so a
+  new class is in a shard without being listed. On a pull request a package is not run again
+  when nothing it depends on differs from main - its module and the seclume modules that module
+  depends on, sources and tests, and the build (`pit_inputs.py`); the pull request cannot change
+  its result. The weekly and the manual runs run everything (`test_pit_shard.py`,
+  `test_pit_inputs.py`, `test_pit_report.py`).
 - **AWS: the session token is not written into a chunked body however its coding is spelled.**
   `SessionTokenSocket` recognised a chunked body only by `transfer-encoding: chunked` with
   exactly one space - the gap `seclume-http`'s framing closed in the third review round (#273).
