@@ -22,7 +22,8 @@ All notable changes to seclume are recorded here. Versions follow
   the first. Row numbers now go on across the blocks. On the last row of a full block the
   server may or may not have more, and reading on would replace the block the row is in:
   `isLast()` says so with `SQLFeatureNotSupportedException` there instead of a guess
-  (`BlockResultSetTest`, `LocalJdbcTest.aResultReadInBlocksCountsItsRowsAcrossThem`).
+  (`BlockResultSetTest`, `LocalJdbcTest.aResultReadInBlocksCountsItsRowsAcrossThem`,
+  `LocalMySqlTest.aFetchSizeReadsTheResultInBlocks`).
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a
