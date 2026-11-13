@@ -10,6 +10,7 @@ import org.bson.BsonString;
 import org.bson.BsonValue;
 import org.bson.codecs.Decoder;
 
+import com.mongodb.MongoCommandException;
 import com.mongodb.MongoException;
 import com.mongodb.ServerAddress;
 import com.mongodb.ServerCursor;
@@ -28,7 +29,9 @@ import space.seclume.mongodb.driver.internal.Topology;
  *
  * <p>A cursor is not tied to the connection that opened it, so each
  * {@code getMore} borrows whichever connection to its server is free - a
- * cursor lives on the server that opened it. Behind a load balancer that
+ * cursor lives on the server that opened it. A {@code getMore} the server
+ * refuses ends the cursor there; one that got no answer does not, and such a
+ * cursor is killed when it is closed. Behind a load balancer that
  * server is reached through the one connection only: the cursor holds it,
  * and gives it back when it ends (see {@code ServerPool#pin}).
  */
@@ -44,6 +47,8 @@ final class BatchCursor<T> implements MongoCursor<T> {
     private final long maxAwaitMillis;
     private final BsonValue comment;
     private long id;
+    /** A cursor a {@code getMore} got no answer for: not read on, but still to be killed. */
+    private long unanswered;
     /** Whether the cursor still holds the server - a pinned connection - for itself. */
     private boolean holding;
     private BsonArray batch;
@@ -153,9 +158,19 @@ final class BatchCursor<T> implements MongoCursor<T> {
         BsonDocument reply;
         try {
             reply = topology.on(server, session, database, command);
-        } catch (MongoException e) {
+        } catch (MongoCommandException e) {
             id = 0;                        // a cursor the server refused is gone there
+            if (session != null) {
+                session.ended(this);
+            }
             letGo();
+            throw e;
+        } catch (MongoException e) {
+            // No answer - a lost connection, a timeout on this side. The server
+            // may have sent a batch nobody read, so the cursor is not read on;
+            // it may still be open there, so close() kills it.
+            unanswered = id;
+            id = 0;
             throw e;
         }
         BsonDocument cursor = reply.getDocument("cursor");
@@ -184,11 +199,12 @@ final class BatchCursor<T> implements MongoCursor<T> {
         if (session != null) {
             session.ended(this);
         }
-        if (id == 0) {
+        long open = id != 0 ? id : unanswered;
+        id = 0;
+        unanswered = 0;
+        if (open == 0) {
             return;
         }
-        long open = id;
-        id = 0;
         batch = new BsonArray();
         at = 0;
         try {

@@ -211,21 +211,35 @@ are not library code.
 | | Baseline | 12 November | Source |
 |---|---:|---:|---|
 | Tests run by the `core` job | 6045, of them 674 skipped | 6135, of them 679 skipped | Surefire's totals per module, summed |
-| Security regression tests in the gate | 51 | 51 | [`.github/security-gate.json`](.github/security-gate.json) |
+| Security regression tests in the gate | 51 | 58 (core 40, PostgreSQL 6, MySQL 4, SQL Server 4, Oracle 4) | [`.github/security-gate.json`](.github/security-gate.json) |
 | Fuzz test classes | 31, of them 12 with `@FuzzTest` methods (21 methods) | 31, 12, 21 | the repository |
 | Coverage-guided fuzz targets, nightly | 16 | 16 | [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml) |
 
 The core job's count grew little because most of what was added since runs elsewhere: in the
 database jobs, the brokers' jobs and the MongoDB jobs, which this count does not sum. The
-gate did not grow: the regression tests of the findings since the baseline run in every build,
-but none of them was added to the gate's list. That is open.
+gate grew by seven tests of the findings since the baseline, all in its five groups. The regression tests in the modules without a group - mail, Redis,
+Kafka, NATS, HTTP, keys, MongoDB - run in every build but are not in the gate. That is open.
 
 ### Mutation score
 
-No scheduled run since the baseline - `mutation.yml` runs on Saturdays. A run on `main` was
-started by hand on 12 November
-([43224031993](https://github.com/Seclume/seclume/actions/runs/43224031993)); its scores go
-here when it has finished. Until then the baseline's are the latest measured ones.
+A run on `main` started by hand on 12 November
+([43224031993](https://github.com/Seclume/seclume/actions/runs/43224031993), commit `38ca730`),
+the same two scores as at the baseline:
+
+| Package | Baseline, with a test | 12 November, with a test | Baseline, of all | 12 November, of all |
+|---|---:|---:|---:|---:|
+| `field` | 97.7 % | 472 / 483 = 97.7 % | 88.4 % | 472 / 534 = 88.4 % |
+| `audit` | 91.2 % | 276 / 300 = 92.0 % | 85.1 % | 276 / 321 = 86.0 % |
+| `crypto` | 92.9 % | 2424 / 2596 = 93.4 % | 75.2 % | 2424 / 3198 = 75.8 % |
+| `secret` | 87.2 % | 1451 / 1648 = 88.0 % | 57.6 % | 1451 / 2490 = 58.3 % |
+| `tls` | not measured | 1779 / 2000 = 89.0 % | not measured | 1779 / 2362 = 75.3 % |
+| `internal` | not measured | 2431 / 3016 = 80.6 % | not measured | 2431 / 4818 = 50.5 % |
+| `pool` | not measured | 544 / 784 = 69.4 % | not measured | 544 / 1305 = 41.7 % |
+
+`tls`, `internal` and `pool` are measured here for the first time, so they have no earlier
+value to compare with. `pool` is the weakest: 240 mutants on lines a test runs survived, and
+521 are on lines no test under PIT runs. From this run on the three have a floor in
+`mutation.yml`, like the other four: the whole percent below the measured score, less one.
 
 ### Fuzzing
 
@@ -271,8 +285,8 @@ Other JDKs and other platforms are not tested.
 - **Native code** is OpenSSL's and CNG's. Their own testing covers it. seclume tests the
   boundary - what it passes in, what it frees, and that nothing it gave them is left behind -
   but not their memory safety. No sanitizer build is run yet.
-- **Mutation testing** covers four packages. `tls`, `internal`, `pool` and the drivers are not
-  under it yet.
+- **Mutation testing** covers seven packages. The drivers are not under it yet, and `pool`
+  kills 69.4 % of the mutants its tests reach.
 - **The constant-time measurement** found `ConstantTime.equals` leaking on two of five nights
   and not on the others or locally. The failure now names the processor, so that the red nights
   can be attributed to the code, a processor model or noise. Open until then.
