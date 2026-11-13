@@ -2,6 +2,7 @@ package space.seclume.internal.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -165,6 +166,78 @@ class TextNumberTest {
             assertEquals(new java.math.BigDecimal(text.trim()),
                     TextNumber.bigDecimal(buffer, 0, text.length(), scratch),
                     "different from new BigDecimal for \"" + text + "\"");
+        }
+    }
+
+    /**
+     * The short way for a plain decimal of up to eighteen digits, against
+     * {@code new BigDecimal}: the same value and the same scale - equals, not
+     * compareTo - over generated values, and the parser's answer, or its
+     * refusal, wherever the short way declines.
+     */
+    @Test
+    void aShortDecimalIsTheParsersValueAndScale() {
+        java.util.SplittableRandom random = new java.util.SplittableRandom(20261113);
+        String alphabet = "0123456789.-+eE ";
+        int short_ = 0;
+        try (WireBuffer buffer = new WireBuffer(64)) {
+            for (int i = 0; i < 200_000; i++) {
+                String text;
+                if (random.nextInt(3) == 0) {
+                    StringBuilder any = new StringBuilder();
+                    for (int n = random.nextInt(1, 8); n > 0; n--) {
+                        any.append(alphabet.charAt(random.nextInt(alphabet.length())));
+                    }
+                    text = any.toString();
+                } else {
+                    long unscaled = random.nextLong() / (long) Math.pow(10, random.nextInt(19));
+                    int scale = random.nextInt(0, 12);
+                    text = java.math.BigDecimal.valueOf(unscaled, scale).toPlainString();
+                    if (random.nextInt(8) == 0) {
+                        text = "00" + text.replace("-", "");
+                    }
+                }
+                buffer.clear();
+                buffer.putText(text);
+                java.math.BigDecimal quick = TextNumber.smallDecimal(buffer, 0, text.length());
+                java.math.BigDecimal parsed;
+                try {
+                    parsed = new java.math.BigDecimal(text);
+                } catch (NumberFormatException refused) {
+                    assertEquals(null, quick, "the parser refuses \"" + text + "\"");
+                    continue;
+                }
+                if (quick != null) {
+                    short_++;
+                    assertEquals(parsed, quick, text);
+                    assertEquals(parsed.scale(), quick.scale(), text);
+                    assertEquals(parsed.toString(), quick.toString(), text);
+                }
+                assertEquals(parsed, TextNumber.bigDecimal(buffer, 0, text.length(), new char[text.length()]), text);
+            }
+        }
+        assertTrue(short_ > 100_000, short_ + " values took the short way");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {".5", "5.", "-.5", "+5", "-0.00", "007.50", "999999999999999999",
+        "-999999999999999999", "0.00000000000000001"})
+    void theParsersCornersAreItsAnswersOnTheShortWay(String text) {
+        try (WireBuffer buffer = new WireBuffer(64)) {
+            buffer.putText(text);
+            java.math.BigDecimal quick = TextNumber.smallDecimal(buffer, 0, text.length());
+            assertEquals(new java.math.BigDecimal(text), quick, text);
+            assertEquals(new java.math.BigDecimal(text).scale(), quick.scale(), text);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "-", "+", ".", "-.", "1.2.3", "1e5", "1E-5", "12 3", "1234567890123456789",
+        "0.0000000000000000001", "--1", "1-"})
+    void whatTheShortWayDeclinesGoesToTheParser(String text) {
+        try (WireBuffer buffer = new WireBuffer(64)) {
+            buffer.putText(text);
+            assertEquals(null, TextNumber.smallDecimal(buffer, 0, text.length()), text);
         }
     }
 }
