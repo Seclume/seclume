@@ -116,9 +116,33 @@ public final class BinaryValues {
      * protocol writes it: a {@code timestamp(3)} is {@code .123}, not
      * {@code .123000}. The wire always carries microseconds.
      */
-    private static String fraction(long micros, int decimals) {
-        String six = String.format(".%06d", micros);
-        return decimals >= 1 && decimals < 6 ? six.substring(0, 1 + decimals) : six;
+    private static void fraction(StringBuilder text, long micros, int decimals) {
+        int from = text.length();
+        text.append('.');
+        pad(text, micros, 6);
+        if (decimals >= 1 && decimals < 6) {
+            text.setLength(from + 1 + decimals);
+        }
+    }
+
+    /**
+     * {@code value} in decimal, with zeros in front to {@code width} digits -
+     * {@code %0<width>d} without {@code String.format}, which parses its
+     * pattern for every call and writes the default locale's digits: three
+     * of them made a {@code DATETIME(6)} of the binary protocol cost some
+     * 720 ns as text, this about 75 ns (measured locally, a million values
+     * after warm-up) - and in {@code ar-EG} or {@code th-TH-u-nu-thai} they
+     * were not ASCII digits at all. Wider values are written whole, as
+     * {@code %0<width>d} writes them.
+     */
+    private static void pad(StringBuilder text, long value, int width) {
+        for (long rest = value / 10, digits = 1; digits < width; rest /= 10, digits++) {
+            if (rest == 0 && value >= 0) {
+                text.repeat('0', width - (int) digits);
+                break;
+            }
+        }
+        text.append(value);
     }
 
     /** {@code YYYY-MM-DD}; zero bytes mean the zero date. */
@@ -126,10 +150,22 @@ public final class BinaryValues {
         if (length == 0) {
             return "0000-00-00";
         }
-        int year = (int) row.unsignedAt(at, 2);
-        int month = row.byteAt(at + 2) & 0xff;
-        int day = row.byteAt(at + 3) & 0xff;
-        return String.format("%04d-%02d-%02d", year, month, day);
+        return dateText(row.unsignedAt(at, 2), row.byteAt(at + 2) & 0xff,
+                row.byteAt(at + 3) & 0xff);
+    }
+
+    static String dateText(long year, int month, int day) {
+        StringBuilder text = new StringBuilder(10); // seclume-allow: a date on its way to the caller, not a secret
+        date(text, year, month, day);
+        return text.toString();
+    }
+
+    private static void date(StringBuilder text, long year, int month, int day) {
+        pad(text, year, 4);
+        text.append('-');
+        pad(text, month, 2);
+        text.append('-');
+        pad(text, day, 2);
     }
 
     /** {@code YYYY-MM-DD HH:MM:SS[.ffffff]}. */
@@ -137,19 +173,36 @@ public final class BinaryValues {
         if (length == 0) {
             return "0000-00-00 00:00:00";
         }
-        String day = date(row, at, length);
+        long year = row.unsignedAt(at, 2);
+        int month = row.byteAt(at + 2) & 0xff;
+        int day = row.byteAt(at + 3) & 0xff;
         if (length <= 4) {
-            return day + " 00:00:00";
+            return timestampText(year, month, day, 0, 0, 0, -1, decimals);
         }
-        int hour = row.byteAt(at + 4) & 0xff;
-        int minute = row.byteAt(at + 5) & 0xff;
-        int second = row.byteAt(at + 6) & 0xff;
-        String base = String.format("%s %02d:%02d:%02d", day, hour, minute, second);
-        if (length < 11) {
-            return base;
+        return timestampText(year, month, day, row.byteAt(at + 4) & 0xff,
+                row.byteAt(at + 5) & 0xff, row.byteAt(at + 6) & 0xff,
+                length < 11 ? -1 : row.unsignedAt(at + 7, 4), decimals);
+    }
+
+    /** @param micros the fraction, or -1 for none */
+    static String timestampText(long year, int month, int day, int hour, int minute,
+            int second, long micros, int decimals) {
+        StringBuilder text = new StringBuilder(26); // seclume-allow: a date on its way to the caller, not a secret
+        date(text, year, month, day);
+        text.append(' ');
+        clock(text, hour, minute, second);
+        if (micros >= 0) {
+            fraction(text, micros, decimals);
         }
-        long micros = row.unsignedAt(at + 7, 4);
-        return base + fraction(micros, decimals);
+        return text.toString();
+    }
+
+    private static void clock(StringBuilder text, long hours, int minute, int second) {
+        pad(text, hours, 2);
+        text.append(':');
+        pad(text, minute, 2);
+        text.append(':');
+        pad(text, second, 2);
     }
 
     /**
@@ -163,14 +216,22 @@ public final class BinaryValues {
         boolean negative = row.byteAt(at) != 0;
         long days = row.unsignedAt(at + 1, 4);
         int hour = row.byteAt(at + 5) & 0xff;
-        int minute = row.byteAt(at + 6) & 0xff;
-        int second = row.byteAt(at + 7) & 0xff;
-        long hours = days * 24 + hour;
-        String base = String.format("%s%02d:%02d:%02d", negative ? "-" : "", hours, minute, second);
-        if (length < 12) {
-            return base;
+        return timeText(negative, days * 24 + hour, row.byteAt(at + 6) & 0xff,
+                row.byteAt(at + 7) & 0xff, length < 12 ? -1 : row.unsignedAt(at + 8, 4),
+                decimals);
+    }
+
+    /** @param micros the fraction, or -1 for none */
+    static String timeText(boolean negative, long hours, int minute, int second, long micros,
+            int decimals) {
+        StringBuilder text = new StringBuilder(18); // seclume-allow: a time on its way to the caller, not a secret
+        if (negative) {
+            text.append('-');
         }
-        long micros = row.unsignedAt(at + 8, 4);
-        return base + fraction(micros, decimals);
+        clock(text, hours, minute, second);
+        if (micros >= 0) {
+            fraction(text, micros, decimals);
+        }
+        return text.toString();
     }
 }

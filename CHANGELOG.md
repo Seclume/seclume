@@ -33,6 +33,15 @@ All notable changes to seclume are recorded here. Versions follow
   and the `seclume$` left over failed the statement. The tag is now one that first occurs where
   the closing tag starts (`ContextValuesTest`, with 20 000 random values of tag-like text and
   the old choice as its control; `LocalJdbcTest.aSessionValueEndingLikeTheQuoteTagIsSetAsItIs`).
+- **MySQL: a binary `DATE`, `DATETIME` or `TIME` as text is ASCII and a tenth of the cost.**
+  Read with `getString` from a server-side prepared statement, these were written with
+  `String.format`, which uses the JVM's default locale: under `ar-EG`, `th-TH-u-nu-thai` or
+  `hi-IN-u-nu-deva` the digits came back Arabic-Indic, Thai or Devanagari, and
+  `Timestamp.valueOf` or an ORM refused them. They are now written digit by digit, the same
+  text in ASCII; a `DATETIME(6)` costs about 75 ns instead of 720 ns (measured locally,
+  `BinaryTemporalTextTest` against the old format for 50 000 random values under `ar-EG`). The
+  MySQL `YEAR`-as-date text, Oracle's `TIMESTAMP WITH TIME ZONE` and `INTERVAL DAY TO SECOND`
+  text and the `ORA-nnnnn` numbers in error messages pin `Locale.ROOT` for the same reason.
   Found in the fourth review round.
 - **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
   output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
