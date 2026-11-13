@@ -273,6 +273,17 @@ class LocalMySqlTest {
                 }
                 assertEquals(1000, seen, "rows lost");
                 assertEquals(500500L, sum, "the values changed");
+                // One result across its blocks: the row number goes on, and
+                // the first row of a later block is not the first row.
+                try (ResultSet rows = query.executeQuery()) {
+                    int at = 0;
+                    while (rows.next()) {
+                        at++;
+                        assertEquals(at, rows.getRow(), "the row number of value " + rows.getInt(1));
+                        assertEquals(at == 1, rows.isFirst(), "isFirst() on row " + at);
+                    }
+                    assertTrue(rows.isAfterLast());
+                }
             } finally {
                 try (Statement statement = connection.createStatement()) {
                     statement.execute("drop table if exists zl_blocks");

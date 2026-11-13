@@ -37,6 +37,11 @@ public final class MyResultSet extends ReadOnlyResultSet implements space.seclum
         return owner != null && owner.fetchNextBlock();
     }
 
+    @Override
+    protected boolean mayFetchMore() throws SQLException {
+        return owner != null && owner.mayFetchNextBlock();
+    }
+
     MyResultSet(MyResultBlock block, Statement statement) {
         super(statement);
         this.block = block;

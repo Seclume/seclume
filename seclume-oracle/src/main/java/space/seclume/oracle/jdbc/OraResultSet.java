@@ -155,6 +155,11 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
         return owner != null && owner.fetchNextBlock();
     }
 
+    @Override
+    protected boolean mayFetchMore() throws SQLException {
+        return owner != null && owner.mayFetchNextBlock();
+    }
+
     OraResultSet(OraResultBlock block, Statement statement) {
         super(statement);
         this.block = block;

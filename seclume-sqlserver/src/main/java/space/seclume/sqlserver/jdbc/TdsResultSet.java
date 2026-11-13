@@ -43,6 +43,11 @@ public final class TdsResultSet extends ReadOnlyResultSet implements space.seclu
         return owner != null && owner.fetchNextBlock();
     }
 
+    @Override
+    protected boolean mayFetchMore() throws SQLException {
+        return owner != null && owner.mayFetchNextBlock();
+    }
+
     TdsResultSet(TdsResultBlock block, Statement statement) {
         super(statement);
         this.block = block;

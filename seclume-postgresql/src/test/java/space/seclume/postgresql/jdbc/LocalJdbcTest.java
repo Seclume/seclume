@@ -1550,4 +1550,44 @@ class LocalJdbcTest {
             assertTrue(refused.getMessage().contains("no OUT parameters"), refused.getMessage());
         }
     }
+
+    /**
+     * A result read in blocks is one result: its row numbers go on across the
+     * blocks, and the last row of a block is not called the last row of the
+     * result - which ended a loop a block early.
+     */
+    @Test
+    void aResultReadInBlocksCountsItsRowsAcrossThem() throws Exception {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement query = connection.prepareStatement(
+                    "select n from generate_series(1, 7) as n")) {
+                query.setFetchSize(3);
+                try (ResultSet rows = query.executeQuery()) {
+                    assertTrue(rows.isBeforeFirst());
+                    assertEquals(0, rows.getRow());
+                    List<String> seen = new ArrayList<>();
+                    while (rows.next()) {
+                        String last;
+                        try {
+                            last = rows.isLast() ? " last" : "";
+                        } catch (java.sql.SQLFeatureNotSupportedException unknown) {
+                            last = " last?";          // a full block: the portal may go on
+                        }
+                        seen.add(rows.getInt(1) + ":" + rows.getRow() + (rows.isFirst() ? " first" : "")
+                                + last);
+                    }
+                    assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?",
+                            "7:7 last"), seen);
+                    assertTrue(rows.isAfterLast(), "after the last row");
+                    assertFalse(rows.isBeforeFirst());
+                    assertEquals(0, rows.getRow());
+                    assertFalse(rows.next());
+                    assertTrue(rows.isAfterLast());
+                }
+            } finally {
+                connection.rollback();
+            }
+        }
+    }
 }

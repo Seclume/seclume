@@ -639,6 +639,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         updateCount = -1;
     }
 
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (lazy) {
+            return connection.session().isPaused();
+        }
+        return streaming && block != null && cursor != 0 && lastBlock >= fetchSize;
+    }
+
     /**
      * Brings the next block into the block the result set reads from.
      *

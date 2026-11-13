@@ -290,6 +290,14 @@ class MyStatement implements Statement, MySession.RowHandler {
     /** The statement whose cursor is open, or {@code null}. */
     private MySession.Prepared cursor;
 
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (!streaming || block == null || cursor == null) {
+            return false;
+        }
+        return connection.session().isCursorOpen();
+    }
+
     /**
      * Brings the next block of rows into the block the result set reads from.
      *

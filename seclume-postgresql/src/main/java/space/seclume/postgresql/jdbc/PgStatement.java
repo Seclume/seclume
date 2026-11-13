@@ -260,6 +260,16 @@ class PgStatement implements Statement, PgSession.RowHandler {
         streaming = prepared && blockSize() > 0 && !connection.getAutoCommit();
     }
 
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (!streaming || block == null) {
+            return false;
+        }
+        // A portal is suspended when the row limit was reached - also when no
+        // row is left: PostgreSQL does not look ahead.
+        return connection.session().isPortalSuspended();
+    }
+
     /**
      * Brings the next block of rows into the block the result set reads from.
      *
