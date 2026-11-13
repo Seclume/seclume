@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **JDBC URL redaction: a password after Oracle's `@//` is hidden.** `JdbcUrl.redact` - what
+  every message naming a wrong URL prints - took the `@` of `jdbc:oracle:thin:@//...` for
+  Oracle's `user/password@` and, finding no `/` before it, hid nothing:
+  `jdbc:oracle:thin:@//app:secret@db:1521/svc` was printed with its password. The authority's
+  `user:password@` rule now applies there as for any URL (`JdbcUrlRedactEdgeTest`, and an
+  EZConnect family in `JdbcUrlPropertyTest`; both fail on the code before).
+- **SCRAM: the `c=` buffer is wiped.** The copy of the GS2 header and the channel binding data
+  the client's final message is encoded from was left in the arena when it was freed
+  (`ScramWipeTest`, which reads every segment of an exchange at `close()`).
+- **Tests and CI: tests for what mutation testing found unchecked, and coverage floors.** New
+  tests for the pool's return path, statement cache, entry state and URL checks, the wire
+  buffer's wiping, SCRAM's wiping, the hostname check's edges and URL redaction; the
+  `coverage` job now fails below `.github/coverage-floors.json` - per module and per
+  security-critical package, the failure annotated with the module.
 - **CI: a job runs the tests of its own modules, not those of every module it builds.**
   `mvn -pl MODULES -am test` runs the tests of every module Maven builds on the way: each of
   the eighteen database jobs ran the core's 4,138 tests again - the same tests with the same
