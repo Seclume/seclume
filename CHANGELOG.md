@@ -5,6 +5,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **AWS: the session token is not written into a chunked body however its coding is spelled.**
+  `SessionTokenSocket` recognised a chunked body only by `transfer-encoding: chunked` with
+  exactly one space - the gap `seclume-http`'s framing closed in the third review round (#273).
+  Written `Transfer-Encoding:chunked`, with a tab, as `gzip, chunked`, over two header lines or
+  next to a `Content-Length`, the body was taken for none or for that many bytes, its chunks for
+  the next head, and the session token written into an `X-Amz-Security-Token` line inside it
+  (and into the trailer): into the object S3 stores. The socket now frames a request as RFC 9112
+  does and refuses what a server could read another way - a coding after `chunked`, two lengths
+  that differ, a length that is not digits, a folded line, a space before a colon - before a
+  byte of it is sent; a head is at most 64 KiB (`SessionTokenFramingTest`). Found in the fourth
+  review round.
 - **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
   output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
   bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
