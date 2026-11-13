@@ -2560,6 +2560,15 @@ public final class MySession implements AutoCloseable {
         return (statusFlags & 0x0001) != 0;
     }
 
+    /**
+     * Whether the session's {@code sql_mode} has {@code NO_BACKSLASH_ESCAPES} -
+     * bit 0x0200 of the status bits, which the server sends with every answer,
+     * so a {@code SET sql_mode} is known here as soon as it is answered.
+     */
+    public boolean noBackslashEscapes() {
+        return (statusFlags & 0x0200) != 0;
+    }
+
     public boolean isMariaDb() {
         return serverVersion.contains("MariaDB");
     }

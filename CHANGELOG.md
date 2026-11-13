@@ -49,6 +49,16 @@ All notable changes to seclume are recorded here. Versions follow
   build, because no job had either. The new `replication` job starts a PostgreSQL primary with
   a streaming standby and a MySQL primary with a GTID replica, runs both, and fails if a test
   was skipped (`.github/scripts/require_replication_tests.py`).
+- **MySQL: `enquoteLiteral` escapes a backslash.** The driver left `Statement.enquoteLiteral`
+  to JDBC's default, which doubles single quotes and nothing else. MySQL reads a backslash as
+  an escape, so a value of `\' or 1=1 -- ` became `'\'' or 1=1 -- '` - a string of one quote,
+  and the rest SQL: an injection through the method an application calls to prevent one. The
+  driver's own doubles the backslash too, unless the session has `NO_BACKSLASH_ESCAPES`, which
+  the server reports with every answer. `enquoteIdentifier` uses backticks - in double quotes
+  MySQL reads a string, not a name (`MyQuotingTest`,
+  `LocalMySqlTest.anEnquotedLiteralIsOneValueToTheServerInBothModes`).
+- **MySQL, Oracle, SQL Server: `executeLargeUpdate()` of a callable statement.** Left to
+  JDBC's default, which throws "not implemented"; it answers as `executeUpdate()` does.
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a
