@@ -171,6 +171,9 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 | 26 | `seclume-mongodb-driver` | A batch too large for one message was encoded whole to find that out, halved, and encoded again - from the limit for every part. | low | #304 |
 | 27 | `seclume-mongodb-driver` | `hasNext()` of a change stream looped on a cursor the server had closed - after the `invalidate` that follows a dropped collection - and never returned: a thread spinning on a CPU (the CI jobs with the test alone did not end). | medium | #305 |
 | 28 | `seclume-diff`, `seclume-oracle` | The differential run's comparison of the catalogue looked columns up in lower case; Oracle has them in upper case, neither driver had a row, and that counted as agreement. Compared at last, `getColumns` said `VARCHAR` for an `NVARCHAR2` column where the result set's metadata and ojdbc say `NVARCHAR`. | low | #309 |
+| 29 | `seclume-mongodb-driver` | Every failed `getMore` was taken as the server's refusal and the cursor's id forgotten. After a lost connection or a timeout on this side the server still held the cursor, and `close()` did nothing: it stayed open there until the idle timeout. | low | #311 |
+| 30 | `seclume-mongodb-driver` | An aggregation ending in `{ $merge: "name" }` - the short form - wrote, and then failed reading its results back: only the document form was expected. | low | #311 |
+| 31 | `seclume-mongodb-driver` | `dropIndex` and `dropIndexes` passed on the server's NamespaceNotFound for a collection that is not there, where `drop()` does not. | low | #311 |
 
 ### Open
 
@@ -256,7 +259,9 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 
 ## The next review
 
-Not yet read line by line: `SeclumeCollection` and `Iterables` of `seclume-mongodb-driver`,
-the options of each command (some 2800 lines) - read so far for how they take sessions and
-cursors and for the checks of update and replacement documents, without a finding. A
+`SeclumeCollection`, `Iterables` and `BatchCursor` of `seclume-mongodb-driver` have been
+read line by line since (findings 29 to 31, each shown failing in the build by its test
+before the fix), except the overloads of `find`, `aggregate`, `distinct` and `watch` that
+only pass their arguments on. Not read line by line in this round: `Indexes`, `Bsons`,
+`SeclumeDatabase` and `EncryptedFields` of that driver. A
 round adds a section here, findings and the sound alike.
