@@ -535,11 +535,36 @@ public abstract class ReadOnlyResultSet implements ResultSet {
             return objectAt(column);
         } catch (NumberFormatException notANumber) {
             throw notANumber(columnIndex, "its declared type", notANumber);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "its declared type", unreadable);
         }
+    }
+
+    /**
+     * A value the server sent that the conversion asked for cannot read - a
+     * MySQL zero date ({@code 0000-00-00}), PostgreSQL's {@code infinity},
+     * a year beyond 9999 - as JDBC says it must arrive: an
+     * {@code SQLException}, here SQLSTATE 22007 (invalid datetime format).
+     * {@code Timestamp.valueOf}, {@code Date.valueOf}, {@code java.time}'s
+     * parsers and {@code UUID.fromString} throw unchecked exceptions, and
+     * those went through every getter to an application that catches
+     * {@code SQLException} (found in the fourth review round).
+     */
+    private static SQLException unreadable(int columnIndex, String what, RuntimeException cause) {
+        return new java.sql.SQLDataException("column " + columnIndex + " cannot be read as "
+                + what, cause instanceof NumberFormatException ? "22018" : "22007", cause);
     }
 
     @Override
     public final Date getDate(int columnIndex) throws SQLException {
+        try {
+            return date(columnIndex);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "a date", unreadable);
+        }
+    }
+
+    private Date date(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -567,6 +592,14 @@ public abstract class ReadOnlyResultSet implements ResultSet {
      */
     @Override
     public final Time getTime(int columnIndex) throws SQLException {
+        try {
+            return time(columnIndex);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "a time", unreadable);
+        }
+    }
+
+    private Time time(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -614,6 +647,14 @@ public abstract class ReadOnlyResultSet implements ResultSet {
      */
     @Override
     public final Timestamp getTimestamp(int columnIndex) throws SQLException {
+        try {
+            return timestamp(columnIndex);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "a timestamp", unreadable);
+        }
+    }
+
+    private Timestamp timestamp(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -769,7 +810,18 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
-        Object value = switch (type.getName()) {
+        Object value;
+        try {
+            value = converted(columnIndex, type);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, type.getSimpleName(), unreadable);
+        }
+        return wasNull() ? null : type.cast(value);
+    }
+
+    /** {@link #getObject(int, Class)}'s value, before its null check and cast. */
+    private Object converted(int columnIndex, Class<?> type) throws SQLException {
+        return switch (type.getName()) {
             case "java.lang.String" -> getString(columnIndex);
             case "java.lang.Boolean", "boolean" -> getBoolean(columnIndex);
             case "java.lang.Byte", "byte" -> getByte(columnIndex);
@@ -855,7 +907,6 @@ public abstract class ReadOnlyResultSet implements ResultSet {
             default -> throw new SQLFeatureNotSupportedException(
                     "seclume does not convert column " + columnIndex + " to " + type.getName());
         };
-        return wasNull() ? null : type.cast(value);
     }
 
     /** Sixteen bytes, most significant first - the way all four store one. */
