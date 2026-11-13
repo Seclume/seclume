@@ -153,20 +153,21 @@ class LocalMySqlTest {
         String[] values = {"plain", "it's", "\\", "\\' or 1=1 -- ", "ends with \\", "a\\'b",
             "'; select 2; -- ", "ümlaut \\ and ' both"};
         try (Connection connection = connect(); Statement statement = connection.createStatement()) {
-            for (String mode : new String[] {"", "NO_BACKSLASH_ESCAPES"}) {
-                statement.execute("set session sql_mode = '" + mode + "'");
+            for (String mode : new String[] {
+                "set session sql_mode = ''", "set session sql_mode = 'NO_BACKSLASH_ESCAPES'"}) {
+                statement.execute(mode);
                 for (String value : values) {
                     try (ResultSet rows = statement.executeQuery(
                             "select " + statement.enquoteLiteral(value) + ", 'after'")) {
                         assertTrue(rows.next());
-                        assertEquals(value, rows.getString(1), "sql_mode '" + mode + "'");
+                        assertEquals(value, rows.getString(1), mode);
                         assertEquals("after", rows.getString(2));
                         assertFalse(rows.next());
                     }
                     try (ResultSet rows = statement.executeQuery(
                             "select " + statement.enquoteNCharLiteral(value))) {
                         assertTrue(rows.next());
-                        assertEquals(value, rows.getString(1), "N, sql_mode '" + mode + "'");
+                        assertEquals(value, rows.getString(1), "N, " + mode);
                     }
                 }
             }
