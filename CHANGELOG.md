@@ -78,6 +78,14 @@ All notable changes to seclume are recorded here. Versions follow
   for the words the forms contain, and a text seen for the first time takes 137 and 513 ns.
   A one-row lookup through the PostgreSQL driver against a local server, five runs each:
   client CPU time 13.0-15.3 µs before, 9.1-10.8 µs after (`SessionStateTest`).
+- **Session state: what a prepared, batched or pipelined statement sets is noted.** Each
+  driver notes the text of what it runs, so that a pool does not silently renew a broken
+  connection whose session had a `SET` - the new one would run without it, for another
+  tenant. MySQL and SQL Server noted only statements sent as text: a prepared
+  `SET @tenant = ?` or `exec sp_set_session_context ...` left no trace, and the recording
+  named the wrong statement. No driver noted a batch or a pipelined execution
+  (`sessionStateSetByAPreparedStatementIsNoted` in `LocalMySqlTest`, `LocalJdbcTest`,
+  `LocalSqlServerTest`).
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a

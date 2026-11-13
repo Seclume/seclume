@@ -165,6 +165,7 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
                         + " parameters but only " + parameters.count() + " were set");
             }
             String text = currentSql();
+            connection.sessionState().note(text);
             parameters.preferVarchar(VarcharParameters.of(connection, text, parameters));
             return session.pipelineExecute(text == sql ? prepared : listPrepared, text,
                     parameters);
@@ -198,6 +199,10 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
         }
         capturingGeneratedKeys = wantsGeneratedKeys;
         String statement = wantsGeneratedKeys ? keyCarryingSql(sql) : sql;
+        // The text goes to the session state and the recording like any
+        // other: without it a prepared sp_set_session_context left no trace,
+        // and a pool that renews a broken connection did so without it.
+        collectingSql(sql);
         collect(session, handler -> session.rpc(statement, declaration, parameters, handler));
     }
 
@@ -320,6 +325,8 @@ final class TdsPreparedStatement extends TdsStatement implements ParameterSetter
         List<Object[]> rows = batch;
         batch = null;
         TdsSession session = connection.session();
+        // Noted like every statement that runs - see collect.
+        connection.sessionState().note(sql);
         // The first row decides which parameters are compared with varchar
         // columns; the answer is about the statement, not the values.
         parameters.clear();
