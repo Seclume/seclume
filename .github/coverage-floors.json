@@ -1,0 +1,187 @@
+{
+  "_about": "Coverage floors: the measured percentage, rounded down, less one point - the margin for a test whose path depends on timing (SECURITY-QUALITY.md: seclume-ldap 84.9 % and 84.5 % on one commit). Checked by .github/scripts/coverage_gate.py in the coverage job of ci.yml. Raise a floor together with the run that measured more; never lower one without saying why in the pull request.",
+  "source": "https://github.com/Seclume/seclume/actions/runs/43419361435 (job coverage, main at 33f1799)",
+  "total": {
+    "line": 71,
+    "branch": 65
+  },
+  "modules": {
+    "seclume-admission": {
+      "line": 81,
+      "branch": 74
+    },
+    "seclume-aws": {
+      "line": 78,
+      "branch": 76
+    },
+    "seclume-azure": {
+      "line": 93,
+      "branch": 65
+    },
+    "seclume-core": {
+      "line": 78,
+      "branch": 72
+    },
+    "seclume-crac": {
+      "line": 69,
+      "branch": 74
+    },
+    "seclume-elasticsearch": {
+      "line": 95,
+      "branch": 75
+    },
+    "seclume-gcp": {
+      "line": 90,
+      "branch": 58
+    },
+    "seclume-grpc": {
+      "line": 99
+    },
+    "seclume-heapcheck": {
+      "line": 67,
+      "branch": 57
+    },
+    "seclume-heapdump": {
+      "line": 92,
+      "branch": 87
+    },
+    "seclume-http": {
+      "line": 86,
+      "branch": 76
+    },
+    "seclume-jgit": {
+      "line": 59,
+      "branch": 13
+    },
+    "seclume-jpa": {
+      "line": 97,
+      "branch": 90
+    },
+    "seclume-jwt": {
+      "line": 88,
+      "branch": 80
+    },
+    "seclume-keys": {
+      "line": 80,
+      "branch": 64
+    },
+    "seclume-kubernetes": {
+      "line": 59,
+      "branch": 49
+    },
+    "seclume-ldap": {
+      "line": 83,
+      "branch": 64
+    },
+    "seclume-logging": {
+      "line": 93,
+      "branch": 83
+    },
+    "seclume-mail": {
+      "line": 85,
+      "branch": 73
+    },
+    "seclume-mongodb": {
+      "line": 74,
+      "branch": 62
+    },
+    "seclume-mongodb-driver": {
+      "line": 20,
+      "branch": 19
+    },
+    "seclume-mongodb-reactive": {
+      "line": 11,
+      "branch": 60
+    },
+    "seclume-mysql": {
+      "line": 67,
+      "branch": 56
+    },
+    "seclume-nats": {
+      "line": 90,
+      "branch": 76
+    },
+    "seclume-opentelemetry": {
+      "line": 89,
+      "branch": 76
+    },
+    "seclume-oracle": {
+      "line": 68,
+      "branch": 61
+    },
+    "seclume-pool": {
+      "line": 87,
+      "branch": 82
+    },
+    "seclume-postgresql": {
+      "line": 69,
+      "branch": 63
+    },
+    "seclume-r2dbc": {
+      "line": 48,
+      "branch": 42
+    },
+    "seclume-rabbitmq": {
+      "line": 69,
+      "branch": 63
+    },
+    "seclume-redis": {
+      "line": 82,
+      "branch": 71
+    },
+    "seclume-spring-boot-starter": {
+      "line": 84,
+      "branch": 73
+    },
+    "seclume-sqlserver": {
+      "line": 68,
+      "branch": 57
+    },
+    "seclume-ssh": {
+      "line": 87,
+      "branch": 83
+    },
+    "seclume-tck": {
+      "line": 79,
+      "branch": 65
+    },
+    "seclume-verify": {
+      "line": 65,
+      "branch": 63
+    }
+  },
+  "packages": {
+    "space.seclume.secret": {
+      "line": 80,
+      "branch": 72
+    },
+    "space.seclume.internal": {
+      "line": 74,
+      "branch": 71
+    },
+    "space.seclume.crypto": {
+      "line": 72,
+      "branch": 64
+    },
+    "space.seclume.tls": {
+      "line": 78,
+      "branch": 68
+    },
+    "space.seclume.field": {
+      "line": 93,
+      "branch": 90
+    },
+    "space.seclume.audit": {
+      "line": 91,
+      "branch": 85
+    },
+    "space.seclume.pool": {
+      "line": 87,
+      "branch": 82
+    },
+    "space.seclume.heapdump": {
+      "line": 92,
+      "branch": 87
+    }
+  }
+}
