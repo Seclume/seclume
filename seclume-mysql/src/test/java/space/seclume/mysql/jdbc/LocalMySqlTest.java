@@ -144,6 +144,54 @@ class LocalMySqlTest {
     }
 
     /**
+     * The server itself reads the literal: whatever the value, it comes back
+     * as it went in, in both modes - and a value written to break out of JDBC's
+     * standard quoting does not.
+     */
+    @Test
+    void anEnquotedLiteralIsOneValueToTheServerInBothModes() throws Exception {
+        String[] values = {"plain", "it's", "\\", "\\' or 1=1 -- ", "ends with \\", "a\\'b",
+            "'; select 2; -- ", "ümlaut \\ and ' both"};
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            for (String mode : new String[] {
+                "set session sql_mode = ''", "set session sql_mode = 'NO_BACKSLASH_ESCAPES'"}) {
+                statement.execute(mode);
+                for (String value : values) {
+                    try (ResultSet rows = statement.executeQuery(
+                            "select " + statement.enquoteLiteral(value) + ", 'after'")) {
+                        assertTrue(rows.next());
+                        assertEquals(value, rows.getString(1), mode);
+                        assertEquals("after", rows.getString(2));
+                        assertFalse(rows.next());
+                    }
+                    try (ResultSet rows = statement.executeQuery(
+                            "select " + statement.enquoteNCharLiteral(value))) {
+                        assertTrue(rows.next());
+                        assertEquals(value, rows.getString(1), "N, " + mode);
+                    }
+                }
+            }
+        }
+    }
+
+    /** An enquoted identifier names the column; in double quotes it would be a string. */
+    @Test
+    void anEnquotedIdentifierNamesAColumn() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            String column = statement.enquoteIdentifier("my col`umn", false);
+            try (ResultSet rows = statement.executeQuery("select t." + column
+                    + " from (select 7 as " + column + ") t")) {
+                assertTrue(rows.next());
+                assertEquals(7, rows.getInt(1));
+                assertEquals("my col`umn", rows.getMetaData().getColumnLabel(1));
+            }
+            assertEquals("plain", statement.enquoteIdentifier("plain", false));
+            assertTrue(statement.isSimpleIdentifier("plain"));
+            assertFalse(statement.isSimpleIdentifier("my col"));
+        }
+    }
+
+    /**
      * {@code getTables} with a type filter - the call Hibernate makes.
      *
      * <p>It found nothing for a while, and the reason is a vocabulary: JDBC
@@ -225,6 +273,17 @@ class LocalMySqlTest {
                 }
                 assertEquals(1000, seen, "rows lost");
                 assertEquals(500500L, sum, "the values changed");
+                // One result across its blocks: the row number goes on, and
+                // the first row of a later block is not the first row.
+                try (ResultSet rows = query.executeQuery()) {
+                    int at = 0;
+                    while (rows.next()) {
+                        at++;
+                        assertEquals(at, rows.getRow(), "the row number of value " + rows.getInt(1));
+                        assertEquals(at == 1, rows.isFirst(), "isFirst() on row " + at);
+                    }
+                    assertTrue(rows.isAfterLast());
+                }
             } finally {
                 try (Statement statement = connection.createStatement()) {
                     statement.execute("drop table if exists zl_blocks");
@@ -891,6 +950,39 @@ class LocalMySqlTest {
                 assertTrue(rows.next(), "the statement still works after its plan was dropped");
                 assertEquals(41, rows.getInt(1));
             }
+        }
+    }
+
+    /**
+     * A statement that sets session state is noted whether it is sent as text,
+     * prepared, batched or pipelined - a pool that renews a broken connection
+     * asks for it, and without it renewed one that had lost this state.
+     */
+    @Test
+    void sessionStateSetByAPreparedStatementIsNoted() throws Exception {
+        try (Connection connection = connect()) {
+            space.seclume.SessionReset session = connection.unwrap(space.seclume.SessionReset.class);
+            try (PreparedStatement select = connection.prepareStatement("select ?")) {
+                select.setString(1, "x");
+                select.executeQuery().close();
+            }
+            assertFalse(session.sessionStateChanged(), "a prepared select set nothing");
+            try (PreparedStatement set = connection.prepareStatement("set @seclume_tenant = ?")) {
+                set.setString(1, "7");
+                set.execute();
+            }
+            assertTrue(session.sessionStateChanged(), "a prepared SET left no trace");
+        }
+        try (Connection connection = connect()) {
+            space.seclume.SessionReset session = connection.unwrap(space.seclume.SessionReset.class);
+            try (PreparedStatement set = connection.prepareStatement("set @seclume_tenant = ?")) {
+                set.setString(1, "7");
+                set.addBatch();
+                set.setString(1, "8");
+                set.addBatch();
+                set.executeBatch();
+            }
+            assertTrue(session.sessionStateChanged(), "a prepared SET in a batch left no trace");
         }
     }
 }

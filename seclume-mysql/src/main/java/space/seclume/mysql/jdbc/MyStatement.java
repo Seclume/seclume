@@ -262,8 +262,12 @@ class MyStatement implements Statement, MySession.RowHandler {
     }
 
     /** Runs a prepared plan; the rows arrive in binary. */
-    void executePrepared(MySession session, MySession.Prepared statement, MyParameters parameters)
-            throws SQLException {
+    void executePrepared(MySession session, MySession.Prepared statement, MyParameters parameters,
+            String sql) throws SQLException {
+        // The text goes to the session state and the recording like any
+        // other: without it a prepared "SET @tenant = ?" left no trace, and a
+        // pool that renews a broken connection did so without it.
+        collectingSql = sql;
         // A fetch size means: the server keeps the rows and hands them out in
         // blocks. The execute then brings the descriptions and nothing else,
         // so the first block is fetched right here.
@@ -289,6 +293,14 @@ class MyStatement implements Statement, MySession.RowHandler {
     private boolean streaming;
     /** The statement whose cursor is open, or {@code null}. */
     private MySession.Prepared cursor;
+
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (!streaming || block == null || cursor == null) {
+            return false;
+        }
+        return connection.session().isCursorOpen();
+    }
 
     /**
      * Brings the next block of rows into the block the result set reads from.
@@ -764,4 +776,25 @@ class MyStatement implements Statement, MySession.RowHandler {
                 space.seclume.QueryFingerprint.Dialect.MYSQL);
     }
 
+    // ---- quoting: JDBC's defaults are standard SQL's, see MyQuoting --------
+
+    @Override
+    public String enquoteLiteral(String value) throws SQLException {
+        return MyQuoting.literal(value, connection.session().noBackslashEscapes());
+    }
+
+    @Override
+    public String enquoteNCharLiteral(String value) throws SQLException {
+        return "N" + enquoteLiteral(value);
+    }
+
+    @Override
+    public String enquoteIdentifier(String identifier, boolean alwaysQuote) throws SQLException {
+        return MyQuoting.identifier(identifier, alwaysQuote);
+    }
+
+    @Override
+    public boolean isSimpleIdentifier(String identifier) throws SQLException {
+        return MyQuoting.simple(identifier);
+    }
 }

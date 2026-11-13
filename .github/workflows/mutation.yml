@@ -55,7 +55,11 @@ jobs:
           - {package: secret, module: seclume-core, floor: '86'}
           - {package: field, module: seclume-core, floor: '96'}
           - {package: audit, module: seclume-core, floor: '90'}
-          - {package: tls, module: seclume-core, floor: '88'}
+          # tls from the lowest of seven runs (87.3 % to 90.5 %), not from one:
+          # its socket tests time a mutant out on a slow runner and not on a
+          # fast one - 81 timeouts in one run, 116 in another - and a timeout
+          # counts as killed.
+          - {package: tls, module: seclume-core, floor: '86'}
           - {package: internal, module: seclume-core, floor: '79'}
           - {package: pool, module: seclume-pool, floor: '68'}
     steps:

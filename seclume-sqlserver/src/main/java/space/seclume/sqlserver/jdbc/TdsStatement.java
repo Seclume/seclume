@@ -37,6 +37,11 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
     /** The statement being read, for the message of a result-limit failure. */
     private String collectingSql;
 
+    /** The text of what runs next, for the session state, the recording and the limit's message. */
+    final void collectingSql(String sql) {
+        collectingSql = sql;
+    }
+
     /** Where this statement was made, when the connection traces that - see OpenStatements. */
     final StackTraceElement[] createdAt;
 
@@ -637,6 +642,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
         collected = null;
         resultSet = block == null ? null : new TdsResultSet(block, this);
         updateCount = -1;
+    }
+
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (lazy) {
+            return connection.session().isPaused();
+        }
+        return streaming && block != null && cursor != 0 && lastBlock >= fetchSize;
     }
 
     /**

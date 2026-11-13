@@ -257,6 +257,84 @@ between seclume and pgjdbc, mssql-jdbc or ojdbc; MySQL's two failures were a tes
 - `seclume-r2dbc`: the factory provider puts the host and database name into the JDBC URL
   unencoded; both come from the application's configuration.
 
+## Round 4 - 13 November 2026
+
+Scope: the TLS client's trust path again (`ClientHandshake`, `Tls12Handshake`,
+`CertificateTrust`, `HostnameMatch` with `PublicSuffixes`, `HandshakeSignature`, `Finished`,
+`RecordProtection`, `TrustChoice` and the pin), siblings of earlier fixes in other modules -
+the HTTP/1.1 framing of `seclume-http` (#273) against `seclume-aws`'s, the quoting of session
+values against that of the catalogue queries - the field encryption's decryption path, the
+JWT and webhook HMAC checks, the access log's verifier, the admission webhook's injection,
+the heap-dump endpoint and folder, `ProcessSecretProvider`, SCRAM in all its users, and the
+drivers' result paths for values that are hard to read. Done with an AI assistant (Claude).
+Maven Central could not be reached where it was done: each fix was compiled with `javac
+--release 25 -Xlint:all,-restricted -Werror`, and its new tests were run with a minimal
+JUnit-API shim, against the fix and - where the API allowed - against the code before it,
+where they failed. The database tests added are for CI.
+
+### Findings
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | `seclume-aws` | `SessionTokenSocket` recognised a chunked body only by `transfer-encoding: chunked` with one space - the gap round 3 closed in `seclume-http` (#273). Written `Transfer-Encoding:chunked`, with a tab, `gzip, chunked`, on two lines or next to a `Content-Length`, the chunks were taken for the next head, and the session token was written into an `X-Amz-Security-Token` line in the body and the trailer: into the object S3 stores. | medium | #322 |
+| 2 | PostgreSQL | `DatabaseMetaData` quoted names and patterns as `'...'` with the quotes doubled. With `standard_conforming_strings` off, `\'` is an escaped quote, and a pattern `\' or true --` ended its literal: SQL injection through `getTables`, `getColumns` and the rest. | medium | #323 |
+| 3 | PostgreSQL | A session value ending in `$seclume` made a dollar-quote tag with the closing tag's first `$`: the quote closed early, and `setSessionContext` failed with a syntax error. Not an injection - the leftover is fixed text. | low | #324 |
+| 4 | MySQL, Oracle | Temporal text of the binary protocol, MySQL's `YEAR` as a date, Oracle's zoned timestamp and interval text and the `ORA-nnnnn` numbers were written with `String.format`'s `%d` in the default locale: under `ar-EG` or `th-TH-u-nu-thai` the digits were not ASCII, and `Timestamp.valueOf` refused them. The MySQL text was also ten times slower than it needs to be. | low | #326 |
+| 5 | JDBC (all four) | The temporal getters and `getObject(i, Class)` let `IllegalArgumentException` and `DateTimeParseException` out for MySQL zero dates, PostgreSQL's `infinity` and years past 9999, and `UUID.fromString`'s for an unreadable UUID - past `catch (SQLException e)`. | low | #327 |
+
+### Open
+
+- **MD5 and `mysql_native_password` over an unauthenticated connection.** TLS.md says these
+  send "a proof, not the password, and are not affected". But under the default `tls=prefer`
+  (or `require`), a server in the middle can answer a SCRAM-configured login by asking for
+  `md5`. It then gets `md5(md5(password || user) || salt)` for a salt it chose: one fast hash
+  per guess, cheaper to brute-force offline than the SCRAM proof with one iteration that round
+  1 refused (#223). `mysql_native_password` is the same with SHA-1. `requireAuth=!md5`
+  closes it per URL. Whether `md5` and `mysql_native_password` should, like the cleartext
+  methods since #258, need `verify-full` or `tlsPin` unless opted out is a decision with
+  compatibility cost (YugabyteDB's default is md5), so it is left here and not changed.
+
+### Reviewed, nothing found
+
+- **TLS 1.3 and 1.2 client**: the flight order is enforced message by message, and
+  `requireAuthenticatedServer` holds on both paths. CertificateVerify is checked whether or
+  not a trust store is set, with `rsa_pss_rsae`/`rsa_pss_pss` kept to their key types and no
+  PKCS#1 in TLS 1.3. The Finished is compared in constant time over the right transcript. The
+  downgrade sentinel is checked whenever TLS 1.3 was offered. TLS 1.2 needs secure
+  renegotiation, verifies the ServerKeyExchange over both randoms, and refuses a
+  HelloRequest. A record's tag is checked before its type is read, and a sequence number
+  never wraps.
+- **Trust**: `CertificateTrust` uses the JDK's PKIX (EKU included) with the TLS 1.3 key-usage
+  type, then `HostnameMatch`. That match uses SAN only, one leftmost whole-label wildcard,
+  never over an ICANN public suffix, IP literals only against iPAddress, and nothing
+  resolved. A pin replaces chain and name for the connection that names it, on both stacks;
+  `--print-pin` stops after the handshake.
+- **Field encryption**: the commitment is checked before AES-GCM-SIV, mode and key are taken
+  from the header and checked, and a failed tag zeroes the output.
+- **JWT and webhook HMACs**: `alg` must match, `crit` is refused, every part is canonical
+  base64url, and MACs are compared with `MessageDigest.isEqual`. Stripe's tolerance check
+  cannot be passed without a valid signature for the timestamp.
+- **Access log verifier**: chain, sequence, the hash as last field, checkpoint signatures by
+  the expected key, `vouched` on reopening; the reopening log verifies the last checkpoint's
+  signature before it vouches.
+- **`ProcessSecretProvider`**: an owner-only temporary directory, `mkfifo -m 600` by
+  absolute path, the read end opened first, and the watchdog's timeouts.
+- **SCRAM** in PostgreSQL, Kafka and MongoDB: the server nonce must extend ours, at least
+  4096 iterations, the server signature is checked before success is believed, and
+  PostgreSQL refuses an `AuthenticationOk` that skipped it.
+- **SPIFFE trust manager**: the chain must lead to the bundle of the trust domain the SVID
+  names, and exactly one URI SAN is allowed.
+- **HTTP/2 rewriting**: padding and priority are bounded, Huffman is refused, every block
+  is re-encoded without indexing, and pseudo-headers are never rewritten.
+- **Redis password slot** after the skip-ahead of bulk strings: the command name and the
+  third element are still read byte by byte, and only `AUTH`'s and `HELLO ... AUTH`'s slot
+  is replaced.
+- **Pool reset**: the borrow is marked used through `unwrap` too, and catalog, schema,
+  network timeout and the driver's session reset are put back at the return.
+- **Identifiers in SQL text**: savepoint, schema and catalog names are checked against plain
+  identifier patterns on all four drivers. SQL Server and Oracle catalogue literals double
+  their quotes (neither has backslash escapes), and MySQL's escape both.
+
 ## The next review
 
 `SeclumeCollection`, `Iterables` and `BatchCursor` of `seclume-mongodb-driver` have been

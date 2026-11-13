@@ -176,7 +176,7 @@ public final class OracleDate {
         int minutes = byteAt(in, at + 5) - INTERVAL_FIELD_BIAS;
         int seconds = byteAt(in, at + 6) - INTERVAL_FIELD_BIAS;
         long nanos = Math.abs(unsigned(in, at + 7, 4) - INTERVAL_BIAS);
-        String fraction = String.format("%09d", nanos).replaceAll("0+$", "");
+        String fraction = String.format(java.util.Locale.ROOT, "%09d", nanos).replaceAll("0+$", "");
         boolean negative = days < 0 || hours < 0 || minutes < 0 || seconds < 0
                 || unsigned(in, at + 7, 4) < INTERVAL_BIAS;
         return (negative ? "-" : "") + Math.abs(days) + " " + Math.abs(hours) + ":"

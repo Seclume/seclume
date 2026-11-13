@@ -1710,6 +1710,89 @@ jobs:
           rm -f .local-pgtls-password bouncer/userlist.txt
           docker rm -f bouncer || true
 
+  # The read/write split against what it is for: a PostgreSQL primary with a
+  # streaming standby and a MySQL primary with a GTID replica. No other job has
+  # a replica, and without one ReadWriteSplitTest and ReadWriteSplitMySqlTest
+  # skip themselves - which they did in every build until this job.
+  replication:
+    runs-on: ubuntu-26.04
+    env:
+      PW: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: PostgreSQL primary and streaming standby
+        run: |
+          docker network create repl
+          docker run -d --name pgprimary --network repl -p 5432:5432 \
+            -e POSTGRES_USER=seclume_test -e POSTGRES_PASSWORD="$PW" -e POSTGRES_DB=seclume_test \
+            -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
+            postgres:18
+          # Over TCP: the server that initialises the data directory listens on its socket only.
+          for i in $(seq 1 60); do docker exec pgprimary pg_isready -q -h 127.0.0.1 && break; sleep 1; done
+          docker exec pgprimary bash -c 'echo "host replication all all scram-sha-256" >> "$PGDATA/pg_hba.conf"'
+          docker exec -u postgres pgprimary pg_ctl reload
+          docker run -d --name pgstandby --network repl -p 5433:5432 --user postgres \
+            -e PGPASSWORD="$PW" -e PGDATA=/tmp/standby --entrypoint bash postgres:18 \
+            -c 'pg_basebackup -h pgprimary -U seclume_test -D "$PGDATA" -R -X stream && chmod 700 "$PGDATA" && exec postgres'
+          for i in $(seq 1 60); do docker exec pgstandby pg_isready -q -h 127.0.0.1 && break; sleep 1; done
+          docker exec -e PGPASSWORD="$PW" pgstandby psql -h 127.0.0.1 -U seclume_test -At \
+            -c 'select pg_is_in_recovery()' seclume_test | grep -qx t
+      - name: MySQL primary and GTID replica
+        run: |
+          for server in 1 2; do
+            name=$([ $server = 1 ] && echo myprimary || echo myreplica)
+            docker run -d --name $name --network repl -p $((3305 + server)):3306 \
+              -e MYSQL_ROOT_PASSWORD="$PW" mysql:8.4 \
+              --server-id=$server --gtid-mode=ON --enforce-gtid-consistency=ON
+          done
+          # Over TCP, for the same reason as above.
+          for name in myprimary myreplica; do
+            for i in $(seq 1 90); do
+              docker exec -e MYSQL_PWD="$PW" $name mysql -uroot -h127.0.0.1 -e 'select 1' >/dev/null 2>&1 && break
+              sleep 1
+            done
+          done
+          docker exec -e MYSQL_PWD="$PW" myreplica mysql -uroot -h127.0.0.1 -e \
+            "CHANGE REPLICATION SOURCE TO SOURCE_HOST='myprimary', SOURCE_USER='root', SOURCE_PASSWORD='$PW', SOURCE_AUTO_POSITION=1, GET_SOURCE_PUBLIC_KEY=1; START REPLICA;"
+          # Made on the primary once the replica follows, so that it gets them too.
+          docker exec -e MYSQL_PWD="$PW" myprimary mysql -uroot -h127.0.0.1 -e \
+            "CREATE DATABASE seclume_test; CREATE USER 'seclume_test'@'%' IDENTIFIED BY '$PW'; GRANT ALL ON seclume_test.* TO 'seclume_test'@'%';"
+          for i in $(seq 1 60); do
+            docker exec -e MYSQL_PWD="$PW" myreplica mysql -useclume_test -h127.0.0.1 seclume_test -e 'select 1' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec -e MYSQL_PWD="$PW" myreplica mysql -useclume_test -h127.0.0.1 seclume_test -e 'select 1'
+      - run: |
+          printf '%s' "$PW" > .local-pgrepl-password
+          printf '%s' "$PW" > .local-myrepl-password
+      - run: >-
+          .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test
+          -Dtest='ReadWriteSplitTest,ReadWriteSplitMySqlTest' -Dsurefire.failIfNoSpecifiedTests=false
+          -Dseclume.pgrepl.host=127.0.0.1 -Dseclume.pgrepl.primary=5432 -Dseclume.pgrepl.replica=5433
+          -Dseclume.myrepl.host=127.0.0.1 -Dseclume.myrepl.primary=3306 -Dseclume.myrepl.replica=3307
+      - name: Require the tests to have run against the replicas
+        if: always()
+        run: python3 .github/scripts/require_replication_tests.py
+      - if: failure()
+        run: |
+          for name in pgprimary pgstandby myprimary myreplica; do
+            echo "::group::$name"; docker logs --tail 40 $name 2>&1 || true; echo "::endgroup::"
+          done
+          docker exec -e MYSQL_PWD="$PW" myreplica mysql -uroot -h127.0.0.1 -e 'show replica status\G' 2>&1 | grep -E 'Running|Error' || true
+      - if: always()
+        run: |
+          rm -f .local-pgrepl-password .local-myrepl-password
+          docker rm -f pgprimary pgstandby myprimary myreplica || true
+
   mysql:
     runs-on: ubuntu-26.04
     services:

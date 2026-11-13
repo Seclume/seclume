@@ -28,11 +28,19 @@ public final class ContextValues {
      * PostgreSQL: the value dollar-quoted, which no setting of the server can
      * make mean anything else - unlike a quoted string, whose backslashes
      * depend on {@code standard_conforming_strings}.
+     *
+     * <p>The tag is one that first occurs in the value and the closing tag
+     * together where the closing tag starts. Not occurring in the value
+     * alone is not enough: the server ends the string at the first tag it
+     * finds, and a value that <em>ends</em> in {@code $seclume} makes one
+     * with the closing tag's first {@code $} - {@code x$seclume} became the
+     * string {@code x}, and {@code seclume$} after it broke the statement
+     * (found in the fourth review round).
      */
     public static String dollarQuoted(String value) {
         String tag = "$seclume$";
         int n = 0;
-        while (value.contains(tag)) {
+        while ((value + tag).indexOf(tag) != value.length()) {
             tag = "$seclume" + (++n) + "$";
         }
         return tag + value + tag;

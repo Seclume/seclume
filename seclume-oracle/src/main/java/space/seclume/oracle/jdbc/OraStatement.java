@@ -488,6 +488,14 @@ class OraStatement implements Statement, TtcResult.RowHandler {
      */
     private boolean streaming;
 
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (!streaming || block == null) {
+            return false;
+        }
+        return connection.session().hasMoreRows();
+    }
+
     /**
      * Brings the next block of rows into the block the result set reads from.
      *
@@ -925,7 +933,7 @@ class OraStatement implements Statement, TtcResult.RowHandler {
      * Without it a caller is left with a number to look up.
      */
     static SQLException failure(TtcResult result) {
-        String number = "ORA-" + String.format("%05d", result.errorNumber());
+        String number = "ORA-" + String.format(java.util.Locale.ROOT, "%05d", result.errorNumber());
         String text = result.errorText();
         String message = text == null || text.isBlank()
                 ? "the server rejected the statement (" + number + ")"

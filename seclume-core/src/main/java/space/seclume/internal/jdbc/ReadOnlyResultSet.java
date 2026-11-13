@@ -54,6 +54,11 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     private final Statement statement;
     private int row = -1;
+    /**
+     * The rows of the blocks read before this one. A result read in blocks is
+     * one result: its row numbers go on across them.
+     */
+    private long before;
     private boolean lastWasNull;
     private boolean closed;
 
@@ -220,12 +225,15 @@ public abstract class ReadOnlyResultSet implements ResultSet {
             // The block is read; a driver that fetches in blocks gets its
             // chance here to bring the next one. Without that hook a result
             // set is exactly as large as the memory it needs.
+            int read = rowCount();
             if (!fetchMore()) {
                 row = rowCount();
                 return false;
             }
+            before += read;
             row = -1;
             if (rowCount() == 0) {
+                row = 0;                         // after the last row, in an empty block
                 return false;
             }
         }
@@ -243,6 +251,15 @@ public abstract class ReadOnlyResultSet implements ResultSet {
      * @return whether a new block was read; it may still be empty
      */
     protected boolean fetchMore() throws SQLException {
+        return false;
+    }
+
+    /**
+     * Whether {@link #fetchMore} may still bring rows: the server has not said
+     * that the result ended. {@code false} - the default - for a result that
+     * is here whole.
+     */
+    protected boolean mayFetchMore() throws SQLException {
         return false;
     }
 
@@ -286,31 +303,43 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     @Override
     public final boolean isBeforeFirst() throws SQLException {
         checkOpen();
-        return row < 0 && rowCount() > 0;
+        return row < 0 && rowCount() > 0 && before == 0;
     }
 
     @Override
     public final boolean isAfterLast() throws SQLException {
         checkOpen();
-        return row >= rowCount() && rowCount() > 0;
+        return row >= rowCount() && (rowCount() > 0 || before > 0);
     }
 
     @Override
     public final boolean isFirst() throws SQLException {
         checkOpen();
-        return row == 0;
+        return row == 0 && rowCount() > 0 && before == 0;
     }
 
     @Override
     public final boolean isLast() throws SQLException {
         checkOpen();
-        return row == rowCount() - 1;
+        if (row < 0 || row != rowCount() - 1) {
+            return false;
+        }
+        // The last row of a block. It was taken for the last row of the
+        // result, and a loop that stopped there lost the rest. Whether it is
+        // can only be known by reading on - which would replace the block the
+        // row is in - unless the server has said that the result ended.
+        if (mayFetchMore()) {
+            throw new SQLFeatureNotSupportedException("isLast() is not known on the last row "
+                    + "of a block the server may follow with more - read on with next(), or read "
+                    + "the result whole with setFetchSize(0)", "0A000");
+        }
+        return true;
     }
 
     @Override
     public final int getRow() throws SQLException {
         checkOpen();
-        return row < 0 || row >= rowCount() ? 0 : row + 1;
+        return row < 0 || row >= rowCount() ? 0 : (int) Math.min(before + row + 1, Integer.MAX_VALUE);
     }
 
     // ---- values ----------------------------------------------------------
@@ -428,17 +457,20 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final byte getByte(int columnIndex) throws SQLException {
-        return (byte) getLong(columnIndex);
+        // Up to 255: an unsigned TINYINT read as a byte, as it always was.
+        return (byte) fitting(getLong(columnIndex), Byte.MIN_VALUE, 255, columnIndex, "a byte");
     }
 
     @Override
     public final short getShort(int columnIndex) throws SQLException {
-        return (short) getLong(columnIndex);
+        return (short) fitting(getLong(columnIndex), Short.MIN_VALUE, Short.MAX_VALUE,
+                columnIndex, "a short");
     }
 
     @Override
     public final int getInt(int columnIndex) throws SQLException {
-        return (int) getLong(columnIndex);
+        return (int) fitting(getLong(columnIndex), Integer.MIN_VALUE, Integer.MAX_VALUE,
+                columnIndex, "an int");
     }
 
     @Override
@@ -474,6 +506,22 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         } catch (NumberFormatException notANumber) {
             throw notANumber(columnIndex, "a number", notANumber);
         }
+    }
+
+    /**
+     * {@code value} if it is within the type asked for. A number cut to the
+     * type's bits is another number, with nothing to say so: 5,000,000,000
+     * read as an int would be 705,032,704. The value is left out of the
+     * message, as in {@link #notANumber}.
+     */
+    private static long fitting(long value, long least, long most, int columnIndex, String what)
+            throws SQLException {
+        if (value < least || value > most) {
+            throw new java.sql.SQLDataException("column " + columnIndex + " holds a number "
+                    + "that does not fit " + what + " - read it with getLong or getBigDecimal",
+                    "22003");
+        }
+        return value;
     }
 
     /**
@@ -535,11 +583,36 @@ public abstract class ReadOnlyResultSet implements ResultSet {
             return objectAt(column);
         } catch (NumberFormatException notANumber) {
             throw notANumber(columnIndex, "its declared type", notANumber);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "its declared type", unreadable);
         }
+    }
+
+    /**
+     * A value the server sent that the conversion asked for cannot read - a
+     * MySQL zero date ({@code 0000-00-00}), PostgreSQL's {@code infinity},
+     * a year beyond 9999 - as JDBC says it must arrive: an
+     * {@code SQLException}, here SQLSTATE 22007 (invalid datetime format).
+     * {@code Timestamp.valueOf}, {@code Date.valueOf}, {@code java.time}'s
+     * parsers and {@code UUID.fromString} throw unchecked exceptions, and
+     * those went through every getter to an application that catches
+     * {@code SQLException} (found in the fourth review round).
+     */
+    private static SQLException unreadable(int columnIndex, String what, RuntimeException cause) {
+        return new java.sql.SQLDataException("column " + columnIndex + " cannot be read as "
+                + what, cause instanceof NumberFormatException ? "22018" : "22007", cause);
     }
 
     @Override
     public final Date getDate(int columnIndex) throws SQLException {
+        try {
+            return date(columnIndex);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "a date", unreadable);
+        }
+    }
+
+    private Date date(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -567,6 +640,14 @@ public abstract class ReadOnlyResultSet implements ResultSet {
      */
     @Override
     public final Time getTime(int columnIndex) throws SQLException {
+        try {
+            return time(columnIndex);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "a time", unreadable);
+        }
+    }
+
+    private Time time(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -614,6 +695,14 @@ public abstract class ReadOnlyResultSet implements ResultSet {
      */
     @Override
     public final Timestamp getTimestamp(int columnIndex) throws SQLException {
+        try {
+            return timestamp(columnIndex);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "a timestamp", unreadable);
+        }
+    }
+
+    private Timestamp timestamp(int columnIndex) throws SQLException {
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -769,7 +858,18 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     @Override
     public final <T> T getObject(int columnIndex, Class<T> type) throws SQLException {
-        Object value = switch (type.getName()) {
+        Object value;
+        try {
+            value = converted(columnIndex, type);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, type.getSimpleName(), unreadable);
+        }
+        return wasNull() ? null : type.cast(value);
+    }
+
+    /** {@link #getObject(int, Class)}'s value, before its null check and cast. */
+    private Object converted(int columnIndex, Class<?> type) throws SQLException {
+        return switch (type.getName()) {
             case "java.lang.String" -> getString(columnIndex);
             case "java.lang.Boolean", "boolean" -> getBoolean(columnIndex);
             case "java.lang.Byte", "byte" -> getByte(columnIndex);
@@ -855,7 +955,6 @@ public abstract class ReadOnlyResultSet implements ResultSet {
             default -> throw new SQLFeatureNotSupportedException(
                     "seclume does not convert column " + columnIndex + " to " + type.getName());
         };
-        return wasNull() ? null : type.cast(value);
     }
 
     /** Sixteen bytes, most significant first - the way all four store one. */

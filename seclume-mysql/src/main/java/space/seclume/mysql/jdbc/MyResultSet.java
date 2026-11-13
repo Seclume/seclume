@@ -37,6 +37,11 @@ public final class MyResultSet extends ReadOnlyResultSet implements space.seclum
         return owner != null && owner.fetchNextBlock();
     }
 
+    @Override
+    protected boolean mayFetchMore() throws SQLException {
+        return owner != null && owner.mayFetchNextBlock();
+    }
+
     MyResultSet(MyResultBlock block, Statement statement) {
         super(statement);
         this.block = block;
@@ -79,7 +84,7 @@ public final class MyResultSet extends ReadOnlyResultSet implements space.seclum
             // As a date, the way Connector/J writes it: 2024-01-01.
             long year = block.isBinary() ? BinaryValues.toLong(block, column)
                     : block.decimalAt(block.offset(column), block.length(column));
-            return String.format("%04d-01-01", year);
+            return String.format(java.util.Locale.ROOT, "%04d-01-01", year);
         }
         if (type == MyTypes.BIT && !block.isBinary()) {
             // The bits as a number in both protocols - the text one sends

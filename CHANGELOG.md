@@ -5,6 +5,53 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **AWS: the session token is not written into a chunked body however its coding is spelled.**
+  `SessionTokenSocket` recognised a chunked body only by `transfer-encoding: chunked` with
+  exactly one space - the gap `seclume-http`'s framing closed in the third review round (#273).
+  Written `Transfer-Encoding:chunked`, with a tab, as `gzip, chunked`, over two header lines or
+  next to a `Content-Length`, the body was taken for none or for that many bytes, its chunks for
+  the next head, and the session token written into an `X-Amz-Security-Token` line inside it
+  (and into the trailer): into the object S3 stores. The socket now frames a request as RFC 9112
+  does and refuses what a server could read another way - a coding after `chunked`, two lengths
+  that differ, a length that is not digits, a folded line, a space before a colon - before a
+  byte of it is sent; a head is at most 64 KiB (`SessionTokenFramingTest`). Found in the fourth
+  review round.
+- **PostgreSQL: a catalogue pattern is a value whatever `standard_conforming_strings` says.**
+  `DatabaseMetaData` put the application's schema and table names and patterns into `'...'`
+  with the quotes doubled. With `standard_conforming_strings` off - a role's, a database's or
+  a session's setting - a backslash escapes the quote after it, so a pattern such as
+  `\' or true --` ended its literal and the rest ran as SQL: `getTables` with it listed every
+  table of every schema. Every such literal is now an escape string, `E'...'`, with backslashes
+  and quotes doubled, which the server reads the same way under either setting
+  (`MetaDataLiteralTest` against a model of PostgreSQL's lexer, with the old quoting as its
+  control; `LocalJdbcTest.metaDataPatternsStayValuesWithStandardConformingStringsOff`). Found in
+  the fourth review round.
+- **PostgreSQL: a session value that ends like its quote's tag is set as it is.**
+  `SessionContext` values are dollar-quoted, so that no server setting changes what they mean;
+  the tag was chosen only so that the value did not contain it. A value ending in `$seclume`
+  made a tag together with the closing tag's first `$`: `x$seclume` closed the quote after `x`,
+  and the `seclume$` left over failed the statement. The tag is now one that first occurs where
+  the closing tag starts (`ContextValuesTest`, with 20 000 random values of tag-like text and
+  the old choice as its control; `LocalJdbcTest.aSessionValueEndingLikeTheQuoteTagIsSetAsItIs`).
+- **MySQL: a binary `DATE`, `DATETIME` or `TIME` as text is ASCII and a tenth of the cost.**
+  Read with `getString` from a server-side prepared statement, these were written with
+  `String.format`, which uses the JVM's default locale: under `ar-EG`, `th-TH-u-nu-thai` or
+  `hi-IN-u-nu-deva` the digits came back Arabic-Indic, Thai or Devanagari, and
+  `Timestamp.valueOf` or an ORM refused them. They are now written digit by digit, the same
+  text in ASCII; a `DATETIME(6)` costs about 75 ns instead of 720 ns (measured locally,
+  `BinaryTemporalTextTest` against the old format for 50 000 random values under `ar-EG`). The
+  MySQL `YEAR`-as-date text, Oracle's `TIMESTAMP WITH TIME ZONE` and `INTERVAL DAY TO SECOND`
+  text and the `ORA-nnnnn` numbers in error messages pin `Locale.ROOT` for the same reason.
+  Found in the fourth review round.
+- **Temporal getters refuse an unreadable value with a `SQLException`.** A MySQL zero date
+  (`0000-00-00 00:00:00`), PostgreSQL's `infinity` and `-infinity`, a year past 9999 or text
+  that is no date reached `getTimestamp`, `getDate`, `getTime`, `getObject` and
+  `getObject(i, LocalDateTime.class)` and its siblings as the `IllegalArgumentException` or
+  `DateTimeParseException` of `Timestamp.valueOf` and `java.time` - past an application's
+  `catch (SQLException e)`, which JDBC promises is enough. They now end in a `SQLDataException`
+  with SQLSTATE 22007 and the original as its cause, for all four drivers; an unreadable UUID
+  likewise (`UnreadableTemporalTest`, which fails on the code before). Found in the fourth review
+  round.
 - **SQL Server XA works on the current 2022 image again.** It refuses an `sp_xa_*` call whose
   output parameters are declared smaller than 8000 bytes (error 47204, "has declared size 2048
   bytes"), and seclume declared the message `nvarchar(1024)`, the transaction cookie and unit of
@@ -15,6 +62,86 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **Kubernetes: the token is bound to the API server the client was made for.**
+  `SeclumeKubernetes.client(url)` registered the token's placeholder without a server, so the
+  token went to whichever server the client's first request reached - another one, if the
+  client was pointed elsewhere before it. It is bound to the URL's host and port now; any
+  other server gets the placeholder
+  (`KubernetesClientTest.theTokenGoesOnlyToTheServerTheClientWasMadeFor`).
+- **JDBC: an integer that does not fit is refused, not cut.** `getInt`, `getShort` and
+  `getByte` - of a result set of any of the four drivers and of a call's OUT parameters - cast
+  the value to the type: 5,000,000,000 read with `getInt` was 705,032,704, with nothing to say
+  so. Now an `SQLDataException` with SQLSTATE 22003; the value is not in the message. `getByte`
+  still takes 128 to 255, an unsigned `TINYINT`'s bits (`NumericResultSetTest`,
+  `OutParametersTest`).
+- **JDBC: a query prepared with `prepareCall` takes `executeLargeUpdate` and `setObject` with
+  an `SQLType`.** `QueryAsCallable` left out the methods JDBC 4.2 added with a default body,
+  and that body throws "not implemented"; they go to the query now, as the same text prepared
+  with `prepareStatement` has them. `QueryAsCallableTest` checks every method of the interface:
+  delegated with its arguments, or refused.
+- **JDBC: OUT parameters.** Text that is no date, time or timestamp is an `SQLException`, not
+  an `IllegalArgumentException`; `setDate`, `setTime` and `setTimestamp` by name pass their
+  `Calendar` on instead of dropping it (`OutParametersTest`).
+- **Read/write split: a replica that is not in recovery no longer makes every read wait.**
+  With `readYourWrites`, a read waited until `pg_last_wal_replay_lsn()` reached the last write.
+  A server that is not in recovery - the primary configured as its own replica on a
+  developer's one server, or a standby promoted since - answers NULL there, or the position
+  its start-up recovery ended at: it never caught up, and every read after a write waited the
+  whole limit before it went to the primary. Such a server is asked for its own position now.
+  For MySQL, of two GTID sets noted by two connections the later one is kept, not the one
+  stored last. The routing connection passes on `beginRequest`, `endRequest` and the sharding
+  keys. `ReadWriteSplitRoutingTest` tests the split's decisions without a database.
+- **CI: the read/write split runs against real replicas.** `ReadWriteSplitTest` and
+  `ReadWriteSplitMySqlTest` need a primary and a replica and skipped themselves in every
+  build, because no job had either. The new `replication` job starts a PostgreSQL primary with
+  a streaming standby and a MySQL primary with a GTID replica, runs both, and fails if a test
+  was skipped (`.github/scripts/require_replication_tests.py`).
+- **MySQL: `enquoteLiteral` escapes a backslash.** The driver left `Statement.enquoteLiteral`
+  to JDBC's default, which doubles single quotes and nothing else. MySQL reads a backslash as
+  an escape, so a value of `\' or 1=1 -- ` became `'\'' or 1=1 -- '` - a string of one quote,
+  and the rest SQL: an injection through the method an application calls to prevent one. The
+  driver's own doubles the backslash too, unless the session has `NO_BACKSLASH_ESCAPES`, which
+  the server reports with every answer. `enquoteIdentifier` uses backticks - in double quotes
+  MySQL reads a string, not a name (`MyQuotingTest`,
+  `LocalMySqlTest.anEnquotedLiteralIsOneValueToTheServerInBothModes`).
+- **MySQL, Oracle, SQL Server: `executeLargeUpdate()` of a callable statement.** Left to
+  JDBC's default, which throws "not implemented"; it answers as `executeUpdate()` does.
+- **JDBC: a result read in blocks counts its rows across them.** With a fetch size, all four
+  drivers read a result block by block, and the shared result set took each block for the
+  whole result: `getRow()` began again at 1, `isFirst()` was true on the first row of every
+  block and `isLast()` on the last - a loop that stopped at `isLast()` lost every block after
+  the first. Row numbers now go on across the blocks. On the last row of a full block the
+  server may or may not have more, and reading on would replace the block the row is in:
+  `isLast()` says so with `SQLFeatureNotSupportedException` there instead of a guess
+  (`BlockResultSetTest`, `LocalJdbcTest.aResultReadInBlocksCountsItsRowsAcrossThem`,
+  `LocalMySqlTest.aFetchSizeReadsTheResultInBlocks`).
+- **Session state: a statement's text is judged once, not at every execution.** Each
+  execution ran the text through the expressions that look for a `SET`, a temporary table or
+  a session function - and the filter in front of them let any text with an underscore
+  through, which is nearly every text with a table or column name in it. For
+  `select id, name, amount, created from zb_rows where id = ?` that was 3.2 µs per
+  execution, for a join over `order_items` 9.9 µs. The last text judged to set nothing is
+  remembered weakly, so a prepared statement run again costs about 1 ns; the filter now looks
+  for the words the forms contain, and a text seen for the first time takes 137 and 513 ns.
+  A one-row lookup through the PostgreSQL driver against a local server, five runs each:
+  client CPU time 13.0-15.3 µs before, 9.1-10.8 µs after (`SessionStateTest`).
+- **Session state: what a prepared, batched or pipelined statement sets is noted.** Each
+  driver notes the text of what it runs, so that a pool does not silently renew a broken
+  connection whose session had a `SET` - the new one would run without it, for another
+  tenant. MySQL and SQL Server noted only statements sent as text: a prepared
+  `SET @tenant = ?` or `exec sp_set_session_context ...` left no trace, and the recording
+  named the wrong statement. No driver noted a batch or a pipelined execution
+  (`sessionStateSetByAPreparedStatementIsNoted` in `LocalMySqlTest`, `LocalJdbcTest`,
+  `LocalSqlServerTest`).
+- **PostgreSQL: `enquoteLiteral` means the same whatever `standard_conforming_strings` is.**
+  It was JDBC's default: single quotes doubled, nothing else. With
+  `standard_conforming_strings = off` - a setting a session, a role or a database can have up
+  to PostgreSQL 18 - the server reads a backslash there as an escape, and `\' or 1=1 -- `
+  ended the literal: the rest of the value was SQL. A value with a backslash is written as an
+  escape string `E'...'` now, as libpq's `PQescapeLiteral` does; `enquoteNCharLiteral` too
+  (`LocalJdbcTest.anEnquotedLiteralIsOneValueToTheServerInBothSettings`, which checks `off`
+  where the server still allows it - PostgreSQL 19 refuses it). The catalogue queries of
+  `DatabaseMetaData` had the same flaw; that fix is #323.
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a

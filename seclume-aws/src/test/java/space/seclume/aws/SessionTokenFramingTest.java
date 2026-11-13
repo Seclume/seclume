@@ -143,8 +143,13 @@ class SessionTokenFramingTest {
     }
 
     private String chunked() {
+        return chunked("Transfer-Encoding: chunked");
+    }
+
+    /** A chunked request whose head says so with {@code codings}, its body a lookalike head. */
+    private String chunked(String... codings) {
         String body = lookalike();
-        return head("PUT", "Transfer-Encoding: chunked")
+        return head("PUT", codings)
                 + Integer.toHexString(body.length()) + "\r\n" + body + "\r\n"
                 + "5;name=value\r\nhello\r\n"
                 + "0\r\n"
@@ -215,6 +220,85 @@ class SessionTokenFramingTest {
                 () -> write(head("PUT", "Transfer-Encoding: chunked") + "-5\r\nhello"));
         assertThrows(IOException.class,
                 () -> write(head("PUT", "Transfer-Encoding: chunked") + "five\r\nhello"));
+    }
+
+    /**
+     * Review round 4: only {@code transfer-encoding: chunked} with one space
+     * was recognised. Written any other way RFC 9112 allows - no space, a
+     * tab, a coding before it, two header lines - the chunked body was taken
+     * for no body, its chunks for the next head, and the session token was
+     * written into the lookalike head inside the body: into the object S3
+     * stores. The same was fixed in seclume-http's framing in round 3 (#273).
+     */
+    @Test
+    void aChunkedBodyIsFollowedHoweverItsCodingIsWritten() throws IOException {
+        for (String[] codings : new String[][] {
+                {"Transfer-Encoding:chunked"},
+                {"Transfer-Encoding:\tchunked"},
+                {"transfer-encoding:   chunked   "},
+                {"TRANSFER-ENCODING: CHUNKED"},
+                {"Transfer-Encoding: gzip, chunked"},
+                {"Transfer-Encoding: gzip", "Transfer-Encoding: chunked"},
+                {"Content-Length: 10", "Transfer-Encoding:chunked"}}) {
+            Recorded sent = new Recorded();
+            try (SessionTokenSocket other = new SessionTokenSocket(new Socket(),
+                    "s3.eu-central-1.amazonaws.com", 443, sent)) {
+                String request = chunked(codings);
+                other.getOutputStream().write((request + head("GET"))
+                        .getBytes(StandardCharsets.ISO_8859_1));
+                String text = sent.text();
+                String which = String.join(" | ", codings);
+                assertEquals(2, count(text, TOKEN), which + ": one token in each of the two heads,"
+                        + " none in the body\n" + text);
+                assertEquals(2, count(text, placeholder), which + ": the chunk's and the "
+                        + "trailer's placeholder stay as they were");
+                assertTrue(text.endsWith(head("GET").replace(placeholder, TOKEN)), which);
+            }
+        }
+    }
+
+    /** What a server could read another way than this socket is refused, before a byte goes. */
+    @Test
+    void whatCannotBeFramedIsRefused() throws IOException {
+        for (String[] headers : new String[][] {
+                {"Transfer-Encoding: chunked, gzip"},
+                {"Transfer-Encoding: gzip"},
+                {"Transfer-Encoding: chunked", "Transfer-Encoding: chunked"},
+                {"Content-Length: 5", "Content-Length: 6"},
+                {"Content-Length: +5"},
+                {"Content-Length: 5, 5"},
+                {"Content-Length : 5"},
+                {"X-Amz-Meta-Note: a", " folded"}}) {
+            Recorded sent = new Recorded();
+            try (SessionTokenSocket other = new SessionTokenSocket(new Socket(),
+                    "s3.eu-central-1.amazonaws.com", 443, sent)) {
+                byte[] request = (head("PUT", headers) + "hello")
+                        .getBytes(StandardCharsets.ISO_8859_1);
+                assertThrows(IOException.class, () -> other.getOutputStream().write(request),
+                        String.join(" | ", headers));
+                assertEquals(0, sent.writes, String.join(" | ", headers) + ": nothing sent");
+            }
+        }
+        // Two lengths that agree are one length.
+        String body = lookalike();
+        String request = head("PUT", "Content-Length: " + body.length(),
+                "Content-Length: " + body.length()) + body;
+        write(request + head("GET"));
+        assertEquals(2, count(tls.text(), TOKEN));
+    }
+
+    @Test
+    void aHeadWithoutEndIsNotHeldForever() {
+        byte[] line = ("X-Amz-Meta-Filler: " + "a".repeat(1000) + "\r\n")
+                .getBytes(StandardCharsets.ISO_8859_1);
+        assertThrows(IOException.class, () -> {
+            OutputStream out = socket.getOutputStream();
+            out.write(("PUT /bucket/key HTTP/1.1\r\n").getBytes(StandardCharsets.ISO_8859_1));
+            for (int i = 0; i <= SessionTokenSocket.MAX_HEAD / line.length; i++) {
+                out.write(line);
+            }
+        });
+        assertEquals(0, tls.writes);
     }
 
     private static int count(String text, String part) {

@@ -26,7 +26,9 @@ import space.seclume.http.SeclumeSslSocketFactory;
  * client holds a placeholder; its HTTP client (OkHttp) gets
  * {@link SeclumeSslSocketFactory}, whose TLS checks the API server against the
  * cluster's CA and writes the token - read from its file for each request, so
- * a rotated one is picked up at once - where the placeholder is.
+ * a rotated one is picked up at once - where the placeholder is. The token
+ * goes to the API server the client was made for and to no other: a client
+ * pointed elsewhere sends the placeholder there.
  */
 public final class SeclumeKubernetes {
 
@@ -34,6 +36,15 @@ public final class SeclumeKubernetes {
     static final Path SERVICE_ACCOUNT = Path.of("/var/run/secrets/kubernetes.io/serviceaccount");
 
     private SeclumeKubernetes() {
+    }
+
+    /** {@code host:port} of the API server, as a placeholder's servers are named; 443 if none is given. */
+    private static java.util.List<String> apiServer(URI uri) {
+        if (uri.getHost() == null) {
+            throw new IllegalArgumentException("no host in the API server's URL: https://"
+                    + uri.getRawAuthority());
+        }
+        return java.util.List.of(uri.getHost() + ":" + (uri.getPort() < 0 ? 443 : uri.getPort()));
     }
 
     /** In a pod: the API server from the environment, the pod's CA and token. */
@@ -78,7 +89,9 @@ public final class SeclumeKubernetes {
             target.append(target.length() == 0 ? "" : "&").append(pair);
         }
         SeclumeSslSocketFactory sockets = SeclumeSslSocketFactory.of(tls.toString());
-        String token = SeclumeSslSocketFactory.placeholder(secret.toString());
+        // The token is this API server's: bound to it here, not to whichever
+        // server the client's first request happens to go to.
+        String token = SeclumeSslSocketFactory.placeholder(secret.toString(), apiServer(uri));
         OkHttpClient http = new OkHttpClient.Builder()
                 .sslSocketFactory(sockets, sockets.trustManager())
                 .hostnameVerifier(sockets.hostnameVerifier())

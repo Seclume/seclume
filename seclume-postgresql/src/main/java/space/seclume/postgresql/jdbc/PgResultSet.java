@@ -63,6 +63,11 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
     }
 
     @Override
+    protected boolean mayFetchMore() throws SQLException {
+        return owner != null && owner.mayFetchNextBlock();
+    }
+
+    @Override
     protected int rowCount() {
         return block.rowCount();
     }

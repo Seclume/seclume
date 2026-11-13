@@ -611,6 +611,69 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * A pattern is a value, whatever {@code standard_conforming_strings} says.
+     * Review round 4: with it off, {@code \' or true --} ended the literal it
+     * was put in, and {@code getTables} answered with every table there is.
+     *
+     * <p>Checked with the setting on, and off where the server still has
+     * that: PostgreSQL 19 refuses {@code off} ("non-standard string literals
+     * are not supported"), so there no literal can be read that way.
+     */
+    @Test
+    void metaDataPatternsStayValuesWithStandardConformingStringsOff() throws Exception {
+        try (Connection connection = connect()) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("drop table if exists seclume_meta_quote");
+                statement.execute("create table seclume_meta_quote (id int primary key)");
+            }
+            try {
+                metaDataPatternsStayValues(connection, "on");
+                boolean off;
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("set standard_conforming_strings = off");
+                    off = true;
+                } catch (SQLException refused) {
+                    assertTrue(refused.getMessage().contains(
+                            "non-standard string literals are not supported"), refused.getMessage());
+                    off = false;
+                }
+                if (off) {
+                    metaDataPatternsStayValues(connection, "off");
+                }
+            } finally {
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("set standard_conforming_strings = on");
+                    statement.execute("drop table seclume_meta_quote");
+                }
+            }
+        }
+    }
+
+    private static void metaDataPatternsStayValues(Connection connection, String setting)
+            throws SQLException {
+        DatabaseMetaData meta = connection.getMetaData();
+        try (ResultSet result = meta.getTables(null, "public", "\\' or true --", null)) {
+            boolean matched = result.next();
+            assertFalse(matched, matched ? "standard_conforming_strings " + setting
+                    + ": the pattern matched a table: " + result.getString("TABLE_SCHEM") + "."
+                    + result.getString("TABLE_NAME") : null);
+        }
+        try (ResultSet result = meta.getColumns(null, "\\' or true --", null, null)) {
+            assertFalse(result.next(), "the pattern matched a column, " + setting);
+        }
+        try (ResultSet result = meta.getPrimaryKeys(null, "public",
+                "seclume_meta_quote' or 'x' = 'x")) {
+            assertFalse(result.next(), "the name matched a key, " + setting);
+        }
+        // An escaped LIKE pattern still means what JDBC says it means.
+        try (ResultSet result = meta.getTables(null, "public", "seclume\\_meta\\_quote", null)) {
+            assertTrue(result.next(), setting);
+            assertEquals("seclume_meta_quote", result.getString("TABLE_NAME"));
+            assertFalse(result.next(), setting);
+        }
+    }
+
     /** An error from the server arrives as a SQLException with a SQLState. */
     @Test
     void serverErrorsReachTheApplication() throws Exception {
@@ -1550,4 +1613,148 @@ class LocalJdbcTest {
             assertTrue(refused.getMessage().contains("no OUT parameters"), refused.getMessage());
         }
     }
-}
+
+    /**
+     * A result read in blocks is one result: its row numbers go on across the
+     * blocks, and the last row of a block is not called the last row of the
+     * result - which ended a loop a block early.
+     */
+    @Test
+    void aResultReadInBlocksCountsItsRowsAcrossThem() throws Exception {
+        try (Connection connection = connect()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement query = connection.prepareStatement(
+                    "select n from generate_series(1, 7) as n")) {
+                query.setFetchSize(3);
+                try (ResultSet rows = query.executeQuery()) {
+                    assertTrue(rows.isBeforeFirst());
+                    assertEquals(0, rows.getRow());
+                    List<String> seen = new ArrayList<>();
+                    while (rows.next()) {
+                        String last;
+                        try {
+                            last = rows.isLast() ? " last" : "";
+                        } catch (java.sql.SQLFeatureNotSupportedException unknown) {
+                            last = " last?";          // a full block: the portal may go on
+                        }
+                        seen.add(rows.getInt(1) + ":" + rows.getRow() + (rows.isFirst() ? " first" : "")
+                                + last);
+                    }
+                    assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?",
+                            "7:7 last"), seen);
+                    assertTrue(rows.isAfterLast(), "after the last row");
+                    assertFalse(rows.isBeforeFirst());
+                    assertEquals(0, rows.getRow());
+                    assertFalse(rows.next());
+                    assertTrue(rows.isAfterLast());
+                }
+            } finally {
+                connection.rollback();
+            }
+        }
+    }
+
+    /**
+     * A statement that sets session state is noted whether it is sent as text,
+     * prepared, batched or pipelined - a pool that renews a broken connection
+     * asks for it, and without it renewed one that had lost this state.
+     */
+    @Test
+    void sessionStateSetByAPreparedStatementIsNoted() throws Exception {
+        try (Connection connection = connect()) {
+            space.seclume.SessionReset session = connection.unwrap(space.seclume.SessionReset.class);
+            try (PreparedStatement select = connection.prepareStatement("select ?")) {
+                select.setString(1, "x");
+                select.executeQuery().close();
+            }
+            assertFalse(session.sessionStateChanged(), "a prepared select set nothing");
+            try (PreparedStatement set = connection.prepareStatement("select set_config('app.tenant', ?, false)")) {
+                set.setString(1, "7");
+                set.execute();
+            }
+            assertTrue(session.sessionStateChanged(), "a prepared set_config left no trace");
+        }
+        try (Connection connection = connect()) {
+            space.seclume.SessionReset session = connection.unwrap(space.seclume.SessionReset.class);
+            try (PreparedStatement set = connection.prepareStatement("select set_config('app.tenant', ?, false)")) {
+                set.setString(1, "7");
+                set.addBatch();
+                set.setString(1, "8");
+                set.addBatch();
+                set.executeBatch();
+            }
+            assertTrue(session.sessionStateChanged(), "a prepared set_config in a batch left no trace");
+        }
+    }
+
+    /**
+     * A session value that ends like the dollar quote's tag is still the value.
+     * Review round 4: {@code x$seclume} closed the quote one character early,
+     * and the statement failed with a syntax error.
+     */
+    @Test
+    void aSessionValueEndingLikeTheQuoteTagIsSetAsItIs() throws Exception {
+        try (Connection connection = connect()) {
+            space.seclume.SessionContext context =
+                    connection.unwrap(space.seclume.SessionContext.class);
+            for (String value : List.of("x$seclume", "$seclume$", "a$seclume$b$seclume1",
+                    "it's \\ a value")) {
+                context.setSessionContext("app.seclume_value", value);
+                try (Statement statement = connection.createStatement();
+                     ResultSet result = statement.executeQuery(
+                             "select current_setting('app.seclume_value')")) {
+                    assertTrue(result.next());
+                    assertEquals(value, result.getString(1));
+                }
+            }
+        }
+    }
+
+    /**
+     * The server reads the literal: whatever the value, it comes back as it
+     * went in, with standard_conforming_strings on and off - and a value
+     * written to break out of quotes that are only doubled does not.
+     *
+     * <p>PostgreSQL 19 refuses {@code off} ("non-standard string literals are
+     * not supported"); there only {@code on} is checked, and the refusal must
+     * be that one.
+     */
+    @Test
+    void anEnquotedLiteralIsOneValueToTheServerInBothSettings() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            enquotedLiteralsComeBack(statement, "on");
+            boolean off;
+            try {
+                statement.execute("set standard_conforming_strings = off");
+                statement.execute("set escape_string_warning = off");
+                off = true;
+            } catch (SQLException refused) {
+                assertTrue(refused.getMessage().contains(
+                        "non-standard string literals are not supported"), refused.getMessage());
+                off = false;
+            }
+            if (off) {
+                enquotedLiteralsComeBack(statement, "off");
+            }
+        }
+    }
+
+    private static void enquotedLiteralsComeBack(Statement statement, String setting)
+            throws SQLException {
+        String[] values = {"plain", "it's", "\\", "\\' or 1=1 -- ", "ends with \\", "a\\'b",
+            "'; select 2; -- ", "ümlaut \\ and ' both"};
+        for (String value : values) {
+            try (ResultSet rows = statement.executeQuery(
+                    "select" + statement.enquoteLiteral(value) + ", 'after'")) {
+                assertTrue(rows.next());
+                assertEquals(value, rows.getString(1), "standard_conforming_strings " + setting);
+                assertEquals("after", rows.getString(2));
+                assertFalse(rows.next());
+            }
+            try (ResultSet rows = statement.executeQuery(
+                    "select " + statement.enquoteNCharLiteral(value))) {
+                assertTrue(rows.next());
+                assertEquals(value, rows.getString(1), "N, " + setting);
+            }
+        }
+    }}

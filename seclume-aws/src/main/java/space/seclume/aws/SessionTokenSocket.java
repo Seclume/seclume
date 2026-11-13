@@ -111,6 +111,9 @@ final class SessionTokenSocket extends SSLSocket {
 
     private static final int BLANK_LINE = 0x0D0A0D0A;
 
+    /** A head this long is not one an AWS SDK writes; refused rather than held. */
+    static final int MAX_HEAD = 64 * 1024;
+
     /**
      * Follows what the client writes, a run of bytes at a time: a head is
      * kept until its blank line, everything else goes on to TLS as far as it
@@ -130,6 +133,12 @@ final class SessionTokenSocket extends SSLSocket {
                         ended = headTail == BLANK_LINE;
                     }
                     head.write(source, from, at - from);
+                    if (head.size() > MAX_HEAD) {
+                        // Not a head an SDK writes - and held whole, it would
+                        // grow for as long as the bytes keep coming.
+                        throw new IOException("a request head of more than " + MAX_HEAD
+                                + " bytes");
+                    }
                     if (ended) {
                         headTail = 0;
                         sendHead();
@@ -190,8 +199,8 @@ final class SessionTokenSocket extends SSLSocket {
         byte[] bytes = head.toByteArray();
         head.reset();
         String text = new String(bytes, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT); // seclume-allow: a request head with the placeholder - no secret
-        long length = header(text, "content-length");
-        if (text.contains("\r\ntransfer-encoding: chunked")) {
+        long length = bodyOf(text);
+        if (length == CHUNKED) {
             state = State.CHUNK_SIZE;
         } else if (length > 0) {
             state = State.BODY;
@@ -278,24 +287,89 @@ final class SessionTokenSocket extends SSLSocket {
         }
     }
 
-    private static long header(String head, String name) throws IOException {
-        int at = head.indexOf("\r\n" + name + ":");
-        if (at < 0) {
-            return -1;
+    /** What {@link #bodyOf} answers for a body in chunks. */
+    static final long CHUNKED = -1;
+
+    /**
+     * Where the body of the request whose head is {@code text} - in lower
+     * case - ends, as the server will see it (RFC 9112 section 6):
+     * {@link #CHUNKED}, or the length of the body, 0 for none.
+     *
+     * <p>A body the socket took for a head would have the token written into
+     * it - into an object S3 stores, a message SQS keeps. So it is the same
+     * rule as {@code seclume-http}'s framing, which the third review round
+     * made strict: {@code Transfer-Encoding} however it is spelled -
+     * {@code transfer-encoding:chunked} without a space, after a tab,
+     * {@code gzip, chunked}, over two header lines - and whatever the server
+     * could read another way than this is refused rather than guessed: a
+     * folded line, a space before a colon, a coding after {@code chunked},
+     * two lengths that differ, a length that is not digits. Only
+     * {@code "transfer-encoding: chunked"} with exactly one space was
+     * recognised here before, and a chunked body written any other way was
+     * taken for no body - its chunks, and a request-like text in them, for
+     * the next head.
+     */
+    static long bodyOf(String text) throws IOException {
+        String[] lines = text.split("\r\n", -1);
+        StringBuilder codings = new StringBuilder();
+        String length = null;
+        for (int i = 1; i < lines.length && !lines[i].isEmpty(); i++) {
+            String line = lines[i];
+            if (line.charAt(0) == ' ' || line.charAt(0) == '\t') {
+                throw new IOException("the HTTP client folded a header line - the framing "
+                        + "of the request cannot be followed");
+            }
+            int colon = line.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            String name = line.substring(0, colon);
+            if (name.endsWith(" ") || name.endsWith("\t")) {
+                throw new IOException("the HTTP client wrote a space before a header's colon");
+            }
+            String value = line.substring(colon + 1).strip();
+            if (name.equals("transfer-encoding")) {
+                codings.append(codings.isEmpty() ? "" : ",").append(value);
+            } else if (name.equals("content-length")) {
+                if (!value.matches("[0-9]{1,18}")) {
+                    throw new IOException("the HTTP client wrote a length that is not a number: '"
+                            + value + "'");
+                }
+                if (length != null && !length.equals(value)) {
+                    throw new IOException("the HTTP client wrote two lengths, " + length
+                            + " and " + value);
+                }
+                length = value;
+            }
         }
-        int end = head.indexOf("\r\n", at + 2);
-        return number(head.substring(at + name.length() + 3, end).trim(), 10);
+        if (!codings.isEmpty()) {
+            java.util.List<String> each = new java.util.ArrayList<>();
+            for (String coding : codings.toString().split(",")) {
+                if (!coding.isBlank()) {
+                    each.add(coding.strip());
+                }
+            }
+            if (each.isEmpty() || !each.get(each.size() - 1).equals("chunked")
+                    || each.indexOf("chunked") != each.size() - 1) {
+                throw new IOException("the HTTP client wrote Transfer-Encoding: " + codings
+                        + " - a request body whose last coding is not chunked, once, has no end "
+                        + "a server can find");
+            }
+            return CHUNKED;                       // over any Content-Length (RFC 9112, 6.3)
+        }
+        return length == null ? 0 : number(length, 10);
     }
 
     /** A length the client wrote - not one, and the framing cannot be followed. */
     private static long number(String text, int radix) throws IOException {
+        // Digits only: Long.parseLong takes a sign too, and "+5" is no length a
+        // server reads the same way.
+        if (!text.matches(radix == 16 ? "[0-9a-fA-F]{1,15}" : "[0-9]{1,18}")) {
+            throw new IOException("the HTTP client wrote a length that is not a number: '"
+                    + text + "'");
+        }
         try {
-            long value = Long.parseLong(text, radix);
-            if (value < 0) {
-                throw new IOException("the HTTP client wrote a length below zero: '" + text
-                        + "'");
-            }
-            return value;
+            return Long.parseLong(text, radix);
         } catch (NumberFormatException e) {
             throw new IOException("the HTTP client wrote a length that is not a number: '"
                     + text + "'", e);

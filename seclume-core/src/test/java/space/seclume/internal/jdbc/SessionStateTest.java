@@ -75,6 +75,54 @@ class SessionStateTest {
     }
 
     /**
+     * A text judged harmless is not judged again when the same String comes
+     * back - a prepared statement run over and over. What sets something is
+     * never skipped: after a reset it is noted again.
+     */
+    @Test
+    void theSameTextIsJudgedOnceAndWhatSetsIsNeverSkipped() {
+        SessionState state = new SessionState();
+        String lookup = "select id, name from order_items where id = ?";
+        for (int i = 0; i < 3; i++) {
+            state.note(lookup);
+            assertFalse(state.changed());
+        }
+        String setter = "set search_path to tenant_" + 7;
+        state.note(setter);
+        assertTrue(state.changed());
+        state.clear();
+        state.note(lookup);
+        assertFalse(state.changed());
+        state.note(setter);
+        assertTrue(state.changed(), "the same setter again, after a reset");
+        state.clear();
+        state.note(setter);
+        assertTrue(state.changed(), "and again");
+        // An equal text that is another String is taken for what it says - alike.
+        state.clear();
+        state.note(new StringBuilder(lookup).toString());
+        state.note(lookup);
+        assertFalse(state.changed());
+        String irreversible = "alter session set nls_date_format = 'yyyy'";
+        state.note(irreversible);
+        assertTrue(state.changed());
+        assertTrue(state.irreversible());
+    }
+
+    /** A batch whose second statement sets something, judged before as a whole: still noted. */
+    @Test
+    void aBatchIsJudgedByEveryStatementInIt() {
+        SessionState state = new SessionState();
+        String batch = "select 1 from order_items; set role admin";
+        state.note(batch);
+        assertTrue(state.changed());
+        state.clear();
+        state.note(batch);
+        assertTrue(state.changed());
+        assertFalse(state.irreversible());
+    }
+
+    /**
      * The filters in front of the two expressions change no verdict: every
      * statement is judged the same as by the expressions alone - the words
      * each alternative starts with, in any case, behind comments and
@@ -109,7 +157,11 @@ class SessionStateTest {
             "select get_lock('l', 1)", "select a into #t from x", "select @a := 1",
             "select a_b from t", "select '#' from t", "select '@x' from t", "update t set a = 1",
             "insert into t values (1)", "delete from t", "  /* c */ ( set x = 1 )",
-            "-- c\nuse db", "setting", "settle", "users", "execution", "select 1; set role admin"};
+            "-- c\nuse db", "setting", "settle", "users", "execution", "select 1; set role admin",
+            "select SET_CONFIG ('a', 'b', true)", "select PG_ADVISORY_LOCK(7)", "dbms_session.x",
+            "select @v:=1", "select @v := 1", "select ':=' , '@'", "select a__b from t_",
+            "select x from my_dbms_table", "select get_lock_count from t", "_", "__get_lock(",
+            "select order_id, customer_id from order_items where created_at > ?"};
         java.util.Random random = new java.util.Random(46);
         for (int i = 0; i < 20_000; i++) {
             StringBuilder sql = new StringBuilder();

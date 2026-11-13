@@ -260,6 +260,16 @@ class PgStatement implements Statement, PgSession.RowHandler {
         streaming = prepared && blockSize() > 0 && !connection.getAutoCommit();
     }
 
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (!streaming || block == null) {
+            return false;
+        }
+        // A portal is suspended when the row limit was reached - also when no
+        // row is left: PostgreSQL does not look ahead.
+        return connection.session().isPortalSuspended();
+    }
+
     /**
      * Brings the next block of rows into the block the result set reads from.
      *
@@ -1070,4 +1080,15 @@ class PgStatement implements Statement, PgSession.RowHandler {
                 space.seclume.QueryFingerprint.Dialect.POSTGRESQL);
     }
 
+    /** JDBC's own doubles the quotes alone - see {@link PgQuoting}. */
+    @Override
+    public String enquoteLiteral(String value) throws SQLException {
+        return PgQuoting.literal(value);
+    }
+
+    /** {@code N'...'} where the value needs no escape string; PostgreSQL has no {@code N E'...'}. */
+    @Override
+    public String enquoteNCharLiteral(String value) throws SQLException {
+        return value.indexOf('\\') < 0 ? "N" + PgQuoting.literal(value) : PgQuoting.literal(value);
+    }
 }

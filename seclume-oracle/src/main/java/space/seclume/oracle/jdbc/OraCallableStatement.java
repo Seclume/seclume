@@ -267,6 +267,12 @@ final class OraCallableStatement extends OraStatement
         return 0;
     }
 
+    /** JDBC's default refuses this ("not implemented"); a call counts as its executeUpdate does. */
+    @Override
+    public long executeLargeUpdate() throws SQLException {
+        return executeUpdate();
+    }
+
     @Override
     public ResultSet executeQuery() throws SQLException {
         throw new SQLException("this call is run with execute() and its outputs read with the "

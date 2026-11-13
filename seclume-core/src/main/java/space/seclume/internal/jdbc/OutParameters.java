@@ -170,17 +170,17 @@ public interface OutParameters extends CallableStatement {
 
     @Override
     default byte getByte(int index) throws SQLException {
-        return (byte) getLong(index);
+        return (byte) fitting(getLong(index), Byte.MIN_VALUE, 255, index, "a byte");
     }
 
     @Override
     default short getShort(int index) throws SQLException {
-        return (short) getLong(index);
+        return (short) fitting(getLong(index), Short.MIN_VALUE, Short.MAX_VALUE, index, "a short");
     }
 
     @Override
     default int getInt(int index) throws SQLException {
-        return (int) getLong(index);
+        return (int) fitting(getLong(index), Integer.MIN_VALUE, Integer.MAX_VALUE, index, "an int");
     }
 
     @Override
@@ -263,7 +263,11 @@ public interface OutParameters extends CallableStatement {
         if (value instanceof Timestamp stamp) {
             return new Date(stamp.getTime());
         }
-        return Date.valueOf(value.toString().trim());
+        try {
+            return Date.valueOf(value.toString().trim());
+        } catch (IllegalArgumentException e) {
+            throw new SQLException("parameter " + index + " is not a date (yyyy-mm-dd)", e);
+        }
     }
 
     @Override
@@ -278,7 +282,11 @@ public interface OutParameters extends CallableStatement {
         if (value instanceof Timestamp stamp) {
             return new Time(stamp.getTime());
         }
-        return Time.valueOf(value.toString().trim());
+        try {
+            return Time.valueOf(value.toString().trim());
+        } catch (IllegalArgumentException e) {
+            throw new SQLException("parameter " + index + " is not a time (hh:mm:ss)", e);
+        }
     }
 
     @Override
@@ -293,7 +301,12 @@ public interface OutParameters extends CallableStatement {
         if (value instanceof Date date) {
             return new Timestamp(date.getTime());
         }
-        return Timestamp.valueOf(value.toString().trim());
+        try {
+            return Timestamp.valueOf(value.toString().trim());
+        } catch (IllegalArgumentException e) {
+            throw new SQLException("parameter " + index + " is not a timestamp "
+                    + "(yyyy-mm-dd hh:mm:ss[.f...])", e);
+        }
     }
 
     @Override
@@ -552,18 +565,18 @@ public interface OutParameters extends CallableStatement {
 
     @Override
     default void setDate(String name, Date value, Calendar calendar) throws SQLException {
-        setDate(indexOf(name), value);
+        setDate(indexOf(name), value, calendar);
     }
 
     @Override
     default void setTime(String name, Time value, Calendar calendar) throws SQLException {
-        setTime(indexOf(name), value);
+        setTime(indexOf(name), value, calendar);
     }
 
     @Override
     default void setTimestamp(String name, Timestamp value, Calendar calendar)
             throws SQLException {
-        setTimestamp(indexOf(name), value);
+        setTimestamp(indexOf(name), value, calendar);
     }
 
     @Override
@@ -857,6 +870,17 @@ public interface OutParameters extends CallableStatement {
     private static SQLFeatureNotSupportedException unsupported(String what) {
         return new SQLFeatureNotSupportedException("seclume does not hand " + what
                 + " out of a call - read it as a value of its own, or select it back");
+    }
+
+    /** {@code value} if it is within the type asked for - never cut to its bits. */
+    private static long fitting(long value, long least, long most, int index, String what)
+            throws SQLException {
+        if (value < least || value > most) {
+            throw new java.sql.SQLDataException("parameter " + index + " holds a number that "
+                    + "does not fit " + what + " - read it with getLong or getBigDecimal",
+                    "22003");
+        }
+        return value;
     }
 
     private static long parseLong(String text, int index) throws SQLException {

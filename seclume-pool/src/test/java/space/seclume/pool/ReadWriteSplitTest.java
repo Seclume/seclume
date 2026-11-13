@@ -2,6 +2,7 @@ package space.seclume.pool;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -142,6 +143,23 @@ class ReadWriteSplitTest {
         assertEquals("1", readOnlyCount(split));
         resume.join();
         assertArrayEquals(new long[] {1, 1, 0}, split.counts(), "the read did not wait for the replica");
+    }
+
+    /**
+     * One server as both: it is not in recovery, has replayed nothing since it
+     * started, and is at its own position - a read goes to it at once instead
+     * of waiting the whole limit for a replay that never comes.
+     */
+    @Test
+    void theSameServerAsItsOwnReplicaIsNotWaitedFor() throws Exception {
+        ReadWriteSplit split = new ReadWriteSplit(new UrlSource(primaryUrl),
+                new UrlSource(primaryUrl)).readYourWrites(Duration.ofSeconds(4));
+        insert(split);
+        long before = System.nanoTime();
+        assertEquals("1", readOnlyCount(split));
+        assertTrue(System.nanoTime() - before < Duration.ofSeconds(3).toNanos(),
+                "the read waited for a server that is not a standby");
+        assertArrayEquals(new long[] {1, 1, 0}, split.counts(), "the read fell back");
     }
 
     @Test
