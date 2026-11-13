@@ -645,6 +645,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      * <p>The end is recognised by a short block: the server sends fewer rows
      * than were asked for only when there are no more.
      */
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (lazy) {
+            return connection.session().isPaused();
+        }
+        return streaming && block != null && cursor != 0 && lastBlock >= fetchSize;
+    }
+
     boolean fetchNextBlock() throws SQLException {
         if (lazy) {
             return resumeLazy();

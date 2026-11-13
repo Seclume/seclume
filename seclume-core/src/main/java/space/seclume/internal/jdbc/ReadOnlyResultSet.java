@@ -54,6 +54,11 @@ public abstract class ReadOnlyResultSet implements ResultSet {
 
     private final Statement statement;
     private int row = -1;
+    /**
+     * The rows of the blocks read before this one. A result read in blocks is
+     * one result: its row numbers go on across them.
+     */
+    private long before;
     private boolean lastWasNull;
     private boolean closed;
 
@@ -220,12 +225,15 @@ public abstract class ReadOnlyResultSet implements ResultSet {
             // The block is read; a driver that fetches in blocks gets its
             // chance here to bring the next one. Without that hook a result
             // set is exactly as large as the memory it needs.
+            int read = rowCount();
             if (!fetchMore()) {
                 row = rowCount();
                 return false;
             }
+            before += read;
             row = -1;
             if (rowCount() == 0) {
+                row = 0;                         // after the last row, in an empty block
                 return false;
             }
         }
@@ -243,6 +251,15 @@ public abstract class ReadOnlyResultSet implements ResultSet {
      * @return whether a new block was read; it may still be empty
      */
     protected boolean fetchMore() throws SQLException {
+        return false;
+    }
+
+    /**
+     * Whether {@link #fetchMore} may still bring rows: the server has not said
+     * that the result ended. {@code false} - the default - for a result that
+     * is here whole.
+     */
+    protected boolean mayFetchMore() throws SQLException {
         return false;
     }
 
@@ -286,31 +303,43 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     @Override
     public final boolean isBeforeFirst() throws SQLException {
         checkOpen();
-        return row < 0 && rowCount() > 0;
+        return row < 0 && rowCount() > 0 && before == 0;
     }
 
     @Override
     public final boolean isAfterLast() throws SQLException {
         checkOpen();
-        return row >= rowCount() && rowCount() > 0;
+        return row >= rowCount() && (rowCount() > 0 || before > 0);
     }
 
     @Override
     public final boolean isFirst() throws SQLException {
         checkOpen();
-        return row == 0;
+        return row == 0 && rowCount() > 0 && before == 0;
     }
 
     @Override
     public final boolean isLast() throws SQLException {
         checkOpen();
-        return row == rowCount() - 1;
+        if (row < 0 || row != rowCount() - 1) {
+            return false;
+        }
+        // The last row of a block. It was taken for the last row of the
+        // result, and a loop that stopped there lost the rest. Whether it is
+        // can only be known by reading on - which would replace the block the
+        // row is in - unless the server has said that the result ended.
+        if (mayFetchMore()) {
+            throw new SQLFeatureNotSupportedException("isLast() is not known on the last row "
+                    + "of a block the server may follow with more - read on with next(), or read "
+                    + "the result whole with setFetchSize(0)", "0A000");
+        }
+        return true;
     }
 
     @Override
     public final int getRow() throws SQLException {
         checkOpen();
-        return row < 0 || row >= rowCount() ? 0 : row + 1;
+        return row < 0 || row >= rowCount() ? 0 : (int) Math.min(before + row + 1, Integer.MAX_VALUE);
     }
 
     // ---- values ----------------------------------------------------------

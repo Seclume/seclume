@@ -495,6 +495,14 @@ class OraStatement implements Statement, TtcResult.RowHandler {
      * is simply emptied and filled again - the memory of one block, not of the
      * whole result.
      */
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (!streaming || block == null) {
+            return false;
+        }
+        return connection.session().hasMoreRows();
+    }
+
     boolean fetchNextBlock() throws SQLException {
         if (!streaming || block == null) {
             return false;

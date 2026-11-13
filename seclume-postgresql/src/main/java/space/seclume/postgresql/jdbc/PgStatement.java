@@ -268,6 +268,16 @@ class PgStatement implements Statement, PgSession.RowHandler {
      * rows are read and done with - goes back to the session. A million rows
      * therefore cost the memory of one block, not of a million rows.
      */
+    /** Whether {@link #fetchNextBlock} may still bring rows - the server has not said the result ended. */
+    boolean mayFetchNextBlock() throws SQLException {
+        if (!streaming || block == null) {
+            return false;
+        }
+        // A portal is suspended when the row limit was reached - also when no
+        // row is left: PostgreSQL does not look ahead.
+        return connection.session().isPortalSuspended();
+    }
+
     boolean fetchNextBlock() throws SQLException {
         if (!streaming || block == null) {
             return false;
