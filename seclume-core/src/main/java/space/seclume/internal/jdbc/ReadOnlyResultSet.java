@@ -208,6 +208,23 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         return null;
     }
 
+    /**
+     * The cell's date and time without an offset, when the driver holds
+     * them as fields already - MySQL's binary {@code DATETIME} - or
+     * {@code null}, which leaves the value to its text.
+     *
+     * <p>Only {@code getTimestamp}, {@code getDate} and {@code getTime} take
+     * it, and only where the fields make the same value as the text would:
+     * the fields java.time accepts, which {@code Timestamp.valueOf} and
+     * {@code Date.valueOf} turn into the constructor the String parsers end
+     * in. {@code getObject} conversions read the text as before.
+     *
+     * @param column zero-based, not NULL
+     */
+    protected java.time.LocalDateTime localDateTimeAt(int column) throws SQLException {
+        return null;
+    }
+
     /** The zero-based index for a column name, or -1. */
     protected abstract int columnIndexOf(String label);
 
@@ -613,6 +630,13 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     }
 
     private Date date(int columnIndex) throws SQLException {
+        int column = check(columnIndex);
+        if (!lastWasNull) {
+            java.time.LocalDateTime fields = localDateTimeAt(column);
+            if (fields != null) {
+                return Date.valueOf(fields.toLocalDate());
+            }
+        }
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -648,6 +672,13 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     }
 
     private Time time(int columnIndex) throws SQLException {
+        int column = check(columnIndex);
+        if (!lastWasNull) {
+            java.time.LocalDateTime fields = localDateTimeAt(column);
+            if (fields != null) {
+                return Time.valueOf(fields.toLocalTime());
+            }
+        }
         String text = getString(columnIndex);
         if (text == null) {
             return null;
@@ -703,6 +734,13 @@ public abstract class ReadOnlyResultSet implements ResultSet {
     }
 
     private Timestamp timestamp(int columnIndex) throws SQLException {
+        int column = check(columnIndex);
+        if (!lastWasNull) {
+            java.time.LocalDateTime fields = localDateTimeAt(column);
+            if (fields != null) {
+                return Timestamp.valueOf(fields);
+            }
+        }
         String text = getString(columnIndex);
         if (text == null) {
             return null;

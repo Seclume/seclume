@@ -168,6 +168,53 @@ public final class BinaryValues {
         pad(text, day, 2);
     }
 
+    /**
+     * A binary {@code DATETIME} or {@code TIMESTAMP} as its fields, or
+     * {@code null} for a cell whose text the general way has to read: the
+     * zero date, a length other than 4, 7 or 11, and fields java.time does
+     * not have (the 30th of February, a Julian leap day, hour 24).
+     *
+     * <p>What it returns is what {@link #timestampText} would have written,
+     * read back: the fraction cut to the column's declared digits, as the
+     * text protocol writes it - a {@code DATETIME(3)} holding 123456
+     * microseconds is {@code .123}.
+     */
+    public static java.time.LocalDateTime localDateTime(ValueCells row, int column) {
+        int at = row.offset(column);
+        int length = row.length(column);
+        if (length != 4 && length != 7 && length != 11) {
+            return null;
+        }
+        long year = row.unsignedAt(at, 2);
+        int month = row.byteAt(at + 2) & 0xff;
+        int day = row.byteAt(at + 3) & 0xff;
+        if (length == 4) {
+            return localDateTime(year, month, day, 0, 0, 0, -1, row.fields().get(column).decimals());
+        }
+        return localDateTime(year, month, day, row.byteAt(at + 4) & 0xff, row.byteAt(at + 5) & 0xff,
+                row.byteAt(at + 6) & 0xff, length < 11 ? -1 : row.unsignedAt(at + 7, 4),
+                row.fields().get(column).decimals());
+    }
+
+    /** @param micros the fraction, or -1 for none */
+    static java.time.LocalDateTime localDateTime(long year, int month, int day, int hour,
+            int minute, int second, long micros, int decimals) {
+        if (year > 9999 || month < 1 || month > 12 || day < 1
+                || day > java.time.YearMonth.of((int) year, month).lengthOfMonth()
+                || hour > 23 || minute > 59 || second > 59 || micros > 999_999) {
+            return null;
+        }
+        long kept = Math.max(micros, 0);
+        if (micros >= 0 && decimals >= 1 && decimals < 6) {
+            long unit = 1;
+            for (int i = decimals; i < 6; i++) {
+                unit *= 10;
+            }
+            kept -= kept % unit;
+        }
+        return java.time.LocalDateTime.of((int) year, month, day, hour, minute, second, (int) (kept * 1000));
+    }
+
     /** {@code YYYY-MM-DD HH:MM:SS[.ffffff]}. */
     private static String timestamp(ValueCells row, int at, int length, int decimals) {
         if (length == 0) {
