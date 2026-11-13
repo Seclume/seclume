@@ -91,6 +91,21 @@ class KubernetesClientTest {
         assertEquals(401, refused.getCode());
     }
 
+    /**
+     * The token belongs to the API server the client was made for. A client
+     * pointed elsewhere afterwards sends the placeholder there, not the token -
+     * whichever server it happens to ask first.
+     */
+    @Test
+    void theTokenGoesOnlyToTheServerTheClientWasMadeFor() {
+        String port = url.substring("https://localhost:".length(), url.indexOf('?'));
+        ApiClient client = SeclumeKubernetes.client(url.replace("localhost:" + port,
+                "localhost:1"));
+        client.setBasePath("https://localhost:" + port);
+        ApiException refused = assertThrows(ApiException.class, () -> pods(client));
+        assertEquals(401, refused.getCode());
+    }
+
     @Test
     void theTokenIsNotOnTheHeap() throws Exception {
         ApiClient client = SeclumeKubernetes.client(url);
