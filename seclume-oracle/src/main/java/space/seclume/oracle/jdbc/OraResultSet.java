@@ -310,7 +310,7 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
         }
         int minutes = offset.getTotalSeconds() / 60;
         return (minutes < 0 ? "-" : "+") + Math.abs(minutes) / 60 + ":"
-                + String.format("%02d", Math.abs(minutes) % 60);
+                + String.format(java.util.Locale.ROOT, "%02d", Math.abs(minutes) % 60);
     }
 
     /**
@@ -330,8 +330,8 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
      * falls into a daylight-saving gap of this JVM's zone.
      */
     private static String ojdbcText(java.time.LocalDateTime value) {
-        String fraction = String.format("%09d", value.getNano()).replaceAll("0+$", "");
-        return String.format("%04d-%02d-%02d %02d:%02d:%02d.%s", value.getYear(),
+        String fraction = String.format(java.util.Locale.ROOT, "%09d", value.getNano()).replaceAll("0+$", "");
+        return String.format(java.util.Locale.ROOT, "%04d-%02d-%02d %02d:%02d:%02d.%s", value.getYear(),
                 value.getMonthValue(), value.getDayOfMonth(), value.getHour(),
                 value.getMinute(), value.getSecond(), fraction.isEmpty() ? "0" : fraction);
     }

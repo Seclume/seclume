@@ -598,7 +598,7 @@ public final class OracleSession implements AutoCloseable {
                     "the listener refused the connection with an invalid error code",
                     "08001", invalidCode);
         }
-        String message = String.format("ORA-%05d: the listener refused the connection%s", code,
+        String message = String.format(java.util.Locale.ROOT, "ORA-%05d: the listener refused the connection%s", code,
                 switch (code) {
                     case 12514 -> " - it does not know this service";
                     case 12516, 12519, 12520 -> " - no free server process at the moment";
@@ -1173,7 +1173,7 @@ public final class OracleSession implements AutoCloseable {
                 if (result.tail().isFailure()
                         && result.tail().errorNumber() != TtcResult.ORA_NO_DATA_FOUND) {
                     throw new SQLException("the LOB call failed (ORA-"
-                            + String.format("%05d", result.tail().errorNumber()) + "): "
+                            + String.format(java.util.Locale.ROOT, "%05d", result.tail().errorNumber()) + "): "
                             + result.tail().errorText(), "22000");
                 }
                 reportedLobValue = result.reported();
@@ -1563,7 +1563,7 @@ public final class OracleSession implements AutoCloseable {
             TtcResult result = readAnswer(null, java.util.List.of());
             if (result.isFailure()) {
                 throw new SQLException("the server refused the logoff (ORA-"
-                        + String.format("%05d", result.errorNumber()) + ")", "08003",
+                        + String.format(java.util.Locale.ROOT, "%05d", result.errorNumber()) + ")", "08003",
                         result.errorNumber());
             }
             forgetTheSession();
@@ -1625,7 +1625,7 @@ public final class OracleSession implements AutoCloseable {
             TtcResult result = readAnswer(null, java.util.List.of());
             if (result.isFailure()) {
                 throw new SQLException("the server rejected the " + what + " (ORA-"
-                        + String.format("%05d", result.errorNumber()) + ")", "25000",
+                        + String.format(java.util.Locale.ROOT, "%05d", result.errorNumber()) + ")", "25000",
                         result.errorNumber());
             }
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
@@ -2055,7 +2055,7 @@ public final class OracleSession implements AutoCloseable {
             TtcResult result = readAnswer(null, java.util.List.of());
             if (result.isFailure()) {
                 throw new SQLException("the server rejected the " + what + " (ORA-"
-                        + String.format("%05d", result.errorNumber()) + ")", "HY000",
+                        + String.format(java.util.Locale.ROOT, "%05d", result.errorNumber()) + ")", "HY000",
                         result.errorNumber());
             }
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
