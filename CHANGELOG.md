@@ -5,6 +5,18 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **JDBC: a timestamp without an offset and a short decimal are read once.**
+  `getTimestamp` on a value without an offset - PostgreSQL's `timestamp`, MySQL's `DATETIME` as
+  text - read its digits looking for an offset, made two more Strings looking again, and then
+  had `Timestamp.valueOf(String)` parse a third. It reads the fields once now and builds the
+  Timestamp with `Timestamp.valueOf(LocalDateTime)`, which ends in the same constructor:
+  the same value in the JVM's zone and calendar. A day java.time does not have (a Julian leap
+  day, the 30th of February) goes the old way. A decimal of up to eighteen digits is
+  `BigDecimal.valueOf(unscaled, scale)` - the parser's value and scale - instead of a parse.
+  Ten thousand rows, client CPU: PostgreSQL 16 text scan 5.3-6.4 to 4.3-5.1 ms, prepared scan
+  5.4-6.4 to 3.7-4.2 ms; MariaDB 10.11 prepared scan 6.5-7.4 to 4.8-5.6 ms, its text scan no
+  clear change (5.1-7.5 before, 5.4-5.8 after) (`LocalTimestampTest` against `Timestamp.valueOf(String)` in eight zones,
+  `TextNumberTest` against `new BigDecimal`).
 - **AWS: the session token is not written into a chunked body however its coding is spelled.**
   `SessionTokenSocket` recognised a chunked body only by `transfer-encoding: chunked` with
   exactly one space - the gap `seclume-http`'s framing closed in the third review round (#273).

@@ -185,10 +185,63 @@ public final class TextNumber {
         while (end > start && (buffer.getByte(offset + end - 1) & 0xff) <= ' ') {
             end--;
         }
+        BigDecimal small = smallDecimal(buffer, offset + start, end - start);
+        if (small != null) {
+            return small;
+        }
         for (int i = start; i < end; i++) {
             scratch[i - start] = (char) (buffer.getByte(offset + i) & 0xff);
         }
         return new BigDecimal(scratch, 0, end - start);
+    }
+
+    /** The most digits whose unscaled value always fits a long. */
+    private static final int LONG_DIGITS = 18;
+
+    /**
+     * A plain decimal of at most eighteen digits - an optional sign, digits,
+     * at most one point - as {@code BigDecimal.valueOf(unscaled, scale)}, or
+     * {@code null} for anything else, which the JDK's parser then reads.
+     *
+     * <p>{@code new BigDecimal("12.50")} is the unscaled value 1250 at scale 2,
+     * and so is {@code BigDecimal.valueOf(1250, 2)}: the same value, the same
+     * scale, the same {@code equals}. Leading zeros, {@code ".5"}, {@code "5."}
+     * and {@code "-0.00"} mean what they mean to the parser; an exponent, a
+     * second point, a lone sign or point and more digits go to it.
+     */
+    static BigDecimal smallDecimal(WireBuffer buffer, int offset, int length) {
+        int i = 0;
+        boolean negative = false;
+        if (length > 0) {
+            int first = buffer.getByte(offset) & 0xff;
+            if (first == '-' || first == '+') {
+                negative = first == '-';
+                i = 1;
+            }
+        }
+        long unscaled = 0;
+        int digits = 0;
+        int point = -1;
+        for (; i < length; i++) {
+            int character = buffer.getByte(offset + i) & 0xff;
+            if (character == '.') {
+                if (point >= 0) {
+                    return null;
+                }
+                point = i;
+                continue;
+            }
+            int digit = character - '0';
+            if (digit < 0 || digit > 9 || ++digits > LONG_DIGITS) {
+                return null;
+            }
+            unscaled = unscaled * 10 + digit;
+        }
+        if (digits == 0) {
+            return null;
+        }
+        int scale = point < 0 ? 0 : length - 1 - point;
+        return BigDecimal.valueOf(negative ? -unscaled : unscaled, scale);
     }
 
     /** The bytes as a {@code String} - only on the paths that cannot avoid it. */
