@@ -151,13 +151,26 @@ class SeclumeMetricsTest {
                 .anyMatch(m -> m.getName().equals("seclume.secret.uses")));
     }
 
+    /**
+     * A statement that takes {@code millis}; with 0 it takes no time at all.
+     *
+     * <p>Zero is an event without begin and end, whose duration JFR sets to
+     * zero - not a begin and an end around {@code Thread.sleep(0)}. That sleep
+     * is a yield, and on a busy CPU a yield is a whole time slice: on a loaded
+     * CI runner the "fast" statement once took 20.05 ms and crossed the 20 ms
+     * threshold, and with six busy loops on its CPU 17 of 1000 did.
+     */
     private static void query(String fingerprint, long millis) throws InterruptedException {
         SeclumeEvents.Query query = new SeclumeEvents.Query();
-        query.begin();
-        Thread.sleep(millis);
+        if (millis > 0) {
+            query.begin();
+            Thread.sleep(millis);
+        }
         query.kind = "postgresql";
         query.fingerprint = fingerprint;
-        query.end();
+        if (millis > 0) {
+            query.end();
+        }
         if (query.shouldCommit()) {
             query.commit();
         }
