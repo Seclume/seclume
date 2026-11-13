@@ -255,8 +255,12 @@ public final class JdbcUrl {
             int slash = url.indexOf('/');
             if (slash >= 0 && slash < oracleAt) {
                 java.util.Arrays.fill(hidden, slash + 1, oracleAt, true);
+                return;
             }
-            return;
+            // No user/password before that @: Oracle's EZConnect "thin:@//"
+            // with a user:password@ typed into its authority. Returning here
+            // showed that password in the message (JdbcUrlRedactEdgeTest) -
+            // the authority's rule below applies to it as to any other URL.
         }
         if (authority < 0) {
             return;
