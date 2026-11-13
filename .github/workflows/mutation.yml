@@ -46,18 +46,18 @@ jobs:
       fail-fast: false
       matrix:
         # A floor is the score of the mutants with a test that the package had
-        # when it was set (SECURITY-QUALITY.md, run 42427494528), rounded down
-        # and less one point - a mutant that times out on one run and not on
-        # the next moves a score by a few tenths. Below it the job fails. tls,
-        # internal and pool have none until their first run has measured them.
+        # when it was set (SECURITY-QUALITY.md: run 42427494528 for the first
+        # four, run 43224031993 for tls, internal and pool), rounded down and
+        # less one point - a mutant that times out on one run and not on the
+        # next moves a score by a few tenths. Below it the job fails.
         include:
           - {package: crypto, module: seclume-core, floor: '91'}
           - {package: secret, module: seclume-core, floor: '86'}
           - {package: field, module: seclume-core, floor: '96'}
           - {package: audit, module: seclume-core, floor: '90'}
-          - {package: tls, module: seclume-core, floor: ''}
-          - {package: internal, module: seclume-core, floor: ''}
-          - {package: pool, module: seclume-pool, floor: ''}
+          - {package: tls, module: seclume-core, floor: '88'}
+          - {package: internal, module: seclume-core, floor: '79'}
+          - {package: pool, module: seclume-pool, floor: '68'}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
