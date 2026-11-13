@@ -15,6 +15,14 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **PostgreSQL: literals mean the same whatever `standard_conforming_strings` is.**
+  `enquoteLiteral` was JDBC's default and the catalogue queries of `DatabaseMetaData` used the
+  same quoting: single quotes doubled, nothing else. With `standard_conforming_strings = off` -
+  a setting a session, a role or a database can still have - PostgreSQL reads a backslash
+  there as an escape, and `\' or true -- ` as a `getTables` pattern matched every table: the
+  rest of the value was SQL. A value with a backslash is written as an escape string `E'...'`
+  now, as libpq's `PQescapeLiteral` does (`LocalJdbcTest.anEnquotedLiteralIsOneValueToTheServerInBothSettings`,
+  `aTableNameWithABackslashAndAQuoteIsOnlyAName`).
 - **Oracle: `getColumns` names national character columns as a result set does.** The
   catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
   set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential

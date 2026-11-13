@@ -1550,4 +1550,55 @@ class LocalJdbcTest {
             assertTrue(refused.getMessage().contains("no OUT parameters"), refused.getMessage());
         }
     }
+
+    /**
+     * The server reads the literal: whatever the value, it comes back as it
+     * went in, with standard_conforming_strings on and off - and a value
+     * written to break out of quotes that are only doubled does not.
+     */
+    @Test
+    void anEnquotedLiteralIsOneValueToTheServerInBothSettings() throws Exception {
+        String[] values = {"plain", "it's", "\\", "\\' or 1=1 -- ", "ends with \\", "a\\'b",
+            "'; select 2; -- ", "ümlaut \\ and ' both"};
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            for (String setting : new String[] {"on", "off"}) {
+                statement.execute("set standard_conforming_strings = " + setting);
+                statement.execute("set escape_string_warning = off");
+                for (String value : values) {
+                    try (ResultSet rows = statement.executeQuery(
+                            "select" + statement.enquoteLiteral(value) + ", 'after'")) {
+                        assertTrue(rows.next());
+                        assertEquals(value, rows.getString(1), "standard_conforming_strings " + setting);
+                        assertEquals("after", rows.getString(2));
+                        assertFalse(rows.next());
+                    }
+                    try (ResultSet rows = statement.executeQuery(
+                            "select " + statement.enquoteNCharLiteral(value))) {
+                        assertTrue(rows.next());
+                        assertEquals(value, rows.getString(1), "N, " + setting);
+                    }
+                }
+            }
+        }
+    }
+
+    /** The catalogue's own queries take a name with a backslash and a quote as a name. */
+    @Test
+    void aTableNameWithABackslashAndAQuoteIsOnlyAName() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            statement.execute("set standard_conforming_strings = off");
+            statement.execute("set escape_string_warning = off");
+            String hostile = "\\' or true -- ";
+            try (ResultSet tables = connection.getMetaData().getTables(null, null, hostile, null)) {
+                assertFalse(tables.next(), "the pattern matched: it was read as SQL");
+            }
+            try (ResultSet columns = connection.getMetaData().getColumns(null, hostile, hostile,
+                    hostile)) {
+                assertFalse(columns.next());
+            }
+            try (ResultSet keys = connection.getMetaData().getPrimaryKeys(null, hostile, hostile)) {
+                assertFalse(keys.next());
+            }
+        }
+    }
 }

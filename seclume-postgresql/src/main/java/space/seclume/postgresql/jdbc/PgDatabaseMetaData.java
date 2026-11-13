@@ -70,7 +70,7 @@ final class PgDatabaseMetaData implements DatabaseMetaData {
 
     /** A literal for a query - single quotes doubled. */
     private static String literal(String value) {
-        return "'" + value.replace("'", "''") + "'";
+        return PgQuoting.literal(value);
     }
 
     /** A pattern such as {@code %} or {@code null} as a LIKE condition. */
