@@ -87,19 +87,20 @@ class BlockResultSetTest {
 
     @Test
     void rowNumbersGoOnAcrossTheBlocks() throws Exception {
-        BlockRows rows = new BlockRows(7, 3, true);
-        assertTrue(rows.isBeforeFirst());
-        assertEquals(0, rows.getRow());
-        // "May" is all a driver says: more rows may follow a full block, and
-        // its last row is not called the last - nor, without reading on, not.
-        assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?", "7:7 last"),
-                walk(rows));
-        assertEquals(2, rows.fetches);
-        assertTrue(rows.isAfterLast());
-        assertFalse(rows.isBeforeFirst());
-        assertEquals(0, rows.getRow());
-        assertFalse(rows.next());
-        assertTrue(rows.isAfterLast());
+        try (BlockRows rows = new BlockRows(7, 3, true)) {
+            assertTrue(rows.isBeforeFirst());
+            assertEquals(0, rows.getRow());
+            // "May" is all a driver says: more rows may follow a full block, and
+            // its last row is not called the last - nor, without reading on, not.
+            assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?", "7:7 last"),
+                    walk(rows));
+            assertEquals(2, rows.fetches);
+            assertTrue(rows.isAfterLast());
+            assertFalse(rows.isBeforeFirst());
+            assertEquals(0, rows.getRow());
+            assertFalse(rows.next());
+            assertTrue(rows.isAfterLast());
+        }
     }
 
     /**
@@ -109,31 +110,35 @@ class BlockResultSetTest {
      */
     @Test
     void theLastRowOfAFullBlockIsNotCalledTheLastWhenMoreMayCome() throws Exception {
-        BlockRows rows = new BlockRows(7, 3, false);
-        assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?", "7:7 last"),
-                walk(rows));
-        BlockRows even = new BlockRows(6, 3, false);
-        assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?"), walk(even));
-        assertTrue(even.isAfterLast(), "after the empty block that ended it");
-        assertFalse(even.isBeforeFirst());
-        assertFalse(even.isFirst());
-        assertEquals(0, even.getRow());
-        SQLException noRow = assertThrows(SQLException.class, () -> even.getInt(1));
-        assertTrue(noRow.getMessage() != null);
-        assertFalse(even.next());
-        assertTrue(even.isAfterLast());
+        try (BlockRows rows = new BlockRows(7, 3, false)) {
+            assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?", "7:7 last"),
+                    walk(rows));
+            try (BlockRows even = new BlockRows(6, 3, false)) {
+                assertEquals(List.of("1:1 first", "2:2", "3:3 last?", "4:4", "5:5", "6:6 last?"), walk(even));
+                assertTrue(even.isAfterLast(), "after the empty block that ended it");
+                assertFalse(even.isBeforeFirst());
+                assertFalse(even.isFirst());
+                assertEquals(0, even.getRow());
+                SQLException noRow = assertThrows(SQLException.class, () -> even.getInt(1));
+                assertTrue(noRow.getMessage() != null);
+                assertFalse(even.next());
+                assertTrue(even.isAfterLast());
+            }
+        }
     }
 
     @Test
     void aResultInOneBlockIsAsBefore() throws Exception {
-        BlockRows rows = new BlockRows(2, 10, false);
-        assertEquals(List.of("1:1 first", "2:2 last"), walk(rows));
-        assertTrue(rows.isAfterLast());
-        BlockRows none = new BlockRows(0, 10, false);
-        assertFalse(none.isBeforeFirst());
-        assertFalse(none.next());
-        assertFalse(none.isAfterLast(), "an empty result has no position after a last row");
-        assertFalse(none.isFirst());
-        assertFalse(none.isLast());
+        try (BlockRows rows = new BlockRows(2, 10, false)) {
+            assertEquals(List.of("1:1 first", "2:2 last"), walk(rows));
+            assertTrue(rows.isAfterLast());
+            try (BlockRows none = new BlockRows(0, 10, false)) {
+                assertFalse(none.isBeforeFirst());
+                assertFalse(none.next());
+                assertFalse(none.isAfterLast(), "an empty result has no position after a last row");
+                assertFalse(none.isFirst());
+                assertFalse(none.isLast());
+            }
+        }
     }
 }

@@ -42,57 +42,58 @@ class QueryAsCallableTest {
                     seen.add(new Seen(method, arguments));
                     return answer[0];
                 });
-        QueryAsCallable call = new QueryAsCallable(query);
-        assertSame(query, call.query());
+        try (QueryAsCallable call = new QueryAsCallable(query)) {
+            assertSame(query, call.query());
 
-        int delegated = 0;
-        int refused = 0;
-        for (Method method : CallableStatement.class.getMethods()) {
-            if (Modifier.isStatic(method.getModifiers())) {
-                continue;
-            }
-            Object[] arguments = Arrays.stream(method.getParameterTypes())
-                    .map(QueryAsCallableTest::some).toArray();
-            answer[0] = some(method.getReturnType());
-            seen.clear();
-            boolean onlyACallHasIt = !has(PreparedStatement.class, method);
-            try {
-                Object result = method.invoke(call, arguments);
-                if (onlyACallHasIt) {
-                    fail(method + " is only a call's, and answered " + result);
+            int delegated = 0;
+            int refused = 0;
+            for (Method method : CallableStatement.class.getMethods()) {
+                if (Modifier.isStatic(method.getModifiers())) {
+                    continue;
                 }
-                assertEquals(1, seen.size(), method + " reaches the query once");
-                assertEquals(method.getName(), seen.get(0).method().getName());
-                assertEquals(List.of(method.getParameterTypes()),
-                        List.of(seen.get(0).method().getParameterTypes()), method.toString());
-                for (int i = 0; i < arguments.length; i++) {
-                    if (method.getParameterTypes()[i].isPrimitive()) {
-                        assertEquals(arguments[i], seen.get(0).arguments()[i],
-                                method + ", argument " + (i + 1));
-                    } else {
-                        assertSame(arguments[i], seen.get(0).arguments()[i],
-                                method + ", argument " + (i + 1));
+                Object[] arguments = Arrays.stream(method.getParameterTypes())
+                        .map(QueryAsCallableTest::some).toArray();
+                answer[0] = some(method.getReturnType());
+                seen.clear();
+                boolean onlyACallHasIt = !has(PreparedStatement.class, method);
+                try {
+                    Object result = method.invoke(call, arguments);
+                    if (onlyACallHasIt) {
+                        fail(method + " is only a call's, and answered " + result);
                     }
+                    assertEquals(1, seen.size(), method + " reaches the query once");
+                    assertEquals(method.getName(), seen.get(0).method().getName());
+                    assertEquals(List.of(method.getParameterTypes()),
+                            List.of(seen.get(0).method().getParameterTypes()), method.toString());
+                    for (int i = 0; i < arguments.length; i++) {
+                        if (method.getParameterTypes()[i].isPrimitive()) {
+                            assertEquals(arguments[i], seen.get(0).arguments()[i],
+                                    method + ", argument " + (i + 1));
+                        } else {
+                            assertSame(arguments[i], seen.get(0).arguments()[i],
+                                    method + ", argument " + (i + 1));
+                        }
+                    }
+                    if (!method.getReturnType().isPrimitive()) {
+                        assertSame(answer[0], result, method + " hands the query's answer back");
+                    } else if (method.getReturnType() != void.class) {
+                        assertEquals(answer[0], result, method + " hands the query's answer back");
+                    }
+                    delegated++;
+                } catch (InvocationTargetException thrown) {
+                    assertTrue(onlyACallHasIt, method + " is a prepared statement's and was refused: "
+                            + thrown.getCause());
+                    SQLFeatureNotSupportedException reason = assertInstanceOf(
+                            SQLFeatureNotSupportedException.class, thrown.getCause(), method.toString());
+                    assertNotNull(reason.getMessage());
+                    assertTrue(reason.getMessage().contains("OUT parameters"), reason.getMessage());
+                    assertTrue(seen.isEmpty(), method + " was refused and still reached the query");
+                    refused++;
                 }
-                if (!method.getReturnType().isPrimitive()) {
-                    assertSame(answer[0], result, method + " hands the query's answer back");
-                } else if (method.getReturnType() != void.class) {
-                    assertEquals(answer[0], result, method + " hands the query's answer back");
-                }
-                delegated++;
-            } catch (InvocationTargetException thrown) {
-                assertTrue(onlyACallHasIt, method + " is a prepared statement's and was refused: "
-                        + thrown.getCause());
-                SQLFeatureNotSupportedException reason = assertInstanceOf(
-                        SQLFeatureNotSupportedException.class, thrown.getCause(), method.toString());
-                assertNotNull(reason.getMessage());
-                assertTrue(reason.getMessage().contains("OUT parameters"), reason.getMessage());
-                assertTrue(seen.isEmpty(), method + " was refused and still reached the query");
-                refused++;
             }
+            assertTrue(delegated > 80, "methods of a prepared statement: " + delegated);
+            assertTrue(refused > 100, "methods only a call has: " + refused);
         }
-        assertTrue(delegated > 80, "methods of a prepared statement: " + delegated);
-        assertTrue(refused > 100, "methods only a call has: " + refused);
     }
 
     private static boolean has(Class<?> type, Method method) {
@@ -131,7 +132,7 @@ class QueryAsCallableTest {
             return 8d;
         }
         if (type == String.class) {
-            return new String("text");
+            return "text";
         }
         if (type == Class.class) {
             return Object.class;

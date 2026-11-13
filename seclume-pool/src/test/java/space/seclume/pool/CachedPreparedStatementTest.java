@@ -189,7 +189,7 @@ class CachedPreparedStatementTest {
             return 8d;
         }
         if (type == String.class) {
-            return new String("text");
+            return "text";
         }
         if (type == Class.class) {
             return Object.class;

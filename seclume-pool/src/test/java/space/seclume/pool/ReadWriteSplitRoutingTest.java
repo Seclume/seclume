@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.logging.Logger;
 
@@ -117,8 +118,9 @@ class ReadWriteSplitRoutingTest {
                                 }
                                 break;
                             case "prepareStatement":
-                                if (arguments.length == 1 && ((String) arguments[0])
-                                        .contains("WAIT_FOR_EXECUTED_GTID_SET")) {
+                                if (arguments != null && arguments.length == 1
+                                        && ((String) arguments[0])
+                                                .contains("WAIT_FOR_EXECUTED_GTID_SET")) {
                                     return Proxy.newProxyInstance(getClass().getClassLoader(),
                                             new Class<?>[] {PreparedStatement.class}, (p, m, a) -> {
                                                 if (m.getName().startsWith("set")) {
@@ -128,14 +130,15 @@ class ReadWriteSplitRoutingTest {
                                                         ? rows(waitAnswer) : null;
                                             });
                                 }
-                                break;
+                                return Proxy.newProxyInstance(getClass().getClassLoader(),
+                                        new Class<?>[] {PreparedStatement.class}, (p, m, a) -> null);
                             case "close":
                                 closed++;
                                 break;
                             case "getAutoCommit":
                                 return autoCommit[0];
                             case "setAutoCommit":
-                                autoCommit[0] = (Boolean) arguments[0];
+                                autoCommit[0] = (Boolean) Objects.requireNonNull(arguments)[0];
                                 break;
                             default:
                         }
@@ -232,7 +235,7 @@ class ReadWriteSplitRoutingTest {
         connection.setReadOnly(true);
         connection.setAutoCommit(false);
         connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
-        connection.createStatement();
+        connection.createStatement().close();
         assertEquals(List.of("setAutoCommit[false]", "setTransactionIsolation[4]",
                 "setReadOnly[true]", "createStatement[]"), replica.calls);
         assertTrue(connection.toString().endsWith("replica"), connection.toString());
@@ -252,7 +255,7 @@ class ReadWriteSplitRoutingTest {
     @Test
     void anythingElseGoesToThePrimary() throws Exception {
         try (Connection connection = split.getConnection()) {
-            connection.prepareStatement("insert into t values (1)");
+            connection.prepareStatement("insert into t values (1)").close();
             assertTrue(connection.toString().endsWith("primary"), connection.toString());
         }
         assertEquals(List.of("setAutoCommit[true]", "setReadOnly[false]",
@@ -317,7 +320,7 @@ class ReadWriteSplitRoutingTest {
     private void write() throws SQLException {
         try (Connection connection = split.getConnection()) {
             connection.setAutoCommit(false);
-            connection.createStatement();
+            connection.createStatement().close();
             connection.commit();
         }
     }
@@ -325,7 +328,7 @@ class ReadWriteSplitRoutingTest {
     private String read() throws SQLException {
         try (Connection connection = split.getConnection()) {
             connection.setReadOnly(true);
-            connection.createStatement();
+            connection.createStatement().close();
             return connection.toString();
         }
     }
@@ -346,7 +349,7 @@ class ReadWriteSplitRoutingTest {
         assertTrue(read().endsWith("replica"), "caught up");
         primary.current = "1/0";
         try (Connection autoCommit = split.getConnection()) {
-            autoCommit.createStatement();              // in auto-commit: noted when given back
+            autoCommit.createStatement().close();      // in auto-commit: noted when given back
         }
         assertTrue(read().endsWith("primary"));
         replica.replayed = "1/0";

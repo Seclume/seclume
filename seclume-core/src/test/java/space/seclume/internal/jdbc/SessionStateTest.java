@@ -98,9 +98,9 @@ class SessionStateTest {
         state.clear();
         state.note(setter);
         assertTrue(state.changed(), "and again");
-        // An equal text that is another String is judged on its own - and alike.
+        // An equal text that is another String is taken for what it says - alike.
         state.clear();
-        state.note(new String(lookup));
+        state.note(new StringBuilder(lookup).toString());
         state.note(lookup);
         assertFalse(state.changed());
         String irreversible = "alter session set nls_date_format = 'yyyy'";

@@ -223,8 +223,9 @@ class OutParametersTest {
         assertThrows(SQLException.class, () -> holding("twelve").getBigDecimal(1));
     }
 
+    /** {@code getBigDecimal(int, int)}, deprecated since JDBC 2, as it still works. */
     @Test
-    @SuppressWarnings("deprecation")
+    @Deprecated
     void aDecimalAskedForWithAScaleIsRoundedHalfUp() throws Exception {
         assertEquals(new BigDecimal("12.35"), holding("12.345").getBigDecimal(1, 2));
         assertEquals(new BigDecimal("12.3450"), holding("12.345").getBigDecimal(1, 4));

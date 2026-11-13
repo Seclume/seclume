@@ -58,8 +58,8 @@ public final class SessionState {
             return;
         }
         java.lang.ref.WeakReference<String> last = harmless;
-        if (last != null && last.get() == sql) {
-            return;                              // this very text, judged before: nothing
+        if (last != null && sql.equals(last.get())) {
+            return;                              // this text, judged before: nothing
         }
         int verdict = verdict(sql);
         if (verdict == 0) {
