@@ -23,6 +23,15 @@ All notable changes to seclume are recorded here. Versions follow
   rest of the value was SQL. A value with a backslash is written as an escape string `E'...'`
   now, as libpq's `PQescapeLiteral` does (`LocalJdbcTest.anEnquotedLiteralIsOneValueToTheServerInBothSettings`,
   `aTableNameWithABackslashAndAQuoteIsOnlyAName`).
+- **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
+  Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
+  second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a
+  secret that got one a byte further in went into the log readable, in a token's payload for
+  one. Percent-encoding is now also found with lower-case hex digits (`%2f`). A line is
+  scanned once per length of a form, not once per length and form: with ten secrets a
+  174-character line took 142 µs and takes 18.5 µs, with one 8.8 and 2.6 µs
+  (`SecretMaskerTest.urlSafeBase64InsideALongerTextIsMaskedAtEveryOffset`,
+  `everyOneOfManySecretsIsMasked`).
 - **Oracle: `getColumns` names national character columns as a result set does.** The
   catalogue said `VARCHAR` and `CHAR` for `NVARCHAR2` and `NCHAR` columns, where the result
   set's own metadata - and ojdbc - say `NVARCHAR` and `NCHAR`. Found when the differential
@@ -80,6 +89,19 @@ All notable changes to seclume are recorded here. Versions follow
   that was gone, in a loop that never returned and kept a CPU busy; iterating
   `collection.watch()` did not end when the collection was dropped. It now returns `false`
   (`LocalChangeStreamTest.aStreamOnADroppedCollectionEnds`).
+- **MongoDB: a cursor whose `getMore` got no answer is killed when it is closed.** Every failed
+  `getMore` was taken as the server's refusal, and the cursor's id forgotten. After a lost
+  connection or a timeout on this side the server still holds the cursor, and `close()` did
+  nothing: it stayed open there until the server's idle timeout. Such a cursor is not read on -
+  the server may have sent a batch nobody received - but `close()` now sends `killCursors` for
+  it (`LocalNothingCarriesOverTest.aCursorWhoseGetMoreGotNoAnswerIsKilledByClose`).
+- **MongoDB: `$merge` with the target's name alone gives its results.** `{ $merge: "name" }`
+  is the short form the server accepts. The pipeline wrote, and reading the results back then
+  failed, because only the document form was expected
+  (`LocalDriverTest.mergeIntoACollectionNamedByAString`).
+- **MongoDB: dropping the indexes of a collection that is not there is no error.** `dropIndex`
+  and `dropIndexes` passed the server's NamespaceNotFound on, where `drop()` and the official
+  driver do not (`LocalDriverTest.droppingTheIndexesOfNoCollectionIsNoError`).
 - **No private key in a checkpoint image.** A TLS server's or client's key, a GCP service
   account's, SSH, JWT and access log signing keys live in OpenSSL's or CNG's memory for as long
   as the application runs, and `seclume-crac` did not count them: a CRaC or SnapStart image held
