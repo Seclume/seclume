@@ -164,6 +164,63 @@ public final class TdsValues {
         };
     }
 
+    /**
+     * A {@code datetime2}, {@code datetime} or {@code smalldatetime} as its
+     * fields, or {@code null} where the value's text has to be read: any
+     * other type, a year past 9999, a time of day past 23:59:59, a scale or a
+     * length the format does not have.
+     *
+     * <p>The fields are those {@link #asText} writes for the same bytes - the
+     * date of {@code LocalDate.ofEpochDay}, the fraction to the column's
+     * scale, a {@code datetime}'s in milliseconds, a {@code smalldatetime}'s
+     * none - so {@code Timestamp.valueOf} of them is {@code Timestamp.valueOf}
+     * of that text, without writing it and reading it back.
+     */
+    public static java.time.LocalDateTime asLocalDateTime(WireBuffer in, int type, int at, int length,
+            int scale) {
+        return switch (type) {
+            case TdsTypes.DATETIME2N -> {
+                int timeBytes = length - 3;
+                if (scale < 0 || scale > MAX_TIME_SCALE || timeBytes < 3 || timeBytes > 5) {
+                    yield null;
+                }
+                yield fields(days(in, at + timeBytes) - DAYS_1970, unsigned(in, at, timeBytes),
+                        ticksPerSecond(scale), scale);
+            }
+            case TdsTypes.DATETIME, TdsTypes.DATETIM4, TdsTypes.DATETIMN -> {
+                if (length == 4) {
+                    yield fields(DAYS_1900 + (int) unsigned(in, at, 2) - DAYS_1970,
+                            unsigned(in, at + 2, 2) * 60L, 1, 0);
+                }
+                if (length != 8) {
+                    yield null;
+                }
+                yield fields(DAYS_1900 + (int) unsigned(in, at, 4) - DAYS_1970,
+                        unsigned(in, at + 4, 4) * 10L / 3L, 1000, 3);
+            }
+            default -> null;
+        };
+    }
+
+    /** The days of years 0 to 9999: outside them the text's year is not four digits. */
+    private static final long FIRST_DAY_OF_0000 = java.time.LocalDate.of(0, 1, 1).toEpochDay();
+    private static final long LAST_DAY_OF_9999 = java.time.LocalDate.of(9999, 12, 31).toEpochDay();
+
+    private static java.time.LocalDateTime fields(long epochDay, long ticks, long perSecond, int scale) {
+        long seconds = ticks / perSecond;
+        long fraction = ticks - seconds * perSecond;
+        if (seconds >= 86_400 || epochDay > LAST_DAY_OF_9999 || epochDay < FIRST_DAY_OF_0000) {
+            return null;
+        }
+        long nanos = fraction;
+        for (int i = scale; i < 9; i++) {
+            nanos *= 10;
+        }
+        return java.time.LocalDateTime.of(java.time.LocalDate.ofEpochDay(epochDay),
+                java.time.LocalTime.of((int) (seconds / 3600), (int) (seconds / 60 % 60),
+                        (int) (seconds % 60), (int) nanos));
+    }
+
     /** The raw bytes of the value - for {@code binary}, {@code varbinary}, {@code image}. */
     public static byte[] asBytes(WireBuffer in, int at, int length) {
         // The slice first: it checks the length against what the buffer holds,

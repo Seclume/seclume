@@ -81,6 +81,24 @@ public final class TdsResultSet extends ReadOnlyResultSet implements space.seclu
                 block.length(column), description.scale(), description.textCharset());
     }
 
+    /**
+     * A {@code datetime2}, {@code datetime} or {@code smalldatetime} from its
+     * bytes, for getTimestamp, getDate and getTime: rendering it as text to
+     * parse it back is what they cost before.
+     */
+    @Override
+    protected java.time.LocalDateTime localDateTimeAt(int column) {
+        TdsColumn description = block.column(column);
+        return TdsValues.asLocalDateTime(block.data(), description.type(), block.offset(column),
+                block.length(column), description.scale());
+    }
+
+    /** A Timestamp from the fields where they are the text's value, else from the text. */
+    private java.sql.Timestamp timestampAt(int column) {
+        java.time.LocalDateTime fields = localDateTimeAt(column);
+        return fields != null ? java.sql.Timestamp.valueOf(fields) : java.sql.Timestamp.valueOf(stringAt(column));
+    }
+
     /** A decimal from its bytes, without the text in between where it fits a long. */
     @Override
     protected java.math.BigDecimal decimalAt(int column) {
@@ -157,7 +175,7 @@ public final class TdsResultSet extends ReadOnlyResultSet implements space.seclu
             case TdsTypes.DATEN -> java.sql.Date.valueOf(stringAt(column));
             case TdsTypes.TIMEN -> java.sql.Time.valueOf(withoutFraction(stringAt(column)));
             case TdsTypes.DATETIME, TdsTypes.DATETIM4, TdsTypes.DATETIMN,
-                 TdsTypes.DATETIME2N -> java.sql.Timestamp.valueOf(stringAt(column));
+                 TdsTypes.DATETIME2N -> timestampAt(column);
             case TdsTypes.DATETIMEOFFSETN ->
                     java.time.OffsetDateTime.parse(isoOffset(stringAt(column)));
             case TdsTypes.BINARY, TdsTypes.BIGBINARY, TdsTypes.VARBINARY,
