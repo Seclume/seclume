@@ -1102,4 +1102,126 @@ public final class QueryAsCallable implements CallableStatement {
     public boolean isWrapperFor(java.lang.Class<?> a0) throws java.sql.SQLException {
         return query.isWrapperFor(a0);
     }
+
+    // ---- the interfaces' default methods ---------------------------------
+    //
+    // JDBC 4.2 added these with a body that throws "not implemented", so a
+    // class that leaves them out still compiles - and a query prepared with
+    // prepareCall then refused executeLargeUpdate() and setObject with an
+    // SQLType, which the same query prepared with prepareStatement takes.
+
+    @Override
+    public void setObject(int a0, java.lang.Object a1, java.sql.SQLType a2, int a3) throws java.sql.SQLException {
+        query.setObject(a0, a1, a2, a3);
+    }
+
+    @Override
+    public void setObject(int a0, java.lang.Object a1, java.sql.SQLType a2) throws java.sql.SQLException {
+        query.setObject(a0, a1, a2);
+    }
+
+    @Override
+    public long executeLargeUpdate() throws java.sql.SQLException {
+        return query.executeLargeUpdate();
+    }
+
+    @Override
+    public long getLargeUpdateCount() throws java.sql.SQLException {
+        return query.getLargeUpdateCount();
+    }
+
+    @Override
+    public void setLargeMaxRows(long a0) throws java.sql.SQLException {
+        query.setLargeMaxRows(a0);
+    }
+
+    @Override
+    public long getLargeMaxRows() throws java.sql.SQLException {
+        return query.getLargeMaxRows();
+    }
+
+    @Override
+    public long[] executeLargeBatch() throws java.sql.SQLException {
+        return query.executeLargeBatch();
+    }
+
+    @Override
+    public long executeLargeUpdate(java.lang.String a0) throws java.sql.SQLException {
+        return query.executeLargeUpdate(a0);
+    }
+
+    @Override
+    public long executeLargeUpdate(java.lang.String a0, int a1) throws java.sql.SQLException {
+        return query.executeLargeUpdate(a0, a1);
+    }
+
+    @Override
+    public long executeLargeUpdate(java.lang.String a0, int[] a1) throws java.sql.SQLException {
+        return query.executeLargeUpdate(a0, a1);
+    }
+
+    @Override
+    public long executeLargeUpdate(java.lang.String a0, java.lang.String[] a1) throws java.sql.SQLException {
+        return query.executeLargeUpdate(a0, a1);
+    }
+
+    @Override
+    public java.lang.String enquoteLiteral(java.lang.String a0) throws java.sql.SQLException {
+        return query.enquoteLiteral(a0);
+    }
+
+    @Override
+    public java.lang.String enquoteIdentifier(java.lang.String a0, boolean a1) throws java.sql.SQLException {
+        return query.enquoteIdentifier(a0, a1);
+    }
+
+    @Override
+    public boolean isSimpleIdentifier(java.lang.String a0) throws java.sql.SQLException {
+        return query.isSimpleIdentifier(a0);
+    }
+
+    @Override
+    public java.lang.String enquoteNCharLiteral(java.lang.String a0) throws java.sql.SQLException {
+        return query.enquoteNCharLiteral(a0);
+    }
+
+    @Override
+    public void setObject(java.lang.String a0, java.lang.Object a1, java.sql.SQLType a2, int a3) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
+
+    @Override
+    public void setObject(java.lang.String a0, java.lang.Object a1, java.sql.SQLType a2) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
+
+    @Override
+    public void registerOutParameter(int a0, java.sql.SQLType a1) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
+
+    @Override
+    public void registerOutParameter(int a0, java.sql.SQLType a1, int a2) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
+
+    @Override
+    public void registerOutParameter(int a0, java.sql.SQLType a1, java.lang.String a2) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
+
+    @Override
+    public void registerOutParameter(java.lang.String a0, java.sql.SQLType a1) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
+
+    @Override
+    public void registerOutParameter(java.lang.String a0, java.sql.SQLType a1, int a2) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
+
+    @Override
+    public void registerOutParameter(java.lang.String a0, java.sql.SQLType a1, java.lang.String a2) throws java.sql.SQLException {
+        throw noOutParameters();
+    }
 }
