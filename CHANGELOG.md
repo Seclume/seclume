@@ -15,6 +15,13 @@ All notable changes to seclume are recorded here. Versions follow
   tables in the job summary, the reports and `coverage.json` (with the commit and run) as an
   artifact. Nothing is excluded (`.github/scripts/coverage_report.py`, tested by
   `test_coverage_report.py`).
+- **MySQL: dates and times of a prepared query are read without a `Formatter`.** The binary
+  protocol sends a `DATETIME` as numbers, and the driver made its text with two or three
+  `String.format` calls per value - 59 % of the CPU time of reading a 10,000-row result with
+  one timestamp column. The text is built digit by digit now, and is the same
+  (`BinaryTemporalTextTest` compares it with the old patterns for every edge of each field and
+  200,000 random values). Measured against a local MariaDB 10.11, three runs each: client CPU
+  time per query 10.9-12.6 ms before, 4.7-5.4 ms after.
 - **Log masking: URL-safe Base64 is looked for at every offset.** A secret inside a longer
   Base64 text is looked for at the three places a byte can start. For the URL-safe alphabet the
   second and third were skipped whenever the secret's own Base64 had no `+` or `/` - and a

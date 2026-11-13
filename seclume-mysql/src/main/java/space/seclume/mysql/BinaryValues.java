@@ -116,9 +116,30 @@ public final class BinaryValues {
      * protocol writes it: a {@code timestamp(3)} is {@code .123}, not
      * {@code .123000}. The wire always carries microseconds.
      */
-    private static String fraction(long micros, int decimals) {
-        String six = String.format(".%06d", micros);
-        return decimals >= 1 && decimals < 6 ? six.substring(0, 1 + decimals) : six;
+    static void fraction(StringBuilder text, long micros, int decimals) {
+        int from = text.length();
+        text.append('.');
+        digits(text, micros, 6);
+        if (decimals >= 1 && decimals < 6) {
+            text.setLength(from + 1 + decimals);
+        }
+    }
+
+    /**
+     * {@code value} in decimal, zeros in front up to {@code width} - what
+     * {@code %0<width>d} writes for a value that is not negative, without a
+     * Formatter: three of those per timestamp were most of the time a
+     * prepared query spent reading one.
+     */
+    static void digits(StringBuilder text, long value, int width) {
+        int length = 1;
+        for (long rest = value; rest >= 10; rest /= 10) {
+            length++;
+        }
+        for (int i = length; i < width; i++) {
+            text.append('0');
+        }
+        text.append(value);
     }
 
     /** {@code YYYY-MM-DD}; zero bytes mean the zero date. */
@@ -126,10 +147,22 @@ public final class BinaryValues {
         if (length == 0) {
             return "0000-00-00";
         }
-        int year = (int) row.unsignedAt(at, 2);
-        int month = row.byteAt(at + 2) & 0xff;
-        int day = row.byteAt(at + 3) & 0xff;
-        return String.format("%04d-%02d-%02d", year, month, day);
+        StringBuilder text = new StringBuilder(10);
+        date(text, row, at);
+        return text.toString();
+    }
+
+    private static void date(StringBuilder text, ValueCells row, int at) {
+        dateText(text, (int) row.unsignedAt(at, 2), row.byteAt(at + 2) & 0xff,
+                row.byteAt(at + 3) & 0xff);
+    }
+
+    static void dateText(StringBuilder text, int year, int month, int day) {
+        digits(text, year, 4);
+        text.append('-');
+        digits(text, month, 2);
+        text.append('-');
+        digits(text, day, 2);
     }
 
     /** {@code YYYY-MM-DD HH:MM:SS[.ffffff]}. */
@@ -137,19 +170,26 @@ public final class BinaryValues {
         if (length == 0) {
             return "0000-00-00 00:00:00";
         }
-        String day = date(row, at, length);
+        StringBuilder text = new StringBuilder(26);
+        date(text, row, at);
         if (length <= 4) {
-            return day + " 00:00:00";
+            return text.append(" 00:00:00").toString();
         }
-        int hour = row.byteAt(at + 4) & 0xff;
-        int minute = row.byteAt(at + 5) & 0xff;
-        int second = row.byteAt(at + 6) & 0xff;
-        String base = String.format("%s %02d:%02d:%02d", day, hour, minute, second);
-        if (length < 11) {
-            return base;
+        text.append(' ');
+        clock(text, row.byteAt(at + 4) & 0xff, row.byteAt(at + 5) & 0xff,
+                row.byteAt(at + 6) & 0xff);
+        if (length >= 11) {
+            fraction(text, row.unsignedAt(at + 7, 4), decimals);
         }
-        long micros = row.unsignedAt(at + 7, 4);
-        return base + fraction(micros, decimals);
+        return text.toString();
+    }
+
+    static void clock(StringBuilder text, long hours, int minute, int second) {
+        digits(text, hours, 2);
+        text.append(':');
+        digits(text, minute, 2);
+        text.append(':');
+        digits(text, second, 2);
     }
 
     /**
@@ -163,14 +203,14 @@ public final class BinaryValues {
         boolean negative = row.byteAt(at) != 0;
         long days = row.unsignedAt(at + 1, 4);
         int hour = row.byteAt(at + 5) & 0xff;
-        int minute = row.byteAt(at + 6) & 0xff;
-        int second = row.byteAt(at + 7) & 0xff;
-        long hours = days * 24 + hour;
-        String base = String.format("%s%02d:%02d:%02d", negative ? "-" : "", hours, minute, second);
-        if (length < 12) {
-            return base;
+        StringBuilder text = new StringBuilder(18);
+        if (negative) {
+            text.append('-');
         }
-        long micros = row.unsignedAt(at + 8, 4);
-        return base + fraction(micros, decimals);
+        clock(text, days * 24 + hour, row.byteAt(at + 6) & 0xff, row.byteAt(at + 7) & 0xff);
+        if (length >= 12) {
+            fraction(text, row.unsignedAt(at + 8, 4), decimals);
+        }
+        return text.toString();
     }
 }
