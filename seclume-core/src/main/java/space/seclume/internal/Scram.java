@@ -488,11 +488,18 @@ public class Scram implements AutoCloseable {
      */
     private int writeBinding(MemorySegment target, int position) {
         MemorySegment raw = arena.allocate(gs2Length + bindingLength);
-        MemorySegment.copy(gs2Header, 0, raw, 0, gs2Length);
-        if (bindingLength > 0) {
-            MemorySegment.copy(bindingData, 0, raw, gs2Length, bindingLength);
+        try {
+            MemorySegment.copy(gs2Header, 0, raw, 0, gs2Length);
+            if (bindingLength > 0) {
+                MemorySegment.copy(bindingData, 0, raw, gs2Length, bindingLength);
+            }
+            return Base64Off.encode(raw, 0, gs2Length + bindingLength, target, position);
+        } finally {
+            // A copy of the header and the channel binding data, held in no
+            // field - close() cannot find it, so it is wiped here, or the
+            // arena would be freed with it in it (ScramWipeTest).
+            raw.fill((byte) 0);
         }
-        return Base64Off.encode(raw, 0, gs2Length + bindingLength, target, position);
     }
 
     private void mac(MemorySegment key, String message, MemorySegment out) {
