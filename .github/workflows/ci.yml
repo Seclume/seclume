@@ -565,7 +565,7 @@ jobs:
       # own for the heap proof), so it needs nothing started beside it.
       # With JaCoCo (-Pcoverage): which code these tests ran, module by module -
       # the numbers SECURITY-QUALITY.md publishes come from here.
-      - run: .github/scripts/mvnw-retry.sh -B -Pcoverage -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-jpa,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac -am test
+      - run: .github/scripts/mvnw-own-tests.sh -B -Pcoverage -pl seclume-core,seclume-tck,seclume-pool,seclume-nats,seclume-opentelemetry,seclume-verify,seclume-heapdump,seclume-logging,seclume-jpa,seclume-heapcheck,seclume-admission,seclume-mail,seclume-jwt,seclume-http,seclume-rabbitmq,seclume-keys,seclume-ssh,seclume-aws,seclume-ldap,seclume-azure,seclume-gcp,seclume-kubernetes,seclume-jgit,seclume-grpc,seclume-crac,seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-reactive,seclume-redis,seclume-elasticsearch -am test
         env:
           SECLUME_AZURITE: ${{ github.workspace }}/.github/ci-tools/node_modules/.bin/azurite
       # Every test that carries a security claim ran and passed - none
@@ -1302,7 +1302,7 @@ jobs:
             < "$RUNNER_TEMP/rabbit-password"
           docker exec -u rabbitmq rabbit rabbitmqctl set_permissions -p / seclume '.*' '.*' '.*'
           cp cert.pem "$RUNNER_TEMP/rabbit-cert.pem"
-      - run: .github/scripts/mvnw-retry.sh -B -pl seclume-rabbitmq -am test
+      - run: .github/scripts/mvnw-own-tests.sh -B -pl seclume-rabbitmq -am test
         env:
           SECLUME_RABBITMQ_PORT: '5671'
           SECLUME_RABBITMQ_CERT: ${{ runner.temp }}/rabbit-cert.pem
@@ -1353,7 +1353,7 @@ jobs:
       - name: MongoDB behind a load balancer
         run: bash .github/scripts/mongo_lb_fixtures.sh "$RUNNER_TEMP/mongo-lb"
       - run: >-
-          .github/scripts/mvnw-retry.sh -B -pl seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-reactive,seclume-mongodb-spring-test -am
+          .github/scripts/mvnw-own-tests.sh -B -pl seclume-mongodb,seclume-mongodb-driver,seclume-mongodb-reactive,seclume-mongodb-spring-test -am
           test -Dseclume.mongo.host=127.0.0.1
       # Skipped is not passed: a test that found no server proves nothing.
       - name: Require executed MongoDB tests
@@ -1386,7 +1386,7 @@ jobs:
       - name: Elasticsearch and OpenSearch with TLS
         run: bash .github/scripts/search_fixtures.sh "$RUNNER_TEMP/search"
       - run: >-
-          .github/scripts/mvnw-retry.sh -B -pl seclume-elasticsearch -am test -Dseclume.search.host=127.0.0.1
+          .github/scripts/mvnw-own-tests.sh -B -pl seclume-elasticsearch -am test -Dseclume.search.host=127.0.0.1
           -Dtest='space.seclume.elasticsearch.**' -Dsurefire.failIfNoSpecifiedTests=false
       # Skipped is not passed here either.
       - name: Require executed search tests
@@ -1533,7 +1533,7 @@ jobs:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
       - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
-      - run: .github/scripts/mvnw-retry.sh -B ${{ matrix.version == '18' && '-Pcoverage' || '' }} -pl seclume-postgresql,seclume-pool,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
+      - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.version == '18' && '-Pcoverage' || '' }} -pl seclume-postgresql,seclume-pool,seclume-r2dbc,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
       - name: Coverage data
@@ -1597,7 +1597,7 @@ jobs:
       # password is not on the heap afterwards.
       - name: Micronaut and Helidon against this server
         run: >-
-          .github/scripts/mvnw-retry.sh -B -pl seclume-micronaut,seclume-helidon -am test
+          .github/scripts/mvnw-own-tests.sh -B -pl seclume-micronaut,seclume-helidon -am test
           -Dtest='SeclumeMicronautTest,LocalMicronautPostgresTest,LocalMicronautDataPostgresTest,SeclumeSettingsTest,SeclumeHelidonTest,SeclumeCdiExtensionTest,SeclumeCdiExtensionOnceTest,LocalHelidonPostgresTest,LocalHelidonMpPostgresTest'
           -Dsurefire.failIfNoSpecifiedTests=false
       - name: Require executed Micronaut and Helidon tests
@@ -1775,7 +1775,7 @@ jobs:
           printf '%s' "$PW" > .local-pgrepl-password
           printf '%s' "$PW" > .local-myrepl-password
       - run: >-
-          .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test
+          .github/scripts/mvnw-own-tests.sh -B -pl seclume-pool -am test
           -Dtest='ReadWriteSplitTest,ReadWriteSplitMySqlTest' -Dsurefire.failIfNoSpecifiedTests=false
           -Dseclume.pgrepl.host=127.0.0.1 -Dseclume.pgrepl.primary=5432 -Dseclume.pgrepl.replica=5433
           -Dseclume.myrepl.host=127.0.0.1 -Dseclume.myrepl.primary=3306 -Dseclume.myrepl.replica=3307
@@ -1866,7 +1866,7 @@ jobs:
       # server; this job's is on 3306. Without saying so they skipped here -
       # eighteen of them - and require_servers.py now fails a job where that
       # happens again.
-      - run: .github/scripts/mvnw-retry.sh -B ${{ matrix.image == 'mysql:8.4' && '-Pcoverage' || '' }} -pl seclume-mysql -am test -Dseclume.mysql.port=3306
+      - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.image == 'mysql:8.4' && '-Pcoverage' || '' }} -pl seclume-mysql -am test -Dseclume.mysql.port=3306
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
       - name: Coverage data
@@ -1970,7 +1970,7 @@ jobs:
           echo "::error title=sqlserver::SQL Server ${{ matrix.version }} never accepted a login: $(docker logs "$id" 2>&1 | tail -15 | tr '\n' ' ' | cut -c1-2500)"
           exit 1
       - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
-      - run: .github/scripts/mvnw-retry.sh -B ${{ matrix.version == '2022' && '-Pcoverage' || '' }} -pl seclume-sqlserver -am test
+      - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.version == '2022' && '-Pcoverage' || '' }} -pl seclume-sqlserver -am test
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
       - name: Coverage data
@@ -2083,7 +2083,7 @@ jobs:
             'grant create session, create table, create sequence, create view, create procedure, create trigger to seclume_spring;' \
             'exit' | docker exec -i oracle sqlplus -s / as sysdba
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
-      - run: .github/scripts/mvnw-retry.sh -B -Pcoverage -pl seclume-oracle -am test
+      - run: .github/scripts/mvnw-own-tests.sh -B -Pcoverage -pl seclume-oracle -am test
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
       - name: Coverage data
