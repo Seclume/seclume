@@ -957,4 +957,38 @@ class LocalSqlServerTest {
             assertTrue(session.sessionStateChanged(), "a prepared sp_set_session_context in a batch left no trace");
         }
     }
+
+    /**
+     * datetime2 at every scale, datetime and smalldatetime, read from their
+     * fields by getTimestamp, getDate, getTime and getObject, are the values
+     * their text is - through a Statement and through a PreparedStatement.
+     */
+    @Test
+    void aDatetimeReadFromItsFieldsIsTheValueItsTextIs() throws Exception {
+        String select = "select cast('2026-09-24 13:14:15.1234567' as datetime2(0)),"
+                + " cast('2026-09-24 13:14:15.1234567' as datetime2(3)),"
+                + " cast('2026-09-24 13:14:15.1234567' as datetime2(7)),"
+                + " cast('0001-01-01 00:00:00' as datetime2(7)), cast('9999-12-31 23:59:59.9999999' as datetime2(7)),"
+                + " cast('1753-01-01 00:00:00.003' as datetime), cast('2026-09-24 23:59:59.997' as datetime),"
+                + " cast('2026-09-24 13:14:00' as smalldatetime), cast(null as datetime2)";
+        try (Connection connection = connect(); Statement statement = connection.createStatement();
+             PreparedStatement prepared = connection.prepareStatement(select)) {
+            for (ResultSet rows : new ResultSet[] {statement.executeQuery(select), prepared.executeQuery()}) {
+                try (rows) {
+                    assertTrue(rows.next());
+                    for (int column = 1; column <= 8; column++) {
+                        String text = rows.getString(column);
+                        java.sql.Timestamp expected = java.sql.Timestamp.valueOf(text);
+                        assertEquals(expected, rows.getTimestamp(column), text);
+                        assertEquals(expected.getNanos(), rows.getTimestamp(column).getNanos(), text);
+                        assertEquals(expected, rows.getObject(column), text);
+                        assertEquals(java.sql.Date.valueOf(text.substring(0, 10)), rows.getDate(column), text);
+                        assertEquals(java.sql.Time.valueOf(text.substring(11, 19)), rows.getTime(column), text);
+                    }
+                    assertEquals(null, rows.getTimestamp(9));
+                    assertTrue(rows.wasNull());
+                }
+            }
+        }
+    }
 }

@@ -1757,4 +1757,77 @@ class LocalJdbcTest {
                 assertEquals(value, rows.getString(1), "N, " + setting);
             }
         }
-    }}
+    }
+
+    /**
+     * A {@code timestamp} is the Timestamp its text is, through the direct
+     * path of getTimestamp, and getDate and getTime take the same fields;
+     * infinity, a BC date and a year past 9999 answer with an SQLException.
+     * The same test passes against the code before that path.
+     */
+    @Test
+    void aTimestampIsTheValueItsText() throws Exception {
+        String[] values = {"2026-09-24 13:14:15", "2026-09-24 13:14:15.123456", "2026-01-01 00:00:00",
+            "1582-10-10 12:00:00", "1000-03-01 00:00:00.5", "9999-12-31 23:59:59.999999", "2024-02-29 23:59:59.1"};
+        try (Connection connection = connect();
+             PreparedStatement both = connection.prepareStatement("select ?::timestamp, (?::timestamp)::text");
+             PreparedStatement one = connection.prepareStatement("select ?::timestamp")) {
+            for (String value : values) {
+                both.setString(1, value);
+                both.setString(2, value);
+                try (ResultSet rows = both.executeQuery()) {
+                    assertTrue(rows.next());
+                    String text = rows.getString(2);
+                    java.sql.Timestamp expected = java.sql.Timestamp.valueOf(text);
+                    assertEquals(expected, rows.getTimestamp(1), value);
+                    assertEquals(expected.getNanos(), rows.getTimestamp(1).getNanos(), value);
+                    assertEquals(java.sql.Date.valueOf(text.substring(0, 10)), rows.getDate(1), value);
+                    assertEquals(java.sql.Time.valueOf(text.substring(11, 19)), rows.getTime(1), value);
+                }
+            }
+            for (String odd : new String[] {"infinity", "-infinity", "0044-03-15 12:00:00 BC", "12026-01-01 00:00:00"}) {
+                one.setString(1, odd);
+                try (ResultSet rows = one.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertThrows(SQLException.class, () -> rows.getTimestamp(1), odd);
+                }
+            }
+        }
+    }
+
+    /**
+     * The session reuses the result formats it asked for when a prepared
+     * statement hands in the same column list again. Two statements with
+     * binary-read columns in different places, taken in turn, must each be
+     * decoded in their own formats, every time.
+     */
+    @Test
+    void resultFormatsReusedAcrossExecutionsAreEachStatementsOwn() throws Exception {
+        try (Connection connection = connect();
+             PreparedStatement first = connection.prepareStatement("select ?::int4 + 1, 'text' || ?, ?::int8 * 2");
+             PreparedStatement second = connection.prepareStatement("select 'a' || ?, ?::int8 + 7, ?::float8 / 2")) {
+            for (int round = 0; round < 6; round++) {
+                first.setInt(1, round);
+                first.setString(2, "r" + round);
+                first.setLong(3, round);
+                try (ResultSet rows = first.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals(round + 1, rows.getInt(1));
+                    assertEquals(String.valueOf(round + 1), rows.getString(1));
+                    assertEquals("textr" + round, rows.getString(2));
+                    assertEquals(round * 2L, rows.getLong(3));
+                }
+                second.setString(1, "b" + round);
+                second.setLong(2, round);
+                second.setDouble(3, round);
+                try (ResultSet rows = second.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("ab" + round, rows.getString(1));
+                    assertEquals(round + 7L, rows.getLong(2));
+                    assertEquals(String.valueOf(round + 7), rows.getString(2));
+                    assertEquals(round / 2.0, rows.getDouble(3));
+                }
+            }
+        }
+    }
+}

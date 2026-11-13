@@ -1025,4 +1025,35 @@ class LocalOracleJdbcTest {
             statement.execute("drop table zl_locked");
         }
     }
+
+    /**
+     * A DATE and a TIMESTAMP read from their fields by getTimestamp, getDate
+     * and getTime are the values their text is - through a Statement and a
+     * PreparedStatement, with and without a fraction, at the ends of the
+     * calendar Oracle and java.sql share.
+     */
+    @Test
+    void aDateReadFromItsFieldsIsTheValueItsTextIs() throws Exception {
+        String select = "select date '2026-09-24', timestamp '2026-09-24 13:14:15.123456789',"
+                + " timestamp '2026-09-24 13:14:15', date '0001-01-01', timestamp '9999-12-31 23:59:59.999999999',"
+                + " cast(timestamp '2026-09-24 13:14:15.5' as timestamp(3)), cast(null as date) from dual";
+        try (Connection connection = connect(); Statement statement = connection.createStatement();
+             PreparedStatement prepared = connection.prepareStatement(select)) {
+            for (ResultSet rows : new ResultSet[] {statement.executeQuery(select), prepared.executeQuery()}) {
+                try (rows) {
+                    assertTrue(rows.next());
+                    for (int column = 1; column <= 6; column++) {
+                        String text = rows.getString(column);
+                        java.sql.Timestamp expected = java.sql.Timestamp.valueOf(text);
+                        assertEquals(expected, rows.getTimestamp(column), text);
+                        assertEquals(expected.getNanos(), rows.getTimestamp(column).getNanos(), text);
+                        assertEquals(java.sql.Date.valueOf(text.substring(0, 10)), rows.getDate(column), text);
+                        assertEquals(java.sql.Time.valueOf(text.substring(11, 19)), rows.getTime(column), text);
+                    }
+                    assertNull(rows.getTimestamp(7));
+                    assertTrue(rows.wasNull());
+                }
+            }
+        }
+    }
 }

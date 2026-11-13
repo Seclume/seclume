@@ -5,6 +5,73 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **CI: a job runs the tests of its own modules, not those of every module it builds.**
+  `mvn -pl MODULES -am test` runs the tests of every module Maven builds on the way: each of
+  the eighteen database jobs ran the core's 4,138 tests again - the same tests with the same
+  results as the core job's - and the PostgreSQL jobs, which build the Spring Boot starter,
+  those of some 25 modules (MongoDB, MySQL, Oracle, SQL Server, AWS, NATS ...) without their
+  servers. `.github/scripts/mvnw-own-tests.sh` builds and installs what MODULES need without
+  tests, then tests MODULES alone. `seclume-r2dbc`, whose tests ran only that way, is named in
+  the PostgreSQL jobs now; the unit tests of the MongoDB modules, Redis and Elasticsearch, whose
+  coverage came from those runs, run in the core job, once. The jobs on Windows, macOS and Linux on ARM are unchanged: there
+  the other modules' tests are tests on another platform (`test_mvnw_own_tests.py`).
+- **Mutation testing in shards, and on a pull request only where it can change something.**
+  The long packages run in parallel shards - tls in four, internal in three, crypto and the
+  pool in two - and each package's check scores its shards' mutants together against the same
+  floor: the same mutants against the same tests as one job. tls took 1.4 to 2.6 hours in one.
+  `pit_shard.py` gives each top-level class, with its nested classes, to one shard by size, so a
+  new class is in a shard without being listed. On a pull request a package is not run again
+  when nothing it depends on differs from main - its module and the seclume modules that module
+  depends on, sources and tests, and the build (`pit_inputs.py`); the pull request cannot change
+  its result. The weekly and the manual runs run everything (`test_pit_shard.py`,
+  `test_pit_inputs.py`, `test_pit_report.py`).
+- **PostgreSQL and MySQL: less garbage per execution.** MySQL compared each column description
+  with the last one through a `MemorySegment` made for it at every execution, and built a new
+  list of the same columns; the segments are made once and the list is handed out again when
+  every column is the same. PostgreSQL built the result formats of a prepared statement - a list
+  and new column descriptions - at every execution; they are kept for the list that asked for
+  them. A PostgreSQL result set made two scratch arrays even when it read no text. Allocated per
+  operation: MySQL lookup 1143-1228 to 783-788 bytes and `select 1` 569-578 to 400-405;
+  PostgreSQL lookup 1371-1396 to 1176-1192 and `select 1` 905-910 to 682-685
+  (`LocalMySqlTest.columnDescriptionsReusedAcrossExecutionsAreEachStatementsOwn`,
+  `LocalJdbcTest.resultFormatsReusedAcrossExecutionsAreEachStatementsOwn`).
+- **SQL Server and Oracle: a date and time is read from its fields, not rendered and parsed back.**
+  `getTimestamp`, `getDate` and `getTime` on a SQL Server `datetime2`, `datetime` or
+  `smalldatetime`, and on an Oracle `DATE` or `TIMESTAMP`, wrote the bytes as text and parsed it
+  again; `getObject` of a SQL Server one did the same. They take the fields now - those the text
+  was written from, the fraction to the column's scale - and anything the text has to say (a
+  year past 9999, an invalid byte, a zoned type) goes the text way as before. Per value, measured
+  over two million: `datetime2(7)` 237-300 to 104-142 ns, Oracle `TIMESTAMP` 233-370 to 81-119 ns
+  (`TdsTemporalFieldsTest`, `OracleDateFieldsTest` against the text in five zones; against the
+  servers `LocalSqlServerTest.aDatetimeReadFromItsFieldsIsTheValueItsTextIs` and
+  `LocalOracleJdbcTest.aDateReadFromItsFieldsIsTheValueItsTextIs`, which run in CI).
+- **MySQL: a binary `DECIMAL` is read from its digits, not from a String.** The binary protocol
+  carries a `DECIMAL` as text inside the row, as the text protocol does, but `getBigDecimal`
+  made a String of it and parsed that; it reads the bytes the way the text protocol's values
+  are read now (`TextNumber`). Prepared scan of ten thousand rows on MariaDB 10.11, client CPU:
+  3.3-3.9 to 2.7-3.0 ms (`LocalMySqlTest.aBinaryDecimalIsTheValueItsTextIs`, Statement against
+  PreparedStatement up to `DECIMAL(65,30)`).
+- **MySQL: a binary `DATETIME` is read from its fields, not rendered as text and parsed back.**
+  `getTimestamp`, `getDate` and `getTime` on a `DATETIME` or `TIMESTAMP` read through a
+  PreparedStatement wrote the value as text and parsed it again. They take the fields now
+  (`ReadOnlyResultSet.localDateTimeAt`), cut to the column's declared digits as the text is; the
+  zero date and fields java.time does not have go the text way as before, and `getObject`
+  conversions are unchanged. Prepared scan of ten thousand rows on MariaDB 10.11, client CPU:
+  5.3-6.4 to 4.4-4.8 ms (`BinaryTemporalFieldsTest` against the text in five zones and an
+  Arabic locale; `LocalMySqlTest.aBinaryDatetimeIsTheValueItsTextIs`, Statement against
+  PreparedStatement).
+- **JDBC: a timestamp without an offset and a short decimal are read once.**
+  `getTimestamp` on a value without an offset - PostgreSQL's `timestamp`, MySQL's `DATETIME` as
+  text - read its digits looking for an offset, made two more Strings looking again, and then
+  had `Timestamp.valueOf(String)` parse a third. It reads the fields once now and builds the
+  Timestamp with `Timestamp.valueOf(LocalDateTime)`, which ends in the same constructor:
+  the same value in the JVM's zone and calendar. A day java.time does not have (a Julian leap
+  day, the 30th of February) goes the old way. A decimal of up to eighteen digits is
+  `BigDecimal.valueOf(unscaled, scale)` - the parser's value and scale - instead of a parse.
+  Ten thousand rows, client CPU: PostgreSQL 16 text scan 5.3-6.4 to 4.3-5.1 ms, prepared scan
+  5.4-6.4 to 3.7-4.2 ms; MariaDB 10.11 prepared scan 6.5-7.4 to 4.8-5.6 ms, its text scan no
+  clear change (5.1-7.5 before, 5.4-5.8 after) (`LocalTimestampTest` against `Timestamp.valueOf(String)` in eight zones,
+  `TextNumberTest` against `new BigDecimal`).
 - **AWS: the session token is not written into a chunked body however its coding is spelled.**
   `SessionTokenSocket` recognised a chunked body only by `transfer-encoding: chunked` with
   exactly one space - the gap `seclume-http`'s framing closed in the third review round (#273).

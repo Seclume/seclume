@@ -144,6 +144,160 @@ class LocalMySqlTest {
     }
 
     /**
+     * The session hands out the column list of the last execution again
+     * when the server described the same columns in the same bytes. Three
+     * statements of the same width - names, types, both differing - taken
+     * in turn must each be read with their own columns, every time.
+     */
+    @Test
+    void columnDescriptionsReusedAcrossExecutionsAreEachStatementsOwn() throws Exception {
+        try (Connection connection = connect();
+             PreparedStatement numbers = connection.prepareStatement("select ? as a, ? + 1 as b");
+             PreparedStatement words = connection.prepareStatement("select concat('w', ?) as a, ? as c");
+             PreparedStatement renamed = connection.prepareStatement("select ? as x, ? + 1 as y")) {
+            for (int round = 0; round < 4; round++) {
+                numbers.setInt(1, round);
+                numbers.setInt(2, round);
+                try (ResultSet rows = numbers.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("a", rows.getMetaData().getColumnLabel(1));
+                    assertEquals("b", rows.getMetaData().getColumnLabel(2));
+                    assertEquals(round + 1, rows.getInt("b"));
+                }
+                words.setString(1, "v" + round);
+                words.setString(2, "c" + round);
+                try (ResultSet rows = words.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("c", rows.getMetaData().getColumnLabel(2));
+                    // Text, not the numbers' description: VARCHAR on MariaDB,
+                    // LONGVARCHAR on MySQL 8 and later.
+                    assertEquals("java.lang.String", rows.getMetaData().getColumnClassName(1));
+                    assertEquals("wv" + round, rows.getString("a"));
+                    assertEquals("c" + round, rows.getString("c"));
+                }
+                renamed.setInt(1, round);
+                renamed.setInt(2, round);
+                try (ResultSet rows = renamed.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("x", rows.getMetaData().getColumnLabel(1));
+                    assertEquals(round + 1, rows.getInt("y"));
+                }
+                try (ResultSet rows = numbers.executeQuery()) {
+                    assertTrue(rows.next());
+                    assertEquals("b", rows.getMetaData().getColumnLabel(2), "the same statement again");
+                }
+            }
+        }
+    }
+
+    /**
+     * A DECIMAL read through a PreparedStatement - the binary protocol,
+     * which carries it as text and is now read without a String - is the
+     * value and the scale the same rows give through a Statement: zero,
+     * negatives, eighteen digits and more, and the widest MySQL has.
+     */
+    @Test
+    void aBinaryDecimalIsTheValueItsTextIs() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            statement.execute("drop temporary table if exists seclume_dec");
+            statement.execute("create temporary table seclume_dec (id int primary key, a decimal(12,2), "
+                    + "b decimal(65,30), c decimal(18,0), d decimal(19,4) null)");
+            statement.execute("insert into seclume_dec values"
+                    + " (1, 0.00, 0, 0, null),"
+                    + " (2, -1234567890.12, -12345678901234567890123456789012345.123456789012345678901234567890,"
+                    + " 999999999999999999, 123456789012345.6789),"
+                    + " (3, 0.01, 0.000000000000000000000000000001, -999999999999999999, -0.0001)");
+            String query = "select a, b, c, d from seclume_dec order by id";
+            java.util.List<String> text = new java.util.ArrayList<>();
+            try (ResultSet rows = statement.executeQuery(query)) {
+                while (rows.next()) {
+                    text.add(decimals(rows));
+                }
+            }
+            java.util.List<String> binary = new java.util.ArrayList<>();
+            try (PreparedStatement prepared = connection.prepareStatement(query);
+                 ResultSet rows = prepared.executeQuery()) {
+                while (rows.next()) {
+                    binary.add(decimals(rows));
+                }
+            }
+            assertEquals(3, text.size());
+            assertEquals(text, binary);
+            assertTrue(binary.get(1).contains("-12345678901234567890123456789012345.123456789012345678901234567890/30"),
+                    binary.get(1));
+        }
+    }
+
+    /** Each column's BigDecimal with its scale, and getObject's. */
+    private static String decimals(ResultSet rows) throws SQLException {
+        StringBuilder all = new StringBuilder();
+        for (int column = 1; column <= 4; column++) {
+            java.math.BigDecimal value = rows.getBigDecimal(column);
+            all.append(value).append('/').append(value == null ? "" : value.scale()).append(' ')
+                    .append(rows.getObject(column)).append(" | ");
+        }
+        return all.toString();
+    }
+
+    /**
+     * A DATETIME read through a PreparedStatement - the binary protocol,
+     * whose fields getTimestamp, getDate and getTime now take as they are -
+     * gives the values the same rows give as text through a Statement:
+     * every precision, a fraction cut to the declared digits, midnight, the
+     * last instant of a year and a date before 1582.
+     */
+    @Test
+    void aBinaryDatetimeIsTheValueItsTextIs() throws Exception {
+        try (Connection connection = connect(); Statement statement = connection.createStatement()) {
+            statement.execute("drop temporary table if exists seclume_dt");
+            statement.execute("create temporary table seclume_dt (id int primary key, a datetime, "
+                    + "b datetime(3), c datetime(6), d timestamp(6) null)");
+            statement.execute("insert into seclume_dt values"
+                    + " (1, '2026-09-24 13:14:15', '2026-09-24 13:14:15.123', '2026-09-24 13:14:15.123456',"
+                    + " '2026-09-24 13:14:15.000001'),"
+                    + " (2, '2026-01-01 00:00:00', '2026-01-01 00:00:00.000', '2026-12-31 23:59:59.999999', null),"
+                    + " (3, '1000-03-01 12:00:00', '1582-10-10 00:00:00.5', '9999-12-31 23:59:59.999999',"
+                    + " '2038-01-19 03:14:07.999999')");
+            String query = "select a, b, c, d from seclume_dt order by id";
+            java.util.List<String> text = new java.util.ArrayList<>();
+            try (ResultSet rows = statement.executeQuery(query)) {
+                while (rows.next()) {
+                    text.add(read(rows));
+                    // And the text protocol's own value is what its text says.
+                    for (int column = 1; column <= 4; column++) {
+                        String value = rows.getString(column);
+                        if (value != null) {
+                            assertEquals(java.sql.Timestamp.valueOf(value), rows.getTimestamp(column), value);
+                        }
+                    }
+                }
+            }
+            java.util.List<String> binary = new java.util.ArrayList<>();
+            try (PreparedStatement prepared = connection.prepareStatement(query);
+                 ResultSet rows = prepared.executeQuery()) {
+                while (rows.next()) {
+                    binary.add(read(rows));
+                }
+            }
+            assertEquals(3, text.size());
+            assertEquals(text, binary);
+            assertTrue(binary.get(0).contains("2026-09-24 13:14:15.123 "), binary.get(0));
+        }
+    }
+
+    /** Every temporal getter of every column of the row, as text. */
+    private static String read(ResultSet rows) throws SQLException {
+        StringBuilder all = new StringBuilder();
+        for (int column = 1; column <= 4; column++) {
+            java.sql.Timestamp stamp = rows.getTimestamp(column);
+            all.append(stamp).append(' ').append(stamp == null ? "" : stamp.getNanos()).append(' ')
+                    .append(rows.getDate(column)).append(' ').append(rows.getTime(column)).append(' ')
+                    .append(rows.getObject(column, java.time.LocalDateTime.class)).append(" | ");
+        }
+        return all.toString();
+    }
+
+    /**
      * The server itself reads the literal: whatever the value, it comes back
      * as it went in, in both modes - and a value written to break out of JDBC's
      * standard quoting does not.

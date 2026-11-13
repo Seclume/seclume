@@ -1575,6 +1575,18 @@ public final class PgSession implements AutoCloseable {
             return known;
         }
         out.putShort((short) known.size());
+        // A prepared statement hands in the same immutable list at every
+        // execution - the one it described, or the one asked for last time,
+        // which it keeps - and what is asked follows from it alone: the codes
+        // and the list of the last time, rather than a new list and new
+        // fields per execution. Asked for again, lastAsked gives itself: its
+        // formats are already the ones it asks for.
+        if (lastAsked != null && (known == lastKnown || known == lastAsked)) {
+            for (Field field : lastAsked) {
+                out.putShort(field.format());
+            }
+            return lastAsked;
+        }
         List<Field> asked = new java.util.ArrayList<>(known.size());
         for (Field field : known) {
             boolean binary = space.seclume.postgresql.jdbc.PgOids.readsBinary(field.typeOid());
@@ -1584,8 +1596,14 @@ public final class PgSession implements AutoCloseable {
                             field.typeOid(), field.typeLength(), field.typeModifier(),
                             binary ? (short) 1 : (short) 0));
         }
-        return List.copyOf(asked);
+        lastKnown = known;
+        lastAsked = List.copyOf(asked);
+        return lastAsked;
     }
+
+    /** The list {@link #writeResultFormats} was last given, and what it asked for it. */
+    private List<Field> lastKnown;
+    private List<Field> lastAsked;
 
     /**
      * Whether this session asks for binary at all - on by default, and off for

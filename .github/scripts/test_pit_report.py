@@ -80,6 +80,23 @@ class PitReportTest(unittest.TestCase):
             read(path)
 
 
+    def test_the_shards_of_a_package_are_scored_together(self):
+        first = report(mutation("KILLED", "space.seclume.tls.A", 1), mutation("SURVIVED", "space.seclume.tls.A", 2))
+        second = report(mutation("KILLED", "space.seclume.tls.B", 3), mutation("KILLED", "space.seclume.tls.B", 4))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(0, main(f"{first},{second}", "src", "tls", 75.0))
+        self.assertIn("3 of 4 mutants with a test killed (75.0%)", output.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(1, main(f"{first},{second}", "src", "tls", 76.0))
+
+    def test_a_missing_shard_fails_the_package(self):
+        first = report(mutation("KILLED", "space.seclume.tls.A", 1))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(1, main(f"{first},/nonexistent/mutations.xml", "src", "tls"))
+        self.assertIn("no PIT report at /nonexistent/mutations.xml", output.getvalue())
+
     def test_a_floor_fails_a_score_below_it_and_only_then(self):
         path = report(mutation("KILLED", "space.seclume.tls.A", 1),
                       mutation("KILLED", "space.seclume.tls.A", 2),

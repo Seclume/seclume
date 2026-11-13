@@ -106,6 +106,28 @@ public final class OracleDate {
     }
 
     /**
+     * A {@code DATE} (seven bytes) or a {@code TIMESTAMP} (eleven) as its
+     * fields, or {@code null} where the value's text has to be read: another
+     * length, bytes java.time refuses, a year outside 0 to 9999.
+     *
+     * <p>These are the fields {@link #toText} writes for the same bytes, so
+     * {@code Timestamp.valueOf} of them is {@code Timestamp.valueOf} of that
+     * text - without writing it and reading it back.
+     */
+    public static java.time.LocalDateTime localDateTime(MemorySegment in, long at, int length) {
+        if (length != DATE_LENGTH && length != DATE_LENGTH + 4) {
+            return null;
+        }
+        java.time.LocalDateTime value;
+        try {
+            value = fields(in, at, length);
+        } catch (java.time.DateTimeException unreadable) {
+            return null;                                   // the text way says why
+        }
+        return value.getYear() < 0 || value.getYear() > 9999 ? null : value;
+    }
+
+    /**
      * The fields as they are on the wire.
      *
      * <p>For a {@code TIMESTAMP WITH TIME ZONE} those are <b>UTC</b>, with the
