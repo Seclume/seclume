@@ -43,11 +43,12 @@ import java.sql.SQLException;
  * <p>Outside the block, JDBC behaves exactly as before. There is no setting
  * that changes it globally - that would be a semantic change nobody asked for.
  *
- * <p><b>Where it saves anything.</b> PostgreSQL and MySQL bundle; Oracle and
- * SQL Server accept the block and save nothing, because their protocols answer
- * every call of their own accord. The block is allowed there so that the same
- * code runs against all four - but it is said out loud rather than implied,
- * and {@link #counts()} comes back empty where nothing was held back.
+ * <p><b>Where it saves anything.</b> PostgreSQL and MySQL bundle the writes
+ * into one round trip, and SQL Server carries several calls in one message.
+ * Oracle accepts the block and, for now, saves nothing: each call is answered
+ * before the next goes out. Calls in flight that the server had not been told
+ * of were refused at random there - Oracle's pipelining is a mode the client
+ * has to announce, and this driver does not speak it yet.
  *
  * <p>The two that bundle differ in one thing worth knowing: after a failure
  * PostgreSQL <b>skips</b> the rest of the group, MySQL <b>runs</b> it. Both

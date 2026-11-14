@@ -24,25 +24,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import space.seclume.Pipeline;
-import space.seclume.tck.BreakableRelay;
 import space.seclume.tck.TestHosts;
 
 /**
- * One trip for a unit of work, on Oracle - and it is a different trip than on
- * SQL Server.
+ * The block on Oracle: accepted, correct, and - for now - no faster.
  *
- * <p>TDS carries several calls in one message, so the round trips themselves
- * disappear and a counter shows it. <b>Oracle numbers every call and answers
- * each one</b>, so the calls still travel separately; what the block removes
- * is the waiting between them. The round trip counter reports the same number
- * either way, which is a limit of the counter rather than of the block: it
- * counts answers read, not time spent waiting for the first byte of each.
- *
- * <p>So this measures what there is to measure - <b>time over a slow line</b>.
- * Ten milliseconds each way through a relay, an ordinary distance between an
- * application server and its database. On a loopback connection the difference
- * disappears into the noise, which is exactly why a test that measured there
- * would prove nothing.
+ * <p>It used to send the calls without waiting and save the waiting between
+ * them: eight inserts over a line with ten milliseconds each way took 199 ms
+ * one at a time and 46 ms in a block, and a test here held it to a factor of
+ * two. That was calls in flight that the server had not been told of, and
+ * with many different statement texts the server refused them at random with
+ * {@code ORA-03146} and dropped the ones behind them -
+ * {@link #manyDifferentTextsInOneBlockAllArrive} is that case. Oracle's own
+ * pipelining is a mode the client announces; until the driver speaks it,
+ * each call is answered before the next goes out, and what is tested here is
+ * that the block keeps its word: every row arrives, a refusal is named.
  */
 @Timeout(240)
 @org.junit.jupiter.api.parallel.Isolated
@@ -103,44 +99,39 @@ class PipelineTest {
     }
 
     /**
-     * What the block is worth, over a line that has a distance in it.
+     * 130 inserts over 97 different texts, one bind each, in one block.
      *
-     * <p>The assertion is deliberately loose - a factor of two rather than the
-     * factor of four that was measured - because this runs on whatever machine
-     * happens to have the servers. What it pins is the claim: the block
-     * removes most of the waiting, and if it ever stops doing that the test
-     * says so.
+     * <p>With calls in flight, Oracle 23.26 Free refused one of these with
+     * {@code ORA-03146: invalid buffer length for TTC field} - the 1st, the
+     * 15th, the 45th or the 75th, from run to run - and dropped every call
+     * behind it. One text repeated never showed it, which is why the eight
+     * inserts of the tests before did not.
      */
     @Test
     @SuppressWarnings("try")   // the block is used for its effect, not its value
-    void overASlowLineTheBlockRemovesMostOfTheWaiting() throws Exception {
-        try (BreakableRelay relay = BreakableRelay.to(host, port)) {
-            String slow = url("127.0.0.1", relay.port());
-            try (Connection connection = DriverManager.getConnection(slow)) {
-                connection.setAutoCommit(false);
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "insert into pipeline_demo (id, note) values (?, ?)")) {
-
-                    relay.delay(10);
-                    long startPlain = System.nanoTime();
-                    write(insert, 1);
-                    long plain = (System.nanoTime() - startPlain) / 1_000_000;
-                    connection.rollback();
-
-                    long startBlock = System.nanoTime();
-                    try (Pipeline unit = Pipeline.open(connection)) {
-                        write(insert, 101);
+    void manyDifferentTextsInOneBlockAllArrive() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setNetworkTimeout(Runnable::run, 60_000);
+            connection.setAutoCommit(false);
+            try (Pipeline unit = Pipeline.open(connection)) {
+                for (int i = 1; i <= 130; i++) {
+                    try (PreparedStatement insert = connection.prepareStatement(
+                            "insert into pipeline_demo (id, note) values (?, 'text " + (i % 97)
+                                    + "')")) {
+                        insert.setInt(1, i);
+                        insert.executeUpdate();
                     }
-                    long block = (System.nanoTime() - startBlock) / 1_000_000;
-                    connection.rollback();
-                    relay.delay(0);
-
-                    System.out.println("[oracle] over a 10 ms line, eight inserts: "
-                            + plain + " ms one at a time, " + block + " ms in a block");
-                    assertTrue(block * 2 < plain,
-                            "the block saved little: " + block + " ms against " + plain + " ms");
                 }
             }
+            connection.commit();
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery(
+                            "select count(*), count(distinct note) from pipeline_demo")) {
+                assertTrue(rows.next());
+                assertEquals(130, rows.getInt(1), "not every insert of the block arrived");
+                assertEquals(97, rows.getInt(2));
+            }
+            connection.commit();
         }
     }
 
@@ -210,6 +201,152 @@ class PipelineTest {
         }
     }
 
+    /**
+     * Twice as many calls in one block as the server allows open cursors.
+     *
+     * <p>Every pipelined call was sent on a fresh cursor and none of them was
+     * ever closed, so the three hundredth ended in {@code ORA-01000} - and
+     * nobody heard of it, because the answers in the block were read and not
+     * looked at: the block ended as if every row had arrived. Found by a
+     * benchmark whose next statement outside the block met the error.
+     *
+     * <p>One text over and over, which runs on the cached cursor, and then
+     * more distinct texts than the cache holds, which parse afresh and push
+     * each other out of it while their calls are still in flight.
+     */
+    @Test
+    @SuppressWarnings("try")   // the block is used for its effect, not its value
+    void moreCallsInTheBlockThanTheServerAllowsCursors() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            // An answer that never comes fails the test here, with what was
+            // waited for, rather than at the class's timeout.
+            connection.setNetworkTimeout(Runnable::run, 60_000);
+            int calls = openCursors(connection) * 2;
+            connection.setAutoCommit(false);
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into pipeline_demo (id, note) values (?, ?)")) {
+                try (Pipeline unit = Pipeline.open(connection)) {
+                    for (int i = 1; i <= calls; i++) {
+                        insert.setInt(1, i);
+                        insert.setString(2, "row " + i);
+                        insert.executeUpdate();
+                    }
+                }
+            }
+            try (Pipeline unit = Pipeline.open(connection)) {
+                for (int i = 1; i <= calls; i++) {
+                    // Ninety-seven texts, more than the cursor cache keeps.
+                    try (PreparedStatement insert = connection.prepareStatement(
+                            "insert into pipeline_demo (id, note) values (?, 'text "
+                                    + (i % 97) + "')")) {
+                        insert.setInt(1, calls + i);
+                        insert.executeUpdate();
+                    }
+                }
+            }
+            connection.commit();
+
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery(
+                            "select count(*), count(distinct note) from pipeline_demo "
+                                    + "where note like 'text %'")) {
+                assertTrue(rows.next());
+                assertEquals(calls, rows.getInt(1), "not every call of the second block arrived");
+                assertEquals(97, rows.getInt(2));
+            }
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery("select count(*) from pipeline_demo")) {
+                assertTrue(rows.next());
+                assertEquals(2 * calls, rows.getInt(1), "not every call of the two blocks arrived");
+            }
+            connection.commit();
+        }
+    }
+
+    /**
+     * A call the server refuses inside the block is reported - with its
+     * place, its text, the exception it would have raised outside, and what
+     * became of the calls behind it.
+     *
+     * <p>Before, the block was not told of the refusal at all: its answer was
+     * read, its count kept as a zero, and the block ended as if every row had
+     * arrived. The calls behind it are not sent once it has been refused -
+     * the exception leaves the block where it was raised.
+     *
+     * <p>The text was run once before the block, so its calls go out on the
+     * cached cursor; the refused one takes that cursor out of the cache. The
+     * connection is fine afterwards, and out of the block.
+     */
+    @Test
+    @SuppressWarnings("try")   // the block is used for its effect, not its value
+    void aRefusedCallInTheBlockIsReportedWithItsPlace() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setNetworkTimeout(Runnable::run, 60_000);
+            connection.setAutoCommit(false);
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into pipeline_demo (id, note) values (?, ?)")) {
+                insert.setInt(1, 100);
+                insert.setString(2, "before");
+                assertEquals(1, insert.executeUpdate());
+
+                SQLException refused = assertThrows(SQLException.class, () -> {
+                    try (Pipeline unit = Pipeline.open(connection)) {
+                        int[] keys = {1, 1, 2, 3};          // the second one is a duplicate
+                        for (int key : keys) {
+                            insert.setInt(1, key);
+                            insert.setString(2, "in the block");
+                            insert.executeUpdate();
+                        }
+                    }
+                });
+                assertTrue(refused instanceof java.sql.SQLIntegrityConstraintViolationException,
+                        "a duplicate key is the same exception inside the block as outside: "
+                                + refused);
+                assertEquals(1, refused.getErrorCode(), refused.getMessage());
+                assertTrue(refused.getMessage().contains("statement 2 of the pipeline block"),
+                        refused.getMessage());
+                assertTrue(refused.getMessage().contains("insert into pipeline_demo"),
+                        refused.getMessage());
+                assertTrue(refused.getMessage().contains("the statements before it ran"),
+                        "the message has to say what became of the others: "
+                                + refused.getMessage());
+
+                // Out of the block: a count again, not SUCCESS_NO_INFO.
+                insert.setInt(1, 4);
+                insert.setString(2, "after");
+                assertEquals(1, insert.executeUpdate());
+                for (int i = 0; i < 20; i++) {
+                    insert.setInt(1, 200 + i);
+                    insert.setString(2, "after");
+                    assertEquals(1, insert.executeUpdate());
+                }
+            }
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery(
+                            "select listagg(id, ',') within group (order by id) from pipeline_demo "
+                                    + "where id in (1, 2, 3, 4, 100)")) {
+                assertTrue(rows.next());
+                assertEquals("1,4,100", rows.getString(1),
+                        "the call before the refused one stays in the transaction, the two "
+                                + "behind it were never sent");
+            }
+            connection.rollback();
+        }
+    }
+
+    /** What the server allows - read rather than assumed, as in CursorReturnTest. */
+    private static int openCursors(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "select value from v$parameter where name = 'open_cursors'")) {
+            Assumptions.assumeTrue(rows.next(), "cannot read open_cursors on this server");
+            int allowed = rows.getInt(1);
+            Assumptions.assumeTrue(allowed > 0 && allowed <= 5000,
+                    "open_cursors is " + allowed + " - too large to reach in a test");
+            return allowed;
+        }
+    }
+
     /** Outside a transaction the block is refused, and the message says why. */
     @Test
     void theBlockNeedsATransaction() throws Exception {
@@ -219,14 +356,6 @@ class PipelineTest {
                     () -> Pipeline.open(connection));
             assertTrue(refused.getMessage().contains("auto-commit"),
                     "the refusal should say what to do: " + refused.getMessage());
-        }
-    }
-
-    private static void write(PreparedStatement insert, int from) throws SQLException {
-        for (int i = 0; i < 8; i++) {
-            insert.setInt(1, from + i);
-            insert.setString(2, "row " + (from + i));
-            insert.executeUpdate();
         }
     }
 }

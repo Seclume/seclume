@@ -37,6 +37,31 @@ All notable changes to seclume are recorded here. Versions follow
     is closed before the completion now (`LocalR2dbcPostgresTest`).
   - The fingerprint of an open statement is kept per statement and text instead of computed
     on every return, and R2DBC parses a text's placeholders once per dialect.
+- **Pipeline: a broken connection on MySQL, lost rows on Oracle - and Oracle no longer sends
+  calls ahead.** Found by a unit-of-work benchmark (an order, its items as a batch, a counter).
+  MySQL: a statement prepared inside a `Pipeline` block - a text the connection had not run
+  yet, singly or as `executeBatch` - sent its prepare without reading the buffered answers
+  first, took the first of them as its own and broke the connection ("the message ends after
+  11 bytes, but 2 more were needed"). Every request now reads the outstanding answers before
+  it goes out, in the one place all of them pass through. Oracle sent the calls of a block
+  without waiting, which is pipelining the server had not been told of; Oracle's own
+  pipelining is a mode the client announces (OCI, 23ai). Measured on Oracle 23.26 Free:
+  130 inserts over 97 texts in one block were refused at random with `ORA-03146: invalid
+  buffer length for TTC field`; the refusal came with a reset, which drops the calls sent
+  behind it, and the driver then waited for their answers for ever. Before that, a refusal
+  in the block was not reported at all, and every call parsed a cursor that was never closed
+  (`ORA-01000` after 300 calls). Now each call is answered before the next goes out - the
+  block saves nothing on Oracle, as the documentation once said, until the announced mode is
+  implemented; the 199 ms against 46 ms measured over a slow line for eight inserts of one
+  text did not hold for a unit of work. Calls run on the cached cursor for their text, and a
+  refusal ends the block with the exception it raises outside it (a duplicate key is a
+  `SQLIntegrityConstraintViolationException`), naming the statement and its place. If a
+  refusal ever comes with calls behind it, the reset is counted and they are reported as not
+  run instead of waited for. New: `PipelineTest.aStatementPreparedInsideTheBlockGetsItsOwnAnswer`
+  (MySQL); `manyDifferentTextsInOneBlockAllArrive`, `moreCallsInTheBlockThanTheServerAllowsCursors`
+  and `aRefusedCallInTheBlockIsReportedWithItsPlace` (Oracle). Removed:
+  `overASlowLineTheBlockRemovesMostOfTheWaiting`, which held the unsafe behaviour to its
+  speed.
 - **TLS: a server certificate the client will not go on with ends in an alert.** An empty
   TLS 1.3 Certificate, a certificate that cannot be read, and one the trust store refuses -
   for another name, an unknown issuer, expired - were refused as a plain `IOException`, with

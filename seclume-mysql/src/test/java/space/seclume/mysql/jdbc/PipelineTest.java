@@ -187,6 +187,61 @@ class PipelineTest {
         }
     }
 
+    /**
+     * A statement whose text the server has not seen yet, run inside the
+     * block - singly and as a batch.
+     *
+     * <p>Preparing is a request with an answer, and it went out without the
+     * answers of the writes before it being read first: it took the first of
+     * those as its own, read a statement description out of an OK packet and
+     * broke the connection - "the message ends after 11 bytes, but 2 more
+     * were needed". Found by a benchmark that writes an order and then its
+     * items as a batch, which is exactly the unit of work the block is for.
+     */
+    @Test
+    @SuppressWarnings("try")   // the block is used for its effect, not its value
+    void aStatementPreparedInsideTheBlockGetsItsOwnAnswer() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement order = connection.prepareStatement(
+                    "insert into pipeline_demo (id, note) values (?, ?)");
+                    PreparedStatement single = connection.prepareStatement(
+                            "insert into pipeline_demo (id, note) values (?, concat(?, ' single'))");
+                    PreparedStatement items = connection.prepareStatement(
+                            "insert into pipeline_demo (id, note) values (?, concat(?, ' item'))")) {
+                for (int round = 0; round < 3; round++) {
+                    int base = round * 10;
+                    try (Pipeline unit = Pipeline.open(connection)) {
+                        order.setInt(1, base + 1);
+                        order.setString(2, "order");
+                        order.executeUpdate();
+                        single.setInt(1, base + 2);
+                        single.setString(2, "row");
+                        single.executeUpdate();
+                        for (int i = 3; i <= 5; i++) {
+                            items.setInt(1, base + i);
+                            items.setString(2, "row");
+                            items.addBatch();
+                        }
+                        int[] counts = items.executeBatch();
+                        assertEquals(3, counts.length, "one count per row of the batch");
+                    }
+                    connection.commit();
+                }
+            }
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery(
+                            "select count(*), sum(note like '% item'), sum(note like '% single') "
+                                    + "from pipeline_demo")) {
+                assertTrue(rows.next());
+                assertEquals(15, rows.getInt(1), "not every write of the three blocks arrived");
+                assertEquals(9, rows.getInt(2));
+                assertEquals(3, rows.getInt(3));
+            }
+            connection.commit();
+        }
+    }
+
     /** Outside a transaction the block is refused, and the message says why. */
     @Test
     void theBlockNeedsATransaction() throws Exception {

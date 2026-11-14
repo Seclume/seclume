@@ -1747,7 +1747,7 @@ public final class MySession implements AutoCloseable {
         if (pipelineGroup == 0) {
             pipelineCarried = writePending();
         }
-        WireBuffer out = command(COM_STMT_EXECUTE);
+        WireBuffer out = pipelinedCommand(COM_STMT_EXECUTE);
         out.putIntLe(statement.statementId());
         out.putByte((byte) 0);                    // no cursor
         out.putIntLe(1);                          // one repetition
@@ -2107,6 +2107,23 @@ public final class MySession implements AutoCloseable {
      * ever reaches a session whose reset was not confirmed.
      */
     private WireBuffer command(byte command) throws SQLException {
+        settleReset();
+        // Inside a pipeline block every request that has an answer reads the
+        // buffered answers first, or it reads the first of them as its own.
+        // Here and not at each send site: query and execute flushed on their
+        // own, prepare did not - and the answer to the first buffered insert
+        // was read as a statement description. Found by a unit of work that
+        // writes an order and then its items as a batch: the batch's text
+        // was prepared inside the block. A site added later cannot forget it.
+        flushPipeline();
+        return channel.beginCommand(command);
+    }
+
+    /**
+     * The one request that must not flush: a buffered execution, which is
+     * what the block is made of.
+     */
+    private WireBuffer pipelinedCommand(byte command) throws SQLException {
         settleReset();
         return channel.beginCommand(command);
     }
