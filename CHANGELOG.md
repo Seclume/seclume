@@ -14,6 +14,15 @@ All notable changes to seclume are recorded here. Versions follow
   without a trust store. Mutation testing had shown that removing the call to the signature
   check, or to the shape check before it, failed no test; now the first fails two and the
   second four.
+- **SQL Server: a cancellation that the server answers before the ATTENTION's write returns
+  is still reported.** The ATTENTION was counted as owed only after its eight bytes were
+  written, while the thread that sent the statement may already be reading the server's
+  answer and asking whether a cancellation is owed. Told nothing, `execute` returned as if the
+  statement had run to the end, and the acknowledgement was left for the next statement. The
+  SQL Server job of #345 failed so: `waitfor delay '00:00:30'`, cancelled after half a second,
+  ended then without `HY008`. The ATTENTION is now owed before it is written, and taken back if
+  the write fails; `AttentionCountedBeforeSentTest` asks the channel from inside that write, as
+  the reading thread can, and failed before the fix. Oracle's break already set its flag first.
 - **Differential tests: a plaintext MySQL login no longer depends on another class having
   logged in first.** MySQL 8's caching_sha2_password answers from a cache of the password's hash
   that is empty after the server starts; filling it over plaintext needs the server's key, which
