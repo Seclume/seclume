@@ -2,6 +2,7 @@ package space.seclume.pool;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -58,6 +59,20 @@ class ReturnRestoresTheSessionTest {
         return settings;
     }
 
+    /** A statement opened and closed again: the borrower used the connection. */
+    private static void use(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            assertNotNull(statement);
+        }
+    }
+
+    /** The same with a prepared statement - the kind a statement cache keeps. */
+    private static void prepare(Connection connection) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("select 1")) {
+            assertNotNull(statement);
+        }
+    }
+
     // ---- the transaction ----------------------------------------------------
 
     @Test
@@ -67,7 +82,7 @@ class ReturnRestoresTheSessionTest {
             Connection borrowed = pool.getConnection();
             Recording.Physical physical = source.physical.getFirst();
             borrowed.setAutoCommit(false);
-            borrowed.createStatement().close();
+            use(borrowed);
             physical.calls.clear();
             borrowed.close();
             assertEquals(1, physical.stub.rollbacks.get(), "what was not committed was not intended");
@@ -82,7 +97,7 @@ class ReturnRestoresTheSessionTest {
         Recording source = new Recording();
         try (SeclumePool pool = new SeclumePool(source, settings(0))) {
             Connection borrowed = pool.getConnection();
-            borrowed.createStatement().close();
+            use(borrowed);
             Recording.Physical physical = source.physical.getFirst();
             physical.calls.clear();
             borrowed.close();
@@ -98,7 +113,7 @@ class ReturnRestoresTheSessionTest {
         source.stubs.beforeReturn(stub -> stub.autoCommit = false);
         try (SeclumePool pool = new SeclumePool(source, settings(0))) {
             Connection borrowed = pool.getConnection();
-            borrowed.createStatement().close();
+            use(borrowed);
             borrowed.close();
             Recording.Physical physical = source.physical.getFirst();
             assertEquals(1, physical.stub.rollbacks.get());
@@ -128,7 +143,7 @@ class ReturnRestoresTheSessionTest {
                     "nothing was asked, so nothing can have warned: " + physical.calls);
 
             Connection used = pool.getConnection();
-            used.createStatement().close();
+            use(used);
             physical.calls.clear();
             used.close();
             assertEquals(1, Collections.frequency(physical.calls, "clearWarnings[]"), physical.calls.toString());
@@ -153,7 +168,7 @@ class ReturnRestoresTheSessionTest {
             assertEquals(1, pool.statementLeaks(), "and reported once");
 
             Connection tidy = pool.getConnection();
-            tidy.createStatement().close();
+            use(tidy);
             tidy.close();
             assertEquals(1, pool.statementLeaks(), "a borrower that closed everything leaked nothing");
         }
@@ -166,7 +181,7 @@ class ReturnRestoresTheSessionTest {
         source.fakeStatements = true;
         try (SeclumePool pool = new SeclumePool(source, settings(8))) {
             Connection borrowed = pool.getConnection();
-            borrowed.prepareStatement("select 1").close();
+            prepare(borrowed);
             borrowed.close();
             Recording.Physical physical = source.physical.getFirst();
             assertEquals(0, pool.statementLeaks());
@@ -184,14 +199,14 @@ class ReturnRestoresTheSessionTest {
         source.fakeStatements = true;
         try (SeclumePool pool = new SeclumePool(source, settings(8))) {
             Connection borrowed = pool.getConnection();
-            borrowed.prepareStatement("select 1").close();
+            prepare(borrowed);
             borrowed.close();
             Recording.Physical physical = source.physical.getFirst();
             FakePreparedStatement first = physical.statements.getFirst();
             assertEquals(0, first.closes.get());
 
             Connection again = pool.getConnection();
-            again.prepareStatement("select 1").close();
+            prepare(again);
             assertEquals(1, physical.statements.size(), "no reset, so the plan was reused");
             Counting reset = new Counting();
             physical.stub.sessionReset = reset;
@@ -216,7 +231,7 @@ class ReturnRestoresTheSessionTest {
             Counting reset = new Counting();
             reset.answer = false;
             physical.stub.sessionReset = reset;
-            borrowed.createStatement().close();
+            use(borrowed);
             borrowed.close();
             assertTrue(physical.stub.closed.get(), "closed rather than lent with another's state");
             try (Connection next = pool.getConnection()) {
@@ -247,7 +262,7 @@ class ReturnRestoresTheSessionTest {
         Recording source = new Recording();
         try (SeclumePool pool = new SeclumePool(source, settings(0))) {
             Connection borrowed = pool.getConnection();
-            borrowed.createStatement().close();
+            use(borrowed);
             Recording.Physical physical = source.physical.getFirst();
             physical.stub.closed.set(true);        // a statement ran on the driver's object and killed it
             borrowed.close();
@@ -264,7 +279,7 @@ class ReturnRestoresTheSessionTest {
         Recording source = new Recording();
         try (SeclumePool pool = new SeclumePool(source, settings(0))) {
             Connection borrowed = pool.getConnection();
-            borrowed.createStatement().close();
+            use(borrowed);
             borrowed.close();
             Recording.Physical physical = source.physical.getFirst();
             try (Connection next = pool.getConnection()) {
@@ -406,7 +421,7 @@ class ReturnRestoresTheSessionTest {
         boolean tracksOpenStatements;
         boolean fakeStatements;
 
-        final class Physical {
+        static final class Physical {
             final StubDataSource.StubConnection stub;
             final List<String> calls = new CopyOnWriteArrayList<>();
             final List<Connection> fronts = new CopyOnWriteArrayList<>();
@@ -449,12 +464,13 @@ class ReturnRestoresTheSessionTest {
                 }
             };
             one.connection = (Connection) Proxy.newProxyInstance(Recording.class.getClassLoader(),
-                    new Class<?>[] {Connection.class, Fronted.class}, (self, method, args) -> {
+                    new Class<?>[] {Connection.class, Fronted.class}, (self, method, given) -> {
+                        Object[] args = given == null ? new Object[0] : given;
                         String name = method.getName();
                         if (!name.equals("front") && !name.equals("isWrapperFor") && !name.equals("unwrap")
                                 && !name.startsWith("get") && !name.startsWith("is")
                                 && !name.equals("hashCode") && !name.equals("equals") && !name.equals("toString")) {
-                            one.calls.add(name + (args == null ? "[]" : java.util.Arrays.toString(args)));
+                            one.calls.add(name + java.util.Arrays.toString(args));
                         } else if (name.equals("getAutoCommit") || name.equals("isReadOnly")) {
                             one.calls.add(name);
                         }

@@ -61,8 +61,9 @@ class PoolListenersTest {
             Heard tracing = new Heard();
             pool.listen(metrics);
             pool.listen(tracing);
-            try (Connection connection = pool.getConnection()) {
-                connection.createStatement().close();
+            try (Connection connection = pool.getConnection();
+                    java.sql.Statement statement = connection.createStatement()) {
+                assertTrue(statement != null, "the borrower uses the connection");
             }
             for (Heard heard : List.of(metrics, tracing)) {
                 assertTrue(heard.events.contains("opened"), heard.events.toString());

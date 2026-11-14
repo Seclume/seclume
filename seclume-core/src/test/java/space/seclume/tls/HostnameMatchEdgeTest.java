@@ -86,7 +86,7 @@ class HostnameMatchEdgeTest {
 
     private static X509Certificate certificate(Object... typeAndValue) {
         List<List<?>> names = new ArrayList<>();
-        for (int i = 0; i < typeAndValue.length; i += 2) {
+        for (int i = 0; i + 1 < typeAndValue.length; i += 2) {
             names.add(Arrays.asList(typeAndValue[i], typeAndValue[i + 1]));
         }
         return new Names(names, false);
