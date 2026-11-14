@@ -41,6 +41,14 @@ import space.seclume.pool.SeclumePool;
  *   <li>{@code seclume-vendor} - this pool over the vendor driver, so that
  *       the pool alone is compared.</li>
  *   <li>{@code seclume-seclume} - the combination this library offers.</li>
+ *   <li>{@code hikari-vendor-reset} - HikariCP over the vendor driver with
+ *       the reset seclume's pool makes, done the way a HikariCP user has to:
+ *       on every return, before the connection goes back, and waited for -
+ *       {@code DISCARD ALL} on PostgreSQL, Connector/J's
+ *       {@code resetServerState()} (COM_RESET_CONNECTION) on MySQL. The
+ *       comparison at the same security; not in the default parameters,
+ *       because SQL Server and Oracle have no such call outside their own
+ *       pools. {@code -p combination=...,hikari-vendor-reset} adds it.</li>
  * </ul>
  *
  * <p>Measured with several threads, because a pool that is fast without
@@ -75,6 +83,7 @@ public class PoolBenchmark {
             case "hikari-vendor" -> hikari();
             case "seclume-vendor" -> seclume(vendorDataSource());
             case "seclume-seclume" -> seclume(database.seclume());
+            case "hikari-vendor-reset" -> new ResettingDataSource(hikari(), database.kind());
             default -> throw new IllegalArgumentException("unknown combination: " + combination);
         };
         // Fill the pool before measuring; otherwise the first iterations
