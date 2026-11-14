@@ -48,13 +48,13 @@ jobs:
         run: |
           props="-Dbench.db=postgresql -Dbench.host=127.0.0.1 -Dbench.port=5432 -Dbench.database=seclume_test -Dbench.user=seclume_test -Dbench.password.file=.local-pg-password -Dbench.tls=off"
           # The same build twice: lanes on platform threads, then all virtual.
-          # Every property in -jvmArgsAppend: given one, JMH no longer hands
-          # the fork the host's own -D options.
+          # The setting travels in JAVA_TOOL_OPTIONS, which the fork inherits.
           for threads in 128 0; do
             echo "##### seclume.r2dbc.platformThreads=$threads"
             for bench in 'R2dbcBenchmark' 'R2dbcPoolBenchmark -p pool=seclume,r2dbc-pool-reset,r2dbc-pool' 'R2dbcContentionBenchmark -p pool=seclume,r2dbc-pool-reset,r2dbc-pool'; do
-              java $props -jar seclume-bench/target/seclume-bench.jar $bench -wi 3 -i 5 -f 1 \
-                -jvmArgsAppend "--enable-native-access=ALL-UNNAMED $props -Dseclume.r2dbc.platformThreads=$threads" | grep -E '^(Benchmark|R2dbc)' | grep -v ':gc'
+              JAVA_TOOL_OPTIONS="-Dseclume.r2dbc.platformThreads=$threads" \
+                java $props -jar seclume-bench/target/seclume-bench.jar $bench -wi 3 -i 5 -f 1 \
+                | grep -E '^(Benchmark|R2dbc)|Exception' | grep -v ':gc' | head -40
             done
           done
       - if: always()
