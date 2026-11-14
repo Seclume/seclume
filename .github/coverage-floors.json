@@ -110,8 +110,8 @@
       "branch": 61
     },
     "seclume-pool": {
-      "line": 87,
-      "branch": 82
+      "line": 88,
+      "branch": 84
     },
     "seclume-postgresql": {
       "line": 69,
@@ -176,12 +176,15 @@
       "branch": 85
     },
     "space.seclume.pool": {
-      "line": 87,
-      "branch": 82
+      "line": 88,
+      "branch": 84
     },
     "space.seclume.heapdump": {
       "line": 92,
       "branch": 87
     }
+  },
+  "raised": {
+    "seclume-pool and space.seclume.pool": "https://github.com/Seclume/seclume/actions/runs/43460151393 (job coverage, PR #340): line 89.5 %, branch 85.8 %"
   }
 }
