@@ -55,7 +55,7 @@ jobs:
           -Dbench.database=seclume_test -Dbench.user=seclume_test
           -Dbench.password.file=.local-mysql-password
           -jar seclume-bench/target/seclume-bench.jar
-          'bench\.(Query|Insert|Pool|PacedPool)Benchmark'
+          'bench\.(Query|Insert|Pool|PacedPool|UnitOfWork)Benchmark'
           -rf json -rff seclume-bench/target/jmh.json -wi 3 -i 5 -f 1
       - name: The results, seclume beside the vendor
         if: always()
@@ -178,7 +178,7 @@ jobs:
           -Dbench.database=seclume_test -Dbench.user=seclume_test
           -Dbench.password.file=.local-pg-password -Dbench.tls=off
           -jar seclume-bench/target/seclume-bench.jar
-          'bench\.(Query|Insert|Pool|PacedPool)Benchmark'
+          'bench\.(Query|Insert|Pool|PacedPool|UnitOfWork)Benchmark'
           -rf json -rff seclume-bench/target/jmh-postgresql.json -wi 3 -i 5 -f 1
       - name: The results, seclume beside the vendor
         if: always()
@@ -232,7 +232,7 @@ jobs:
           -Dbench.database=seclume_test -Dbench.user=sa
           -Dbench.password.file=.local-mssql-password
           -jar seclume-bench/target/seclume-bench.jar
-          'bench\.(Query|Insert|Pool|PacedPool)Benchmark'
+          'bench\.(Query|Insert|Pool|PacedPool|UnitOfWork)Benchmark'
           -rf json -rff seclume-bench/target/jmh-sqlserver.json -wi 3 -i 5 -f 1
       - name: The results, seclume beside the vendor
         if: always()
@@ -285,7 +285,7 @@ jobs:
           -Dbench.database=FREEPDB1 -Dbench.user=seclume_test
           -Dbench.password.file=.local-ora-password -Dbench.tls=off
           -jar seclume-bench/target/seclume-bench.jar
-          'bench\.(Query|Insert|Pool|PacedPool|Pbkdf2)Benchmark'
+          'bench\.(Query|Insert|Pool|PacedPool|Pbkdf2|UnitOfWork)Benchmark'
           -rf json -rff seclume-bench/target/jmh-oracle.json -wi 3 -i 5 -f 1
       # The pool resets an Oracle session by logging in again (OraConnection.
       # resetSessionState): Pbkdf2Benchmark (SHA_512, 4096 rounds - the 12c
