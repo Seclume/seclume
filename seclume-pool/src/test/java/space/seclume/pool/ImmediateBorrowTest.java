@@ -138,6 +138,38 @@ class ImmediateBorrowTest {
         }
     }
 
+    /**
+     * The connection this thread just gave back usually still waits for its
+     * reset's answer, and it is the first one this thread looks at: another
+     * free one, whose reset is confirmed, is lent instead - and the first
+     * stays in the pool.
+     */
+    @Test
+    void anotherReadyConnectionIsLentWhileTheFirstAwaitsItsAnswer() throws SQLException {
+        StubDataSource source = new StubDataSource();
+        Answered reset = new Answered();
+        try (SeclumePool pool = new SeclumePool(source, settings(2))) {
+            Connection other = pool.getConnection();
+            StubDataSource.StubConnection physical = usedAndReturned(pool, source, reset);
+            other.close();                                   // nothing used, nothing owed
+            StubDataSource.StubConnection ready = source.handedOut().getFirst() == physical
+                    ? source.handedOut().get(1) : source.handedOut().getFirst();
+
+            try (Connection lent = pool.getConnectionIfReady()) {
+                assertNotNull(lent, "a ready connection was there");
+                assertSame(ready.proxy, ((PooledConnection) lent).delegate());
+                assertEquals(0, reset.settles, "the unanswered one was not read");
+            }
+            reset.arrived.set(true);
+            try (Connection a = pool.getConnection(); Connection b = pool.getConnection()) {
+                assertTrue(((PooledConnection) a).delegate() == physical.proxy
+                        || ((PooledConnection) b).delegate() == physical.proxy,
+                        "the connection passed over was lost");
+            }
+            assertTrue(reset.settled);
+        }
+    }
+
     @Test
     void aRefusedResetIsNotLentAndTheConnectionIsRetired() throws SQLException {
         StubDataSource source = new StubDataSource();

@@ -319,22 +319,45 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
             throw new SQLException("this pool is closed", "08003");
         }
         long now = System.nanoTime();
-        PoolEntry entry = claimIdle();
+        // Every free connection is looked at, not only the first: the first
+        // is usually the one this thread just gave back, whose reset answer
+        // is still on its way. Those passed over go back afterwards.
+        java.util.List<PoolEntry> passedOver = null;
+        PoolEntry entry = null;
+        try {
+            for (int looked = 0; looked <= slotMask; looked++) {
+                PoolEntry candidate = claimIdle();
+                if (candidate == null) {
+                    break;
+                }
+                boolean stale = settings.getValidationBypassWindow().isZero()
+                        || candidate.idleNanos(now) > settings.getValidationBypassWindow().toNanos();
+                boolean expired = (!settings.getMaxLifetime().isZero()
+                        && candidate.ageNanos(now) > settings.getMaxLifetime().toNanos())
+                        || candidate.credentialExpired(now);
+                if (!answered(candidate) || stale || expired) {
+                    if (passedOver == null) {
+                        passedOver = new java.util.ArrayList<>(4);
+                    }
+                    passedOver.add(candidate);
+                    continue;
+                }
+                if (!settle(candidate)) {
+                    // The reset was refused: the session is not lent, whatever else.
+                    retire(candidate);
+                    continue;
+                }
+                entry = candidate;
+                break;
+            }
+        } finally {
+            if (passedOver != null) {
+                for (PoolEntry back : passedOver) {
+                    park(back);
+                }
+            }
+        }
         if (entry == null) {
-            return null;
-        }
-        boolean stale = settings.getValidationBypassWindow().isZero()
-                || entry.idleNanos(now) > settings.getValidationBypassWindow().toNanos();
-        boolean expired = (!settings.getMaxLifetime().isZero()
-                && entry.ageNanos(now) > settings.getMaxLifetime().toNanos())
-                || entry.credentialExpired(now);
-        if (!answered(entry) || stale || expired) {
-            park(entry);
-            return null;
-        }
-        if (!settle(entry)) {
-            // The reset was refused: the session is not lent, whatever else.
-            retire(entry);
             return null;
         }
         return lend(entry, now);
