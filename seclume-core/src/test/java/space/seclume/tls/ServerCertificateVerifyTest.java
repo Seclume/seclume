@@ -150,7 +150,7 @@ class ServerCertificateVerifyTest {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             int at = 0;
             boolean found = false;
-            while (at < flight.length) {
+            while (at + Handshake.HEADER <= flight.length) {
                 int length = ((flight[at + 1] & 0xff) << 16) | ((flight[at + 2] & 0xff) << 8)
                         | (flight[at + 3] & 0xff);
                 byte[] message = java.util.Arrays.copyOfRange(flight, at, at + Handshake.HEADER + length);
@@ -161,6 +161,7 @@ class ServerCertificateVerifyTest {
                 out.writeBytes(message);
                 at += Handshake.HEADER + length;
             }
+            assertEquals(flight.length, at, "the flight is whole messages");
             assertTrue(found, "the flight has a CertificateVerify");
             return out.toByteArray();
         };
