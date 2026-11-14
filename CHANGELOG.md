@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **TLS: a server certificate the client will not go on with ends in an alert.** An empty
+  TLS 1.3 Certificate, a certificate that cannot be read, and one the trust store refuses -
+  for another name, an unknown issuer, expired - were refused as a plain `IOException`, with
+  no alert, so the server saw the connection drop and logged nothing of why. Now, as RFC 8446
+  asks: `decode_error` for the empty list (section 4.4.2.4, a MUST; the TLS 1.2 handshake
+  already sent it), `bad_certificate` for one that is corrupt and `certificate_unknown` for
+  one refused (section 6.2; the JDK's client sends the same), for TLS 1.3 and TLS 1.2 alike.
+  The exceptions are `TlsProtocolException`s with the same messages as before.
+  `ServerCertificateAlertTest` and `Tls12ServerCertificateAlertTest` failed on all three
+  before the change.
 - **Constant time: the measurement no longer tells the two classes apart by its own setup.**
   The nightly check of `ConstantTime.equals` failed on 7 and 13 November (t = 6.8 to 45.7). The
   setup copied the input and then wrote the two bytes that may differ - one changed, one as it
