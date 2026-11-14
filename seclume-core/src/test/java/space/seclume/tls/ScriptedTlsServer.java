@@ -78,6 +78,8 @@ final class ScriptedTlsServer implements Transport {
     private final ByteArrayOutputStream fromClient = new ByteArrayOutputStream();
     private ByteBuffer toClient = ByteBuffer.allocate(0);
     private boolean helloSeen;
+    private byte[] clientHello;
+    private int changeCipherSpecs;
     private boolean open = true;
 
     private RecordProtection clientHandshakeReader;
@@ -154,6 +156,16 @@ final class ScriptedTlsServer implements Transport {
     /** The alert description the client sent, or -1 if it sent none. */
     int alertReceived() {
         return alertReceived;
+    }
+
+    /** The body of the client's ClientHello, as it came, or null before it did. */
+    byte[] clientHello() {
+        return clientHello == null ? null : clientHello.clone();
+    }
+
+    /** How many ChangeCipherSpec records the client sent. */
+    int changeCipherSpecsReceived() {
+        return changeCipherSpecs;
     }
 
     /** Whether the client got as far as sending its own Finished. */
@@ -235,7 +247,10 @@ final class ScriptedTlsServer implements Transport {
                     at + RecordProtection.HEADER + length);
             if (!helloSeen && type == 22) {
                 helloSeen = true;
+                clientHello = body.clone();
                 answer(body);
+            } else if (type == 20) {
+                changeCipherSpecs++;
             } else if (type == 21 && length >= 2) {
                 alertReceived = body[1] & 0xff;
             } else if (type == 23 && clientHandshakeReader != null) {
