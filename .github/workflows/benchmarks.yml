@@ -285,11 +285,12 @@ jobs:
           -Dbench.database=FREEPDB1 -Dbench.user=seclume_test
           -Dbench.password.file=.local-ora-password -Dbench.tls=off
           -jar seclume-bench/target/seclume-bench.jar
-          'bench\.(Query|Insert|Pool|PacedPool|Pbkdf2)Benchmark'
+          'bench\.(Query|Insert|Pool|PacedPool|Pbkdf2|Relogin)Benchmark'
           -rf json -rff seclume-bench/target/jmh-oracle.json -wi 3 -i 5 -f 1
       # The pool resets an Oracle session by logging in again (OraConnection.
       # resetSessionState): Pbkdf2Benchmark (SHA_512, 4096 rounds - the 12c
       # verifier) is the part of that which is the client's own work.
+      # ReloginBenchmark is that reset alone, on one connection per thread.
       # ConnectBenchmark is left out here: Oracle Free's listener does not
       # keep up with one login after another. In run 42988358015 both drivers
       # ended with ORA-12516 - seclume in its second iteration, ojdbc in its
