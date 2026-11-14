@@ -14,6 +14,24 @@ All notable changes to seclume are recorded here. Versions follow
   after that the same operation stayed below 4.5 in 79 rounds of 80 and `ConstantTime.equals`
   below 2.7 in all 80, while the early-exit control is still found (t around -1650). The GCM
   tag check is set up the same way, and `thePreparationAloneIsQuiet` keeps the setup honest.
+- **SQL Server: a cancellation that the server answers before the ATTENTION's write returns
+  is still reported.** The ATTENTION was counted as owed only after its eight bytes were
+  written, while the thread that sent the statement may already be reading the server's
+  answer and asking whether a cancellation is owed. Told nothing, `execute` returned as if the
+  statement had run to the end, and the acknowledgement was left for the next statement. The
+  SQL Server job of #345 failed so: `waitfor delay '00:00:30'`, cancelled after half a second,
+  ended then without `HY008`. The ATTENTION is now owed before it is written, and taken back if
+  the write fails; `AttentionCountedBeforeSentTest` asks the channel from inside that write, as
+  the reading thread can, and failed before the fix. Oracle's break already set its flag first.
+- **Differential tests: a plaintext MySQL login no longer depends on another class having
+  logged in first.** MySQL 8's caching_sha2_password answers from a cache of the password's hash
+  that is empty after the server starts; filling it over plaintext needs the server's key, which
+  seclume asks for only with `allowPublicKeyRetrieval=true`. Six classes logged in with
+  `tls=off` and without it, and passed only when another class had filled the cache - the
+  differential `mysql` job of 13 November failed in two of them, and a fresh MySQL 8.0 refused
+  all six every time. They allow the key now, as the other plaintext logins of the module did;
+  `PlaintextMySqlLoginTest` reads the module's sources and fails on a plaintext MySQL login
+  that does not.
 - **CI tools: `@opentelemetry/instrumentation-http` 0.222.0.** The CI's Azure storage emulator
   (Azurite, a test helper; nothing of it ships) brings 0.221.0 through `applicationinsights`, and
   GHSA-3v2p-hm54-8qcq (sensitive data in logs, fixed in 0.222.0) failed `npm_audit.py` in the core
