@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Constant time: the measurement no longer tells the two classes apart by its own setup.**
+  The nightly check of `ConstantTime.equals` failed on 7 and 13 November (t = 6.8 to 45.7). The
+  setup copied the input and then wrote the two bytes that may differ - one changed, one as it
+  was - and which store changed something was enough to tell the classes apart: on eight
+  runners (Xeon Platinum 8573C, EPYC 7763, EPYC 9V74) an operation that does not read the input
+  had |t| up to 85 after it. Each class's input is now made beforehand and copied in whole;
+  after that the same operation stayed below 4.5 in 79 rounds of 80 and `ConstantTime.equals`
+  below 2.7 in all 80, while the early-exit control is still found (t around -1650). The GCM
+  tag check is set up the same way, and `thePreparationAloneIsQuiet` keeps the setup honest.
 - **CI: a job runs the tests of its own modules, not those of every module it builds.**
   `mvn -pl MODULES -am test` runs the tests of every module Maven builds on the way: each of
   the eighteen database jobs ran the core's 4,138 tests again - the same tests with the same
