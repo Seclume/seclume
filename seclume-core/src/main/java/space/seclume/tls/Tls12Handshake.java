@@ -546,7 +546,7 @@ final class Tls12Handshake {
             try {
                 chain.add(Certificates.parse(message, at, size));
             } catch (CertificateException e) {
-                throw new IOException("the server sent a certificate that cannot be read", e);
+                throw ClientHandshake.badCertificate(e);
             }
             at += size;
         }

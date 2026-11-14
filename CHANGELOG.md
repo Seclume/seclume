@@ -5,6 +5,16 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **TLS: a server certificate the client will not go on with ends in an alert.** An empty
+  TLS 1.3 Certificate, a certificate that cannot be read, and one the trust store refuses -
+  for another name, an unknown issuer, expired - were refused as a plain `IOException`, with
+  no alert, so the server saw the connection drop and logged nothing of why. Now, as RFC 8446
+  asks: `decode_error` for the empty list (section 4.4.2.4, a MUST; the TLS 1.2 handshake
+  already sent it), `bad_certificate` for one that is corrupt and `certificate_unknown` for
+  one refused (section 6.2; the JDK's client sends the same), for TLS 1.3 and TLS 1.2 alike.
+  The exceptions are `TlsProtocolException`s with the same messages as before.
+  `ServerCertificateAlertTest` and `Tls12ServerCertificateAlertTest` failed on all three
+  before the change.
 - **tls mutation score: 90.3 %, and no longer a matter of the runner.** The tls floor of 86 %
   was met or missed by the speed of the machine: of 30 report logs since 8 November, 141
   mutants survived in every run and 160 only in some - those no fast test failed on, which a

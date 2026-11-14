@@ -1089,11 +1089,11 @@ public final class ClientHandshake {
             }
         });
         if (!problem.isEmpty()) {
-            throw new IOException("the server sent a certificate that cannot be read",
-                    problem.get(0));
+            throw badCertificate(problem.get(0));
         }
         if (chain.isEmpty()) {
-            throw new IOException("the server sent an empty certificate list");
+            throw new TlsProtocolException(TlsAlertException.DECODE_ERROR,
+                    "the server sent an empty certificate list");
         }
     }
 
@@ -1181,8 +1181,27 @@ public final class ClientHandshake {
         try {
             trust.checkServer(chain, host);
         } catch (CertificateException e) {
-            throw new IOException("the server's certificate was refused: " + e.getMessage(), e);
+            // RFC 8446 section 6.2: certificate_unknown, "some other
+            // (unspecified) issue" - the chain, the name, the validity or the
+            // key usage; the JDK's client sends the same. Said, so that the
+            // server's log shows why rather than a connection that dropped.
+            TlsProtocolException refused = new TlsProtocolException(
+                    TlsAlertException.CERTIFICATE_UNKNOWN,
+                    "the server's certificate was refused: " + e.getMessage());
+            refused.initCause(e);
+            throw refused;
         }
+    }
+
+    /**
+     * A certificate in the server's Certificate that is not one - RFC 8446
+     * section 6.2's bad_certificate, "corrupt". For TLS 1.3 and TLS 1.2 alike.
+     */
+    static TlsProtocolException badCertificate(CertificateException unreadable) {
+        TlsProtocolException refused = new TlsProtocolException(TlsAlertException.BAD_CERTIFICATE,
+                "the server sent a certificate that cannot be read");
+        refused.initCause(unreadable);
+        return refused;
     }
 
     private static void verifySignature(List<X509Certificate> chain, MemorySegment message,

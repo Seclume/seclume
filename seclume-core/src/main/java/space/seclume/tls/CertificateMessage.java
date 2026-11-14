@@ -62,7 +62,8 @@ public final class CertificateMessage {
      * The server's Certificate message, checked field by field before it is
      * read: an empty request context (TLS 1.3 servers answer none), a list
      * that fills the message exactly, entries that fill the list exactly,
-     * and no per-certificate extensions, since this client asks for none.
+     * at least one entry, and no per-certificate extensions, since this
+     * client asks for none.
      * {@link #certificates} walks what fits and stops; TLS-Anvil
      * (27.09.2026) showed that is too kind to a length that lies.
      */
@@ -80,6 +81,12 @@ public final class CertificateMessage {
         if (listLength != length - 4) {
             throw StrictExtensions.decodeError("the certificate list says " + listLength
                     + " bytes and the message has " + (length - 4));
+        }
+        if (listLength == 0) {
+            // RFC 8446 section 4.4.2.4: "If the server supplies an empty
+            // Certificate message, the client MUST abort the handshake with a
+            // 'decode_error' alert." The TLS 1.2 handshake already did.
+            throw StrictExtensions.decodeError("the server's Certificate has no certificate in it");
         }
         long at = offset + 4;
         long end = at + listLength;

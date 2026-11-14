@@ -31,6 +31,8 @@ public class TlsAlertException extends IOException {
     /** RFC 8446: a message lacks an extension it must carry. */
     public static final int MISSING_EXTENSION = 109;
     public static final int BAD_CERTIFICATE = 42;
+    /** RFC 8446: a certificate unacceptable for a reason no other alert names. */
+    public static final int CERTIFICATE_UNKNOWN = 46;
     public static final int DECRYPT_ERROR = 51;
     public static final int INSUFFICIENT_SECURITY = 71;
     /** RFC 5246: a renegotiation was asked for, and this client never renegotiates. */
