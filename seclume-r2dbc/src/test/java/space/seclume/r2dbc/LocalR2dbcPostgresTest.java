@@ -205,7 +205,10 @@ class LocalR2dbcPostgresTest {
                 // The reset's answer has to have arrived for a borrow that
                 // does not wait; until then the lane takes it, as it should.
                 Thread.sleep(20);
-                name = Mono.usingWhen(Mono.from(pooled.create()).doOnNext(c -> lentOn[0] = Thread.currentThread()),
+                name = Mono.usingWhen(Mono.from(pooled.create()).map(c -> {
+                    lentOn[0] = Thread.currentThread();
+                    return c;
+                }),
                         c -> Flux.from(c.createStatement("show application_name").execute())
                                 .concatMap(r -> r.map((row, meta) -> row.get(0, String.class))).next(),
                         Connection::close).block(WAIT);

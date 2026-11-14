@@ -66,7 +66,7 @@ class OraStatement implements Statement, TtcResult.RowHandler {
         if (sql == null) {
             return null;
         }
-        if (sql != fingerprintedSql && !sql.equals(fingerprintedSql)) {
+        if (!sql.equals(fingerprintedSql)) {
             lastFingerprint = space.seclume.QueryFingerprint.of(sql);
             fingerprintedSql = sql;
         }
