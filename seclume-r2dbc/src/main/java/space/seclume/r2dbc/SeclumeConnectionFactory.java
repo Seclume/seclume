@@ -70,8 +70,8 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
             // A pool with a connection ready lends it without waiting for
             // anything: taken on the subscriber's thread, it saves the hop to
             // a virtual thread of its own - a carrier woken and parked again
-            // for a borrow that blocks on nothing. Measured as most of what
-            // a borrow cost beside r2dbc-pool's (R2dbcPoolBenchmark, JFR).
+            // for a borrow that blocks on nothing (R2dbcPoolBenchmark under
+            // JFR: ForkJoinPool.deactivate was the top frame, 16 %).
             // Anything that could wait - no free connection, a reset not yet
             // answered, a validation due - is the lane's, as before.
             if (dialect != null && source instanceof space.seclume.ImmediateBorrow ready) {
@@ -82,7 +82,7 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
                     return Mono.error(Errors.translate(e));
                 }
                 if (jdbc != null) {
-                    return Mono.just((Connection) new SeclumeConnection(jdbc, new Lane(), dialect));
+                    return describe(jdbc);
                 }
             }
             Lane lane = new Lane();
@@ -99,6 +99,46 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
                 }
             }).doOnError(failure -> lane.close());
         });
+    }
+
+    /**
+     * The R2DBC connection over one already borrowed. SeclumeConnection asks
+     * it for its auto-commit, isolation and server version: seclume's
+     * PostgreSQL and MySQL drivers answer all three from what they hold, so
+     * that is done here, on the subscriber's thread. Any other driver may ask
+     * the server - SQL Server's and Oracle's do for the version, pgJDBC for
+     * the isolation - and is asked on the lane.
+     */
+    private Mono<Connection> describe(java.sql.Connection jdbc) {
+        Lane lane = new Lane();
+        try {
+            boolean answersLocally = (dialect == Placeholders.Dialect.POSTGRESQL
+                    || dialect == Placeholders.Dialect.MYSQL)
+                    && jdbc.isWrapperFor(space.seclume.SessionReset.class);
+            if (answersLocally) {
+                return Mono.just((Connection) new SeclumeConnection(jdbc, lane, dialect));
+            }
+        } catch (java.sql.SQLException | RuntimeException e) {
+            lane.close();
+            closeQuietly(jdbc);
+            return Mono.error(Errors.translate(e));
+        }
+        return lane.call(() -> {
+            try {
+                return (Connection) new SeclumeConnection(jdbc, lane, dialect);
+            } catch (java.sql.SQLException | RuntimeException e) {
+                jdbc.close();
+                throw e;
+            }
+        }).doOnError(failure -> lane.close());
+    }
+
+    private static void closeQuietly(java.sql.Connection jdbc) {
+        try {
+            jdbc.close();
+        } catch (java.sql.SQLException ignored) {
+            // The borrow failed already; that is what the subscriber hears.
+        }
     }
 
     @Override
