@@ -22,90 +22,14 @@ permissions:
   contents: read
 
 jobs:
-  corpus:
+  probe:
+    # Experiment branch only: where the constant-time t comes from, on several runners.
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.m2/wrapper
-          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - name: The whole corpus
-        run: >
-          .github/scripts/mvnw-retry.sh -B -Pfuzz
-          -pl seclume-core,seclume-tck,seclume-postgresql,seclume-mysql,seclume-sqlserver,seclume-oracle
-          -am test -Dtest='*Fuzz*,BoundaryContractTest'
-          -Dsurefire.failIfNoSpecifiedTests=false
-      # MongoDB: the reply parser, the logins and DNS seedlists - more rounds
-      # than the CI runs, and a seed of the night's own, printed on failure.
-      - name: MongoDB
-        run: >
-          .github/scripts/mvnw-retry.sh -B -pl seclume-mongodb,seclume-mongodb-driver -am test
-          -Dtest='OpMsgFuzzTest,MongoLoginFuzzTest,SrvFuzzTest'
-          -Dseclume.mongo.fuzz.rounds=200000 -Dseclume.mongo.fuzz.seed=${{ github.run_id }}
-          -Dsurefire.failIfNoSpecifiedTests=false
-      # The pool as a state machine: random sequences of borrows, returns,
-      # broken connections, late and refused resets, suspend and resume,
-      # checked after every step. The CI runs 150 sequences; this runs 20 000.
-      - name: The pool's promises, many sequences
-        run: >
-          .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test
-          -Dtest='PoolStateMachineTest,ConcurrentPoolStateMachineTest'
-          -Dseclume.pool.stateMachine.seeds=20000 -Dseclume.pool.concurrent.seeds=2000
-          -Dsurefire.failIfNoSpecifiedTests=false
-      # Timing: whether comparisons, the GCM tag check and the Java AES take
-      # longer for some secrets than for others (dudect's method, with a
-      # negative control that must be found). Too noisy for every build.
-      - name: Constant time
-        run: >
-          .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=ConstantTimeLeakageTest
-          -Dseclume.constantTime=true -Dsurefire.failIfNoSpecifiedTests=false
-      - name: The failing tests, on the run's page
-        if: failure()
-        run: python3 .github/scripts/surefire_errors.py
-      - name: What the run found
-        if: failure()
-        run: |
-          echo "A corpus finding is a defect until somebody shows it is not."
-          echo "Every failure prints the stream that produced it, as hex, so it"
-          echo "reproduces from the log alone with no corpus file to fetch."
-
-  # Coverage-guided search, as opposed to replaying a corpus: Jazzer mutates
-  # toward inputs that reach new code. Fifteen minutes per target a night:
-  # the four wire decoders and seclume's own TLS client - before the key
-  # (ServerHello, alerts), behind it (the encrypted flight), after the
-  # handshake (records under the application key) and a connection's
-  # written-down state. A finding fails the job; the input that caused it is kept as an
-  # artefact and belongs in src/test/resources as a regression case.
-  coverage-guided:
-    runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - { module: seclume-postgresql, test: PgDecoderFuzzTest, method: coverageGuided }
-          - { module: seclume-mysql, test: MyDecoderFuzzTest, method: coverageGuided }
-          - { module: seclume-sqlserver, test: TdsDecoderFuzzTest, method: coverageGuided }
-          - { module: seclume-oracle, test: OracleDecoderFuzzTest, method: coverageGuided }
-          - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileServerHelloFailsWithAnIoException }
-          - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileEncryptedFlightNeverConnectsUnauthenticated }
-          - { module: seclume-core, test: TlsRecordFuzzTest, method: recordsAfterTheHandshake }
-          - { module: seclume-core, test: TlsRecordFuzzTest, method: aFrozenConnection }
-          - { module: seclume-core, test: JsonOffFuzzTest, method: arbitraryDocumentsStayWithinBounds }
-          - { module: seclume-core, test: JsonOffFuzzTest, method: generatedValuesRoundTrip }
-          - { module: seclume-core, test: SecretFetchFuzzTest, method: anyAnswerIsParsedOrRefused }
-          - { module: seclume-core, test: KeyFilesFuzzTest, method: anyKeyFileIsReadOrRefused }
-          - { module: seclume-core, test: HostnameMatchFuzzTest, method: wildcardAndPunycodeBoundaries }
-          - { module: seclume-core, test: EncryptedValueFuzzTest, method: anyStoredValueDecryptsOnlyIfItWasWritten }
-          - { module: seclume-core, test: EncryptedValueFuzzTest, method: aesGcmSivRoundTripsAndRefusesAnyChange }
-          - { module: seclume-core, test: ShamirShareFuzzTest, method: anyShareIsReadOrRefused }
+        runner: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
@@ -113,24 +37,10 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
-      - run: .github/scripts/mvnw-retry.sh -B -DskipTests install -pl ${{ matrix.target.module }} -am
-      - name: Search
-        env:
-          JAZZER_FUZZ: '1'
-        run: >
-          .github/scripts/mvnw-retry.sh -B test -pl ${{ matrix.target.module }}
-          -Dtest='${{ matrix.target.test }}#${{ matrix.target.method }}'
-          -Djazzer.max_duration=15m -Dsurefire.failIfNoSpecifiedTests=false
-      - name: The failing tests, on the run's page
-        if: failure()
-        run: python3 .github/scripts/surefire_errors.py
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: finding-${{ matrix.target.test }}-${{ matrix.target.method }}
-          # Jazzer keeps a finding in src/test/resources only where that
-          # directory exists, and none of the four modules has one - so it
-          # writes crash-* into the module's working directory. The first
-          # nightly run (27.09.2026) found two crashes and uploaded neither:
-          # this path looked only under src/test/resources.
-          path: ${{ matrix.target.module }}/**/crash-*
+      - name: The constant-time class, three times
+        run: |
+          for i in 1 2 3; do
+            .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=ConstantTimeLeakageTest \
+              -Dseclume.constantTime=true -Dsurefire.failIfNoSpecifiedTests=false || echo "RUN $i FAILED"
+          done
+          grep -m1 "model name" /proc/cpuinfo
