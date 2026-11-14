@@ -77,7 +77,7 @@ class PipelineProbeTest {
     @Test
     @SuppressWarnings("try")
     void probe() throws Exception {
-        for (String reuse : new String[] {"false", "true"}) {
+        for (String reuse : new String[] {"true"}) {
             System.setProperty("probe.reuse", reuse);
             System.out.println("##### reuse cached cursors: " + reuse);
             scenarios();
@@ -87,6 +87,54 @@ class PipelineProbeTest {
     @SuppressWarnings("try")
     static void scenarios() throws Exception {
         String sql = "insert into probe_t (id, note) values (?, ?)";
+        scenario("G: 130 calls over 97 texts, a statement per call", c -> {
+            for (int i = 1; i <= 130; i++) {
+                try (PreparedStatement p = c.prepareStatement(
+                        "insert into probe_t (id, note) values (?, 'text " + (i % 97) + "')")) {
+                    if (i == 1) {
+                        // nothing
+                    }
+                }
+            }
+            try (Pipeline u = Pipeline.open(c)) {
+                for (int i = 1; i <= 130; i++) {
+                    try (PreparedStatement p = c.prepareStatement(
+                            "insert into probe_t (id, note) values (?, 'text " + (i % 97) + "')")) {
+                        p.setInt(1, i);
+                        p.executeUpdate();
+                    }
+                }
+            }
+            c.commit();
+        });
+        scenario("H: 130 calls over 97 texts, the statements kept open", c -> {
+            PreparedStatement[] ps = new PreparedStatement[97];
+            for (int t = 0; t < 97; t++) {
+                ps[t] = c.prepareStatement("insert into probe_t (id, note) values (?, 'text " + t + "')");
+            }
+            try (Pipeline u = Pipeline.open(c)) {
+                for (int i = 1; i <= 130; i++) {
+                    ps[i % 97].setInt(1, i);
+                    ps[i % 97].executeUpdate();
+                }
+            }
+            c.commit();
+            for (PreparedStatement p : ps) {
+                p.close();
+            }
+        });
+        scenario("I: 70 distinct texts, no cache before", c -> {
+            try (Pipeline u = Pipeline.open(c)) {
+                for (int i = 1; i <= 70; i++) {
+                    try (PreparedStatement p = c.prepareStatement(
+                            "insert into probe_t (id, note) values (?, 'other " + i + "')")) {
+                        p.setInt(1, i);
+                        p.executeUpdate();
+                    }
+                }
+            }
+            c.commit();
+        });
         scenario("A: four fresh parses in flight, no failure", c -> {
             try (PreparedStatement p = c.prepareStatement(sql)) {
                 try (Pipeline u = Pipeline.open(c)) {
