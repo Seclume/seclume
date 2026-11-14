@@ -50,8 +50,9 @@ import java.sql.SQLException;
  * slow line shows and a loopback connection does not.
  *
  * <p>They differ in one thing worth knowing: after a failure PostgreSQL
- * <b>skips</b> the rest of the group, MySQL and Oracle <b>run</b> it. Each
- * says which in the message of the exception.
+ * <b>skips</b> the rest of the group, MySQL <b>runs</b> it, and Oracle drops
+ * the calls already sent behind the refused one, so they do not run either.
+ * Each says which in the message of the exception.
  */
 public final class Pipeline implements AutoCloseable {
 

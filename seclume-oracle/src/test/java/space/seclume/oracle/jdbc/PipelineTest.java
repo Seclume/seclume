@@ -227,6 +227,9 @@ class PipelineTest {
     @SuppressWarnings("try")   // the block is used for its effect, not its value
     void moreCallsInTheBlockThanTheServerAllowsCursors() throws Exception {
         try (Connection connection = DriverManager.getConnection(url)) {
+            // An answer that never comes fails the test here, with what was
+            // waited for, rather than at the class's timeout.
+            connection.setNetworkTimeout(Runnable::run, 60_000);
             int calls = openCursors(connection) * 2;
             connection.setAutoCommit(false);
             try (PreparedStatement insert = connection.prepareStatement(
@@ -271,17 +274,23 @@ class PipelineTest {
 
     /**
      * A call the server refuses inside the block is reported - with its
-     * place, its text and the exception it would have raised outside.
+     * place, its text, the exception it would have raised outside, and what
+     * became of the calls behind it.
+     *
+     * <p>Oracle answers the refusal with a reset, and the reset throws away
+     * the calls it had been sent and not yet read: the third and fourth here
+     * never run and are never answered. Before, the block was not told of
+     * the refusal at all and then waited for those two answers for ever.
      *
      * <p>The text was run once before the block, so its calls go out on the
-     * cached cursor; the refused one takes that cursor out of the cache, and
-     * the calls after it, already sent on it, must not give it back a second
-     * time. The connection is fine afterwards, and out of the block.
+     * cached cursor; the refused one takes that cursor out of the cache. The
+     * connection is fine afterwards, and out of the block.
      */
     @Test
     @SuppressWarnings("try")   // the block is used for its effect, not its value
     void aRefusedCallInTheBlockIsReportedWithItsPlace() throws Exception {
         try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setNetworkTimeout(Runnable::run, 60_000);
             connection.setAutoCommit(false);
             try (PreparedStatement insert = connection.prepareStatement(
                     "insert into pipeline_demo (id, note) values (?, ?)")) {
@@ -307,6 +316,9 @@ class PipelineTest {
                         refused.getMessage());
                 assertTrue(refused.getMessage().contains("insert into pipeline_demo"),
                         refused.getMessage());
+                assertTrue(refused.getMessage().contains("statements 3 to 4 did not run"),
+                        "the message has to say what became of the calls behind it: "
+                                + refused.getMessage());
 
                 // Out of the block: a count again, not SUCCESS_NO_INFO.
                 insert.setInt(1, 4);
@@ -320,10 +332,12 @@ class PipelineTest {
             }
             try (Statement statement = connection.createStatement();
                     ResultSet rows = statement.executeQuery(
-                            "select count(*) from pipeline_demo where id in (1, 2, 3, 4, 100)")) {
+                            "select listagg(id, ',') within group (order by id) from pipeline_demo "
+                                    + "where id in (1, 2, 3, 4, 100)")) {
                 assertTrue(rows.next());
-                assertEquals(5, rows.getInt(1),
-                        "Oracle runs the calls after the refused one, and they stay in the transaction");
+                assertEquals("1,4,100", rows.getString(1),
+                        "the call before the refused one stays in the transaction, the two "
+                                + "behind it did not run");
             }
             connection.rollback();
         }

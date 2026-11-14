@@ -2158,33 +2158,49 @@ public final class OracleSession implements AutoCloseable {
         pipelineGroup = 0;
         TtcResult failure = null;
         int failedAt = -1;
+        int dropped = 0;
         try {
             for (int i = 0; i < group; i++) {
+                long resetsBefore = channel.resets();
                 TtcResult result = readAnswer(null, java.util.List.of());
                 String sql = pipelineSql.get(groupStart + i);
                 settleCursor(sql, pipelineCursors[i], result);
-                if (result.isFailure()) {
-                    keep(groupStart + i, java.sql.Statement.EXECUTE_FAILED);
-                    if (failure == null) {
-                        failure = result;
-                        failedAt = groupStart + i;
-                    }
-                } else {
+                if (!result.isFailure()) {
                     keep(groupStart + i, Math.max(result.rowCount(), 0));
+                    continue;
+                }
+                keep(groupStart + i, java.sql.Statement.EXECUTE_FAILED);
+                if (failure == null) {
+                    failure = result;
+                    failedAt = groupStart + i;
+                }
+                if (channel.resets() != resetsBefore) {
+                    // The refusal came with a reset, and a reset clears what
+                    // the server had been sent and not yet read: the calls
+                    // behind this one never ran and will never be answered.
+                    // Reading on waited for them for ever - see
+                    // NsChannel.resets for how that was measured.
+                    dropped = group - i - 1;
+                    break;
                 }
             }
-            pipelineCount += group;
+            if (dropped > 0) {
+                // Out of the block's record, so that the texts and the counts
+                // of what is sent next line up again.
+                pipelineSql.subList(groupStart + group - dropped, groupStart + group).clear();
+            }
+            pipelineCount += group - dropped;
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection("the connection to the server broke: " + e.getMessage(), e);
         }
         if (failure != null) {
-            // Every answer of the group is read first, or the next call would
+            // Every answer still to come is read first, or the next call would
             // be handed the answer after the refused one. Until now a refusal
             // was not reported at all: the answer was read, its count kept as
-            // a zero, and the block ended as if every row had arrived - the
-            // ORA-01000 above came to light only because the next call
-            // outside the block met it.
-            throw pipelineFailure(failure, failedAt);
+            // a zero, and the block ended as if every row had arrived - or,
+            // with calls behind it, waited for ever for their answers.
+            boolean ranAfter = dropped == 0 && failedAt < groupStart + group - 1;
+            throw pipelineFailure(failure, failedAt, dropped, ranAfter);
         }
     }
 
@@ -2241,7 +2257,8 @@ public final class OracleSession implements AutoCloseable {
         }
     }
 
-    private SQLException pipelineFailure(TtcResult result, int at) {
+    private SQLException pipelineFailure(TtcResult result, int at, int dropped,
+                                         boolean ranAfter) {
         String number = "ORA-" + String.format(java.util.Locale.ROOT, "%05d", result.errorNumber());
         String text = result.errorText();
         String statement = at >= 0 && at < pipelineSql.size() ? pipelineSql.get(at).strip() : null;
@@ -2252,8 +2269,18 @@ public final class OracleSession implements AutoCloseable {
                 + (statement == null ? "" : " (" + statement + ")")
                 + (text == null || text.isBlank() ? ": the server rejected it (" + number + ")"
                         : ": the server rejected it: " + text.strip())
-                + " - Oracle runs every call it was sent, so the statements after it did "
-                + "execute; the transaction decides what stays.";
+                + (dropped > 0
+                        ? " - Oracle drops the calls sent after a refused one, so statement"
+                                + (dropped == 1 ? " " + (at + 2) + " did"
+                                        : "s " + (at + 2) + " to " + (at + 1 + dropped) + " did")
+                                + " not run; the ones before it did, and the transaction "
+                                + "decides what stays."
+                        : ranAfter
+                                ? " - the server answered it without a reset, so the statements "
+                                        + "after it ran as well; the transaction decides what "
+                                        + "stays."
+                                : " - the statements before it ran; the transaction decides what "
+                                        + "stays.");
         return pipelineFailures != null ? pipelineFailures.apply(message, result.errorNumber())
                 : new SQLException(message, "HY000", result.errorNumber());
     }

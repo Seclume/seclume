@@ -14,9 +14,13 @@ All notable changes to seclume are recorded here. Versions follow
   parsed on a fresh cursor that was never closed, so the three hundredth call of a session
   ended in `ORA-01000` - and a refused call inside the block was not reported at all: its
   answer was read, its count kept as a zero, and the block ended as if every row had arrived.
-  Calls now run on the cached cursor for their text and give back the ones they do not keep,
-  and a refusal ends the block with the exception it raises outside it (a duplicate key is a
-  `SQLIntegrityConstraintViolationException`), naming the statement and its place. The
+  With calls behind it the block hung instead: Oracle answers the refusal with a reset, the
+  reset drops the calls it was sent and had not read, and the driver waited for their answers
+  for ever (measured on Oracle 23.26 Free: a duplicate key in the second of four calls, the
+  third and fourth never ran). Calls now run on the cached cursor for their text and give back
+  the ones they do not keep, and a refusal ends the block with the exception it raises outside
+  it (a duplicate key is a `SQLIntegrityConstraintViolationException`), naming the statement,
+  its place and the statements behind it that did not run. The
   `Pipeline` documentation said Oracle and SQL Server save nothing; both pipeline, and it now
   says how. New: `PipelineTest.aStatementPreparedInsideTheBlockGetsItsOwnAnswer` (MySQL),
   `moreCallsInTheBlockThanTheServerAllowsCursors` and

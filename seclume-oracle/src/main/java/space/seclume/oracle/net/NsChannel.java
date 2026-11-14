@@ -425,6 +425,7 @@ public final class NsChannel implements AutoCloseable {
             sawReset |= markerType() == NsPacket.MARKER_RESET;
             if (sawReset) {
                 sendMarker(NsPacket.MARKER_RESET);
+                resets++;
                 if (nativeEncryption != null) {
                     nativeEncryption.reset();       // both ends derive the checksum keys anew
                 }
@@ -521,6 +522,23 @@ public final class NsChannel implements AutoCloseable {
      * break nobody took before the next request goes out.
      */
     private volatile boolean lateBreak;
+
+    /** How many resets this channel has answered - see {@link #resets()}. */
+    private long resets;
+
+    /**
+     * How many times the server has asked for a reset and been given one.
+     *
+     * <p>A reset clears what the server has been sent and not yet read - on a
+     * pipeline, the calls behind a refused one. Measured on Oracle 23.26
+     * Free: a duplicate key in the second of four calls in flight came back
+     * as two markers and the error, and the third and fourth never ran and
+     * were never answered. A refusal answered without markers leaves them
+     * alone; this count is how the caller tells the two apart.
+     */
+    public long resets() {
+        return resets;
+    }
 
     /**
      * Whether the answer just read is followed by the server's reaction to a
