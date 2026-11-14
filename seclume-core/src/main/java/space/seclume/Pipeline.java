@@ -43,15 +43,15 @@ import java.sql.SQLException;
  * <p>Outside the block, JDBC behaves exactly as before. There is no setting
  * that changes it globally - that would be a semantic change nobody asked for.
  *
- * <p><b>Where it saves anything.</b> PostgreSQL and MySQL bundle; Oracle and
- * SQL Server accept the block and save nothing, because their protocols answer
- * every call of their own accord. The block is allowed there so that the same
- * code runs against all four - but it is said out loud rather than implied,
- * and {@link #counts()} comes back empty where nothing was held back.
+ * <p><b>Where it saves anything.</b> PostgreSQL and MySQL bundle the writes
+ * into one round trip, and SQL Server carries several calls in one message.
+ * Oracle numbers and answers every call, so its calls still travel one by
+ * one; what the block removes there is the waiting between them, which a
+ * slow line shows and a loopback connection does not.
  *
- * <p>The two that bundle differ in one thing worth knowing: after a failure
- * PostgreSQL <b>skips</b> the rest of the group, MySQL <b>runs</b> it. Both
- * say which in the message of the exception.
+ * <p>They differ in one thing worth knowing: after a failure PostgreSQL
+ * <b>skips</b> the rest of the group, MySQL and Oracle <b>run</b> it. Each
+ * says which in the message of the exception.
  */
 public final class Pipeline implements AutoCloseable {
 

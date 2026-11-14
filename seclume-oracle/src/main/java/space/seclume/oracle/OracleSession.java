@@ -2079,13 +2079,28 @@ public final class OracleSession implements AutoCloseable {
     private long[] pipelineCounts = new long[0]; // seclume-allow: update counts, not a secret
     private int pipelineCount;
     private final java.util.List<String> pipelineSql = new java.util.ArrayList<>();
+    /**
+     * The cursor each call of the group in flight was sent on - the one the
+     * cache had for its text, or 0 for a fresh parse.
+     */
+    private final int[] pipelineCursors = new int[PIPELINE_CALLS]; // seclume-allow: cursor numbers, not a secret
+    /** Turns a refused call into the exception a caller would have got without the block. */
+    private java.util.function.BiFunction<String, Integer, SQLException> pipelineFailures;
 
-    public void beginPipeline() {
+    /**
+     * @param failures what a refused call becomes, from its message and its
+     *                 Oracle error number - the JDBC layer's own translation,
+     *                 so that a duplicate key inside the block is the same
+     *                 {@code SQLIntegrityConstraintViolationException} it is
+     *                 outside
+     */
+    public void beginPipeline(java.util.function.BiFunction<String, Integer, SQLException> failures) {
         pipelining = true;
         pipelineGroup = 0;
         pipelineCount = 0;
         pipelineCounts = new long[16]; // seclume-allow: update counts, not a secret
         pipelineSql.clear();
+        pipelineFailures = failures;
     }
 
     public boolean isPipelining() {
@@ -2106,8 +2121,14 @@ public final class OracleSession implements AutoCloseable {
             if (!autoCommit) {
                 inTransaction = true;
             }
-            TtcQuery.send(channel, newCallNumber(), sql, 0, false, binds, 0, 1, null,
+            // The cursor the cache has for this text, as outside the block:
+            // sent on a fresh one each time, every call left a cursor open on
+            // the server that nobody closed, and the three hundredth call of a
+            // session ended in ORA-01000. See flushPipeline for the rest.
+            int reuse = cursorFor(sql);
+            TtcQuery.send(channel, newCallNumber(), sql, 0, false, binds, reuse, 1, null,
                     autoCommit, isPlsqlBlock(sql));
+            pipelineCursors[pipelineGroup] = reuse;
             pipelineGroup++;
             pipelineSql.add(sql);
             if (pipelineGroup >= PIPELINE_CALLS) {
@@ -2133,21 +2154,118 @@ public final class OracleSession implements AutoCloseable {
             return;
         }
         int group = pipelineGroup;
+        int groupStart = pipelineCount;
         pipelineGroup = 0;
+        TtcResult failure = null;
+        int failedAt = -1;
         try {
             for (int i = 0; i < group; i++) {
                 TtcResult result = readAnswer(null, java.util.List.of());
-                keep(pipelineCount + i, Math.max(result.rowCount(), 0));
+                String sql = pipelineSql.get(groupStart + i);
+                settleCursor(sql, pipelineCursors[i], result);
+                if (result.isFailure()) {
+                    keep(groupStart + i, java.sql.Statement.EXECUTE_FAILED);
+                    if (failure == null) {
+                        failure = result;
+                        failedAt = groupStart + i;
+                    }
+                } else {
+                    keep(groupStart + i, Math.max(result.rowCount(), 0));
+                }
             }
             pipelineCount += group;
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection("the connection to the server broke: " + e.getMessage(), e);
         }
+        if (failure != null) {
+            // Every answer of the group is read first, or the next call would
+            // be handed the answer after the refused one. Until now a refusal
+            // was not reported at all: the answer was read, its count kept as
+            // a zero, and the block ended as if every row had arrived - the
+            // ORA-01000 above came to light only because the next call
+            // outside the block met it.
+            throw pipelineFailure(failure, failedAt);
+        }
+    }
+
+    /**
+     * What becomes of the cursor one pipelined call ran on.
+     *
+     * <p>The rules are the ones {@link #rememberCursor} and
+     * {@link #forgetCursor} apply outside the block, with one more: <b>a
+     * number is given back once</b>. Several calls of one text can be in
+     * flight on the same cached cursor, and when the cache lets go of it in
+     * between - a refused call, an eviction - it is already queued to close;
+     * the calls after it answer with that number again, and a second close
+     * would reach whatever the server has given the number to since.
+     *
+     * <p>A number taken from the cache when the call was sent and no longer
+     * in it now has therefore always been given back: every way out of the
+     * cache gives back what it removes.
+     */
+    private void settleCursor(String sql, int sentOn, TtcResult result) {
+        int id = result.cursorId();
+        if (result.isFailure()) {
+            // Not kept, as outside the block: a statement that failed may
+            // have failed at parse, and its cursor would answer every later
+            // execution of the text with ORA-01003.
+            OpenCursor cached = cursors.remove(sql);
+            if (cached != null) {
+                giveCursorBack(cached.id());
+            }
+            boolean gone = (cached != null && cached.id() == id) || (sentOn != 0 && id == sentOn);
+            if (!gone) {
+                giveCursorBack(id);
+            }
+            return;
+        }
+        if (id == 0) {
+            return;
+        }
+        OpenCursor cached = cursors.get(sql);
+        if (cached != null && cached.id() == id) {
+            return;                                   // still the cached one
+        }
+        if (sentOn != 0 && id == sentOn) {
+            return;                                   // was cached, given back since
+        }
+        if (cached == null || cached.id() == sentOn) {
+            // A fresh parse for a text the cache does not hold - or the
+            // server parsed afresh on its own, and rememberCursor gives the
+            // number it replaces back.
+            rememberCursor(sql, id, result.columns());
+        } else {
+            // The cache holds the text on another cursor: a second call of
+            // the same text sent before the first one's answer was read.
+            giveCursorBack(id);
+        }
+    }
+
+    private SQLException pipelineFailure(TtcResult result, int at) {
+        String number = "ORA-" + String.format(java.util.Locale.ROOT, "%05d", result.errorNumber());
+        String text = result.errorText();
+        String statement = at >= 0 && at < pipelineSql.size() ? pipelineSql.get(at).strip() : null;
+        if (statement != null && statement.length() > 80) {
+            statement = statement.substring(0, 77) + "...";
+        }
+        String message = "statement " + (at + 1) + " of the pipeline block failed"
+                + (statement == null ? "" : " (" + statement + ")")
+                + (text == null || text.isBlank() ? ": the server rejected it (" + number + ")"
+                        : ": the server rejected it: " + text.strip())
+                + " - Oracle runs every call it was sent, so the statements after it did "
+                + "execute; the transaction decides what stays.";
+        return pipelineFailures != null ? pipelineFailures.apply(message, result.errorNumber())
+                : new SQLException(message, "HY000", result.errorNumber());
     }
 
     public long[] endPipeline() throws SQLException {
-        flushPipeline();
-        pipelining = false;
+        try {
+            flushPipeline();
+        } finally {
+            // A refused call ends the block too: left open, every later
+            // executeUpdate on the connection would go on being buffered.
+            pipelining = false;
+        }
         long[] counts = java.util.Arrays.copyOf(pipelineCounts, pipelineCount);
         pipelineCount = 0;
         pipelineSql.clear();

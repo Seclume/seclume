@@ -210,6 +210,138 @@ class PipelineTest {
         }
     }
 
+    /**
+     * Twice as many calls in one block as the server allows open cursors.
+     *
+     * <p>Every pipelined call was sent on a fresh cursor and none of them was
+     * ever closed, so the three hundredth ended in {@code ORA-01000} - and
+     * nobody heard of it, because the answers in the block were read and not
+     * looked at: the block ended as if every row had arrived. Found by a
+     * benchmark whose next statement outside the block met the error.
+     *
+     * <p>One text over and over, which runs on the cached cursor, and then
+     * more distinct texts than the cache holds, which parse afresh and push
+     * each other out of it while their calls are still in flight.
+     */
+    @Test
+    @SuppressWarnings("try")   // the block is used for its effect, not its value
+    void moreCallsInTheBlockThanTheServerAllowsCursors() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            int calls = openCursors(connection) * 2;
+            connection.setAutoCommit(false);
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into pipeline_demo (id, note) values (?, ?)")) {
+                try (Pipeline unit = Pipeline.open(connection)) {
+                    for (int i = 1; i <= calls; i++) {
+                        insert.setInt(1, i);
+                        insert.setString(2, "row " + i);
+                        insert.executeUpdate();
+                    }
+                }
+            }
+            try (Pipeline unit = Pipeline.open(connection)) {
+                for (int i = 1; i <= calls; i++) {
+                    // Ninety-seven texts, more than the cursor cache keeps.
+                    try (PreparedStatement insert = connection.prepareStatement(
+                            "insert into pipeline_demo (id, note) values (?, 'text "
+                                    + (i % 97) + "')")) {
+                        insert.setInt(1, calls + i);
+                        insert.executeUpdate();
+                    }
+                }
+            }
+            connection.commit();
+
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery(
+                            "select count(*), count(distinct note) from pipeline_demo "
+                                    + "where note like 'text %'")) {
+                assertTrue(rows.next());
+                assertEquals(calls, rows.getInt(1), "not every call of the second block arrived");
+                assertEquals(97, rows.getInt(2));
+            }
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery("select count(*) from pipeline_demo")) {
+                assertTrue(rows.next());
+                assertEquals(2 * calls, rows.getInt(1), "not every call of the two blocks arrived");
+            }
+            connection.commit();
+        }
+    }
+
+    /**
+     * A call the server refuses inside the block is reported - with its
+     * place, its text and the exception it would have raised outside.
+     *
+     * <p>The text was run once before the block, so its calls go out on the
+     * cached cursor; the refused one takes that cursor out of the cache, and
+     * the calls after it, already sent on it, must not give it back a second
+     * time. The connection is fine afterwards, and out of the block.
+     */
+    @Test
+    @SuppressWarnings("try")   // the block is used for its effect, not its value
+    void aRefusedCallInTheBlockIsReportedWithItsPlace() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into pipeline_demo (id, note) values (?, ?)")) {
+                insert.setInt(1, 100);
+                insert.setString(2, "before");
+                assertEquals(1, insert.executeUpdate());
+
+                SQLException refused = assertThrows(SQLException.class, () -> {
+                    try (Pipeline unit = Pipeline.open(connection)) {
+                        int[] keys = {1, 1, 2, 3};          // the second one is a duplicate
+                        for (int key : keys) {
+                            insert.setInt(1, key);
+                            insert.setString(2, "in the block");
+                            insert.executeUpdate();
+                        }
+                    }
+                });
+                assertTrue(refused instanceof java.sql.SQLIntegrityConstraintViolationException,
+                        "a duplicate key is the same exception inside the block as outside: "
+                                + refused);
+                assertEquals(1, refused.getErrorCode(), refused.getMessage());
+                assertTrue(refused.getMessage().contains("statement 2 of the pipeline block"),
+                        refused.getMessage());
+                assertTrue(refused.getMessage().contains("insert into pipeline_demo"),
+                        refused.getMessage());
+
+                // Out of the block: a count again, not SUCCESS_NO_INFO.
+                insert.setInt(1, 4);
+                insert.setString(2, "after");
+                assertEquals(1, insert.executeUpdate());
+                for (int i = 0; i < 20; i++) {
+                    insert.setInt(1, 200 + i);
+                    insert.setString(2, "after");
+                    assertEquals(1, insert.executeUpdate());
+                }
+            }
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery(
+                            "select count(*) from pipeline_demo where id in (1, 2, 3, 4, 100)")) {
+                assertTrue(rows.next());
+                assertEquals(5, rows.getInt(1),
+                        "Oracle runs the calls after the refused one, and they stay in the transaction");
+            }
+            connection.rollback();
+        }
+    }
+
+    /** What the server allows - read rather than assumed, as in CursorReturnTest. */
+    private static int openCursors(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement();
+                ResultSet rows = statement.executeQuery(
+                        "select value from v$parameter where name = 'open_cursors'")) {
+            Assumptions.assumeTrue(rows.next(), "cannot read open_cursors on this server");
+            int allowed = rows.getInt(1);
+            Assumptions.assumeTrue(allowed > 0 && allowed <= 5000,
+                    "open_cursors is " + allowed + " - too large to reach in a test");
+            return allowed;
+        }
+    }
+
     /** Outside a transaction the block is refused, and the message says why. */
     @Test
     void theBlockNeedsATransaction() throws Exception {

@@ -5,6 +5,22 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **Pipeline: two bugs on MySQL and Oracle, both found by a unit-of-work benchmark.**
+  MySQL: a statement prepared inside a `Pipeline` block - a text the connection had not run
+  yet, singly or as `executeBatch` - sent its prepare without reading the buffered answers
+  first, took the first of them as its own and broke the connection ("the message ends after
+  11 bytes, but 2 more were needed"). Every request now reads the outstanding answers before
+  it goes out, in the one place all of them pass through. Oracle: every pipelined call was
+  parsed on a fresh cursor that was never closed, so the three hundredth call of a session
+  ended in `ORA-01000` - and a refused call inside the block was not reported at all: its
+  answer was read, its count kept as a zero, and the block ended as if every row had arrived.
+  Calls now run on the cached cursor for their text and give back the ones they do not keep,
+  and a refusal ends the block with the exception it raises outside it (a duplicate key is a
+  `SQLIntegrityConstraintViolationException`), naming the statement and its place. The
+  `Pipeline` documentation said Oracle and SQL Server save nothing; both pipeline, and it now
+  says how. New: `PipelineTest.aStatementPreparedInsideTheBlockGetsItsOwnAnswer` (MySQL),
+  `moreCallsInTheBlockThanTheServerAllowsCursors` and
+  `aRefusedCallInTheBlockIsReportedWithItsPlace` (Oracle).
 - **TLS: a server certificate the client will not go on with ends in an alert.** An empty
   TLS 1.3 Certificate, a certificate that cannot be read, and one the trust store refuses -
   for another name, an unknown issuer, expired - were refused as a plain `IOException`, with

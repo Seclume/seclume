@@ -1061,7 +1061,7 @@ public final class OraConnection implements Connection, space.seclume.internal.j
                     + "would leave the ones before it standing. Call setAutoCommit(false) "
                     + "first.", "25000");
         }
-        session.beginPipeline();
+        session.beginPipeline(OraStatement::error);
     }
 
     @Override
