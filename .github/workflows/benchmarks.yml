@@ -50,7 +50,7 @@ jobs:
             java -Dbench.db=postgresql -Dbench.host=127.0.0.1 -Dbench.port=5432 \
               -Dbench.database=seclume_test -Dbench.user=seclume_test \
               -Dbench.password.file=.local-pg-password -Dbench.tls=off \
-              -jar seclume-bench/target/seclume-bench.jar $bench -p pool=seclume-vendor,r2dbc-pool \
+              -jar seclume-bench/target/seclume-bench.jar $bench -p pool=seclume,seclume-vendor,r2dbc-pool \
               -wi 2 -i 3 -f 1 -prof gc -prof 'jfr:dir=/tmp/jfr'
           done
           find /tmp/jfr -name '*.jfr' | sort | while read -r file; do
