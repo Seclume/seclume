@@ -46,18 +46,16 @@ jobs:
       - run: .github/scripts/mvnw-retry.sh -B -pl seclume-bench -am -DskipTests package
       - name: R2DBC with lanes on platform threads and on virtual ones
         run: |
-          run() {
-            java -Dbench.db=postgresql -Dbench.host=127.0.0.1 -Dbench.port=5432 \
-              -Dbench.database=seclume_test -Dbench.user=seclume_test \
-              -Dbench.password.file=.local-pg-password -Dbench.tls=off \
-              -jar seclume-bench/target/seclume-bench.jar "$@" -wi 3 -i 5 -f 1
-          }
+          props="-Dbench.db=postgresql -Dbench.host=127.0.0.1 -Dbench.port=5432 -Dbench.database=seclume_test -Dbench.user=seclume_test -Dbench.password.file=.local-pg-password -Dbench.tls=off"
           # The same build twice: lanes on platform threads, then all virtual.
+          # Every property in -jvmArgsAppend: given one, JMH no longer hands
+          # the fork the host's own -D options.
           for threads in 128 0; do
             echo "##### seclume.r2dbc.platformThreads=$threads"
-            run 'R2dbcBenchmark' -jvmArgsAppend "-Dseclume.r2dbc.platformThreads=$threads"
-            run 'R2dbcPoolBenchmark' -p pool=seclume,r2dbc-pool-reset,r2dbc-pool -jvmArgsAppend "-Dseclume.r2dbc.platformThreads=$threads"
-            run 'R2dbcContentionBenchmark' -p pool=seclume,r2dbc-pool-reset,r2dbc-pool -jvmArgsAppend "-Dseclume.r2dbc.platformThreads=$threads"
+            for bench in 'R2dbcBenchmark' 'R2dbcPoolBenchmark -p pool=seclume,r2dbc-pool-reset,r2dbc-pool' 'R2dbcContentionBenchmark -p pool=seclume,r2dbc-pool-reset,r2dbc-pool'; do
+              java $props -jar seclume-bench/target/seclume-bench.jar $bench -wi 3 -i 5 -f 1 \
+                -jvmArgsAppend "--enable-native-access=ALL-UNNAMED $props -Dseclume.r2dbc.platformThreads=$threads" | grep -E '^(Benchmark|R2dbc)' | grep -v ':gc'
+            done
           done
       - if: always()
         run: rm -f .local-pg-password
