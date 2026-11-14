@@ -5,6 +5,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **TLS 1.3: a server CertificateVerify that does not verify ends in `decrypt_error`.** The
+  handshake refused it, but as a bare `IOException` and without an alert, so the server saw a
+  reset; RFC 8446 section 4.4.3 asks for `decrypt_error`, which the TLS 1.2 handshake already
+  sent for its ServerKeyExchange. `ServerCertificateVerifyTest` runs the check inside the
+  handshake for the first time - a scripted server with the right certificate signing with
+  another key, and CertificateVerify messages whose signature does not fill them - with and
+  without a trust store. Mutation testing had shown that removing the call to the signature
+  check, or to the shape check before it, failed no test; now the first fails two and the
+  second four.
 - **SQL Server: a cancellation that the server answers before the ATTENTION's write returns
   is still reported.** The ATTENTION was counted as owed only after its eight bytes were
   written, while the thread that sent the statement may already be reading the server's
