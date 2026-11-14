@@ -95,7 +95,7 @@ class StatementListenerTest {
                 new Database("PostgreSQL", "postgresql", 5432, "seclume_test", "seclume_test",
                         ".local-pg-password", "&tls=off"),
                 new Database("MySQL", "mysql", 3307, "seclume_test", "seclume_test",
-                        ".local-mysql-password", "&tls=off"),
+                        ".local-mysql-password", "&tls=off&allowPublicKeyRetrieval=true"),
                 new Database("SQL Server", "sqlserver", 1433, "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
