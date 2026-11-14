@@ -137,7 +137,8 @@ jobs:
       matrix:
         # A floor is the score of the mutants with a test that the package had
         # when it was set (SECURITY-QUALITY.md: run 42427494528 for the first
-        # four, run 43224031993 for tls, internal and pool), rounded down and
+        # four, run 43224031993 for tls, run 43460151108 for internal and pool
+        # after the tests of PR #340: 82.6 % and 81.1 %), rounded down and
         # less one point - a mutant that times out on one run and not on the
         # next moves a score by a few tenths. Below it the check fails.
         include:
@@ -150,8 +151,8 @@ jobs:
           # fast one - 81 timeouts in one run, 116 in another - and a timeout
           # counts as killed.
           - {package: tls, module: seclume-core, shards: 4, floor: '86'}
-          - {package: internal, module: seclume-core, shards: 3, floor: '79'}
-          - {package: pool, module: seclume-pool, shards: 2, floor: '68'}
+          - {package: internal, module: seclume-core, shards: 3, floor: '81'}
+          - {package: pool, module: seclume-pool, shards: 2, floor: '80'}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

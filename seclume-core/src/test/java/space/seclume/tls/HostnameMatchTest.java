@@ -45,6 +45,7 @@ class HostnameMatchTest {
             "*.example.com,        a.b.example.com",      // a wildcard is one label, not several
             "*.example.com,        example.com",          // and not the bare domain
             "*.example.com,        .example.com",         // the label has to be a real one
+            "*.example.com,        .x.example.com",       // and a dot at its start is not one
             "*.com,                example.com",          // too broad to be allowed at all
             "*.co.uk,              example.co.uk",        // multi-label public suffix
             "*.com.au,             example.com.au",

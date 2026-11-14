@@ -165,4 +165,98 @@ class HandshakeReassemblerTest {
             assertThrows(IllegalStateException.class, () -> r.append(chunk, 0, 10));
         }
     }
+
+    // The tests below run in milliseconds what the handshake tests reach
+    // only through a socket - slow enough that PIT timed these faults out on
+    // a slow runner and let them survive on a fast one.
+
+    @Test
+    void aCapOfZeroIsRefused() {
+        assertThrows(IllegalArgumentException.class, () -> new HandshakeReassembler(0));
+    }
+
+    @Test
+    void anEmptyAppendDoesNotTouchItsSource() {
+        try (Arena arena = Arena.ofConfined(); HandshakeReassembler r = new HandshakeReassembler(64)) {
+            MemorySegment empty = arena.allocate(4);
+            r.append(empty, 9, 0);                         // past the end: never read
+            assertEquals(0, r.buffered());
+        }
+    }
+
+    @Test
+    void aMessageLargerThanTheFirstBufferGrowsItAndArrivesWhole() {
+        // The buffer starts at 4 KiB; a Certificate is often larger.
+        try (Arena arena = Arena.ofConfined(); HandshakeReassembler r = new HandshakeReassembler(1 << 20)) {
+            byte[] large = body(10_000, 3);
+            MemorySegment msg = message(arena, Handshake.CERTIFICATE, large);
+            r.append(msg, 0, 1000);
+            r.append(msg, 1000, (int) msg.byteSize() - 1000);
+
+            List<Seen> seen = drain(r);
+            assertEquals(1, seen.size());
+            assertArrayEquals(large, seen.get(0).body());
+        }
+    }
+
+    @Test
+    void firstCompleteIsTheWholeFirstMessageEvenWhenNothingFollows() {
+        try (Arena arena = Arena.ofConfined(); HandshakeReassembler r = new HandshakeReassembler(64)) {
+            MemorySegment msg = message(arena, 14, new byte[0]); // TLS 1.2 ServerHelloDone: empty
+            r.append(msg, 0, 2);
+            assertEquals(-1, r.firstComplete(), "half a header");
+            r.append(msg, 2, 2);
+            assertEquals(Handshake.HEADER, r.firstComplete(), "a header alone is a whole empty message");
+
+            MemorySegment longer = message(arena, Handshake.CERTIFICATE, body(5, 1));
+            r.discard(Handshake.HEADER);
+            r.append(longer, 0, 8);
+            assertEquals(-1, r.firstComplete(), "one byte short");
+            r.append(longer, 8, 1);
+            assertEquals(9, r.firstComplete(), "complete, and exactly what is buffered");
+        }
+    }
+
+    @Test
+    void discardTakesTheFrontAndKeepsTheRestInOrder() {
+        try (Arena arena = Arena.ofConfined(); HandshakeReassembler r = new HandshakeReassembler(64)) {
+            byte[] a = body(3, 10);
+            byte[] b = body(6, 40);
+            MemorySegment m1 = message(arena, Handshake.SERVER_HELLO, a);
+            MemorySegment m2 = message(arena, Handshake.CERTIFICATE, b);
+            r.append(m1, 0, (int) m1.byteSize());
+            r.append(m2, 0, (int) m2.byteSize());
+
+            r.discard(r.firstComplete());
+            assertEquals(m2.byteSize(), r.buffered());
+            List<Seen> seen = drain(r);
+            assertEquals(1, seen.size());
+            assertEquals(Handshake.CERTIFICATE, seen.get(0).type());
+            assertArrayEquals(b, seen.get(0).body());
+        }
+    }
+
+    @Test
+    void discardOfNothingAndOfEverythingAreBothAllowed() {
+        try (Arena arena = Arena.ofConfined(); HandshakeReassembler r = new HandshakeReassembler(64)) {
+            MemorySegment chunk = arena.allocate(10);
+            r.append(chunk, 0, 10);
+            r.discard(0);
+            assertEquals(10, r.buffered());
+            r.discard(10);
+            assertEquals(0, r.buffered());
+            assertThrows(IllegalArgumentException.class, () -> r.discard(1));
+            assertThrows(IllegalArgumentException.class, () -> r.discard(-1));
+        }
+    }
+
+    @Test
+    void closeFreesTheBuffer() {
+        HandshakeReassembler r = new HandshakeReassembler(64);
+        MemorySegment buffer = r.segment();
+        r.close();
+        assertEquals(0, r.buffered());
+        assertThrows(IllegalStateException.class, () -> buffer.get(ValueLayout.JAVA_BYTE, 0),
+                "the memory is gone, not merely forgotten");
+    }
 }

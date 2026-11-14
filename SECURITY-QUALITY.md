@@ -241,6 +241,22 @@ value to compare with. `pool` is the weakest: 240 mutants on lines a test runs s
 521 are on lines no test under PIT runs. From this run on the three have a floor in
 `mutation.yml`, like the other four: the whole percent below the measured score, less one.
 
+**13 November, PR #340** (tests aimed at survivors; run
+[43460151108](https://github.com/Seclume/seclume/actions/runs/43460151108), compared with the
+day's integration run [43416680859](https://github.com/Seclume/seclume/actions/runs/43416680859)):
+
+| Package | 13 Nov, integration | PR #340 | Survivors | Classes whose survivors went |
+|---|---:|---:|---:|---|
+| `pool` | 789 / 1081 = 73.0 % | 934 / 1152 = 81.1 % | 292 → 218 | `PoolEntry` 24 → 0, `PooledConnection` 44 → 24, `PoolConfiguration` 13 → 2, `StatementCache` 8 → 2 |
+| `internal` | 2792 / 3443 = 81.1 % | 2849 / 3451 = 82.6 % | 651 → 602 | `WireBuffer` 46 → 23, `JdbcUrl` 30 → 18, `Scram` 30 → 21 |
+| `tls` | 1802 / 2000 = 90.1 % | 1819 / 2003 = 90.8 % | 198 → 184 | `HostnameMatch` 10 → 3 |
+| `crypto` | 2430 / 2596 = 93.6 % | 2420 / 2596 = 93.2 % | 166 → 176 | none changed; within the run-to-run spread (93.4 % on 12 Nov) |
+| `secret`, `field`, `audit` | 88.2 / 97.7 / 92.0 % | 88.1 / 97.7 / 92.0 % | | not targeted |
+
+The floors of `pool` and `internal` rise with it, to 80 and 81. In the same PR the `coverage`
+job got floors of its own (`.github/coverage-floors.json`, per module and per critical
+package), and two of the new tests found faults - see REVIEWS.md, round 5.
+
 ### Fuzzing
 
 The nightly `fuzz` run since the baseline:

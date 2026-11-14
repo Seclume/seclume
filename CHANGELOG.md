@@ -15,6 +15,34 @@ All notable changes to seclume are recorded here. Versions follow
   The exceptions are `TlsProtocolException`s with the same messages as before.
   `ServerCertificateAlertTest` and `Tls12ServerCertificateAlertTest` failed on all three
   before the change.
+- **tls mutation score: 90.3 %, and no longer a matter of the runner.** The tls floor of 86 %
+  was met or missed by the speed of the machine: of 30 report logs since 8 November, 141
+  mutants survived in every run and 160 only in some - those no fast test failed on, which a
+  slow runner timed out and PIT counted as killed. The last fast run before this scored
+  86.0 %. New tests that fail at once where a socket test only took long:
+  `CertificateMessageTest`, `CertificateVerifyMessageTest`, `StrictExtensionsTest`,
+  `RecordStreamTest`, `RecordProtectionEdgesTest`, `TlsConnectionLifecycleTest`,
+  `ServerCertificateShapeTest` (the handshake checks the server's Certificate before reading
+  it - removing that call failed no test), `ClientHandshakeWireTest`,
+  `ClientHandshakePropertiesTest`, `ClientHelloNameTest`, and more in
+  `HandshakeReassemblerTest` and `HostnameMatchTest`. Measured on the pull request: 1819 of
+  2014 mutants with a test killed (90.3 %), 195 survived, 29 timed out - against 281 to 301
+  survivors on the fast runs before. The floor stays at 86. `pit_report.py` now logs every
+  timeout and how many tests each survivor ran.
+- **JDBC URL redaction: a password after Oracle's `@//` is hidden.** `JdbcUrl.redact` - what
+  every message naming a wrong URL prints - took the `@` of `jdbc:oracle:thin:@//...` for
+  Oracle's `user/password@` and, finding no `/` before it, hid nothing:
+  `jdbc:oracle:thin:@//app:secret@db:1521/svc` was printed with its password. The authority's
+  `user:password@` rule now applies there as for any URL (`JdbcUrlRedactEdgeTest`, and an
+  EZConnect family in `JdbcUrlPropertyTest`; both fail on the code before).
+- **SCRAM: the `c=` buffer is wiped.** The copy of the GS2 header and the channel binding data
+  the client's final message is encoded from was left in the arena when it was freed
+  (`ScramWipeTest`, which reads every segment of an exchange at `close()`).
+- **Tests and CI: tests for what mutation testing found unchecked, and coverage floors.** New
+  tests for the pool's return path, statement cache, entry state and URL checks, the wire
+  buffer's wiping, SCRAM's wiping, the hostname check's edges and URL redaction; the
+  `coverage` job now fails below `.github/coverage-floors.json` - per module and per
+  security-critical package, the failure annotated with the module.
 - **Constant time: the measurement no longer tells the two classes apart by its own setup.**
   The nightly check of `ConstantTime.equals` failed on 7 and 13 November (t = 6.8 to 45.7). The
   setup copied the input and then wrote the two bytes that may differ - one changed, one as it
