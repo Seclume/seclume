@@ -11,13 +11,24 @@ import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * One connection's calls, one after the other, on a virtual thread of its own.
+ * One connection's calls, one after the other, on a thread of the driver's.
  *
  * <p>A JDBC connection is used by one thread at a time, and R2DBC asks for
  * nothing else: the next statement waits for the last result to be consumed.
  * So every call of a connection is a task on its lane, run in the order it
- * was subscribed to. The blocking read of an answer blocks a virtual thread,
- * not a carrier: the reactive application's few threads stay free.
+ * was subscribed to. The blocking read of an answer blocks a thread of the
+ * driver's, never one of the reactive application's few.
+ *
+ * <p><b>Which thread.</b> A platform thread from a small shared set, and a
+ * virtual one when the set is in use. A virtual thread that blocks on a
+ * socket parks, the JDK's poller waits for the answer in its stead and wakes
+ * it onto a carrier - two more hand-overs per answer than a platform thread
+ * blocked in the kernel, which the kernel wakes itself. One statement through
+ * R2DBC under JFR: {@code ForkJoinPool.deactivate} was 55 % of the samples,
+ * carriers parked and woken around every round trip. The set is bounded
+ * ({@link #PLATFORM_THREADS}): a lane holds its thread only while it has work,
+ * so a pool of connections needs as many as it has connections busy at once,
+ * and past the bound the lane is virtual as before.
  *
  * <p>The lane is also the quiet point a session can be handed over at: a
  * task on it is the only thing touching the connection while it runs.
@@ -43,6 +54,36 @@ final class Lane implements AutoCloseable {
      * other, each task's effects visible to the next through the queue.
      */
     private final ConcurrentLinkedQueue<Runnable> tasks = new ConcurrentLinkedQueue<>();
+
+    /**
+     * How many platform threads the lanes share - {@code
+     * seclume.r2dbc.platformThreads}, 128 unless set; 0 runs every lane on a
+     * virtual thread.
+     */
+    static final int PLATFORM_THREADS = Math.max(0,
+            Integer.getInteger("seclume.r2dbc.platformThreads", 128));
+
+    /**
+     * The shared platform threads: none until the first lane has work, each
+     * one gone after a minute without any. A hand-over to a thread waiting
+     * for work, never a queue - a task that finds every one of them busy runs
+     * on a virtual thread at once rather than waiting behind another lane.
+     */
+    private static final java.util.concurrent.ThreadPoolExecutor PLATFORM =
+            PLATFORM_THREADS == 0 ? null : platformThreads();
+
+    private static java.util.concurrent.ThreadPoolExecutor platformThreads() {
+        java.util.concurrent.ThreadPoolExecutor threads = new java.util.concurrent.ThreadPoolExecutor(
+                0, PLATFORM_THREADS, 60, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.SynchronousQueue<>(),
+                Thread.ofPlatform().name("seclume-r2dbc-", 0).daemon(true).factory(),
+                (task, full) -> Thread.ofVirtual().name("seclume-r2dbc").start(task));
+        return threads;
+    }
+
+    /** Where blocking work with no lane of its own waits: a borrow from a full pool. */
+    static final Scheduler WAITING = Schedulers.fromExecutor(
+            task -> Thread.ofVirtual().name("seclume-r2dbc-borrow").start(task));
     private final AtomicBoolean draining = new AtomicBoolean();
     final Scheduler scheduler = Schedulers.fromExecutor(this::enqueue);
 
@@ -52,7 +93,11 @@ final class Lane implements AutoCloseable {
         }
         tasks.add(task);
         if (draining.compareAndSet(false, true)) {
-            Thread.ofVirtual().name("seclume-r2dbc").start(this::drain);
+            if (PLATFORM != null) {
+                PLATFORM.execute(this::drain);
+            } else {
+                Thread.ofVirtual().name("seclume-r2dbc").start(this::drain);
+            }
         }
     }
 
@@ -86,6 +131,19 @@ final class Lane implements AutoCloseable {
     <T> Mono<T> call(Callable<T> work) {
         return Mono.defer(() -> closed ? Mono.<T>error(closedConnection())
                 : Mono.fromCallable(work).subscribeOn(scheduler).onErrorMap(Errors::translate));
+    }
+
+    /**
+     * {@code work} on a virtual thread rather than the lane's: for the first
+     * call of a lane, the borrow, which may wait for a pool with nothing free.
+     * Five hundred requests waiting on a pool of sixteen would otherwise hold
+     * the shared platform threads while doing nothing - and the busy lanes
+     * after them would find none. Nothing else runs on a lane before its
+     * borrow has returned, so the order is the same.
+     */
+    <T> Mono<T> callWaiting(Callable<T> work) {
+        return Mono.defer(() -> closed ? Mono.<T>error(closedConnection())
+                : Mono.fromCallable(work).subscribeOn(WAITING).onErrorMap(Errors::translate));
     }
 
     Mono<Void> run(SqlWork work) {

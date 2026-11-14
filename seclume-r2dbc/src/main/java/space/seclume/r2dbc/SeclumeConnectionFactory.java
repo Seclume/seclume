@@ -86,7 +86,7 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
                 }
             }
             Lane lane = new Lane();
-            return lane.call(() -> {
+            return lane.callWaiting(() -> {
                 java.sql.Connection jdbc = source.getConnection();
                 try {
                     Placeholders.Dialect spoken = dialect != null ? dialect
