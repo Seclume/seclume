@@ -19,6 +19,24 @@ All notable changes to seclume are recorded here. Versions follow
   buffer's wiping, SCRAM's wiping, the hostname check's edges and URL redaction; the
   `coverage` job now fails below `.github/coverage-floors.json` - per module and per
   security-critical package, the failure annotated with the module.
+- **Constant time: the measurement no longer tells the two classes apart by its own setup.**
+  The nightly check of `ConstantTime.equals` failed on 7 and 13 November (t = 6.8 to 45.7). The
+  setup copied the input and then wrote the two bytes that may differ - one changed, one as it
+  was - and which store changed something was enough to tell the classes apart: on eight
+  runners (Xeon Platinum 8573C, EPYC 7763, EPYC 9V74) an operation that does not read the input
+  had |t| up to 85 after it. Each class's input is now made beforehand and copied in whole;
+  after that the same operation stayed below 4.5 in 79 rounds of 80 and `ConstantTime.equals`
+  below 2.7 in all 80, while the early-exit control is still found (t around -1650). The GCM
+  tag check is set up the same way, and `thePreparationAloneIsQuiet` keeps the setup honest.
+- **TLS 1.3: a server CertificateVerify that does not verify ends in `decrypt_error`.** The
+  handshake refused it, but as a bare `IOException` and without an alert, so the server saw a
+  reset; RFC 8446 section 4.4.3 asks for `decrypt_error`, which the TLS 1.2 handshake already
+  sent for its ServerKeyExchange. `ServerCertificateVerifyTest` runs the check inside the
+  handshake for the first time - a scripted server with the right certificate signing with
+  another key, and CertificateVerify messages whose signature does not fill them - with and
+  without a trust store. Mutation testing had shown that removing the call to the signature
+  check, or to the shape check before it, failed no test; now the first fails two and the
+  second four.
 - **SQL Server: a cancellation that the server answers before the ATTENTION's write returns
   is still reported.** The ATTENTION was counted as owed only after its eight bytes were
   written, while the thread that sent the statement may already be reading the server's
