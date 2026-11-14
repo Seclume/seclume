@@ -134,7 +134,7 @@
       <dependency>
         <groupId>at.yawk.lz4</groupId>
         <artifactId>lz4-java</artifactId>
-        <version>1.12.1</version>
+        <version>1.14.0</version>
       </dependency>
       <!-- Pinned for CVE-2026-93451 (buffer overflow on malformed input) and
            CVE-2026-108106 (unbounded allocation while decompressing), fixed
@@ -319,7 +319,7 @@
           <plugin>
             <groupId>org.jacoco</groupId>
             <artifactId>jacoco-maven-plugin</artifactId>
-            <version>0.8.14</version>
+            <version>0.8.16</version>
             <executions>
               <execution>
                 <id>agent</id>
@@ -371,7 +371,7 @@
           <plugin>
             <groupId>org.pitest</groupId>
             <artifactId>pitest-maven</artifactId>
-            <version>1.30.1</version>
+            <version>1.30.2</version>
             <dependencies>
               <dependency>
                 <groupId>org.pitest</groupId>
@@ -547,7 +547,7 @@
           <plugin>
             <groupId>com.github.siom79.japicmp</groupId>
             <artifactId>japicmp-maven-plugin</artifactId>
-            <version>0.26.5</version>
+            <version>0.27.0</version>
             <configuration>
               <oldVersion>
                 <dependency>

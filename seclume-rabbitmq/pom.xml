@@ -20,7 +20,7 @@
     placeholder.</description>
 
   <properties>
-    <amqp-client.version>5.37.0</amqp-client.version>
+    <amqp-client.version>5.37.1</amqp-client.version>
     <spring.boot.version>4.1.2</spring.boot.version>
   </properties>
 

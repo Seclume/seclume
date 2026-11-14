@@ -18,7 +18,7 @@
     login from native memory.</description>
 
   <properties>
-    <jgit.version>7.8.0.202609011348-r</jgit.version>
+    <jgit.version>7.8.1.202611041320-r</jgit.version>
   </properties>
 
   <dependencies>
@@ -44,7 +44,7 @@
     <dependency>
       <groupId>org.apache.tomcat.embed</groupId>
       <artifactId>tomcat-embed-core</artifactId>
-      <version>11.0.27</version>
+      <version>11.0.29</version>
       <scope>test</scope>
     </dependency>
     <dependency>
