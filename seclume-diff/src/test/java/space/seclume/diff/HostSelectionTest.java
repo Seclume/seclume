@@ -57,7 +57,7 @@ class HostSelectionTest {
                 new Database("PostgreSQL", "postgresql", 5432, "seclume_test", "seclume_test",
                         ".local-pg-password", "&tls=off", 9),
                 new Database("MySQL", "mysql", 3307, "seclume_test", "seclume_test",
-                        ".local-mysql-password", "&tls=off", 11),
+                        ".local-mysql-password", "&tls=off&allowPublicKeyRetrieval=true", 11),
                 new Database("SQL Server", "sqlserver", 1433, "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true", 13),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",

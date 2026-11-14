@@ -81,7 +81,7 @@ class LoginEventTest {
                 new Database("PostgreSQL", "postgresql", 5432, "seclume_test", "seclume_test",
                         ".local-pg-password", "&tls=off", "scram-sha-256"),
                 new Database("MySQL", "mysql", 3307, "seclume_test", "seclume_test",
-                        ".local-mysql-password", "&tls=off", null),
+                        ".local-mysql-password", "&tls=off&allowPublicKeyRetrieval=true", null),
                 new Database("SQL Server", "sqlserver", 1433, "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true", "login7"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
