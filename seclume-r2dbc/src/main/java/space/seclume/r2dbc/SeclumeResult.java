@@ -106,6 +106,14 @@ final class SeclumeResult implements Result {
                             SeclumeRow row = new SeclumeRow(rows, metadata);
                             sink.next((RowSegment) () -> row);
                         } else {
+                            // Closed here, on the lane, before the completion
+                            // goes downstream: what it sets off - a
+                            // usingWhen's Connection.close() - is queued on
+                            // the lane too, and ran first. The pool then
+                            // found the statement still open on every
+                            // return, closed it as one the borrower forgot,
+                            // and counted it as a leak.
+                            closeQuietly();
                             sink.complete();
                         }
                     } catch (SQLException e) {

@@ -100,7 +100,35 @@ final class Placeholders {
     private Placeholders() {
     }
 
+    /** What a text parsed to, per dialect; cleared when it grows past {@link #CACHED}. */
+    private static final java.util.concurrent.ConcurrentHashMap<Text, Parsed> PARSED =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int CACHED = 512;
+
+    private record Text(String sql, Dialect dialect) {
+    }
+
+    /**
+     * The text parsed - once per text and dialect: an application runs the
+     * same few statements over and over, and parsing each anew on every
+     * createStatement was a few per cent of a borrow's CPU
+     * (R2dbcPoolBenchmark, JFR). What it returns is never changed by anyone.
+     */
     static Parsed parse(String sql, Dialect dialect) {
+        Text key = new Text(sql, dialect);
+        Parsed known = PARSED.get(key);
+        if (known != null) {
+            return known;
+        }
+        Parsed parsed = parseText(sql, dialect);
+        if (PARSED.size() >= CACHED) {
+            PARSED.clear();
+        }
+        PARSED.put(key, parsed);
+        return parsed;
+    }
+
+    private static Parsed parseText(String sql, Dialect dialect) {
         StringBuilder out = new StringBuilder(sql.length());
         Map<String, List<Integer>> found = new LinkedHashMap<>();
         int position = 0;
@@ -156,7 +184,8 @@ final class Placeholders {
         } else {
             found.forEach((k, v) -> positions.put(k, toArray(v)));
         }
-        return new Parsed(out.toString(), positions, compound, dialect == Dialect.POSTGRESQL);
+        return new Parsed(out.toString(), java.util.Collections.unmodifiableMap(positions), compound,
+                dialect == Dialect.POSTGRESQL);
     }
 
     /** The end of a literal, quoted identifier or comment at {@code i}, or {@code i}. */

@@ -166,4 +166,17 @@ class PlaceholdersTest {
         // a blank is no delimiter: q is a name and ' :a' a literal
         assertEquals("select q' :a' , ?", spaced.sql());
     }
+
+    @Test
+    void aTextIsParsedOncePerDialectAndWhatComesBackCannotBeChanged() {
+        Placeholders.Parsed first = Placeholders.parse("select ? where x = ?", Dialect.MYSQL);
+        Placeholders.Parsed again = Placeholders.parse("select ? where x = ?", Dialect.MYSQL);
+        org.junit.jupiter.api.Assertions.assertSame(first, again, "parsed anew");
+        assertEquals(2, first.positions().size());
+        // The same text in another dialect is another statement: no "?"
+        // placeholders in PostgreSQL's numbered syntax.
+        assertEquals(0, Placeholders.parse("select ? where x = ?", Dialect.POSTGRESQL).positions().size());
+        assertThrows(UnsupportedOperationException.class, () -> first.positions().clear(),
+                "a cached parse that one statement can change for the next");
+    }
 }

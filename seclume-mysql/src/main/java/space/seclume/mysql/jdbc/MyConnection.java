@@ -79,10 +79,8 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
     public java.util.List<space.seclume.OpenStatements.Opened> openStatements() {
         java.util.List<space.seclume.OpenStatements.Opened> opened = new java.util.ArrayList<>();
         for (MyStatement statement : new java.util.ArrayList<>(open)) {
-            String sql = statement.lastSql();
             opened.add(new space.seclume.OpenStatements.Opened(statement,
-                    sql == null ? null : space.seclume.QueryFingerprint.of(sql),
-                    statement.createdAt));
+                    statement.lastFingerprint(), statement.createdAt));
         }
         return opened;
     }

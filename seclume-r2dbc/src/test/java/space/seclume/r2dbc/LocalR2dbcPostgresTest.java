@@ -214,4 +214,51 @@ class LocalR2dbcPostgresTest {
             assertTrue(name == null || !name.equals("tenant-a"), "the last borrower's setting survived: " + name);
         }
     }
+
+    /**
+     * A result read to its end is closed before its completion reaches
+     * whoever closes the connection: the pool saw the statement still open
+     * on every return, closed it as one the borrower forgot, and warned of a
+     * leak - on every borrow through R2DBC.
+     */
+    @Test
+    void aResultReadToItsEndLeavesNoStatementForThePoolToClose() throws Exception {
+        java.util.logging.Logger log = java.util.logging.Logger.getLogger(
+                space.seclume.pool.SeclumePool.class.getName());
+        java.util.List<String> warned = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                warned.add(String.valueOf(record.getMessage()));
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        log.addHandler(handler);
+        space.seclume.pool.PoolSettings settings = new space.seclume.pool.PoolSettings();
+        settings.setMaximumPoolSize(2);
+        settings.setMinimumIdle(0);
+        try (space.seclume.pool.SeclumePool pool = new space.seclume.pool.SeclumePool(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(jdbcUrl), settings)) {
+            ConnectionFactory pooled = SeclumeConnectionFactory.over(pool, "postgresql");
+            for (int i = 0; i < 20; i++) {
+                int expected = i;
+                Integer read = Mono.usingWhen(pooled.create(),
+                        c -> Flux.from(c.createStatement("select $1::int").bind(0, expected).execute())
+                                .concatMap(r -> r.map((row, meta) -> row.get(0, Integer.class))).next(),
+                        Connection::close).block(WAIT);
+                assertEquals(expected, read);
+            }
+        } finally {
+            log.removeHandler(handler);
+        }
+        assertTrue(warned.stream().noneMatch(m -> m.contains("left open by the borrower")),
+                "statements the pool had to close: " + warned);
+    }
 }
