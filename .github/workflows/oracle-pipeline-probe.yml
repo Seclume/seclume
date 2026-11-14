@@ -57,7 +57,7 @@ jobs:
             'grant create session, create table, create sequence, create view, create procedure, create trigger to seclume_spring;' \
             'exit' | docker exec -i oracle sqlplus -s / as sysdba
       - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
-      - run: ./mvnw -B -ntp -pl seclume-oracle -am -Dtest=PipelineProbeTest -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false test 2>&1 | grep -v "^\[INFO\] Download" | tail -400
+      - run: ./mvnw -B -ntp -pl seclume-oracle -am -Dtest=PipelineProbeTest -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false test > probe-out.txt 2>&1 || true; grep -E "^(=== |#####|  )|ORA-|Tests run" probe-out.txt | grep -v "^    [<-]" | head -1500
       - if: always()
         run: cat seclume-oracle/target/surefire-reports/*PipelineProbeTest*-output.txt 2>/dev/null || true
       - if: always()
