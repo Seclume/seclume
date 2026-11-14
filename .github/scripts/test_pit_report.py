@@ -4,17 +4,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pit_report import annotations, main, read, score, survivors_by_class, MAX_ANNOTATIONS, MAX_CHARS
+from pit_report import (annotations, main, read, score, survivors_by_class, test_name,
+                        MAX_ANNOTATIONS, MAX_CHARS)
 
 
 def mutation(status, cls, line, mutator="NegateConditionalsMutator", method="check",
-             description="negated conditional"):
+             description="negated conditional", tests_run=1, killing_test=None):
     package, name = cls.rsplit(".", 1)
-    return (f'<mutation detected="{str(status == "KILLED").lower()}" status="{status}" numberOfTestsRun="1">'
+    killing = f"<killingTest>{killing_test}</killingTest>" if killing_test else ""
+    return (f'<mutation detected="{str(status == "KILLED").lower()}" status="{status}" '
+            f'numberOfTestsRun="{tests_run}">'
             f"<sourceFile>{name}.java</sourceFile><mutatedClass>{cls}</mutatedClass>"
             f"<mutatedMethod>{method}</mutatedMethod><lineNumber>{line}</lineNumber>"
             f"<mutator>org.pitest.mutationtest.engine.gregor.mutators.{mutator}</mutator>"
-            f"<description>{description}</description></mutation>")
+            f"<description>{description}</description>{killing}</mutation>")
 
 
 def report(*mutations):
@@ -115,6 +118,31 @@ class PitReportTest(unittest.TestCase):
         self.assertIn("below the floor of 75.1%", text)
         self.assertIn("::group::every survivor in tls (1)", text)
         self.assertIn("survivor src/space/seclume/tls/A.java:4 ", text)
+
+    def test_the_log_names_each_timeout_with_its_test_and_how_many_tests_a_survivor_ran(self):
+        test_id = ("space.seclume.tls.CertificateMessageTest.[engine:junit-jupiter]"
+                   "/[class:space.seclume.tls.CertificateMessageTest]/[method:aWellFormedChainOfTwoPasses()]")
+        path = report(mutation("TIMED_OUT", "space.seclume.tls.RecordStream", 160, killing_test=test_id),
+                      mutation("TIMED_OUT", "space.seclume.tls.A", 2),
+                      mutation("SURVIVED", "space.seclume.tls.A", 4, tests_run=7),
+                      mutation("KILLED", "space.seclume.tls.A", 5))
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.assertEqual(0, main(str(path), "src", "tls"))
+        text = printed.getvalue()
+        self.assertIn("survivor src/space/seclume/tls/A.java:4 check NegateConditionalsMutator: "
+                      "negated conditional [7 tests ran]", text)
+        self.assertIn("::group::every timeout in tls (2)", text)
+        self.assertIn("timeout src/space/seclume/tls/A.java:2 check NegateConditionalsMutator: "
+                      "negated conditional - in no test named", text)
+        self.assertIn("timeout src/space/seclume/tls/RecordStream.java:160 check NegateConditionalsMutator: "
+                      "negated conditional - in CertificateMessageTest#aWellFormedChainOfTwoPasses", text)
+        self.assertLess(text.index("A.java:2"), text.index("RecordStream.java:160"), "by class, then line")
+
+    def test_a_test_id_without_a_class_is_named_as_it_is(self):
+        self.assertEqual("some.Test.method", test_name("some.Test.method"))
+        self.assertEqual("T#each", test_name("[class:a.b.T]/[test-template:each(int)]/[test-template-invocation:#1]"))
+        self.assertEqual("T", test_name("[engine:junit-jupiter]/[class:a.b.T]"))
 
 
 if __name__ == "__main__":

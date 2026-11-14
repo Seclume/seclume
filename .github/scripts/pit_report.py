@@ -18,6 +18,7 @@ is the score a package had when it was set, rounded down and less a point for
 the variation between runs: it keeps a change from losing what the tests
 already notice, and is raised as they notice more.
 """
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -46,6 +47,8 @@ def read(report):
             "line": int(field("lineNumber") or 0),
             "mutator": field("mutator").rsplit(".", 1)[-1],
             "description": field("description"),
+            "tests_run": int(node.get("numberOfTestsRun", "0") or 0),
+            "killing_test": field("killingTest"),
         })
     return mutations
 
@@ -55,6 +58,15 @@ def score(mutations):
     killed = sum(1 for m in mutations if m["status"] in ("KILLED", "TIMED_OUT", "MEMORY_ERROR"))
     uncovered = sum(1 for m in mutations if m["status"] == "NO_COVERAGE")
     return killed, len(mutations) - uncovered, uncovered, len(mutations)
+
+
+def test_name(killing_test):
+    """class#method of a PIT test id such as '...[class:a.B]/[method:c()]', else the id itself."""
+    found = dict(re.findall(r"\[(class|method|test-template):([^\]]*)\]", killing_test))
+    if "class" not in found:
+        return killing_test
+    method = found.get("method") or found.get("test-template") or ""
+    return found["class"].rsplit(".", 1)[-1] + ("#" + method.split("(", 1)[0] if method else "")
 
 
 def survivors_by_class(mutations):
@@ -125,7 +137,19 @@ def main(report, source_root, package, floor=None):
         for found in grouped.values():
             for m in found:
                 print(f"survivor {source_path(source_root, m)}:{m['line']} {m['method']} "
-                      f"{m['mutator']}: {m['description']}")
+                      f"{m['mutator']}: {m['description']} [{m['tests_run']} tests ran]")
+        print("::endgroup::")
+    # A timeout counts as killed, and whether a mutant times out can depend
+    # on the runner more than on the tests: a slow one times a socket test
+    # out that a fast one lets finish. The log names each one and the test
+    # that ran out of time, so that the mutants a score owes to a slow runner
+    # can be found and given a test that fails rather than one that waits.
+    timeouts = [m for m in mutations if m["status"] == "TIMED_OUT"]
+    if timeouts:
+        print(f"::group::every timeout in {package} ({len(timeouts)})")
+        for m in sorted(timeouts, key=lambda m: (m["class"], m["line"], m["mutator"])):
+            print(f"timeout {source_path(source_root, m)}:{m['line']} {m['method']} "
+                  f"{m['mutator']}: {m['description']} - in {test_name(m['killing_test']) or 'no test named'}")
         print("::endgroup::")
     if floor is not None and percent < floor:
         print(f"::error title=mutation ({package})::the score of the mutants with a test is "

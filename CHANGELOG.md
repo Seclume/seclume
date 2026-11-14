@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **tls mutation score: 90.3 %, and no longer a matter of the runner.** The tls floor of 86 %
+  was met or missed by the speed of the machine: of 30 report logs since 8 November, 141
+  mutants survived in every run and 160 only in some - those no fast test failed on, which a
+  slow runner timed out and PIT counted as killed. The last fast run before this scored
+  86.0 %. New tests that fail at once where a socket test only took long:
+  `CertificateMessageTest`, `CertificateVerifyMessageTest`, `StrictExtensionsTest`,
+  `RecordStreamTest`, `RecordProtectionEdgesTest`, `TlsConnectionLifecycleTest`,
+  `ServerCertificateShapeTest` (the handshake checks the server's Certificate before reading
+  it - removing that call failed no test), `ClientHandshakeWireTest`,
+  `ClientHandshakePropertiesTest`, `ClientHelloNameTest`, and more in
+  `HandshakeReassemblerTest` and `HostnameMatchTest`. Measured on the pull request: 1819 of
+  2014 mutants with a test killed (90.3 %), 195 survived, 29 timed out - against 281 to 301
+  survivors on the fast runs before. The floor stays at 86. `pit_report.py` now logs every
+  timeout and how many tests each survivor ran.
 - **JDBC URL redaction: a password after Oracle's `@//` is hidden.** `JdbcUrl.redact` - what
   every message naming a wrong URL prints - took the `@` of `jdbc:oracle:thin:@//...` for
   Oracle's `user/password@` and, finding no `/` before it, hid nothing:
