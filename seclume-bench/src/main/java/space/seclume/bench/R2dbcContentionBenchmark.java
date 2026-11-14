@@ -37,7 +37,12 @@ import space.seclume.r2dbc.SeclumeConnectionFactory;
  * of a batch is the pool's hand-over plus the statements. One operation is a
  * whole batch; divide by {@code requests} for a statement. As in
  * {@link R2dbcPoolBenchmark}, seclume's pool resets the session on every
- * return and r2dbc-pool resets nothing.
+ * return and r2dbc-pool resets nothing; {@code seclume-vendor} is seclume's
+ * R2DBC and pool over pgJDBC, which the pool does not reset - the adapter
+ * and the pool without the reset. {@code r2dbc-pool-reset} is r2dbc-pool
+ * sending the same
+ * {@code DISCARD ALL} on every release (preRelease), its statement cache off
+ * as that requires: the comparison at the same security.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -48,7 +53,7 @@ public class R2dbcContentionBenchmark {
     private static final Duration WAIT = Duration.ofMinutes(2);
     private static final int SIZE = 16;
 
-    @Param({"seclume", "r2dbc-pool"})
+    @Param({"seclume", "seclume-vendor", "r2dbc-pool", "r2dbc-pool-reset"})
     public String pool;
 
     @Param({"64", "512"})
@@ -60,19 +65,28 @@ public class R2dbcContentionBenchmark {
     @Setup(Level.Trial)
     public void open() throws Exception {
         BenchDatabase database = BenchDatabase.fromSystemProperties();
-        if (pool.equals("seclume")) {
+        if (pool.startsWith("seclume")) {
             PoolSettings settings = new PoolSettings();
             settings.setMaximumPoolSize(SIZE);
             settings.setMinimumIdle(SIZE);
             settings.setWarmup(true);
             settings.setName("seclume-r2dbc-contention");
             settings.setConnectionTimeout(Duration.ofSeconds(60));
-            SeclumePool seclume = new SeclumePool(database.seclume(), settings);
+            SeclumePool seclume = new SeclumePool(pool.equals("seclume-vendor")
+                    ? new DriverManagerDataSource(database.vendorUrl(), database.vendorProperties())
+                    : database.seclume(), settings);
             closing = seclume;
             factory = SeclumeConnectionFactory.over(seclume, "postgresql");
         } else {
-            ConnectionPool vendor = new ConnectionPool(ConnectionPoolConfiguration
-                    .builder(R2dbcBenchmark.vendor(database))
+            boolean reset = pool.equals("r2dbc-pool-reset");
+            ConnectionPoolConfiguration.Builder builder = ConnectionPoolConfiguration
+                    .builder(R2dbcBenchmark.vendor(database, reset ? 0 : -1));
+            if (reset) {
+                // The reset seclume's pool makes, on every release, waited for.
+                builder.preRelease(c -> Flux.from(c.createStatement("DISCARD ALL").execute())
+                        .flatMap(io.r2dbc.spi.Result::getRowsUpdated).then());
+            }
+            ConnectionPool vendor = new ConnectionPool(builder
                     .initialSize(SIZE)
                     .maxSize(SIZE)
                     .maxAcquireTime(Duration.ofSeconds(60))

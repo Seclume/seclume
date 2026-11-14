@@ -67,7 +67,18 @@ public class R2dbcBenchmark {
 
     /** r2dbc-postgresql, set up as its documentation shows - password as a String. */
     static ConnectionFactory vendor(BenchDatabase database) throws Exception {
+        return vendor(database, -1);
+    }
+
+    /**
+     * r2dbc-postgresql with {@code preparedStatementCacheQueries} as given:
+     * -1, its default, keeps every plan; 0 keeps none - what it needs under a
+     * pool that sends {@code DISCARD ALL} on release, which takes the plans
+     * its cache would still name.
+     */
+    static ConnectionFactory vendor(BenchDatabase database, int cachedPlans) throws Exception {
         return new PostgresqlConnectionFactory(PostgresqlConnectionConfiguration.builder()
+                .preparedStatementCacheQueries(cachedPlans)
                 .host(database.host())
                 .port(database.port())
                 .database(database.database())

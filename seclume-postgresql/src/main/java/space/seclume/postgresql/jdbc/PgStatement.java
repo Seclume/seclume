@@ -43,6 +43,27 @@ class PgStatement implements Statement, PgSession.RowHandler {
     String lastSql() {
         return collectingSql;
     }
+
+    private String fingerprintedSql;
+    private String lastFingerprint;
+
+    /**
+     * The fingerprint of {@link #lastSql()}, computed once per text: the
+     * pool asks for every open statement on every return, and a cached
+     * statement is open and runs the same text each time - normalising it
+     * again was a few per cent of a borrow's CPU under R2dbcPoolBenchmark.
+     */
+    String lastFingerprint() {
+        String sql = collectingSql;
+        if (sql == null) {
+            return null;
+        }
+        if (!sql.equals(fingerprintedSql)) {
+            lastFingerprint = space.seclume.QueryFingerprint.of(sql);
+            fingerprintedSql = sql;
+        }
+        return lastFingerprint;
+    }
     private PgResultSet resultSet;
     private long updateCount = -1;
     private int maxRows;

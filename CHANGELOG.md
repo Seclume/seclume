@@ -5,6 +5,25 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **R2DBC over the seclume pool: half the time per borrow, ahead of r2dbc-pool at the same
+  reset.** Measured in CI on PostgreSQL, against r2dbc-pool with the same `DISCARD ALL` on
+  release: `R2dbcPoolBenchmark` 343 µs against 398 µs (737 µs before);
+  `R2dbcContentionBenchmark` with 512 requests 22.2 ms against 20.0 ms (53.7 ms before).
+  r2dbc-pool without any reset stays faster (202 µs and 10.1 ms) - it hands the next borrower
+  the session as the last one left it. What changed:
+  - A return or a freed permit wakes one waiter that nobody has woken yet, and a waiter that
+    leaves with a wakeup it did not use passes it on; the safety-net park backs off from 2 ms
+    to 64 ms. Before, a burst of eight returns served one of 64 waiters until the net woke the
+    rest (`WaiterWakeupTest`).
+  - `ImmediateBorrow`, implemented by `SeclumePool`: a borrow that does not wait, lends a
+    connection only once its reset is answered and confirmed, and never one due for
+    validation or past its lifetime (`ImmediateBorrowTest`). The R2DBC adapter uses it to lend
+    a ready connection without a hop to another thread.
+  - A result read to its end closed its statement after the completion had gone downstream,
+    so the pool found it open on every return, closed it as forgotten and counted a leak. It
+    is closed before the completion now (`LocalR2dbcPostgresTest`).
+  - The fingerprint of an open statement is kept per statement and text instead of computed
+    on every return, and R2DBC parses a text's placeholders once per dialect.
 - **TLS: a server certificate the client will not go on with ends in an alert.** An empty
   TLS 1.3 Certificate, a certificate that cannot be read, and one the trust store refuses -
   for another name, an unknown issuer, expired - were refused as a plain `IOException`, with
