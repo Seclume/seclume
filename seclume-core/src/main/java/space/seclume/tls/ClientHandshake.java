@@ -1196,7 +1196,10 @@ public final class ClientHandshake {
         byte[] signature = message.asSlice(at, length).toArray(ValueLayout.JAVA_BYTE);
         byte[] hash = transcriptHash.toArray(ValueLayout.JAVA_BYTE);
         if (!HandshakeSignature.verifyServer(chain.get(0).getPublicKey(), hash, scheme, signature)) {
-            throw new IOException("the server's CertificateVerify does not verify against its "
+            // decrypt_error, RFC 8446 section 4.4.3 - and what Tls12Handshake
+            // already sends for its ServerKeyExchange.
+            throw new TlsProtocolException(TlsAlertException.DECRYPT_ERROR,
+                    "the server's CertificateVerify does not verify against its "
                     + "own certificate - it does not hold the key it presented");
         }
     }
