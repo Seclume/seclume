@@ -64,10 +64,21 @@ import space.seclume.secret.SecretWatch;
  * one again, and the slots nobody touches grow old and run into the idle
  * timeout - which is what lets the pool shrink under light load.
  */
-public final class SeclumePool implements DataSource, AutoCloseable {
+public final class SeclumePool implements DataSource, AutoCloseable, space.seclume.ImmediateBorrow {
 
-    /** Longest a waiting thread parks before it looks again by itself. */
-    private static final long PARK_NANOS = 2_000_000L;
+    /**
+     * The first park of a waiting thread before it looks again by itself; each
+     * park that ends unwoken doubles it, up to {@link #PARK_MAX_NANOS}.
+     *
+     * <p>A safety net, not the way out: a returned connection or a freed
+     * permit wakes one waiter of its own (see {@link #signal}). Flat at 2 ms,
+     * as it was, 496 waiters for 16 connections woke 248,000 times a second
+     * to find nothing - 13 % of the client's CPU in openOrWait under
+     * R2dbcContentionBenchmark, on a machine the server shares.
+     */
+    static volatile long PARK_NANOS = 2_000_000L;
+    /** The longest safety-net park. Both package-private for the test that lengthens them. */
+    static volatile long PARK_MAX_NANOS = 64_000_000L;
 
     /** The first and the longest pause before opening again after a transient refusal. */
     private static final long REFUSED_PAUSE_MIN_NANOS = 1_000_000L;
@@ -149,7 +160,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     /** This many connections may exist; every <b>connection</b> holds one. */
     private final Semaphore permits;
     /** Who is waiting for one to come back - only touched when none is free. */
-    private final java.util.Queue<Thread> waiters = new ConcurrentLinkedQueue<>();
+    private final java.util.Queue<Waiter> waiters = new ConcurrentLinkedQueue<>();
     /** How many of them there are - read on every return, written almost never. */
     private final java.util.concurrent.atomic.AtomicInteger waiting =
             new java.util.concurrent.atomic.AtomicInteger();
@@ -291,6 +302,46 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 PoolEvents.endWait(waiting, settings.getName(), borrowed.sum(), timedOut);
             }
         }
+        return lend(entry, now);
+    }
+
+    /**
+     * A connection, if one can be lent without waiting - see
+     * {@link space.seclume.ImmediateBorrow}. The rules are getConnection's:
+     * the reset is settled first, and only when its answer has arrived, so
+     * that settling is a read out of a buffer; lifetime and credential are
+     * checked; a connection idle past the validation window is not validated
+     * here - that is a round trip - but put back for an ordinary borrow.
+     */
+    @Override
+    public Connection getConnectionIfReady() throws SQLException {
+        if (closed) {
+            throw new SQLException("this pool is closed", "08003");
+        }
+        long now = System.nanoTime();
+        PoolEntry entry = claimIdle();
+        if (entry == null) {
+            return null;
+        }
+        boolean stale = settings.getValidationBypassWindow().isZero()
+                || entry.idleNanos(now) > settings.getValidationBypassWindow().toNanos();
+        boolean expired = (!settings.getMaxLifetime().isZero()
+                && entry.ageNanos(now) > settings.getMaxLifetime().toNanos())
+                || entry.credentialExpired(now);
+        if (!answered(entry) || stale || expired) {
+            park(entry);
+            return null;
+        }
+        if (!settle(entry)) {
+            // The reset was refused: the session is not lent, whatever else.
+            retire(entry);
+            return null;
+        }
+        return lend(entry, now);
+    }
+
+    /** Hands out a connection taken for this borrow - the tail of every borrow. */
+    private Connection lend(PoolEntry entry, long now) throws SQLException {
         entry.setQuietly(PoolEntry.State.IN_USE);
         boolean withContext = settings.getSessionContext() != null && applySessionContext(entry);
         boolean watched = !settings.getLeakDetectionThreshold().isZero();
@@ -400,9 +451,10 @@ public final class SeclumePool implements DataSource, AutoCloseable {
      * arrives just before the parking - not the normal way out.
      */
     private PoolEntry openOrWait(long deadline) throws SQLException {
-        Thread self = Thread.currentThread();
+        Waiter self = new Waiter(Thread.currentThread());
         waiters.add(self);
         waiting.incrementAndGet();
+        long net = PARK_NANOS;
         // A server that refuses for now - Oracle's listener with no free
         // server process (ORA-12516), a "too many connections" - is waited
         // out until the deadline: a returned connection is taken, or another
@@ -418,6 +470,9 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 if (closed) {
                     throw new SQLException("this pool is closed", "08003");
                 }
+                // Taken before looking: a signal that arrives while this
+                // thread looks is kept, and the park after it returns at once.
+                self.signaled = false;
                 if ((refused == null || System.nanoTime() - retryAt >= 0) && permits.tryAcquire()) {
                     try {
                         return newEntry();
@@ -450,11 +505,53 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                     throw new SQLTransientConnectionException(
                             "interrupted while waiting for a connection", "08006");
                 }
-                LockSupport.parkNanos(this, Math.min(left, PARK_NANOS));
+                LockSupport.parkNanos(this, Math.min(left, net));
+                if (!self.signaled) {
+                    net = Math.min(net * 2, PARK_MAX_NANOS);
+                }
             }
         } finally {
             waiting.decrementAndGet();
             waiters.remove(self);
+            // A signal this thread had and did not use - it took another
+            // connection, timed out, or failed - is passed on: it stands for
+            // a connection or a permit that somebody else may be waiting for.
+            if (self.signaled) {
+                signal();
+            }
+        }
+    }
+
+    /** A thread waiting in {@link #openOrWait}, and whether it has been woken for something. */
+    private static final class Waiter {
+        final Thread thread;
+        volatile boolean signaled;
+
+        Waiter(Thread thread) {
+            this.thread = thread;
+        }
+    }
+
+    /**
+     * Wakes one waiter that has not been woken yet, if any is waiting: a
+     * connection has been parked or a permit freed. One per event, so that
+     * two returns in a row wake two waiters, not the same one twice - the
+     * second connection would otherwise wait for the safety net.
+     */
+    private void signal() {
+        // The count is read first and is almost always zero: a volatile int
+        // that nobody writes sits in every core's cache, while looking into
+        // the queue itself means touching a line that the waiters keep
+        // changing - on the path of every single return.
+        if (waiting.get() == 0) {
+            return;
+        }
+        for (Waiter waiter : waiters) {
+            if (!waiter.signaled) {
+                waiter.signaled = true;
+                LockSupport.unpark(waiter.thread);
+                return;
+            }
         }
     }
 
@@ -642,6 +739,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         for (int i = 0; i < size; i++) {
             int slot = indexOf(start + i);
             if (free.get(slot) == null && free.compareAndSet(slot, null, entry)) {
+                signal();
                 return;
             }
         }
@@ -1080,17 +1178,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
         } else {
             park(entry);
         }
-        // Somebody may be waiting for exactly this one. The count is read
-        // first and is almost always zero: a volatile int that nobody writes
-        // sits in every core's cache, while looking into the queue itself
-        // means touching a line that the waiters keep changing - on the path
-        // of every single return.
-        if (waiting.get() > 0) {
-            Thread waiter = waiters.peek();
-            if (waiter != null) {
-                LockSupport.unpark(waiter);
-            }
-        }
+        // Somebody may be waiting for exactly this one: park and retire
+        // wake one waiter each (signal).
     }
 
     private boolean isPastLifetime(PoolEntry entry, long now) {
@@ -1138,12 +1227,7 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             permits.release();
         }
         detached.increment();
-        if (waiting.get() > 0) {
-            Thread waiter = waiters.peek();
-            if (waiter != null) {
-                LockSupport.unpark(waiter);
-            }
-        }
+        signal();
         return connection;
     }
 
@@ -1212,8 +1296,10 @@ public final class SeclumePool implements DataSource, AutoCloseable {
     private void retire(PoolEntry entry) {
         entry.set(PoolEntry.State.CLOSED);
         if (entries.remove(entry)) {
-            // The permit belongs to the connection, so it goes back with it.
+            // The permit belongs to the connection, so it goes back with it -
+            // and a waiter may open one with it.
             permits.release();
+            signal();
         }
         retired.increment();
         // The plans belong to this session and die with it; closing them first
@@ -1655,8 +1741,8 @@ public final class SeclumePool implements DataSource, AutoCloseable {
             watch.close();
         }
         housekeeper.interrupt();
-        for (Thread waiter : waiters) {
-            LockSupport.unpark(waiter);
+        for (Waiter waiter : waiters) {
+            LockSupport.unpark(waiter.thread);
         }
         for (int i = 0; i < free.length(); i++) {
             PoolEntry entry = free.getAndSet(i, null);
