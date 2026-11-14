@@ -5,6 +5,19 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **R2DBC: one statement ahead of r2dbc-postgresql.** A connection's work (its "lane") ran on
+  a virtual thread, which parks on the socket. The JDK's poller then waits for the answer
+  instead and wakes it onto a carrier: two more hand-overs per round trip than a platform
+  thread blocked in the kernel. Under JFR, `ForkJoinPool.deactivate` was 55 % of the samples
+  of one statement. Lanes now run on a bounded set of shared platform threads
+  (`seclume.r2dbc.platformThreads`, 128 by default; 0 keeps every lane virtual). A lane that
+  finds none free runs on a virtual thread at once, and the borrow, which may wait for a full
+  pool, stays virtual. Measured in one CI run on PostgreSQL, the same build with the setting
+  at 128 and at 0, against r2dbc-postgresql in the same run: `selectOne` 69 µs (90 µs at 0)
+  against 73 µs, `selectRow` 71 µs (91 µs) against 79 µs, `selectManyRows` 403 µs (415 µs)
+  against 679 µs. Through the pool, `R2dbcPoolBenchmark` 323 µs (349 µs) against 408 µs for
+  r2dbc-pool with the same reset; `R2dbcContentionBenchmark` with 512 requests 21.6 ms
+  (22.6 ms) against 19.3 ms. `LaneTest` covers the thread choice and the order.
 - **R2DBC over the seclume pool: half the time per borrow, ahead of r2dbc-pool at the same
   reset.** Measured in CI on PostgreSQL, against r2dbc-pool with the same `DISCARD ALL` on
   release: `R2dbcPoolBenchmark` 343 µs against 398 µs (737 µs before);
