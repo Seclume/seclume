@@ -24,25 +24,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import space.seclume.Pipeline;
-import space.seclume.tck.BreakableRelay;
 import space.seclume.tck.TestHosts;
 
 /**
- * One trip for a unit of work, on Oracle - and it is a different trip than on
- * SQL Server.
+ * The block on Oracle: accepted, correct, and - for now - no faster.
  *
- * <p>TDS carries several calls in one message, so the round trips themselves
- * disappear and a counter shows it. <b>Oracle numbers every call and answers
- * each one</b>, so the calls still travel separately; what the block removes
- * is the waiting between them. The round trip counter reports the same number
- * either way, which is a limit of the counter rather than of the block: it
- * counts answers read, not time spent waiting for the first byte of each.
- *
- * <p>So this measures what there is to measure - <b>time over a slow line</b>.
- * Ten milliseconds each way through a relay, an ordinary distance between an
- * application server and its database. On a loopback connection the difference
- * disappears into the noise, which is exactly why a test that measured there
- * would prove nothing.
+ * <p>It used to send the calls without waiting and save the waiting between
+ * them: eight inserts over a line with ten milliseconds each way took 199 ms
+ * one at a time and 46 ms in a block, and a test here held it to a factor of
+ * two. That was calls in flight that the server had not been told of, and
+ * with many different statement texts the server refused them at random with
+ * {@code ORA-03146} and dropped the ones behind them -
+ * {@link #manyDifferentTextsInOneBlockAllArrive} is that case. Oracle's own
+ * pipelining is a mode the client announces; until the driver speaks it,
+ * each call is answered before the next goes out, and what is tested here is
+ * that the block keeps its word: every row arrives, a refusal is named.
  */
 @Timeout(240)
 @org.junit.jupiter.api.parallel.Isolated
@@ -103,44 +99,39 @@ class PipelineTest {
     }
 
     /**
-     * What the block is worth, over a line that has a distance in it.
+     * 130 inserts over 97 different texts, one bind each, in one block.
      *
-     * <p>The assertion is deliberately loose - a factor of two rather than the
-     * factor of four that was measured - because this runs on whatever machine
-     * happens to have the servers. What it pins is the claim: the block
-     * removes most of the waiting, and if it ever stops doing that the test
-     * says so.
+     * <p>With calls in flight, Oracle 23.26 Free refused one of these with
+     * {@code ORA-03146: invalid buffer length for TTC field} - the 1st, the
+     * 15th, the 45th or the 75th, from run to run - and dropped every call
+     * behind it. One text repeated never showed it, which is why the eight
+     * inserts of the tests before did not.
      */
     @Test
     @SuppressWarnings("try")   // the block is used for its effect, not its value
-    void overASlowLineTheBlockRemovesMostOfTheWaiting() throws Exception {
-        try (BreakableRelay relay = BreakableRelay.to(host, port)) {
-            String slow = url("127.0.0.1", relay.port());
-            try (Connection connection = DriverManager.getConnection(slow)) {
-                connection.setAutoCommit(false);
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "insert into pipeline_demo (id, note) values (?, ?)")) {
-
-                    relay.delay(10);
-                    long startPlain = System.nanoTime();
-                    write(insert, 1);
-                    long plain = (System.nanoTime() - startPlain) / 1_000_000;
-                    connection.rollback();
-
-                    long startBlock = System.nanoTime();
-                    try (Pipeline unit = Pipeline.open(connection)) {
-                        write(insert, 101);
+    void manyDifferentTextsInOneBlockAllArrive() throws Exception {
+        try (Connection connection = DriverManager.getConnection(url)) {
+            connection.setNetworkTimeout(Runnable::run, 60_000);
+            connection.setAutoCommit(false);
+            try (Pipeline unit = Pipeline.open(connection)) {
+                for (int i = 1; i <= 130; i++) {
+                    try (PreparedStatement insert = connection.prepareStatement(
+                            "insert into pipeline_demo (id, note) values (?, 'text " + (i % 97)
+                                    + "')")) {
+                        insert.setInt(1, i);
+                        insert.executeUpdate();
                     }
-                    long block = (System.nanoTime() - startBlock) / 1_000_000;
-                    connection.rollback();
-                    relay.delay(0);
-
-                    System.out.println("[oracle] over a 10 ms line, eight inserts: "
-                            + plain + " ms one at a time, " + block + " ms in a block");
-                    assertTrue(block * 2 < plain,
-                            "the block saved little: " + block + " ms against " + plain + " ms");
                 }
             }
+            connection.commit();
+            try (Statement statement = connection.createStatement();
+                    ResultSet rows = statement.executeQuery(
+                            "select count(*), count(distinct note) from pipeline_demo")) {
+                assertTrue(rows.next());
+                assertEquals(130, rows.getInt(1), "not every insert of the block arrived");
+                assertEquals(97, rows.getInt(2));
+            }
+            connection.commit();
         }
     }
 
@@ -277,10 +268,10 @@ class PipelineTest {
      * place, its text, the exception it would have raised outside, and what
      * became of the calls behind it.
      *
-     * <p>Oracle answers the refusal with a reset, and the reset throws away
-     * the calls it had been sent and not yet read: the third and fourth here
-     * never run and are never answered. Before, the block was not told of
-     * the refusal at all and then waited for those two answers for ever.
+     * <p>Before, the block was not told of the refusal at all: its answer was
+     * read, its count kept as a zero, and the block ended as if every row had
+     * arrived. The calls behind it are not sent once it has been refused -
+     * the exception leaves the block where it was raised.
      *
      * <p>The text was run once before the block, so its calls go out on the
      * cached cursor; the refused one takes that cursor out of the cache. The
@@ -316,8 +307,8 @@ class PipelineTest {
                         refused.getMessage());
                 assertTrue(refused.getMessage().contains("insert into pipeline_demo"),
                         refused.getMessage());
-                assertTrue(refused.getMessage().contains("statements 3 to 4 did not run"),
-                        "the message has to say what became of the calls behind it: "
+                assertTrue(refused.getMessage().contains("the statements before it ran"),
+                        "the message has to say what became of the others: "
                                 + refused.getMessage());
 
                 // Out of the block: a count again, not SUCCESS_NO_INFO.
@@ -337,7 +328,7 @@ class PipelineTest {
                 assertTrue(rows.next());
                 assertEquals("1,4,100", rows.getString(1),
                         "the call before the refused one stays in the transaction, the two "
-                                + "behind it did not run");
+                                + "behind it were never sent");
             }
             connection.rollback();
         }
@@ -365,14 +356,6 @@ class PipelineTest {
                     () -> Pipeline.open(connection));
             assertTrue(refused.getMessage().contains("auto-commit"),
                     "the refusal should say what to do: " + refused.getMessage());
-        }
-    }
-
-    private static void write(PreparedStatement insert, int from) throws SQLException {
-        for (int i = 0; i < 8; i++) {
-            insert.setInt(1, from + i);
-            insert.setString(2, "row " + (from + i));
-            insert.executeUpdate();
         }
     }
 }

@@ -1029,23 +1029,20 @@ public final class OraConnection implements Connection, space.seclume.internal.j
     // ---- the pipeline block ---------------------------------------------
 
     /**
-     * From here on, an update nobody is waiting for is sent without waiting.
+     * From here on, an update runs inside a block - and on Oracle, for now,
+     * each one is still answered before the next goes out.
      *
      * <p>{@link space.seclume.Pipeline} exists so that an application can
      * write a unit of work once and have it cost one trip where the protocol
-     * allows it. <b>Oracle allows a different shape of it than SQL Server
-     * does</b>, and the difference is worth knowing: TDS carries several calls
-     * in one message, so the round trips themselves disappear. Oracle numbers
-     * every call and answers each one, so the calls still travel separately -
-     * what the block removes is the <b>waiting between them</b>.
-     *
-     * <p>That distinction is invisible on a loopback connection and decisive
-     * over a real one. Measured through a relay adding ten milliseconds each
-     * way - an ordinary distance between an application server and its
-     * database - eight inserts took <b>199 ms one at a time and 46 ms in a
-     * block</b>. The round trip counter reports the same number either way,
-     * because it counts answers read and not time spent; that is a limit of
-     * the counter, not of the block.
+     * allows it. On Oracle it was meant to remove the <b>waiting between the
+     * calls</b>: through a relay adding ten milliseconds each way, eight
+     * inserts took 199 ms one at a time and 46 ms in a block. That was calls
+     * in flight the server had not been told of, and it does not hold: with
+     * many different statement texts the server refused calls at random with
+     * {@code ORA-03146} and dropped the ones behind them - see
+     * OracleSession.PIPELINE_CALLS. Oracle's own pipelining is a mode the
+     * client announces; until this driver speaks it, the block is accepted,
+     * and saves nothing, so that the same code runs against all four.
      *
      * <p><b>What is not buffered</b>, because it cannot be: a query, anything
      * asking for generated keys, and a statement with an open cursor. Each of

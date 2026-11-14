@@ -45,14 +45,14 @@ import java.sql.SQLException;
  *
  * <p><b>Where it saves anything.</b> PostgreSQL and MySQL bundle the writes
  * into one round trip, and SQL Server carries several calls in one message.
- * Oracle numbers and answers every call, so its calls still travel one by
- * one; what the block removes there is the waiting between them, which a
- * slow line shows and a loopback connection does not.
+ * Oracle accepts the block and, for now, saves nothing: each call is answered
+ * before the next goes out. Calls in flight that the server had not been told
+ * of were refused at random there - Oracle's pipelining is a mode the client
+ * has to announce, and this driver does not speak it yet.
  *
- * <p>They differ in one thing worth knowing: after a failure PostgreSQL
- * <b>skips</b> the rest of the group, MySQL <b>runs</b> it, and Oracle drops
- * the calls already sent behind the refused one, so they do not run either.
- * Each says which in the message of the exception.
+ * <p>The two that bundle differ in one thing worth knowing: after a failure
+ * PostgreSQL <b>skips</b> the rest of the group, MySQL <b>runs</b> it. Both
+ * say which in the message of the exception.
  */
 public final class Pipeline implements AutoCloseable {
 

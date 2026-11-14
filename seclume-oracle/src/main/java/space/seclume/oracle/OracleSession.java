@@ -2069,9 +2069,8 @@ public final class OracleSession implements AutoCloseable {
     //
     // Whether this works at all is a question about the server rather than
     // about this code: Oracle numbers every call and this driver has always
-    // sent one and waited. Two calls in flight at once is therefore an
-    // experiment, and the answer is written down where the experiment is -
-    // see OraConnection.
+    // sent one and waited. Two calls in flight at once was an experiment, and
+    // the answer is no - see PIPELINE_CALLS.
 
     private boolean pipelining;
     /** How many calls have been sent whose answers nobody has read. */
@@ -2141,12 +2140,28 @@ public final class OracleSession implements AutoCloseable {
     }
 
     /**
-     * How many calls may be in flight at once.
+     * How many calls may be in flight at once: one - each call is answered
+     * before the next goes out.
      *
-     * <p>Bounded for the reason every such buffer is: if both sides keep
-     * writing and neither reads, both socket buffers fill and both block.
+     * <p>It was 64, and the server does not support that. Calls sent without
+     * waiting are pipelining that the client has not announced: Oracle's
+     * documented pipelining (OCI, 23ai) is a mode the client opens and closes
+     * with the server, and without it the server reads a stream it does not
+     * expect. Measured on Oracle 23.26 Free with a probe: 130 inserts over 97
+     * texts in one block were refused with {@code ORA-03146: invalid buffer
+     * length for TTC field} at the 1st, 15th, 45th or 75th call - a different
+     * one from run to run, never the same text twice; the same 130 inserts
+     * one at a time all ran. One text over and over did not show it, which is
+     * how the eight inserts of the old test passed. A refusal also drops the
+     * calls behind it (see flushPipeline), so a block of 64 lost up to 63
+     * rows of a unit of work on a hiccup of the protocol.
+     *
+     * <p>So the block saves nothing on Oracle, as Pipeline's documentation
+     * once said and should have gone on saying, until the announced mode is
+     * implemented; the rest of the machinery - the cursor kept per text, a
+     * refusal named with its place - stands for it.
      */
-    private static final int PIPELINE_CALLS = 64;
+    private static final int PIPELINE_CALLS = 1;
 
     /** Reads the answers to everything that was sent. */
     public void flushPipeline() throws SQLException {
