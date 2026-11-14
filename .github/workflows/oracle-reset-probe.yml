@@ -1,0 +1,38 @@
+name: oracle-reset-probe
+
+# A probe on its own branch, not part of the build: what Oracle's RESET_STATE
+# clears at the end of a request. See .github/probe/reset_state.py.
+on:
+  push:
+    branches: [oracle-reset-state-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - name: Start Oracle Free
+        run: |
+          docker run -d --name oracle --network host \
+            -e ORACLE_PASSWORD=seclume-ci-password -e APP_USER=seclume_test \
+            -e APP_USER_PASSWORD=seclume-ci-password \
+            --health-cmd healthcheck.sh --health-interval 10s \
+            --health-timeout 10s --health-retries 60 \
+            gvenzl/oracle-free:23-slim
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pip install --break-system-packages oracledb==26.0.1
+      - name: Wait for Oracle
+        run: |
+          for i in $(seq 1 90); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' oracle)" = healthy ] && exit 0
+            sleep 10
+          done
+          exit 1
+      - name: Probe
+        env:
+          ORACLE_PASSWORD: seclume-ci-password
+          APP_PASSWORD: seclume-ci-password
+        run: python3 .github/probe/reset_state.py
