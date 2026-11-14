@@ -5,6 +5,20 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+- **JDBC URL redaction: a password after Oracle's `@//` is hidden.** `JdbcUrl.redact` - what
+  every message naming a wrong URL prints - took the `@` of `jdbc:oracle:thin:@//...` for
+  Oracle's `user/password@` and, finding no `/` before it, hid nothing:
+  `jdbc:oracle:thin:@//app:secret@db:1521/svc` was printed with its password. The authority's
+  `user:password@` rule now applies there as for any URL (`JdbcUrlRedactEdgeTest`, and an
+  EZConnect family in `JdbcUrlPropertyTest`; both fail on the code before).
+- **SCRAM: the `c=` buffer is wiped.** The copy of the GS2 header and the channel binding data
+  the client's final message is encoded from was left in the arena when it was freed
+  (`ScramWipeTest`, which reads every segment of an exchange at `close()`).
+- **Tests and CI: tests for what mutation testing found unchecked, and coverage floors.** New
+  tests for the pool's return path, statement cache, entry state and URL checks, the wire
+  buffer's wiping, SCRAM's wiping, the hostname check's edges and URL redaction; the
+  `coverage` job now fails below `.github/coverage-floors.json` - per module and per
+  security-critical package, the failure annotated with the module.
 - **Constant time: the measurement no longer tells the two classes apart by its own setup.**
   The nightly check of `ConstantTime.equals` failed on 7 and 13 November (t = 6.8 to 45.7). The
   setup copied the input and then wrote the two bytes that may differ - one changed, one as it

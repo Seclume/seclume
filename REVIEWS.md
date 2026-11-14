@@ -335,6 +335,40 @@ where they failed. The database tests added are for CI.
   identifier patterns on all four drivers. SQL Server and Oracle catalogue literals double
   their quotes (neither has backslash escapes), and MySQL's escape both.
 
+## Round 5 - 13 November 2026 (test quality)
+
+Scope: not a reading of the code against its claims, but of the tests against the code - the
+surviving mutants PIT listed for `pool`, `internal`, `secret` and `tls` (run 43416680859), and
+for each the question what a test would have to check to notice it. Where that test found the
+code wrong, it is a finding here. Done with an AI assistant (Claude). Maven Central and a
+JDK 25 could not be reached where it was done: new tests were compiled against the core
+built with JDK 21 (`--enable-preview`, the four JDK 22 FFM renames patched in a copy), run on
+a minimal JUnit-API shim, and each targeted mutant was applied to a copy of the source to see
+the new tests fail on it. PIT in this pull request's CI is the measure.
+
+### Findings
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | JDBC URL redaction | `JdbcUrl.redact` took an `@` before the first `//` for Oracle's `user/password@` and stopped when no `/` came before it, also when it had hidden nothing: `jdbc:oracle:thin:@//app:secret@db:1521/svc` - EZConnect with a login typed into its authority - came back with the password in it, in the message that names a wrong URL. `JdbcUrlPropertyTest` had no such family; it has now, and fails on the code before. | medium | #340 |
+| 2 | SCRAM | The class promises an arena "zeroed on close". The `c=` value's source - the GS2 header and the channel binding data, the server certificate's hash - was copied into a buffer no field held, so `close()` could not wipe it and the arena was freed with it in it. Not a credential; the promise did not hold. | low | #340 |
+
+### Reviewed, nothing found
+
+- **Pool return path** (`PooledConnection.restore`/`close`, `adopted`): rollback before
+  auto-commit is put back, warnings cleared after a use, leaked statements closed, the statement
+  cache emptied by a session reset, the driver told to forget the handle; an adopted session
+  keeps its transaction while borrowed (AGENTS.md) and is reset on return, and is not renewed
+  under an open transaction. Each now checked to the call with a recording driver.
+- **Statement cache**: no statement is handed to two borrowers, and maxRows, query timeout,
+  fetch size and direction, max field size, parameters, warnings and batch are put back to the
+  driver's defaults - never run before without a server, as the stub's statements refuse every
+  getter.
+- **`WireBuffer`**: `clear()` wipes the content written or read and not a byte more; growth
+  wipes what it leaves.
+- **`HostnameMatch`**: an address matches only an iPAddress entry; IPv4-mapped addresses
+  compare as what they are; entries that are no name are skipped.
+
 ## The next review
 
 `SeclumeCollection`, `Iterables` and `BatchCursor` of `seclume-mongodb-driver` have been
