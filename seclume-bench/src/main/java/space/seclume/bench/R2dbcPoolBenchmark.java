@@ -34,6 +34,9 @@ import space.seclume.r2dbc.SeclumeConnectionFactory;
  * session on every return; r2dbc-postgresql's from r2dbc-pool, which by
  * default resets nothing. So the {@code seclume} row pays for a reset the
  * other one does not make, as it does against HikariCP in PoolBenchmark.
+ * {@code seclume-vendor} is the same adapter and pool over pgJDBC, which the
+ * pool does not reset: the difference between the two seclume rows is the
+ * reset, the rest is the adapter and the pool.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
@@ -44,7 +47,7 @@ public class R2dbcPoolBenchmark {
 
     private static final Duration WAIT = Duration.ofSeconds(30);
 
-    @Param({"seclume", "r2dbc-pool"})
+    @Param({"seclume", "seclume-vendor", "r2dbc-pool"})
     public String pool;
 
     @Param({"16"})
@@ -56,14 +59,16 @@ public class R2dbcPoolBenchmark {
     @Setup(Level.Trial)
     public void open() throws Exception {
         BenchDatabase database = BenchDatabase.fromSystemProperties();
-        if (pool.equals("seclume")) {
+        if (pool.startsWith("seclume")) {
             PoolSettings settings = new PoolSettings();
             settings.setMaximumPoolSize(size);
             settings.setMinimumIdle(size);
             settings.setWarmup(true);
             settings.setName("seclume-r2dbc-bench");
             settings.setConnectionTimeout(Duration.ofSeconds(10));
-            SeclumePool seclume = new SeclumePool(database.seclume(), settings);
+            SeclumePool seclume = new SeclumePool(pool.equals("seclume-vendor")
+                    ? new DriverManagerDataSource(database.vendorUrl(), database.vendorProperties())
+                    : database.seclume(), settings);
             closing = seclume;
             factory = SeclumeConnectionFactory.over(seclume, "postgresql");
         } else {
