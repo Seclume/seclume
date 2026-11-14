@@ -2125,7 +2125,7 @@ public final class OracleSession implements AutoCloseable {
             // sent on a fresh one each time, every call left a cursor open on
             // the server that nobody closed, and the three hundredth call of a
             // session ended in ORA-01000. See flushPipeline for the rest.
-            int reuse = cursorFor(sql);
+            int reuse = Boolean.getBoolean("probe.reuse") ? cursorFor(sql) : 0;
             TtcQuery.send(channel, newCallNumber(), sql, 0, false, binds, reuse, 1, null,
                     autoCommit, isPlsqlBlock(sql));
             pipelineCursors[pipelineGroup] = reuse;
@@ -2163,6 +2163,9 @@ public final class OracleSession implements AutoCloseable {
             for (int i = 0; i < group; i++) {
                 long resetsBefore = channel.resets();
                 TtcResult result = readAnswer(null, java.util.List.of());
+                System.out.println("  answer " + (groupStart + i) + ": cursor " + result.cursorId()
+                        + " sent on " + pipelineCursors[i] + (result.isFailure() ? " ORA-" + result.errorNumber() : "")
+                        + " closing " + closingCount);
                 String sql = pipelineSql.get(groupStart + i);
                 settleCursor(sql, pipelineCursors[i], result);
                 if (!result.isFailure()) {

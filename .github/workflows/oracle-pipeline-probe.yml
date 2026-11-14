@@ -1,0 +1,64 @@
+name: oracle-pipeline-probe
+on:
+  push:
+    branches: [oracle-pipeline-probe]
+permissions:
+  contents: read
+jobs:
+  oracle:
+    runs-on: ubuntu-26.04
+    env:
+      ORA_PASSWORD: ${{ secrets.ORA_TEST_PASSWORD || 'seclume-ci-password' }}
+    steps:
+      - name: Start Oracle Free on the host network
+        run: |
+          docker run -d --name oracle --network host \
+            -e ORACLE_PASSWORD="$ORA_PASSWORD" -e APP_USER=seclume_test \
+            -e APP_USER_PASSWORD="$ORA_PASSWORD" \
+            --health-cmd healthcheck.sh --health-interval 10s \
+            --health-timeout 10s --health-retries 60 \
+            gvenzl/oracle-free:23-slim
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: maven
+      # setup-java's cache holds ~/.m2/repository - the dependencies. The
+      # wrapper's own copy of Maven lives elsewhere and was fetched afresh by
+      # every job, which on 22.09.2026 got one of nine a 429 from the
+      # distribution host and a red build with nothing wrong in it.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+      - name: Wait for Oracle
+        run: |
+          for i in $(seq 1 90); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' oracle)
+            [ "$s" = healthy ] && exit 0
+            sleep 10
+          done
+          docker logs oracle | tail -50
+          exit 1
+      # LocalLogInAgainTest proves the reset clears an application context;
+      # creating one needs this privilege, which APP_USER does not get.
+      - name: Grant create any context
+        run: |
+          echo 'alter session set container=FREEPDB1;
+          grant create any context to seclume_test;
+          exit' | docker exec -i oracle sqlplus -s / as sysdba
+      # The Spring application's own schema: its Flyway wants an empty one,
+      # not the one the driver tests have filled.
+      - name: A schema for the Spring application
+        run: |
+          printf '%s\n' 'alter session set container=FREEPDB1;' \
+            "create user seclume_spring identified by \"$ORA_PASSWORD\" quota unlimited on users;" \
+            'grant create session, create table, create sequence, create view, create procedure, create trigger to seclume_spring;' \
+            'exit' | docker exec -i oracle sqlplus -s / as sysdba
+      - run: printf '%s' "$ORA_PASSWORD" > .local-oracle-password
+      - run: ./mvnw -B -ntp -pl seclume-oracle -am -Dtest=PipelineProbeTest -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false test 2>&1 | grep -v "^\[INFO\] Download" | tail -400
+      - if: always()
+        run: cat seclume-oracle/target/surefire-reports/*PipelineProbeTest*-output.txt 2>/dev/null || true
+      - if: always()
+        run: rm -f .local-oracle-password
