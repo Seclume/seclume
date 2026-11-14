@@ -132,8 +132,27 @@ class ConstantTimeLeakageTest {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment a = random(arena, 64, 1);
             MemorySegment b = arena.allocate(64);
-            seen("an early exit", ROUNDS, round -> measure(round, 16, klass -> differAt(a, b, klass == 0 ? 0 : 63, 0, 63),
+            MemorySegment[] inputs = differingAt(arena, a, 0, 63);
+            seen("an early exit", ROUNDS, round -> measure(round, 16, klass -> install(inputs, klass, b),
                     klass -> sink ^= earlyExit(a, b, 64) ? 1 : 0));
+        }
+    }
+
+    /**
+     * The preparation alone: the same two inputs installed as for the
+     * comparison, and an operation that does not read them. Two classes that
+     * this tells apart would be told apart by the setup, whatever ran after
+     * it - which is what the setup before this one did (see
+     * {@link #install}).
+     */
+    @Test
+    void thePreparationAloneIsQuiet() {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment a = random(arena, 64, 2);
+            MemorySegment b = arena.allocate(64);
+            MemorySegment[] inputs = differingAt(arena, a, 0, 63);
+            quiet("installing the inputs", ROUNDS, round -> measure(round, 16,
+                    klass -> install(inputs, klass, b), klass -> sink ^= 1));
         }
     }
 
@@ -147,8 +166,9 @@ class ConstantTimeLeakageTest {
             // is not - which is exactly what an early exit gives away.
             MemorySegment a = random(arena, 64, 2);
             MemorySegment b = arena.allocate(64);
+            MemorySegment[] inputs = differingAt(arena, a, 0, 63);
             quiet("ConstantTime.equals", ROUNDS, round -> measure(round, 16,
-                    klass -> differAt(a, b, klass == 0 ? 0 : 63, 0, 63),
+                    klass -> install(inputs, klass, b),
                     klass -> sink ^= ConstantTime.equals(a, 0, b, 0, 64) ? 1 : 0));
         }
     }
@@ -168,8 +188,9 @@ class ConstantTimeLeakageTest {
             try (AesKey aes = new AesKey(key)) {
                 AesGcm.encrypt(aes, nonce, 0, MemorySegment.NULL, 0, 0, plain, 0, 64, sealed, 0);
                 MemorySegment forged = arena.allocate(64 + 16);
+                MemorySegment[] forgeries = differingAt(arena, sealed, 64, 79);
                 quiet("the GCM tag check", ROUNDS, round -> measure(round, 2,
-                        klass -> differAt(sealed, forged, klass == 0 ? 64 : 79, 64, 79),
+                        klass -> install(forgeries, klass, forged),
                         klass -> sink ^= AesGcm.decrypt(aes, nonce, 0, MemorySegment.NULL, 0, 0,
                                 forged, 0, 64, out, 0) ? 1 : 0));
             }
@@ -271,19 +292,34 @@ class ConstantTimeLeakageTest {
     }
 
     /**
-     * {@code into} becomes {@code from} with the byte at {@code flip} - one of
-     * {@code low} and {@code high} - changed. Both are written in both classes,
-     * in the same order: a store to one place just before the clock starts is
-     * itself measurable (a t of 8, a tenth of a nanosecond per call, from
-     * which cache line the last store went to).
+     * Two copies of {@code from}, the first with the byte at {@code first}
+     * changed and the second with the byte at {@code second}: the inputs of
+     * the two classes, made once, before anything is measured.
      */
-    private static void differAt(MemorySegment from, MemorySegment into, long flip, long low,
-                                 long high) {
-        MemorySegment.copy(from, 0, into, 0, into.byteSize());
-        byte lowValue = from.get(ValueLayout.JAVA_BYTE, low);
-        byte highValue = from.get(ValueLayout.JAVA_BYTE, high);
-        into.set(ValueLayout.JAVA_BYTE, low, flip == low ? (byte) ~lowValue : lowValue);
-        into.set(ValueLayout.JAVA_BYTE, high, flip == high ? (byte) ~highValue : highValue);
+    private static MemorySegment[] differingAt(Arena arena, MemorySegment from, long first, long second) {
+        MemorySegment[] inputs = {copy(arena, from), copy(arena, from)};
+        inputs[0].set(ValueLayout.JAVA_BYTE, first, (byte) ~from.get(ValueLayout.JAVA_BYTE, first));
+        inputs[1].set(ValueLayout.JAVA_BYTE, second, (byte) ~from.get(ValueLayout.JAVA_BYTE, second));
+        return inputs;
+    }
+
+    /**
+     * {@code into} becomes the input of {@code klass}, written whole: the same
+     * stores to the same memory in both classes, only the bytes they carry
+     * differ.
+     *
+     * <p>The setup before this copied {@code from} and then wrote the two
+     * bytes that may differ, one changed and one as it was - and which of the
+     * two stores changed something told the classes apart by itself. Measured
+     * on eight runners of 14 November 2026 (Xeon Platinum 8573C, EPYC 7763,
+     * EPYC 9V74), five rounds each: an operation that does not read the input
+     * at all had |t| up to 85 after that setup and at most 8.9 in one round
+     * of 80 after this one; ConstantTime.equals had |t| up to 98 after that
+     * setup and below 2.7 in every round after this one. So the nightly
+     * failures of 7 and 13 November (t = 6.8 to 45.7) were the setup's.
+     */
+    private static void install(MemorySegment[] inputs, int klass, MemorySegment into) {
+        MemorySegment.copy(inputs[klass], 0, into, 0, into.byteSize());
     }
 
     private static MemorySegment copy(Arena arena, MemorySegment from) {

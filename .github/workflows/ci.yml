@@ -2283,3 +2283,14 @@ jobs:
             */target/site/jacoco/
           retention-days: 30
           if-no-files-found: warn
+      # The floors in .github/coverage-floors.json: the whole, each module and
+      # each security-critical package. A failure is annotated with the module
+      # or package it is about. Only a complete measurement is held to them -
+      # with a test job failed or cancelled its share of the data is missing,
+      # and that job's own failure is the one to read.
+      - name: Coverage floors
+        if: >-
+          needs.core.result == 'success' && needs.postgresql.result == 'success'
+          && needs.mysql.result == 'success' && needs.sqlserver.result == 'success'
+          && needs.oracle.result == 'success'
+        run: python3 .github/scripts/coverage_gate.py coverage-merged.json .github/coverage-floors.json
