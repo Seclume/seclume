@@ -14,6 +14,11 @@ All notable changes to seclume are recorded here. Versions follow
   after that the same operation stayed below 4.5 in 79 rounds of 80 and `ConstantTime.equals`
   below 2.7 in all 80, while the early-exit control is still found (t around -1650). The GCM
   tag check is set up the same way, and `thePreparationAloneIsQuiet` keeps the setup honest.
+- **CI tools: `@opentelemetry/instrumentation-http` 0.222.0.** The CI's Azure storage emulator
+  (Azurite, a test helper; nothing of it ships) brings 0.221.0 through `applicationinsights`, and
+  GHSA-3v2p-hm54-8qcq (sensitive data in logs, fixed in 0.222.0) failed `npm_audit.py` in the core
+  job of every pull request. An override pins the fixed version, as for `uuid` and
+  `@azure/msal-node`; no release of `@azure/monitor-opentelemetry` asks for it yet.
 - **CI: a job runs the tests of its own modules, not those of every module it builds.**
   `mvn -pl MODULES -am test` runs the tests of every module Maven builds on the way: each of
   the eighteen database jobs ran the core's 4,138 tests again - the same tests with the same
