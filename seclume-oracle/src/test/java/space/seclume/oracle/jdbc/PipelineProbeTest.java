@@ -87,6 +87,60 @@ class PipelineProbeTest {
     @SuppressWarnings("try")
     static void scenarios() throws Exception {
         String sql = "insert into probe_t (id, note) values (?, ?)";
+        scenario("J: H without a pipeline", c -> {
+            PreparedStatement[] ps = new PreparedStatement[97];
+            for (int t = 0; t < 97; t++) {
+                ps[t] = c.prepareStatement("insert into probe_t (id, note) values (?, 'text " + t + "')");
+            }
+            for (int i = 1; i <= 130; i++) {
+                ps[i % 97].setInt(1, i);
+                ps[i % 97].executeUpdate();
+            }
+            c.commit();
+            for (PreparedStatement p : ps) {
+                p.close();
+            }
+        });
+        scenario("K: 130 calls over 97 texts with two binds", c -> {
+            PreparedStatement[] ps = new PreparedStatement[97];
+            for (int t = 0; t < 97; t++) {
+                ps[t] = c.prepareStatement("insert into probe_t (id, note) values (?, ?) /* " + t + " */");
+            }
+            try (Pipeline u = Pipeline.open(c)) {
+                for (int i = 1; i <= 130; i++) {
+                    ps[i % 97].setInt(1, i);
+                    ps[i % 97].setString(2, "n" + i);
+                    ps[i % 97].executeUpdate();
+                }
+            }
+            c.commit();
+            for (PreparedStatement p : ps) {
+                p.close();
+            }
+        });
+        scenario("L: one text, one bind, 130 calls", c -> {
+            try (PreparedStatement p = c.prepareStatement("insert into probe_t (id, note) values (?, 'same')")) {
+                try (Pipeline u = Pipeline.open(c)) {
+                    for (int i = 1; i <= 130; i++) {
+                        p.setInt(1, i);
+                        p.executeUpdate();
+                    }
+                }
+            }
+            c.commit();
+        });
+        scenario("M: one text, two binds, values 1..130 as in F, but int bind only differs", c -> {
+            try (PreparedStatement p = c.prepareStatement("insert into probe_t (id, note) values (?, ?)")) {
+                try (Pipeline u = Pipeline.open(c)) {
+                    for (int i = 1; i <= 130; i++) {
+                        p.setInt(1, i);
+                        p.setString(2, "text " + i);
+                        p.executeUpdate();
+                    }
+                }
+            }
+            c.commit();
+        });
         scenario("G: 130 calls over 97 texts, a statement per call", c -> {
             for (int i = 1; i <= 130; i++) {
                 try (PreparedStatement p = c.prepareStatement(
