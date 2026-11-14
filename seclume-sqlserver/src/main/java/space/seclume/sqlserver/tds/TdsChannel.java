@@ -452,6 +452,13 @@ public final class TdsChannel implements AutoCloseable {
     public void sendAttention() throws IOException {
         // Closed again at once - see NsChannel.writeBreak: a shared arena is
         // not collected, and every cancel and timeout kept its buffer.
+        // Owed before it is written, not after: the server can answer before
+        // this write returns, and the thread reading that answer asks
+        // drainAttention whether anything is owed. Counted afterwards it was
+        // told nothing, returned as if the statement had run to the end, and
+        // left the acknowledgement for the next statement to trip over.
+        attentionsPending.incrementAndGet();
+        boolean sent = false;
         try (WireBuffer attention = new WireBuffer(Tds.HEADER_SIZE)) {
             attention.putZeroes(Tds.HEADER_SIZE);
             attention.putByteAt(0, (byte) Tds.TYPE_ATTENTION);
@@ -462,8 +469,14 @@ public final class TdsChannel implements AutoCloseable {
             ByteBuffer view = attention.view();
             view.clear().position(0).limit(Tds.HEADER_SIZE);
             write(view);
+            sent = true;
+        } finally {
+            if (!sent) {
+                // Nothing reached the server, so nothing will answer it. Not
+                // below zero: a drain may already have taken this one.
+                attentionsPending.updateAndGet(owed -> Math.max(0, owed - 1));
+            }
         }
-        attentionsPending.incrementAndGet();
     }
 
     /**
