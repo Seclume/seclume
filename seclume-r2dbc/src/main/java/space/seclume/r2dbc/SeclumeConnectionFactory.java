@@ -67,6 +67,24 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
     @Override
     public Mono<Connection> create() {
         return Mono.defer(() -> {
+            // A pool with a connection ready lends it without waiting for
+            // anything: taken on the subscriber's thread, it saves the hop to
+            // a virtual thread of its own - a carrier woken and parked again
+            // for a borrow that blocks on nothing. Measured as most of what
+            // a borrow cost beside r2dbc-pool's (R2dbcPoolBenchmark, JFR).
+            // Anything that could wait - no free connection, a reset not yet
+            // answered, a validation due - is the lane's, as before.
+            if (dialect != null && source instanceof space.seclume.ImmediateBorrow ready) {
+                java.sql.Connection jdbc;
+                try {
+                    jdbc = ready.getConnectionIfReady();
+                } catch (java.sql.SQLException | RuntimeException e) {
+                    return Mono.error(Errors.translate(e));
+                }
+                if (jdbc != null) {
+                    return Mono.just((Connection) new SeclumeConnection(jdbc, new Lane(), dialect));
+                }
+            }
             Lane lane = new Lane();
             return lane.call(() -> {
                 java.sql.Connection jdbc = source.getConnection();

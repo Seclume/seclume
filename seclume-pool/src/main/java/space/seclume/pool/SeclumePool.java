@@ -64,7 +64,7 @@ import space.seclume.secret.SecretWatch;
  * one again, and the slots nobody touches grow old and run into the idle
  * timeout - which is what lets the pool shrink under light load.
  */
-public final class SeclumePool implements DataSource, AutoCloseable {
+public final class SeclumePool implements DataSource, AutoCloseable, space.seclume.ImmediateBorrow {
 
     /**
      * The first park of a waiting thread before it looks again by itself; each
@@ -302,6 +302,46 @@ public final class SeclumePool implements DataSource, AutoCloseable {
                 PoolEvents.endWait(waiting, settings.getName(), borrowed.sum(), timedOut);
             }
         }
+        return lend(entry, now);
+    }
+
+    /**
+     * A connection, if one can be lent without waiting - see
+     * {@link space.seclume.ImmediateBorrow}. The rules are getConnection's:
+     * the reset is settled first, and only when its answer has arrived, so
+     * that settling is a read out of a buffer; lifetime and credential are
+     * checked; a connection idle past the validation window is not validated
+     * here - that is a round trip - but put back for an ordinary borrow.
+     */
+    @Override
+    public Connection getConnectionIfReady() throws SQLException {
+        if (closed) {
+            throw new SQLException("this pool is closed", "08003");
+        }
+        long now = System.nanoTime();
+        PoolEntry entry = claimIdle();
+        if (entry == null) {
+            return null;
+        }
+        boolean stale = settings.getValidationBypassWindow().isZero()
+                || entry.idleNanos(now) > settings.getValidationBypassWindow().toNanos();
+        boolean expired = (!settings.getMaxLifetime().isZero()
+                && entry.ageNanos(now) > settings.getMaxLifetime().toNanos())
+                || entry.credentialExpired(now);
+        if (!answered(entry) || stale || expired) {
+            park(entry);
+            return null;
+        }
+        if (!settle(entry)) {
+            // The reset was refused: the session is not lent, whatever else.
+            retire(entry);
+            return null;
+        }
+        return lend(entry, now);
+    }
+
+    /** Hands out a connection taken for this borrow - the tail of every borrow. */
+    private Connection lend(PoolEntry entry, long now) throws SQLException {
         entry.setQuietly(PoolEntry.State.IN_USE);
         boolean withContext = settings.getSessionContext() != null && applySessionContext(entry);
         boolean watched = !settings.getLeakDetectionThreshold().isZero();
