@@ -3,6 +3,8 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
 ## [0.14.0] - 2026-11-18
 
 ### Upgrading: what changes behaviour
