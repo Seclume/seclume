@@ -3,7 +3,7 @@
   <parent>
     <artifactId>seclume-parent</artifactId>
     <groupId>space.seclume</groupId>
-    <version>0.14.0-SNAPSHOT</version>
+    <version>0.14.0</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>seclume-bench</artifactId>
@@ -85,7 +85,7 @@
   </dependencies>
   <properties>
     <jmh.version>1.37</jmh.version>
-    <mongodb.version>5.13.0</mongodb.version>
+    <mongodb.version>5.14.0</mongodb.version>
     <maven.install.skip>true</maven.install.skip>
     <maven.deploy.skip>true</maven.deploy.skip>
   </properties>

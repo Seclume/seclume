@@ -464,7 +464,7 @@ dump of your application after login or rotation, use the composite action:
 ```yaml
 - uses: ./.github/actions/heapcheck
   with:
-    jar: seclume-heapcheck/target/seclume-heapcheck-0.13.1.jar
+    jar: seclume-heapcheck/target/seclume-heapcheck-0.14.0.jar
     dump: app.hprof
     secret-directory: /run/secrets/app   # optional with discover
     discover: 'true'                       # optional: credentials nobody named

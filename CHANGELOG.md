@@ -3,7 +3,7 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.14.0] - 2026-11-18
 
 - **R2DBC: one statement ahead of r2dbc-postgresql.** A connection's work (its "lane") ran on
   a virtual thread, which parks on the socket. The JDK's poller then waits for the answer
@@ -5698,6 +5698,7 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.14.0]: https://github.com/Seclume/seclume/releases/tag/v0.14.0
 [0.13.1]: https://github.com/Seclume/seclume/releases/tag/v0.13.1
 [0.13.0]: https://github.com/Seclume/seclume/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Seclume/seclume/releases/tag/v0.12.0
