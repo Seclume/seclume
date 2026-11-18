@@ -3,7 +3,28 @@
 All notable changes to seclume are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.14.0] - 2026-11-18
+
+### Upgrading: what changes behaviour
+
+Each of these is described in full in its entry below.
+
+- **The password goes only to a server whose certificate was checked.** PostgreSQL's
+  `password` (and `ldap`, `pam`, `radius`) and MySQL's cleartext paths are refused with
+  SQLSTATE 28000 under `tls=prefer` and `tls=require`. Use `tls=verify-full` (with
+  `tlsRootCert` for your own CA) or `tlsPin`; for MySQL, `allowCleartextOverUnverifiedTls=true`
+  keeps the old behaviour. A MySQL 8 user on `tls=prefer` otherwise fails the first login after
+  a server restart.
+- **SCRAM refuses fewer than 4096 iterations** (PostgreSQL, Kafka, MongoDB);
+  `-Dseclume.scram.minIterations` moves the floor.
+- **`PoolConfiguration` refuses every inline secret**, and **Quarkus refuses a datasource
+  password at start-up** as well as in the build (`QUARKUS_DATASOURCE_PASSWORD`, mounted config).
+- **`getInt`, `getShort` and `getByte` refuse a value that does not fit** (SQLSTATE 22003)
+  instead of cutting it.
+- **A JWT must be canonical base64url**, and a token with a `crit` header is refused.
+- **An OAuth client-credentials token is renewed within a day** at the latest.
+
+### Changes
 
 - **R2DBC: one statement ahead of r2dbc-postgresql.** A connection's work (its "lane") ran on
   a virtual thread, which parks on the socket. The JDK's poller then waits for the answer
@@ -5698,6 +5719,7 @@ GitHub Packages requires a token even to **read** a public package. That is a
 property of the registry, not of this project. A dependency that should simply
 resolve belongs on Maven Central, and that is where 1.0.0 will go.
 
+[0.14.0]: https://github.com/Seclume/seclume/releases/tag/v0.14.0
 [0.13.1]: https://github.com/Seclume/seclume/releases/tag/v0.13.1
 [0.13.0]: https://github.com/Seclume/seclume/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Seclume/seclume/releases/tag/v0.12.0

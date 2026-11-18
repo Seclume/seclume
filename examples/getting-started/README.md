@@ -25,12 +25,12 @@ The whole integration is two dependencies in [`pom.xml`](pom.xml):
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-spring-boot-starter</artifactId>
-  <version>0.13.1</version>
+  <version>0.14.0</version>
 </dependency>
 <dependency>
   <groupId>space.seclume</groupId>
   <artifactId>seclume-postgresql</artifactId>
-  <version>0.13.1</version>
+  <version>0.14.0</version>
 </dependency>
 ```
 
@@ -74,7 +74,7 @@ holds Vault's dev CA, which is public; `changeit` is its customary password, not
 
 ```sh
 curl -sLo seclume-heapcheck.jar \
-  https://repo1.maven.org/maven2/space/seclume/seclume-heapcheck/0.13.1/seclume-heapcheck-0.13.1.jar
+  https://repo1.maven.org/maven2/space/seclume/seclume-heapcheck/0.14.0/seclume-heapcheck-0.14.0.jar
 ./compare.sh seclume-heapcheck.jar
 ```
 
