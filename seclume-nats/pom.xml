@@ -21,7 +21,7 @@
   </description>
 
   <properties>
-    <jnats.version>2.26.4</jnats.version>
+    <jnats.version>2.27.0</jnats.version>
   </properties>
 
   <dependencies>
