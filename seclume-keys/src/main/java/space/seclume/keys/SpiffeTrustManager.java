@@ -41,8 +41,10 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
     /**
      * @param bundles the CAs for a trust domain - empty for one without a bundle
      * @param issuers every CA, for {@link #getAcceptedIssuers}
-     * @param peers   the SPIFFE IDs a peer may have; empty for any of the trust
-     *                domains that have a bundle
+     * @param peers   the SPIFFE IDs a peer may have; empty for any workload of
+     *                this workload's own trust domain - a federated one's only
+     *                when named here
+     * @param own     this workload's trust domain, from its current SVID
      */
     SpiffeTrustManager(Function<String, List<X509Certificate>> bundles,
             Supplier<List<X509Certificate>> issuers, Set<String> peers, Supplier<String> own) {

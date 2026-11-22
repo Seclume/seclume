@@ -260,7 +260,7 @@ public final class SeclumeKeys {
         }
         return new Spiffe(new Factory(keys),
                 new TrustFactory(new SpiffeTrustManager(keys::bundleFor, keys::allBundles,
-                        peers)));
+                        peers, keys::trustDomain)));
     }
 
     /** A {@code TrustManagerFactory} that hands out the one trust manager it was made with. */

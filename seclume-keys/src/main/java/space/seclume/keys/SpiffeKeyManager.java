@@ -254,6 +254,11 @@ final class SpiffeKeyManager extends RotatingKeyManager {
      * bundle for its own trust domain, a federated one's for another - none for
      * a domain it does not federate with.
      */
+    /** The trust domain of this workload's current SVID, or null before the first. */
+    String trustDomain() {
+        return trustDomain;
+    }
+
     List<X509Certificate> bundleFor(String domain) {
         if (domain.equals(trustDomain)) {
             return bundle;
