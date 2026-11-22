@@ -73,7 +73,12 @@ final class CredentialPlaceholders {
         for (String server : servers) {
             normal.add(normalize(server));
         }
-        String placeholder = PREFIX + NONCE + "-" + NEXT.incrementAndGet();
+        // Random each, not a shared nonce and a count: one placeholder seen in
+        // a log must not name every other one.
+        String placeholder;
+        do {
+            placeholder = PREFIX + HexFormat.of().formatHex(nonce16()); // seclume-allow: random, public
+        } while (PROVIDERS.containsKey(placeholder));
         PROVIDERS.put(placeholder, new Registration(provider, Set.copyOf(normal),
                 new AtomicReference<>()));
         return placeholder;
@@ -117,6 +122,12 @@ final class CredentialPlaceholders {
     /** Whether {@code c} can be part of a placeholder after its prefix. */
     static boolean placeholderChar(int c) {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-';
+    }
+
+    private static byte[] nonce16() {
+        byte[] bytes = new byte[16];
+        RANDOM.nextBytes(bytes);
+        return bytes;
     }
 
     private static byte[] nonce() {

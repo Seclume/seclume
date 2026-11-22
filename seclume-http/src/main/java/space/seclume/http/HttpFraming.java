@@ -316,8 +316,31 @@ final class HttpFraming {
     }
 
     /** One header line, secrets written in, into {@code out}. */
+    /**
+     * The header lines a credential is written into. Any other line - a
+     * correlation id, a referer, a cookie the application filled from what a
+     * user typed - goes as it is, placeholder and all.
+     */
+    static final java.util.Set<String> CREDENTIAL_HEADERS = java.util.Set.of(
+            "authorization", "proxy-authorization", "x-api-key", "api-key", "x-auth-token");
+
+    private static boolean credentialHeader(byte[] bytes, int from, int to) {
+        for (int i = from; i < to; i++) {
+            if (bytes[i] == ':') {
+                String name = new String(bytes, from, i - from, StandardCharsets.ISO_8859_1) // seclume-allow: a header's name
+                        .trim().toLowerCase(Locale.ROOT);
+                return CREDENTIAL_HEADERS.contains(name);
+            }
+        }
+        return false;
+    }
+
     private static void rewriteLine(byte[] bytes, int from, int to, Room out, String server)
             throws IOException {
+        if (!credentialHeader(bytes, from, to)) {
+            out.put(bytes, from, to - from);
+            return;
+        }
         int basic = basicValue(bytes, from, to);
         if (basic >= 0) {
             int valueEnd = to;
