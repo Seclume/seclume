@@ -88,6 +88,20 @@ abstract class TemporaryCredentials {
                    SecretScope token) {
     }
 
+    TemporaryCredentials() {
+        // Before a checkpoint (CRaC, SnapStart): the secret key and the token
+        // must not be in the image. The next request fetches a fresh set.
+        space.seclume.internal.Checkpoint.register(this, TemporaryCredentials::forget);
+    }
+
+    /** Wipes every generation; a request signed with one of them fails rather than leaks. */
+    private synchronized void forget() {
+        while (!generations.isEmpty()) {
+            generations.removeFirst().close();
+        }
+        askAgain = Instant.MIN;
+    }
+
     /** Fetches a fresh set; the caller owns the scopes. */
     abstract Fetched fetch();
 
