@@ -12,6 +12,7 @@ import space.seclume.internal.SocketTransport;
 import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
+import space.seclume.internal.jdbc.Deadline;
 import space.seclume.internal.jdbc.TlsStack;
 import space.seclume.secret.SecretScope;
 
@@ -60,6 +61,13 @@ final class MailWire implements AutoCloseable {
     private final java.util.List<SecretScope> guarded = new java.util.ArrayList<>();
     /** Where a line is held while it is searched. */
     private SecretScope held;
+    /**
+     * The time the whole login has - greeting, STARTTLS, handshake, login - or
+     * {@link Deadline#NONE}. The read timeout is per read: a server that sends
+     * a byte just before each one ran out held the login for good.
+     */
+    private Deadline login = Deadline.NONE;
+    private int loginSeconds;
 
     private MailWire(MailSettings settings, SocketTransport transport) {
         this.settings = settings;
@@ -72,6 +80,8 @@ final class MailWire implements AutoCloseable {
                 settings.connectTimeout);
         MailWire wire = new MailWire(settings, transport);
         try {
+            wire.loginSeconds = loginBudget(settings.timeout);
+            wire.login = Deadline.of(wire.loginSeconds, transport::close);
             transport.networkTimeout(settings.timeout);
             if (settings.implicitTls) {
                 wire.encrypt();
@@ -81,6 +91,41 @@ final class MailWire implements AutoCloseable {
             wire.close();
             throw e;
         }
+    }
+
+    /**
+     * The seconds a login has: {@code seclume.loginBudgetFactor} (3) times the
+     * read timeout, at least one; none when reads wait for ever.
+     */
+    static int loginBudget(int timeoutMillis) {
+        if (timeoutMillis <= 0) {
+            return 0;
+        }
+        long factor = Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1, (timeoutMillis * factor + 999) / 1000));
+    }
+
+    /** The login is over: its deadline no longer applies. */
+    void loggedIn() {
+        login.close();
+        login = Deadline.NONE;
+    }
+
+    /** Whether the login ran out of time - and the connection was closed for it. */
+    boolean loginExpired() {
+        return login.expired();
+    }
+
+    /** What a read that failed because the login ran out of time says. */
+    IOException overdue(IOException cause) {
+        if (!login.expired()) {
+            return cause;
+        }
+        MailException late = new MailException(-1, settings.host + " did not finish the login "
+                + "within " + loginSeconds + " s (" + Integer.getInteger("seclume.loginBudgetFactor", 3)
+                + " times timeout=" + settings.timeout + " ms)");
+        late.initCause(cause);
+        return late;
     }
 
     /**
@@ -98,6 +143,14 @@ final class MailWire implements AutoCloseable {
     }
 
     private void encrypt() throws IOException {
+        try {
+            encryptNow();
+        } catch (IOException e) {
+            throw overdue(e);
+        }
+    }
+
+    private void encryptNow() throws IOException {
         try {
             tls = TrustChoice.using(settings.trust, () -> {
                 try {
@@ -264,10 +317,15 @@ final class MailWire implements AutoCloseable {
 
     private void fill() throws IOException {
         incoming.clear();
-        int n = tls != null ? tls.read(incoming) : transport.read(incoming);
+        int n;
+        try {
+            n = tls != null ? tls.read(incoming) : transport.read(incoming);
+        } catch (IOException e) {
+            throw overdue(e);
+        }
         incoming.flip();
         if (n < 0) {
-            throw new MailException(-1, settings.host + " closed the connection");
+            throw overdue(new MailException(-1, settings.host + " closed the connection"));
         }
     }
 
@@ -286,6 +344,7 @@ final class MailWire implements AutoCloseable {
             return;
         }
         open = false;
+        login.close();
         unguard();
         if (tls != null) {
             try {

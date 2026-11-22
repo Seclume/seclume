@@ -44,6 +44,7 @@ final class ImapLogin {
             ImapLogin login = new ImapLogin(wire);
             MailEvents.login("imap", settings, login::login);
             wire.unguard();
+            wire.loggedIn();
             return wire;
         } catch (IOException | RuntimeException e) {
             wire.close();

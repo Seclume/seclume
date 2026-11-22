@@ -28,6 +28,10 @@ All notable changes to seclume are recorded here. Versions follow
   checked without `--in-target`, wrote its dump into its own `/tmp`, where it stayed when the
   check failed to find it. That is refused before the dump now; with `--dump-dir`, a dump the
   process wrote out of this check's sight is deleted through `/proc/<pid>/root`.
+- **Mail and LDAP logins have a time limit as a whole.** The read timeout was per read: a server
+  that sent a byte just before each read ran out - or anyone on the path before STARTTLS - held
+  an SMTP, IMAP or POP3 login, and JNDI's connect through StartTLS and the handshake, for good.
+  Each now has `seclume.loginBudgetFactor` (3) times the read timeout; `timeout=0` still waits.
 
 ## [0.14.0] - 2026-11-18
 

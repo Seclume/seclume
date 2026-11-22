@@ -25,6 +25,7 @@ import space.seclume.internal.SocketTransport;
 import space.seclume.internal.TlsLayer;
 import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
+import space.seclume.internal.jdbc.Deadline;
 import space.seclume.internal.jdbc.TlsStack;
 import space.seclume.secret.SecretScope;
 
@@ -106,8 +107,13 @@ final class LdapSocket extends Socket {
         }
         SocketTransport opened = SocketTransport.connect(found.host, found.port,
                 connectTimeout > 0 ? connectTimeout : found.connectTimeout);
+        // StartTLS and the handshake as a whole, not read by read: a server that
+        // sends a byte just before each read times out held JNDI's connect for good.
+        int readTimeout = timeout > 0 ? timeout : found.timeout;
+        int budget = budgetSeconds(readTimeout);
+        Deadline handshake = Deadline.of(budget, opened::close);
         try {
-            opened.networkTimeout(timeout > 0 ? timeout : found.timeout);
+            opened.networkTimeout(readTimeout);
             if (found.startTls) {
                 startTls(opened, found);
             }
@@ -125,11 +131,41 @@ final class LdapSocket extends Socket {
             transport = opened;
         } catch (SQLException e) {
             opened.close();
-            throw e.getCause() instanceof IOException io ? io : new IOException(e.getMessage(), e);
-        } catch (IOException | RuntimeException e) {
+            throw late(handshake, budget, found,
+                    e.getCause() instanceof IOException io ? io : new IOException(e.getMessage(), e));
+        } catch (IOException e) {
+            opened.close();
+            throw late(handshake, budget, found, e);
+        } catch (RuntimeException e) {
             opened.close();
             throw e;
+        } finally {
+            handshake.close();
         }
+    }
+
+    /**
+     * The seconds StartTLS and the handshake - or a Kerberos bind - have:
+     * {@code seclume.loginBudgetFactor} (3) times the read timeout, at least one;
+     * none when reads wait for ever.
+     */
+    static int budgetSeconds(int timeoutMillis) {
+        if (timeoutMillis <= 0) {
+            return 0;
+        }
+        long factor = Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1, (timeoutMillis * factor + 999) / 1000));
+    }
+
+    private static IOException late(Deadline deadline, int budget, LdapSettings server,
+            IOException cause) {
+        if (!deadline.expired()) {
+            return cause;
+        }
+        java.net.SocketTimeoutException late = new java.net.SocketTimeoutException("the LDAP "
+                + "server at " + server.authority() + " did not finish within " + budget + " s");
+        late.initCause(cause);
+        return late;
     }
 
     /**
@@ -439,7 +475,9 @@ final class LdapSocket extends Socket {
                 : target.host + ":" + target.port, "kerberos-bind");
         TlsLayer channel = open();
         ParsedResult lastResult;
-        try (Gssapi.Context gss = registered.gssSupplier.get()) {
+        int budget = budgetSeconds(timeout > 0 ? timeout : registered.timeout);
+        try (Deadline bound = Deadline.of(budget, this::close);
+             Gssapi.Context gss = registered.gssSupplier.get()) {
             byte[] clientStep = gss.step(null, 0, 0);
             writeSaslBindRequest(channel, msgIdBytes, clientStep);
             lastResult = readBindResponse(channel, registered);

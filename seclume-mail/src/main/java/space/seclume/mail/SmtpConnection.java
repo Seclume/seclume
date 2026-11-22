@@ -76,6 +76,7 @@ public final class SmtpConnection implements AutoCloseable {
                 MailEvents.login("smtp", settings, connection::login);
                 connection.wire.unguard();
             }
+            connection.wire.loggedIn();
             return connection;
         } catch (IOException | RuntimeException e) {
             connection.abandon();
