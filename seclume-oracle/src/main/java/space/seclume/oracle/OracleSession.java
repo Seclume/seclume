@@ -79,6 +79,20 @@ public final class OracleSession implements AutoCloseable {
                            boolean legacyVerifier11g) {
 
         /**
+         * Host and service go into the (DESCRIPTION=...) as they are: a
+         * parenthesis or an equals sign in either would add entries of its own.
+         */
+        public Settings {
+            if (service != null && !service.matches("[A-Za-z0-9_.$#\\-]+")) {
+                throw new IllegalArgumentException("a service name is letters, digits and "
+                        + "_ . $ # - only, not '" + service + "'");
+            }
+            if (host != null && !host.matches("[A-Za-z0-9._\\-:\\[\\]]+")) {
+                throw new IllegalArgumentException("not a host name: '" + host + "'");
+            }
+        }
+
+        /**
          * Without the 11g verifier - the default: an account that has only
          * the 11g verifier is refused, and says how to allow it.
          */

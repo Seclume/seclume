@@ -450,8 +450,13 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
     protected long longAt(int column) throws SQLException {
         OracleColumn description = block.column(column);
         if (description.type() == OracleColumn.TYPE_NUMBER) {
-            return OracleNumber.toLong(block.data().segment(), block.offset(column),
-                    block.length(column));
+            try {
+                return OracleNumber.toLong(block.data().segment(), block.offset(column),
+                        block.length(column));
+            } catch (ArithmeticException tooLarge) {
+                throw new java.sql.SQLDataException("column " + (column + 1)
+                        + " does not fit into a long", "22003", tooLarge);
+            }
         }
         if (OracleFloat.isBinaryFloat(description.type())) {
             return (long) OracleFloat.toDouble(block.data().segment(), block.offset(column),

@@ -261,11 +261,16 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
         if (service == null || service.isBlank()) {
             throw new SQLException("no service configured - Oracle connects to a service");
         }
-        OracleSession.Settings settings = new OracleSession.Settings(host, port, service,
-                user, provider, connectTimeoutMillis,
-                hosts != null ? hosts : HostList.of(host, port),
-                ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
-                resolvedIdentity(), nativeEncryption, legacyVerifier11g);
+        OracleSession.Settings settings;
+        try {
+            settings = new OracleSession.Settings(host, port, service,
+                    user, provider, connectTimeoutMillis,
+                    hosts != null ? hosts : HostList.of(host, port),
+                    ResultLimit.of(maxResultBytes, maxResultRows), tls, tlsStack,
+                    resolvedIdentity(), nativeEncryption, legacyVerifier11g);
+        } catch (IllegalArgumentException e) {
+            throw new SQLException(e.getMessage(), "08001", e);
+        }
         return new OraConnection(space.seclume.internal.TrustChoice.using(trust,
                 () -> space.seclume.internal.Transports.using(transport,
                         () -> OracleSession.open(settings))),

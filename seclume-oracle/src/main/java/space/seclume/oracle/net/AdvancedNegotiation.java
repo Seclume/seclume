@@ -76,6 +76,11 @@ public final class AdvancedNegotiation {
     private static final int INTEGRITY = 3;
     private static final int FIELD_STRING = 0;
     private static final int FIELD_BYTES = 1;
+    /** The Diffie-Hellman groups taken: 1024 to 4096 bits. */
+    private static final int MIN_GROUP_BYTES = 128;
+    private static final int MAX_GROUP_BYTES = 512;
+    /** A 256-bit private exponent - enough for a 128-bit level, and 8 to 16 times cheaper. */
+    private static final int EXPONENT_BYTES = 32;
     private static final int FIELD_UB1 = 2;
     private static final int FIELD_UB2 = 3;
     private static final int FIELD_UB4 = 4;
@@ -257,6 +262,14 @@ public final class AdvancedNegotiation {
             space.seclume.internal.Gssapi.Context ntlm = null;
             try {
                 int length = encrypted ? (int) prime.byteSize() : 0;
+                if (encrypted && (length < MIN_GROUP_BYTES || length > MAX_GROUP_BYTES)) {
+                    // The group is the server's to choose, and so was the cost:
+                    // the exponent was as long as the prime, and a 65535-byte
+                    // prime meant years of CPU in connect, before any login.
+                    throw new IOException("the server's Diffie-Hellman group has " + length * 8
+                            + " bits; " + MIN_GROUP_BYTES * 8 + " to " + MAX_GROUP_BYTES * 8
+                            + " are accepted");
+                }
                 if (encrypted && serverPublic.byteSize() != length) {
                     throw new IOException("the server's public value has "
                             + serverPublic.byteSize() + " bytes for a group of " + length);
@@ -274,7 +287,7 @@ public final class AdvancedNegotiation {
                     header(answer, size, (encrypted ? 1 : 0) + (loginChosen ? 1 : 0));
                     if (encrypted) {
                         dh = DiffieHellman.generate(prime, 0, length, generator, 0,
-                                (int) generator.byteSize(), length);
+                                (int) generator.byteSize(), EXPONENT_BYTES);
                         MemorySegment own = arena.allocate(length);
                         dh.publicValue(own, 0);
                         serviceHeader(answer, INTEGRITY, 1);

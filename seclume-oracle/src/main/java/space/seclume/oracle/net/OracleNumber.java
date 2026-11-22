@@ -233,25 +233,39 @@ public final class OracleNumber {
         }
         boolean positive = (byteAt(in, at) & 0x80) != 0;
         int exponent = exponentOf(in, at);
-        long value = 0;
+        // Accumulated as a negative number, which reaches Long.MIN_VALUE, and
+        // checked at every digit: ten base-100 digits wrapped round silently -
+        // 18446744073709551621 came back as 5 - and a check on the positive
+        // side refused Long.MIN_VALUE, which fits.
+        long negative = 0;
         int used = 0;
         for (int i = 1; i < length && used <= exponent; i++) {
             int b = byteAt(in, at + i);
             if (!positive && b == NEGATIVE_TERMINATOR) {
                 break;
             }
-            value = value * BASE + digitOf(b, positive);
+            int digit = digitOf(b, positive);
+            if (negative < (Long.MIN_VALUE + digit) / BASE) {
+                throw new ArithmeticException("the number does not fit into a long");
+            }
+            negative = negative * BASE - digit;
             used++;
         }
         // Trailing zero digits are not sent: 100 is one digit with an exponent
         // of one, so the missing places have to be multiplied back in.
         for (int i = used; i <= exponent; i++) {
-            if (value > Long.MAX_VALUE / BASE) {
+            if (negative < Long.MIN_VALUE / BASE) {
                 throw new ArithmeticException("the number does not fit into a long");
             }
-            value *= BASE;
+            negative *= BASE;
         }
-        return positive ? value : -value;
+        if (!positive) {
+            return negative;
+        }
+        if (negative == Long.MIN_VALUE) {
+            throw new ArithmeticException("the number does not fit into a long");
+        }
+        return -negative;
     }
 
     /**
