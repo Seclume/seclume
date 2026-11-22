@@ -35,6 +35,8 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
     private final Function<String, List<X509Certificate>> bundles;
     private final Supplier<List<X509Certificate>> issuers;
     private final Set<String> peers;
+    /** The workload's own trust domain: without peer-ids, the only one trusted. */
+    private final Supplier<String> own;
 
     /**
      * @param bundles the CAs for a trust domain - empty for one without a bundle
@@ -43,7 +45,8 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
      *                domains that have a bundle
      */
     SpiffeTrustManager(Function<String, List<X509Certificate>> bundles,
-            Supplier<List<X509Certificate>> issuers, Set<String> peers) {
+            Supplier<List<X509Certificate>> issuers, Set<String> peers, Supplier<String> own) {
+        this.own = own;
         this.bundles = bundles;
         this.issuers = issuers;
         this.peers = Set.copyOf(peers);
@@ -62,6 +65,12 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
         } catch (IllegalArgumentException e) {
             throw new CertificateException("the peer's SPIFFE ID is malformed: "
                     + e.getMessage(), e);
+        }
+        if (peers.isEmpty() && !domain.equals(own.get())) {
+            // A federated domain's workloads are trusted for what they are named
+            // for, not for anything: without peer-ids only this workload's own.
+            throw new CertificateException("the peer is of the federated trust domain " + domain
+                    + "; name it in peer-ids to accept it");
         }
         List<X509Certificate> anchors = bundles.apply(domain);
         if (anchors.isEmpty()) {
