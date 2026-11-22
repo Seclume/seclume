@@ -457,7 +457,54 @@ public final class SecretMasker implements AutoCloseable {
         if (text == null || now.isEmpty() || closed) {
             return text;
         }
-        int size = text.length();
+        List<int[]> hits = scan(scanned, text.length(), text::charAt, null, null);
+        // The secret as encoders write it is more than the forms above: an
+        // encoder that percent-encodes only what its part of a URL does not
+        // allow (java.net.URI, Spring's, OkHttp's: p@ss%20word), or a JSON
+        // writer that escapes = ' < > & as backslash-u-003d (Gson's default). So the line
+        // is also read decoded - percent-decoded, with and without + for a
+        // blank, and JSON-unescaped - in native memory, and a secret found
+        // there is masked where its encoded form stands in the line.
+        if (text.indexOf('%') >= 0 || text.indexOf('+') >= 0) {
+            hits = viewed(scanned, text, View.PERCENT, hits);
+            hits = viewed(scanned, text, View.FORM, hits);
+        }
+        if (text.indexOf('\\') >= 0) {
+            hits = viewed(scanned, text, View.JSON, hits);
+        }
+        if (hits == null) {
+            return text;
+        }
+        hits.sort(Comparator.comparingInt(hit -> hit[0]));
+        StringBuilder masked = new StringBuilder(text.length());
+        int at = 0;
+        for (int[] hit : hits) {
+            if (hit[1] <= at) {
+                continue;                          // inside what was masked already
+            }
+            if (hit[0] < at) {
+                at = hit[1];                       // overlaps: the mask goes on to its end
+                continue;
+            }
+            masked.append(text, at, hit[0]).append("[redacted:").append(now.get(hit[2]).label())
+                    .append(']');
+            at = hit[1];
+        }
+        return masked.append(text, at, text.length()).toString();
+    }
+
+    /** A character of a text or of a view of it. */
+    @FunctionalInterface
+    private interface Chars {
+        char at(int i);
+    }
+
+    /**
+     * Where the forms are in {@code size} characters: {start, end, form}, in the
+     * text's own positions - through {@code from} and {@code to} for a view.
+     */
+    private List<int[]> scan(Index scanned, int size, Chars chars, int[] from, int[] to) {
+        List<Form> now = scanned.forms();
         long base = scanned.base();
         List<int[]> hits = null;
         for (int l = 0; l < scanned.lengths().length; l++) {
@@ -466,18 +513,18 @@ public final class SecretMasker implements AutoCloseable {
                 continue;
             }
             long power = scanned.powers()[l];
-            int from = scanned.first()[l];
-            int to = scanned.first()[l + 1];
+            int first = scanned.first()[l];
+            int last = scanned.first()[l + 1];
             long rolling = 0;
             for (int i = 0; i < length; i++) {
-                rolling = rolling * base + text.charAt(i);
+                rolling = rolling * base + chars.at(i);
             }
             for (int start = 0; ; start++) {
-                for (int f = from; f < to; f++) {
+                for (int f = first; f < last; f++) {
                     Form form = now.get(f);
                     if (form.fingerprint() == rolling
                             && (hits == null || !covered(hits, start, start + length))
-                            && confirmed(text, start, form)) {
+                            && confirmed(chars, start, form)) {
                         if (hits == null) {
                             hits = new ArrayList<>();
                         }
@@ -487,25 +534,166 @@ public final class SecretMasker implements AutoCloseable {
                 if (start + length >= size) {
                     break;
                 }
-                rolling = (rolling - text.charAt(start) * power) * base
-                        + text.charAt(start + length);
+                rolling = (rolling - chars.at(start) * power) * base + chars.at(start + length);
             }
         }
-        if (hits == null) {
-            return text;
+        if (hits != null && from != null) {
+            for (int[] hit : hits) {
+                int end = to[hit[1] - 1];
+                hit[0] = from[hit[0]];
+                hit[1] = end;
+            }
         }
-        hits.sort(Comparator.comparingInt(hit -> hit[0]));
-        StringBuilder masked = new StringBuilder(text.length());
+        return hits;
+    }
+
+    /** How a line is read decoded. */
+    private enum View { PERCENT, FORM, JSON }
+
+    /** {@code hits} and those found in {@code text} read as {@code view}. */
+    private List<int[]> viewed(Index scanned, String text, View view, List<int[]> hits) {
+        int size = text.length();
+        int[] from = new int[size];
+        int[] to = new int[size];
+        try (SecretScope decoded = SecretScope.allocate(Math.max(2, size * 2));
+             SecretScope bytes = SecretScope.allocate(Math.max(1, size))) {
+            MemorySegment out = decoded.segment();
+            int count = view == View.JSON ? unescaped(text, out, from, to)
+                    : percentDecoded(text, view == View.FORM, out, bytes.segment(), from, to);
+            if (count < 0) {
+                return hits;                          // nothing decoded: the text itself
+            }
+            List<int[]> found = scan(scanned, count,
+                    i -> out.get(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * i), from, to);
+            if (found == null) {
+                return hits;
+            }
+            if (hits == null) {
+                return found;
+            }
+            hits.addAll(found);
+            return hits;
+        }
+    }
+
+    /**
+     * {@code text} percent-decoded into {@code out} as UTF-16 - UTF-8 runs of
+     * {@code %XX} as their characters, and with {@code form} a {@code +} as a
+     * blank - its length, or -1 where nothing was decoded. {@code from} and
+     * {@code to} get where each character's encoding begins and ends.
+     */
+    static int percentDecoded(String text, boolean form, MemorySegment out, MemorySegment bytes,
+            int[] from, int[] to) {
         int at = 0;
-        for (int[] hit : hits) {
-            if (hit[0] < at) {
+        boolean changed = false;
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (c == '%' && hexAt(text, i)) {
+                int start = i;
+                int n = 0;
+                int[] ends = new int[text.length()];
+                while (i < text.length() && text.charAt(i) == '%' && hexAt(text, i)) {
+                    bytes.set(ValueLayout.JAVA_BYTE, n, (byte) Integer.parseInt(text, i + 1, i + 3, 16));
+                    i += 3;
+                    ends[n++] = i;
+                }
+                // The run as UTF-8, a character at a time; a byte that is not
+                // part of a whole sequence stands for itself.
+                int k = 0;
+                while (k < n) {
+                    int b = bytes.get(ValueLayout.JAVA_BYTE, k) & 0xff;
+                    int length = b < 0x80 ? 1 : (b & 0xe0) == 0xc0 ? 2 : (b & 0xf0) == 0xe0 ? 3
+                            : (b & 0xf8) == 0xf0 ? 4 : 1;
+                    if (k + length > n) {
+                        length = 1;
+                    }
+                    int units = length == 1 ? 1 : utf16Units(bytes.asSlice(k, length), length);
+                    if (units < 0) {
+                        length = 1;
+                        units = 1;
+                    }
+                    int begin = k == 0 ? start : ends[k - 1];
+                    if (length == 1) {
+                        out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, (char) b);
+                    } else {
+                        utf16(bytes.asSlice(k, length), length, out.asSlice(2L * at, 2L * units));
+                    }
+                    for (int u = 0; u < units; u++) {
+                        from[at + u] = begin;
+                        to[at + u] = ends[k + length - 1];
+                    }
+                    at += units;
+                    k += length;
+                }
+                changed = true;
                 continue;
             }
-            masked.append(text, at, hit[0]).append("[redacted:").append(now.get(hit[2]).label())
-                    .append(']');
-            at = hit[1];
+            char put = form && c == '+' ? ' ' : c;
+            changed |= put != c;
+            out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, put);
+            from[at] = i;
+            to[at] = i + 1;
+            at++;
+            i++;
         }
-        return masked.append(text, at, text.length()).toString();
+        return changed ? at : -1;
+    }
+
+    private static boolean hexAt(String text, int percent) {
+        return percent + 2 < text.length() && Character.digit(text.charAt(percent + 1), 16) >= 0
+                && Character.digit(text.charAt(percent + 2), 16) >= 0;
+    }
+
+    /**
+     * {@code text} with JSON's escapes read - a backslash, u and four hex digits, and the short ones -
+     * into {@code out}, its length, or -1 where there were none.
+     */
+    static int unescaped(String text, MemorySegment out, int[] from, int[] to) {
+        int at = 0;
+        boolean changed = false;
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            int next = i + 1;
+            if (c == '\\' && i + 1 < text.length()) {
+                char e = text.charAt(i + 1);
+                char decoded = switch (e) {
+                    case '"', '\\', '/' -> e;
+                    case 'n' -> '\n';
+                    case 'r' -> '\r';
+                    case 't' -> '\t';
+                    case 'b' -> '\b';
+                    case 'f' -> '\f';
+                    default -> 0;
+                };
+                if (e == 'u' && i + 6 <= text.length()
+                        && isHex(text, i + 2, i + 6)) {
+                    c = (char) Integer.parseInt(text, i + 2, i + 6, 16);
+                    next = i + 6;
+                    changed = true;
+                } else if (decoded != 0) {
+                    c = decoded;
+                    next = i + 2;
+                    changed = true;
+                }
+            }
+            out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, c);
+            from[at] = i;
+            to[at] = next;
+            at++;
+            i = next;
+        }
+        return changed ? at : -1;
+    }
+
+    private static boolean isHex(String text, int start, int end) {
+        for (int i = start; i < end; i++) {
+            if (Character.digit(text.charAt(i), 16) < 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean covered(List<int[]> hits, int start, int end) {
@@ -518,11 +706,11 @@ public final class SecretMasker implements AutoCloseable {
     }
 
     /** Whether the window's tag is the form's - the window copied to native memory and wiped. */
-    private boolean confirmed(String text, int start, Form form) {
+    private boolean confirmed(Chars text, int start, Form form) {
         try (SecretScope window = SecretScope.allocate(form.length() * 2)) {
             for (int i = 0; i < form.length(); i++) {
                 window.segment().set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * i,
-                        text.charAt(start + i));
+                        text.at(start + i));
             }
             byte[] tag = tag(window.segment(), form.length());
             int difference = 0;

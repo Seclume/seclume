@@ -63,6 +63,13 @@ All notable changes to seclume are recorded here. Versions follow
   now as the syntax around them says - `;` at the top level, `,` and `)` inside parentheses -
   and both readings of a `//` in quotes are hidden. Redacted URLs are what refusals,
   `seclume-verify --migrate` and the logs print.
+- **The log masker finds a secret however an encoder wrote it.** It looked for a secret
+  percent-encoded only as RFC 3986 strictly or as `URLEncoder` encode it, and JSON-escaped only
+  as `\"` and `\\`. But most URL builders encode only what their part of a URL does not allow -
+  `java.net.URI`, Spring, OkHttp: `p@ss%20word` - and Gson escapes `= ' < > &` as backslash-u
+  sequences by default: with a special character in it, about half of the passwords written so
+  went to the log unmasked. A line with `%`, `+` or a backslash is now also read decoded, in
+  native memory, and a secret found there is masked where it stands.
 
 ## [0.14.0] - 2026-11-18
 
