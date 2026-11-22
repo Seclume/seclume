@@ -70,6 +70,10 @@ All notable changes to seclume are recorded here. Versions follow
   sequences by default: with a special character in it, about half of the passwords written so
   went to the log unmasked. A line with `%`, `+` or a backslash is now also read decoded, in
   native memory, and a secret found there is masked where it stands.
+- **PostgreSQL: a `?` in an escape string is text.** `E'it\'s ?'` was read as a plain literal
+  that ended at the escaped quote, so the `?` in it became `$1` and a real `?` after it stayed as
+  it was - an unterminated literal, or a statement the server refused. Values are bound on the
+  server, so no value ever went into the text.
 
 ## [0.14.0] - 2026-11-18
 
