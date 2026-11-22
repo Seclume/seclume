@@ -74,6 +74,15 @@ All notable changes to seclume are recorded here. Versions follow
   that ended at the escaped quote, so the `?` in it became `$1` and a real `?` after it stayed as
   it was - an unterminated literal, or a statement the server refused. Values are bound on the
   server, so no value ever went into the text.
+- **A heap dump's redaction, and heapcheck, find a secret in the forms an application leaves it
+  in.** A named secret was looked for as itself, UTF-16, Latin-1 and its own Base64. In an
+  `Authorization: Basic` header its Base64 starts at whatever offset the user name leaves - for
+  `svc:` or `abcd:` nothing like the password's own - and URL-safe Base64, percent-encoded and
+  JSON-escaped copies were not looked for either: the redacted copy kept them, its own check
+  passed, and `heapcheck` said NOT FOUND for a process holding a password in a header only. The
+  same for the application's own secrets behind `/actuator/heapdump`. One list of encodings
+  (`SecretEncodings`) now serves the search, the check after a redaction, the native patterns of
+  the application's secrets and the TCK's heap scanner.
 
 ## [0.14.0] - 2026-11-18
 

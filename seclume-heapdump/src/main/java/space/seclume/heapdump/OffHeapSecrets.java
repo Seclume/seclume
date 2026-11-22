@@ -77,6 +77,13 @@ public interface OffHeapSecrets {
         if (latin1 != null) {
             patterns.add(new Pattern("ISO-8859-1", latin1, Redactor.Fill.ASCII));
         }
+        embedded(utf8, allocator, patterns);
+        for (boolean form : new boolean[] {false, true}) {
+            for (boolean lower : new boolean[] {false, true}) {
+                add(patterns, "percent-encoded", Native.percent(utf8, form, lower, allocator));
+            }
+        }
+        add(patterns, "JSON-escaped", Native.json(utf8, allocator));
         return new Needle(label, patterns);
     }
 
@@ -85,8 +92,37 @@ public interface OffHeapSecrets {
         if (secret.byteSize() == 0) {
             throw new IllegalArgumentException("an empty secret matches everywhere");
         }
-        return new Needle(label, List.of(new Pattern("bytes", secret, Redactor.Fill.ZERO),
+        List<Pattern> patterns = new ArrayList<>(List.of(new Pattern("bytes", secret, Redactor.Fill.ZERO),
                 new Pattern("Base64", Native.base64(secret, allocator), Redactor.Fill.ASCII)));
+        embedded(secret, allocator, patterns);
+        return new Needle(label, patterns);
+    }
+
+    /**
+     * Its Base64 inside a longer Base64 text - {@code Basic base64(user:password)}
+     * - at each of the three places a byte can start, standard and URL-safe: the
+     * stretch made of the secret's bytes alone, when it is long enough not to be
+     * found anywhere by chance (see {@link space.seclume.tck.SecretEncodings}).
+     */
+    private static void embedded(MemorySegment data, SegmentAllocator allocator, List<Pattern> patterns) {
+        for (int offset = 0; offset < 3; offset++) {
+            for (boolean urlSafe : new boolean[] {false, true}) {
+                add(patterns, "Base64 inside", Native.base64Inside(data, offset, urlSafe, allocator));
+            }
+        }
+    }
+
+    /** {@code bytes} as one more pattern, filled as ASCII - unless null or one there is already. */
+    private static void add(List<Pattern> patterns, String encoding, MemorySegment bytes) {
+        if (bytes == null) {
+            return;
+        }
+        for (Pattern known : patterns) {
+            if (known.bytes().byteSize() == bytes.byteSize() && known.bytes().mismatch(bytes) < 0) {
+                return;
+            }
+        }
+        patterns.add(new Pattern(encoding, bytes, Redactor.Fill.ASCII));
     }
 
     /** Encodings computed in native memory, byte by byte, with nothing on the heap. */
@@ -189,6 +225,116 @@ public interface OffHeapSecrets {
             out.set(ValueLayout.JAVA_BYTE, at, (byte) (bigEndian ? unit >>> 8 : unit));
             out.set(ValueLayout.JAVA_BYTE, at + 1, (byte) (bigEndian ? unit : unit >>> 8));
             return at + 2;
+        }
+
+        /**
+         * The Base64 of {@code data} where it starts {@code offset} bytes into a
+         * group: the characters that depend on its bytes alone, or null when
+         * there are fewer than {@link space.seclume.tck.SecretEncodings}'s eight.
+         */
+        static MemorySegment base64Inside(MemorySegment data, int offset, boolean urlSafe,
+                SegmentAllocator allocator) {
+            long n = data.byteSize();
+            long from = (offset + 2) / 3 * 4;
+            long to = (offset + n) / 3 * 4;
+            if (to - from < 8) {
+                return null;
+            }
+            MemorySegment shifted = allocator.allocate(offset + n);
+            MemorySegment.copy(data, 0, shifted, offset, n);
+            MemorySegment whole = base64(shifted, allocator);
+            MemorySegment middle = allocator.allocate(to - from);
+            MemorySegment.copy(whole, from, middle, 0, to - from);
+            if (urlSafe) {
+                for (long i = 0; i < middle.byteSize(); i++) {
+                    byte b = middle.get(ValueLayout.JAVA_BYTE, i);
+                    middle.set(ValueLayout.JAVA_BYTE, i, b == '+' ? (byte) '-' : b == '/' ? (byte) '_' : b);
+                }
+            }
+            shifted.fill((byte) 0);
+            whole.fill((byte) 0);
+            return middle;
+        }
+
+        /** RFC 3986's unreserved kept, or - {@code form} - {@code URLEncoder}'s way; null when it is the text itself. */
+        static MemorySegment percent(MemorySegment utf8, boolean form, boolean lower,
+                SegmentAllocator allocator) {
+            long n = utf8.byteSize();
+            MemorySegment out = allocator.allocate(n * 3);
+            long at = 0;
+            boolean changed = false;
+            for (long i = 0; i < n; i++) {
+                int b = utf8.get(ValueLayout.JAVA_BYTE, i) & 0xff;
+                boolean kept = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
+                        || b == '-' || b == '.' || b == '_' || (form ? b == '*' : b == '~');
+                if (kept) {
+                    out.set(ValueLayout.JAVA_BYTE, at++, (byte) b);
+                } else if (form && b == ' ') {
+                    out.set(ValueLayout.JAVA_BYTE, at++, (byte) '+');
+                    changed = true;
+                } else {
+                    out.set(ValueLayout.JAVA_BYTE, at++, (byte) '%');
+                    out.set(ValueLayout.JAVA_BYTE, at++, hex(b >>> 4, lower));
+                    out.set(ValueLayout.JAVA_BYTE, at++, hex(b & 0xf, lower));
+                    changed = true;
+                }
+            }
+            if (!changed || (lower && !hasLetterDigit(out, at))) {
+                out.fill((byte) 0);
+                return null;
+            }
+            return out.asSlice(0, at);
+        }
+
+        private static byte hex(int nibble, boolean lower) {
+            return (byte) (nibble < 10 ? '0' + nibble : (lower ? 'a' : 'A') + nibble - 10);
+        }
+
+        /** Whether a %XX in {@code out} has a letter among its digits - else lower case changes nothing. */
+        private static boolean hasLetterDigit(MemorySegment out, long length) {
+            for (long i = 0; i + 2 < length; i++) {
+                if (out.get(ValueLayout.JAVA_BYTE, i) == '%') {
+                    for (int k = 1; k <= 2; k++) {
+                        byte c = out.get(ValueLayout.JAVA_BYTE, i + k);
+                        if (c >= 'a' && c <= 'f') {
+                            return true;
+                        }
+                    }
+                    i += 2;
+                }
+            }
+            return false;
+        }
+
+        /** The text as a JSON string's content - " \ and line breaks escaped; null where it has none. */
+        static MemorySegment json(MemorySegment utf8, SegmentAllocator allocator) {
+            long n = utf8.byteSize();
+            MemorySegment out = allocator.allocate(n * 2);
+            long at = 0;
+            boolean changed = false;
+            for (long i = 0; i < n; i++) {
+                byte b = utf8.get(ValueLayout.JAVA_BYTE, i);
+                byte escape = switch (b) {
+                    case '"' -> (byte) '"';
+                    case '\\' -> (byte) '\\';
+                    case '\n' -> (byte) 'n';
+                    case '\r' -> (byte) 'r';
+                    case '\t' -> (byte) 't';
+                    default -> 0;
+                };
+                if (escape != 0) {
+                    out.set(ValueLayout.JAVA_BYTE, at++, (byte) '\\');
+                    out.set(ValueLayout.JAVA_BYTE, at++, escape);
+                    changed = true;
+                } else {
+                    out.set(ValueLayout.JAVA_BYTE, at++, b);
+                }
+            }
+            if (!changed) {
+                out.fill((byte) 0);
+                return null;
+            }
+            return out.asSlice(0, at);
         }
 
         /** {@code data} as Base64 with padding, written by {@code allocator}. */

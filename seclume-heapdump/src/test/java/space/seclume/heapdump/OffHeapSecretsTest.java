@@ -45,23 +45,26 @@ class OffHeapSecretsTest {
     /** The encodings made in native memory are the JDK's, byte for byte - on text that is no secret. */
     @Test
     void theNativeEncodingsAreTheJdks() {
+        // Made in native memory, the patterns are exactly those every searcher
+        // uses (SecretEncodings): the redaction of an application's own secrets
+        // looks for what the check after it, and heapcheck, look for.
         for (String text : List.of("a", "ab", "abc", "pässwörd", "日本語", "emoji 🔑 key",
-                "x".repeat(1000))) {
+                "x".repeat(1000), "p@ss w\"rd+/=?&", "Qz-decoy+pw/\"with\\needs?3")) {
             try (Arena arena = Arena.ofConfined()) {
                 OffHeapSecrets.Needle needle = OffHeapSecrets.text("t",
                         nativeCopy(arena, text.getBytes(StandardCharsets.UTF_8)), arena);
-                boolean latin1 = text.chars().allMatch(c -> c <= 0xff)
-                        && text.chars().anyMatch(c -> c > 0x7f);
-                assertEquals(latin1 ? 5 : 4, needle.patterns().size(), text);
-                if (latin1) {
-                    assertEquals("ISO-8859-1", needle.patterns().get(4).encoding());
-                    assertArrayEquals(text.getBytes(StandardCharsets.ISO_8859_1),
-                            bytes(needle.patterns().get(4).bytes()), text);
+                java.util.Set<String> made = new java.util.TreeSet<>();
+                for (OffHeapSecrets.Pattern pattern : needle.patterns()) {
+                    made.add(java.util.HexFormat.of().formatHex(bytes(pattern.bytes())));
                 }
+                java.util.Set<String> expected = new java.util.TreeSet<>();
+                for (byte[] pattern : space.seclume.tck.SecretEncodings.ofText(text).values()) {
+                    expected.add(java.util.HexFormat.of().formatHex(pattern));
+                }
+                assertEquals(expected, made, text);
+                assertEquals(needle.patterns().size(), made.size(), "a pattern twice: " + text);
                 assertArrayEquals(text.getBytes(StandardCharsets.UTF_16BE),
                         bytes(needle.patterns().get(1).bytes()), text);
-                assertArrayEquals(text.getBytes(StandardCharsets.UTF_16LE),
-                        bytes(needle.patterns().get(2).bytes()), text);
                 assertArrayEquals(Base64.getEncoder().encode(text.getBytes(StandardCharsets.UTF_8)),
                         bytes(needle.patterns().get(3).bytes()), text);
             }
