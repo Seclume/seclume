@@ -457,6 +457,25 @@ Scope: what the heap dump redaction, heapcheck and the TCK look for.
 |---|------|---------|----------|----------|
 | 1 | Heap dumps | A named secret was looked for as UTF-8, UTF-16, Latin-1 and its own Base64. In `Authorization: Basic base64(user:password)` its Base64 begins where the user name leaves it; URL-safe, percent-encoded and JSON-escaped forms were not looked for either. A redacted copy "passed its own check" with twelve Basic headers decoding to the password; heapcheck found nothing in a process that held it only in a header; `/actuator/heapdump` and the TCK's heap tests had the same patterns. One shared list (`SecretEncodings`) now. | high | `review/dump-encodings` |
 
+## Round 14 - November 2026 (checked, not changed)
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Heap dump discovery | Copies of a discovered credential were looked for as its own padded Base64 only: a discovered URL password also held in a Basic value `base64("app:" + pw)`, and a discovered token as URL-safe Base64, stayed in the redacted copy, which passed its own check. | medium | open |
+| 2 | Discovery detector `http-authorization` | Only `Authorization: Basic <b64>` in one string was found. HTTP clients keep the value apart from its name (Apache `BasicHeader`, the JDK's `HttpClient`, Spring's `HttpHeaders`); `Basic <b64>` alone, in lower case, or the bare Base64 stayed in the copy, decodable. | medium | open |
+
+### Open
+
+- Discovery's echoes should use the same `SecretEncodings` as named secrets (finding 1).
+- The detector should take a bare `Basic <b64>` and `Bearer <token>` value, in any case, with
+  a least length against false alarms (finding 2).
+
+### Reviewed, nothing found
+
+- With round 13's stricter scanner, the heap dump and `NoSecretInHeap` tests that run here
+  (19 classes) found nothing they did not before. The module tests that need a database or a
+  client library (mail, HTTP, AWS, Kafka, Redis, MongoDB, LDAP, ...) are for CI.
+
 ## Round 15 - November 2026
 
 Scope: `seclume-logging`'s Logback, Log4j 2 and java.util.logging adapters.
@@ -515,6 +534,6 @@ only pass their arguments on. Not read line by line in this round: `Indexes`, `B
 `SeclumeDatabase` and `EncryptedFields` of that driver. A
 round adds a section here, findings and the sound alike.
 
-After round 16: the open items of rounds 7 and 15 above, and the modules not read in any
+After round 16: the open items of rounds 7, 14 and 15 above, and the modules not read in any
 round yet - `seclume-micronaut`, `seclume-helidon`, `seclume-mongodb-reactive`, the Spring
 Boot starter as a whole, and most of the SQL Server and PostgreSQL drivers.
