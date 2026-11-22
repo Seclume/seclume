@@ -158,8 +158,12 @@ public final class SecretFetch {
             List<SecretHeader> secretHeaders, String requestBody, SecretBody secretBody,
             MemorySegment body) throws IOException {
 
-        try (Transport socket = SocketTransport.connect(host, port, timeoutMillis);
-             TlsLayer tls = startTls(socket, host, port, verify)) {
+        try (SocketTransport socket = timed(SocketTransport.connect(host, port, timeoutMillis),
+                     timeoutMillis);
+             space.seclume.internal.jdbc.Deadline whole = space.seclume.internal.jdbc.Deadline.of(
+                     budget(timeoutMillis), socket::close);
+             TlsLayer tls = late(whole, host, port, timeoutMillis,
+                     () -> startTls(socket, host, port, verify))) {
 
             ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024
                     + (secretBody == null ? 0 : secretBody.length()));
@@ -184,7 +188,60 @@ public final class SecretFetch {
                 // is still a copy of a secret and it is finished with.
                 wipe(request);
             }
-            return readResponse(tls::read, body);
+            return late(whole, host, port, timeoutMillis, () -> readResponse(tls::read, body));
+        }
+    }
+
+    /**
+     * The read timeout on a connection that has just been made: the timeout
+     * given was the connect's only, and a server that took the connection and
+     * then said nothing - a secret manager that hangs, a balancer that black-
+     * holes - held the handshake and the answer, and every login waiting for
+     * this secret, for good.
+     */
+    private static SocketTransport timed(SocketTransport socket, int timeoutMillis)
+            throws IOException {
+        try {
+            socket.networkTimeout(Math.max(0, timeoutMillis));
+            return socket;
+        } catch (IOException | RuntimeException e) {
+            socket.close();
+            throw e;
+        }
+    }
+
+    /**
+     * The seconds the whole exchange has - handshake, request, answer:
+     * {@code seclume.loginBudgetFactor} (3) times the timeout, at least one,
+     * none without a timeout. The timeout is per read, and a server sending a
+     * byte just before each one ran out kept the exchange going without end.
+     */
+    static int budget(int timeoutMillis) {
+        if (timeoutMillis <= 0) {
+            return 0;
+        }
+        long factor = Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1, (timeoutMillis * factor + 999) / 1000));
+    }
+
+    @FunctionalInterface
+    private interface Exchange<T> {
+        T run() throws IOException;
+    }
+
+    /** {@code step}, and a failure that came from the deadline said as such. */
+    private static <T> T late(space.seclume.internal.jdbc.Deadline whole, String host, int port,
+            int timeoutMillis, Exchange<T> step) throws IOException {
+        try {
+            return step.run();
+        } catch (IOException e) {
+            if (!whole.expired()) {
+                throw e;
+            }
+            java.net.SocketTimeoutException late = new java.net.SocketTimeoutException(host + ":"
+                    + port + " did not answer within " + budget(timeoutMillis) + " s");
+            late.initCause(e);
+            throw late;
         }
     }
 
@@ -221,8 +278,10 @@ public final class SecretFetch {
             throw new IOException("refusing plain HTTP to " + host + " (" + address.getHostAddress()
                     + "): only a link-local metadata service may be asked without TLS");
         }
-        try (Transport socket = SocketTransport.connect(address.getHostAddress(), port,
-                timeoutMillis)) {
+        try (SocketTransport socket = timed(SocketTransport.connect(address.getHostAddress(),
+                     port, timeoutMillis), timeoutMillis);
+             space.seclume.internal.jdbc.Deadline whole = space.seclume.internal.jdbc.Deadline.of(
+                     budget(timeoutMillis), socket::close)) {
             ByteBuffer request = ByteBuffer.allocateDirect(8 * 1024);
             try {
                 writeRequest(request, host, method, path, headers, secretHeaders, null);
@@ -235,7 +294,7 @@ public final class SecretFetch {
                 // as on the TLS path above.
                 wipe(request);
             }
-            return readResponse(socket::read, body);
+            return late(whole, host, port, timeoutMillis, () -> readResponse(socket::read, body));
         }
     }
 

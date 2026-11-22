@@ -32,6 +32,13 @@ All notable changes to seclume are recorded here. Versions follow
   that sent a byte just before each read ran out - or anyone on the path before STARTTLS - held
   an SMTP, IMAP or POP3 login, and JNDI's connect through StartTLS and the handshake, for good.
   Each now has `seclume.loginBudgetFactor` (3) times the read timeout; `timeout=0` still waits.
+- **Secret fetches time out.** The timeout a secret provider gives - Vault, AWS, Azure, GCP,
+  their KMS, the metadata services - was the connect's only: a server that took the
+  connection and said nothing held the TLS handshake and the answer, and every login waiting for
+  the secret, for good. It is the read timeout as well now, and the whole exchange has
+  `seclume.loginBudgetFactor` (3) times it.
+- **`SeclumeRedisSocketFactory`'s timeout covers the TLS handshake.** It was set after it, so a
+  silent `rediss://` server held Jedis's `createSocket` for good.
 
 ## [0.14.0] - 2026-11-18
 

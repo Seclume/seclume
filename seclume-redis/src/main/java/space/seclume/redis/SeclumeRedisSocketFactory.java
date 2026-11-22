@@ -103,6 +103,9 @@ public final class SeclumeRedisSocketFactory implements JedisSocketFactory {
         TlsLayer layer = null;
         try {
             transport = SocketTransport.connect(host, port, connectTimeout);
+            // Before the handshake: set only after it, a server that took the
+            // connection and said nothing held the handshake - and Jedis - for good.
+            transport.networkTimeout(timeout);
             if (tls) {
                 SocketTransport plain = transport;
                 layer = TrustChoice.using(trust, () -> {
