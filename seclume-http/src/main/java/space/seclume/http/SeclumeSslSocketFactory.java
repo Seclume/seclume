@@ -178,7 +178,19 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
         // TCP only: seclume's TLS runs over it before a byte is written - see over().
         Socket plain = new Socket(); // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket
         plain.connect(new InetSocketAddress(host, port), connectTimeout);
-        return CredentialSocket.over(plain, host, port, trust, http2);
+        // This socket is ours, so the handshake's time limit is too: with none,
+        // a server that took the connection and said nothing held the handshake
+        // for good. connectTimeout bounds each of its reads; the socket is handed
+        // out as a new one is, without a read timeout, for the caller to set.
+        try {
+            plain.setSoTimeout(Math.max(0, connectTimeout));
+        } catch (IOException | RuntimeException e) {
+            plain.close();
+            throw e;
+        }
+        Socket tls = CredentialSocket.over(plain, host, port, trust, http2);
+        tls.setSoTimeout(0);
+        return tls;
     }
 
     @Override

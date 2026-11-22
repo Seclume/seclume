@@ -39,6 +39,10 @@ All notable changes to seclume are recorded here. Versions follow
   `seclume.loginBudgetFactor` (3) times it.
 - **`SeclumeRedisSocketFactory`'s timeout covers the TLS handshake.** It was set after it, so a
   silent `rediss://` server held Jedis's `createSocket` for good.
+- **`SeclumeSslSocketFactory.createSocket(host, port)` bounds its handshake.** It makes the TCP
+  connection itself, and `connectTimeout` bounded only that: a server that took the connection
+  and said nothing held the TLS handshake for good. `connectTimeout` bounds each read of the
+  handshake now; the socket is handed out without a read timeout, as before.
 
 ## [0.14.0] - 2026-11-18
 
