@@ -22,6 +22,11 @@ on:
 permissions:
   contents: read
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  MAVEN_ARGS: --strict-checksums
+
 jobs:
   interop:
     runs-on: ubuntu-24.04

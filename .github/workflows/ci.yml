@@ -44,6 +44,11 @@ concurrency:
   group: ci-${{ github.ref }}${{ inputs.run && format('-hunt-{0}', inputs.run) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !inputs.run }}
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  MAVEN_ARGS: --strict-checksums
+
 jobs:
   # The crypto policy action as a user's pipeline runs it: the first release
   # meets a strict policy, the second - the hybrid lost, an RSA-2048 key, a
@@ -538,6 +543,10 @@ jobs:
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
       - name: The security gate names every method of its tests that exists
         run: python3 .github/scripts/gate_methods.py --check
+      # Images and downloads by digest or checksum; the ones not pinned yet are
+      # listed in .github/unpinned-inputs.json, and that list only shrinks.
+      - name: No new input fetched by name alone
+        run: python3 .github/scripts/pinned_inputs.py --check
       - name: The Maven Central bundle stays under 1,000 files
         run: python3 .github/scripts/central_bundle.py
       - name: Test heapcheck report comparison

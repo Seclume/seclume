@@ -32,6 +32,11 @@ concurrency:
   group: tls-anvil-${{ github.ref }}
   cancel-in-progress: true
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  MAVEN_ARGS: --strict-checksums
+
 jobs:
   client:
     name: client (${{ matrix.offer }})

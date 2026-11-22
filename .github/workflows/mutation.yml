@@ -46,6 +46,11 @@ concurrency:
   group: mutation-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
+env:
+  MAVEN_ARGS: --strict-checksums
+
 jobs:
   pit:
     name: mutation (${{ matrix.package }}, ${{ matrix.shard }}/${{ matrix.shards }})

@@ -12,6 +12,12 @@ All notable changes to seclume are recorded here. Versions follow
   still let the build through. `.github/security-gate.json` now lists each entry's `methods`
   (`gate_methods.py`), and on a pull request the gate runs with the base branch's manifest and
   script (`trusted_gate.sh`).
+- **CI fails on a checksum that does not match, and on a new input fetched by name alone.**
+  Every workflow that runs Maven sets `MAVEN_ARGS=--strict-checksums`; a mismatching dependency
+  or plugin used to be a warning. `pinned_inputs.py --check` (core job) fails on a container
+  image without a digest, a Maven distribution without `distributionSha256Sum`, or an archive
+  checked only against a checksum from the same server - unless `.github/unpinned-inputs.json`
+  lists it, and that list may only shrink. `pinned_inputs.py --pin` pins the listed images.
 
 ## [0.14.0] - 2026-11-18
 

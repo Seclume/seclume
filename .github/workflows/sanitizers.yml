@@ -43,7 +43,10 @@ concurrency:
   group: sanitizers-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# A dependency or plugin whose checksum does not match fails the build instead
+# of a warning (Maven reads MAVEN_ARGS since 3.9).
 env:
+  MAVEN_ARGS: --strict-checksums
   OPENSSL_TAG: openssl-3.5.9
   # The commit the tag names, checked after the clone: a tag can be moved.
   OPENSSL_COMMIT: 45e844fa2a14ec92d146bd8f5778ac130b6625fb
