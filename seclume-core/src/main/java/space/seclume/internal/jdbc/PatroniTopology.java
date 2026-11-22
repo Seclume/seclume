@@ -55,8 +55,25 @@ public final class PatroniTopology implements ClusterTopology {
         }
     }
 
-    private PatroniTopology(List<URI> endpoints) {
+    /** The URL's own hosts: a member the answer names that is not one of them is not used. */
+    private final java.util.Set<String> allowed;
+
+    private PatroniTopology(List<URI> endpoints, java.util.Set<String> allowed) {
         this.endpoints = endpoints;
+        this.allowed = allowed;
+    }
+
+    /** The option, with the hosts of the URL it came with - the only servers a member may be. */
+    public static PatroniTopology of(String option, java.util.Collection<String> urlHosts) {
+        PatroniTopology plain = of(option);
+        if (plain == null) {
+            return null;
+        }
+        java.util.Set<String> hosts = new java.util.HashSet<>();
+        for (String host : urlHosts) {
+            hosts.add(host.toLowerCase(Locale.ROOT));
+        }
+        return new PatroniTopology(plain.endpoints, java.util.Set.copyOf(hosts));
     }
 
     /** The {@code patroni=} option, or null when there is none. */
@@ -71,7 +88,7 @@ public final class PatroniTopology implements ClusterTopology {
                 endpoints.add(URI.create(trimmed.contains("://") ? trimmed : "http://" + trimmed));
             }
         }
-        return endpoints.isEmpty() ? null : new PatroniTopology(List.copyOf(endpoints));
+        return endpoints.isEmpty() ? null : new PatroniTopology(List.copyOf(endpoints), null);
     }
 
     /**
@@ -83,6 +100,9 @@ public final class PatroniTopology implements ClusterTopology {
         List<HostList.Host> leaders = new ArrayList<>();
         List<HostList.Host> replicas = new ArrayList<>();
         for (Member member : members()) {
+            if (allowed != null && !allowed.contains(member.host().toLowerCase(Locale.ROOT))) {
+                continue;                  // an answer may reorder the URL's servers, not add one
+            }
             if (member.usable()) {
                 (member.leader() ? leaders : replicas)
                         .add(new HostList.Host(member.host(), member.port()));
@@ -185,7 +205,23 @@ public final class PatroniTopology implements ClusterTopology {
             this.text = text;
         }
 
+        private int depth;
+
         Object value() {
+            if (++depth > 64) {
+                // A cluster description is three levels deep. Unbounded, a
+                // nested answer over plain HTTP was a StackOverflowError out of
+                // connect - which the pool does not catch.
+                throw new IllegalArgumentException("the answer is nested more than 64 levels");
+            }
+            try {
+                return valueAtDepth();
+            } finally {
+                depth--;
+            }
+        }
+
+        private Object valueAtDepth() {
             skip();
             if (at >= text.length()) {
                 throw new IllegalArgumentException("the answer ends early");

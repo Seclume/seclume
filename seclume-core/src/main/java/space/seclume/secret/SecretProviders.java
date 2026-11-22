@@ -91,6 +91,20 @@ public final class SecretProviders {
         return settings;
     }
 
+    /**
+     * provider=process starts a program. Settings come from JDBC URLs and
+     * Properties, which some applications take from their users - so a
+     * command is run only where the JVM was started to allow it.
+     */
+    static boolean processAllowed() {
+        return Boolean.getBoolean("seclume.secret.process.allowed");
+    }
+
+    private static SecretProvider refuseProcess() {
+        throw new IllegalArgumentException("provider=process runs a program and is refused "
+                + "unless the JVM is started with -Dseclume.secret.process.allowed=true");
+    }
+
     public static SecretProvider of(Map<String, String> settings) {
         rejectInlineSecrets(settings);
         String kind = value(settings, "provider");
@@ -115,8 +129,9 @@ public final class SecretProviders {
                     SpiffeWorkloadApi.timeoutMillis("timeout-millis",
                             value(settings, "timeout-millis"),
                             UnixSocketSecretProvider.DEFAULT_TIMEOUT_MILLIS));
-            case "process" -> new ProcessSecretProvider(
-                    List.of(required(settings, "command", "process").split("\\s+")), maxLength);
+            case "process" -> processAllowed() ? new ProcessSecretProvider(
+                    List.of(required(settings, "command", "process").split("\\s+")), maxLength)
+                    : refuseProcess();
             case "dpapi" -> new DpapiSecretProvider(path(settings, "dpapi"),
                     value(settings, "entropy"), maxLength);
             case "credential-manager", "credentialmanager" -> new CredentialManagerSecretProvider(

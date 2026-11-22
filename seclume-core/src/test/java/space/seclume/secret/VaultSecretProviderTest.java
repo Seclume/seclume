@@ -217,16 +217,22 @@ class VaultSecretProviderTest {
      * lease-less "refresh" decided it was due.
      */
     @Test
-    void aStaticSecretIsFetchedOnceAndKept() throws Exception {
+    void aStaticSecretIsKeptForItsMaximumAgeAndThenReadAgain() throws Exception {
+        // A KV secret has no lease, but it is rotated: a new version in Vault.
+        // It is kept for seclume.vault.kvMaxAgeSeconds (60) and read again after,
+        // or a rotation at the source would never be taken up.
         String answer = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
         MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
         try (FakeVault vault = new FakeVault(200, answer);
              VaultSecretProvider provider = provider(vault, "secret/data/app", clock)) {
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < 3; i++) {
                 assertEquals("hunter2", read(provider));
-                clock.advance(Duration.ofDays(30));
+                clock.advance(Duration.ofSeconds(20));
             }
-            assertEquals(1, vault.served(), vault.requests.toString());
+            assertEquals(1, vault.served(), "within the maximum age: " + vault.requests);
+            clock.advance(Duration.ofSeconds(1));
+            assertEquals("hunter2", read(provider));
+            assertEquals(2, vault.served(), "read again after the maximum age: " + vault.requests);
         }
     }
 

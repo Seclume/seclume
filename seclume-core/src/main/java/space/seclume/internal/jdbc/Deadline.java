@@ -70,6 +70,8 @@ public final class Deadline implements AutoCloseable {
     }
 
     private final ScheduledFuture<?> timer;
+    /** Closes the connection when the cancellation did not end it; null without. */
+    private volatile ScheduledFuture<?> killer;
     private final AtomicBoolean expired;
 
     private Deadline() {
@@ -89,6 +91,18 @@ public final class Deadline implements AutoCloseable {
      * @param stop    the driver's cancellation, run on the scheduler thread
      */
     public static Deadline of(int seconds, Stop stop) {
+        return of(seconds, stop, null);
+    }
+
+    /**
+     * The same, and {@code kill} - closing the connection - when the
+     * cancellation did not end the statement within a grace of its own
+     * ({@code seclume.queryTimeoutGraceSeconds}, the timeout itself, 2 to 30 s).
+     * A server that ignores the cancellation and keeps sending a byte now and
+     * then defeats a network timeout, which counts only silence; without this
+     * the statement waited for as long as the server liked.
+     */
+    public static Deadline of(int seconds, Stop stop, Stop kill) {
         if (seconds <= 0) {
             return NONE;
         }
@@ -107,7 +121,27 @@ public final class Deadline implements AutoCloseable {
                 // on this thread.
             }
         }, seconds, TimeUnit.SECONDS);
-        return new Deadline(timer, expired);
+        Deadline deadline = new Deadline(timer, expired);
+        if (kill != null) {
+            long grace = Long.getLong("seclume.queryTimeoutGraceSeconds",
+                    Math.max(2, Math.min(30, seconds)));
+            deadline.killer = Scheduler.SERVICE.schedule(() -> {
+                // Under the deadline's lock, and only while it is open: once
+                // close() has returned the statement is over and its
+                // connection may already be someone else's.
+                synchronized (deadline) {
+                    if (deadline.finished) {
+                        return;
+                    }
+                    try {
+                        kill.now();
+                    } catch (Exception ignored) {
+                        // closing is all there is left to try
+                    }
+                }
+            }, seconds + grace, TimeUnit.SECONDS);
+        }
+        return deadline;
     }
 
     /** Whether the time ran out before the answer arrived. */
@@ -164,10 +198,22 @@ public final class Deadline implements AutoCloseable {
     }
 
     /** Stops the clock. Harmless twice, and harmless after it has fired. */
+    /** Set by close(), under this object's lock: the kill stage then does nothing. */
+    private boolean finished;
+
     @Override
     public void close() {
+        if (killer != null) {
+            synchronized (this) {
+                finished = true;
+            }
+        }
         if (timer != null) {
             timer.cancel(false);
+        }
+        ScheduledFuture<?> k = killer;
+        if (k != null) {
+            k.cancel(false);
         }
     }
 }

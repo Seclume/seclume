@@ -98,6 +98,9 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     static final long MAX_LEASE_SECONDS = 10L * 366 * 24 * 3600;
 
     /** The credential in hand, or {@code null} before the first fetch. */
+    /** How long a KV secret is used before it is read again ({@code seclume.vault.kvMaxAgeSeconds}). */
+    static final java.time.Duration STATIC_MAX_AGE =
+            java.time.Duration.ofSeconds(Long.getLong("seclume.vault.kvMaxAgeSeconds", 60));
     private SecretScope cached;
     private Instant fetchedAt;
     private Instant validUntil;
@@ -304,7 +307,11 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
      */
     private boolean dueForRefresh() {
         if (validUntil == null) {
-            return false;                       // no lease: a static secret does not go stale
+            // No lease: a KV secret. It does not expire, but it is rotated -
+            // a new version - and is read again after STATIC_MAX_AGE, or a
+            // rotation at the source is never taken up (nor seen by a watch).
+            return fetchedAt != null
+                    && !clock.instant().isBefore(fetchedAt.plus(STATIC_MAX_AGE));
         }
         if (tokenReplaced()) {
             return true;

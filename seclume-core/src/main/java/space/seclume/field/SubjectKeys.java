@@ -56,6 +56,8 @@ public final class SubjectKeys implements AutoCloseable {
 
     private final FieldKeys ring;
     private final SubjectKeyStore store;
+    /** How often each subject was shredded, to tell a ring opened across a shred; guarded by this. */
+    private final java.util.Map<String, Long> shreds = new java.util.HashMap<>();
     private final int cached;
     private final LinkedHashMap<String, FieldKeys> rings;
     private boolean closed;
@@ -142,6 +144,7 @@ public final class SubjectKeys implements AutoCloseable {
     public boolean shred(String subject) {
         check(subject);
         synchronized (this) {
+            shreds.merge(subject, 1L, Long::sum);    // a ring being opened meanwhile is not cached
             FieldKeys open = rings.remove(subject);
             if (open != null) {
                 open.close();
@@ -160,6 +163,10 @@ public final class SubjectKeys implements AutoCloseable {
             if (open != null) {
                 return open;
             }
+        }
+        long seen;
+        synchronized (this) {
+            seen = shreds.getOrDefault(subject, 0L);
         }
         byte[] context = subject.getBytes(StandardCharsets.UTF_8); // seclume-allow: a subject's name, not a secret
         EncryptedColumn wrapping = ring.column(WRAPPING, Mode.RANDOMIZED);
@@ -194,6 +201,13 @@ public final class SubjectKeys implements AutoCloseable {
             subjectRing = FieldKeys.builder().key(SUBJECT_KEY, copyOf(key.secret())).unlisted().build();
         }
         synchronized (this) {
+            if (shreds.getOrDefault(subject, 0L) != seen) {
+                // Shredded while its key was being read: the key in hand is the
+                // one that was deleted, and neither caching nor using it is allowed.
+                subjectRing.close();
+                throw new FieldEncryptionException("the subject " + subject
+                        + " was shredded while its key was being read");
+            }
             FieldKeys raced = rings.get(subject);
             if (raced != null) {
                 subjectRing.close();

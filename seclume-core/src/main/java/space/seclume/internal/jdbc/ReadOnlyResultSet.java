@@ -580,7 +580,14 @@ public abstract class ReadOnlyResultSet implements ResultSet {
         if (lastWasNull) {
             return null;
         }
-        byte[] value = bytesAt(column); // seclume-allow: the value getBytes returns anyway
+        byte[] value; // seclume-allow: the value getBytes returns anyway
+        try {
+            value = bytesAt(column); // seclume-allow: the value getBytes returns anyway
+        } catch (NumberFormatException notANumber) {
+            throw notANumber(columnIndex, "bytes", notANumber);
+        } catch (java.time.DateTimeException | IllegalArgumentException unreadable) {
+            throw unreadable(columnIndex, "bytes", unreadable);
+        }
         return maxFieldSize > 0 && value.length > maxFieldSize && truncatable(column)
                 ? java.util.Arrays.copyOf(value, maxFieldSize) : value;
     }

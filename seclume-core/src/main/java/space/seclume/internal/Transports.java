@@ -120,12 +120,36 @@ public final class Transports {
             } catch (IOException notOffered) {
                 // a transport without a timeout of its own: the login is not watched
             }
+            // And a bound on the login as a whole: the watch above counts
+            // silence only, and a server that sends a byte now and then kept
+            // a login - and the pool's thread and permit - for as long as it
+            // liked. seclume.loginBudgetFactor times the connect timeout.
+            long budget = connectTimeoutMillis * Long.getLong("seclume.loginBudgetFactor", 3);
+            LOGINS.put(opened, Budget.SERVICE.schedule(opened::close, budget,
+                    java.util.concurrent.TimeUnit.MILLISECONDS));
         }
         return opened;
     }
 
     /** The login is done: lifts the watch {@link #open} set on it. */
+    /** Logins under way, and what closes each when its budget is spent. */
+    private static final java.util.Map<Transport, java.util.concurrent.ScheduledFuture<?>> LOGINS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final class Budget {
+        static final java.util.concurrent.ScheduledExecutorService SERVICE =
+                java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread t = new Thread(r, "seclume-login-budget");
+                    t.setDaemon(true);
+                    return t;
+                });
+    }
+
     public static void loggedIn(Transport transport) {
+        java.util.concurrent.ScheduledFuture<?> budget = LOGINS.remove(transport);
+        if (budget != null) {
+            budget.cancel(false);
+        }
         try {
             transport.networkTimeout(0);
         } catch (IOException notOffered) {
