@@ -57,7 +57,23 @@ final class AuditVerify {
             for (String problem : result.problems()) {
                 out.println("  " + problem);
             }
-            return result.holds() ? 0 : 1;
+            if (!result.holds()) {
+                return 1;
+            }
+            if (key != null && result.entries() > 0 && result.checkpoints() == 0) {
+                // A chain without a single signature is one anybody who can
+                // write the file can make again, entry by entry, with SHA-256.
+                out.println("  NOT vouched for: no checkpoint in this log is signed by the key "
+                        + "given - the chain alone proves nothing against whoever could write "
+                        + "the file");
+                return 1;
+            }
+            if (key != null && result.unsigned() > 0) {
+                out.println("  the last " + result.unsigned() + " entries are vouched for by no "
+                        + "checkpoint yet: exit 3, not 0");
+                return 3;
+            }
+            return 0;
         } catch (IOException | IllegalArgumentException e) {
             err.println("the access log cannot be checked: " + e.getMessage());
             return 2;
