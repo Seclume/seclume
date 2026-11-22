@@ -105,6 +105,10 @@ final class FakePreparedStatement {
                             yield null;
                         }
                         case "isClosed" -> closed;
+                        // What a driver says once the result of the last execution
+                        // is read: none left - the cache asks before it keeps one.
+                        case "getResultSet" -> null;
+                        case "getMoreResults" -> false;
                         case "hashCode" -> System.identityHashCode(self);
                         case "equals" -> self == args[0];
                         case "toString" -> "FakePreparedStatement";

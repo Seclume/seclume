@@ -209,7 +209,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
     /** Replacements opened before the connection they replace was retired. */
     private final LongAdder prewarmed = new LongAdder();
     /** How often the secret was rotated - see {@link #rotateSecret}. */
-    private volatile long rotation;
+    private final java.util.concurrent.atomic.AtomicLong rotation = new java.util.concurrent.atomic.AtomicLong();
 
     private final Thread housekeeper;
     private volatile boolean closed;
@@ -255,7 +255,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
             PoolEntry entry;
             try {
                 entry = newEntry();
-            } catch (SQLException | RuntimeException e) {
+            } catch (SQLException | RuntimeException | Error e) {
                 // RuntimeException too: a secret provider that cannot deliver
                 // (SecretUnavailableException) or a malformed handshake reaches
                 // here unchecked, and a permit not given back is a connection
@@ -393,7 +393,16 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
      * runs without it is exactly the failure this exists to prevent.
      */
     private boolean applySessionContext(PoolEntry entry) throws SQLException {
-        java.util.Map<String, String> context = settings.getSessionContext().get();
+        java.util.Map<String, String> context;
+        try {
+            context = settings.getSessionContext().get();
+        } catch (RuntimeException | Error e) {
+            // Nothing was set yet: the connection goes back as it came. Not
+            // handed back, it was lost for good - a request without a tenant
+            // took one connection each until the pool was empty.
+            release(entry, false);
+            throw e;
+        }
         if (context == null || context.isEmpty()) {
             return false;
         }
@@ -504,7 +513,10 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                         refused = e;
                         retryAt = System.nanoTime() + pause;
                         pause = Math.min(pause * 2, REFUSED_PAUSE_MAX_NANOS);
-                    } catch (SQLException | RuntimeException e) {
+                    } catch (SQLException | RuntimeException | Error e) {
+                        // Error too: a StackOverflowError out of a hostile answer
+                        // kept the permit, and after maximumPoolSize of them the
+                        // pool could never open a connection again.
                         permits.release();
                         throw e;
                     }
@@ -953,6 +965,8 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
 
     private PoolEntry newEntry() throws SQLException {
         // This is where the call to the secret source happens - every time anew.
+        // The rotation it may have read the old secret before.
+        long generation = rotation.get();
         long opening = listener != null ? System.nanoTime() : 0;
         Connection connection = source.getConnection();
         if (opening != 0) {
@@ -965,6 +979,13 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                 capacityChecked = true;
                 warnAboutCapacity(connection);
                 adoptIdleLimit(connection);
+                if (connection.isClosed()) {
+                    // A probe ran out of time and its deadline closed the
+                    // connection: not one to lend.
+                    capacityChecked = false;
+                    throw new SQLException("the connection did not survive the pool's capacity "
+                            + "probe - the server did not answer in time", "08006");
+                }
             }
             if (!settings.getLeakDetectionThreshold().isZero()) {
                 traceStatements(connection);
@@ -987,6 +1008,12 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
             throw failure;
         }
         entries.add(entry);
+        if (rotation.get() != generation) {
+            // A rotation ran while this login was under way: its sweep of
+            // entries may have missed this one, and the password it used may
+            // be the old one. Added first and checked after, as for close().
+            entry.retireOnReturn();
+        }
         if (closed) {
             // close() may have run between the check above and the add, and
             // then its sweep of entries missed this one: an open session,
@@ -1299,7 +1326,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
             adopted.increment();
             borrowed.increment();
             return handle;
-        } catch (SQLException | RuntimeException e) {
+        } catch (SQLException | RuntimeException | Error e) {
             // A connection that cannot say its state - closed, broken - is
             // refused like one for a full pool: the caller's, not closed here.
             // What was taken for it goes back: the entry, and the permit, or
@@ -1362,7 +1389,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                 markLapsedForReturn();
                 replenish();
                 reportLeaks();
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | StackOverflowError e) {
                 // Housekeeping must never die; the next round carries on.
                 Logger.getLogger(SeclumePool.class.getName())
                         .warning(settings.getName() + " - housekeeping failed: " + e);
@@ -1416,7 +1443,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
             try {
                 park(newEntry());
                 prewarmed.increment();
-            } catch (SQLException | RuntimeException cannot) {
+            } catch (SQLException | RuntimeException | Error cannot) {
                 // Stock keeping, not an order. Whoever actually needs a
                 // connection gets the failure in getConnection().
                 permits.release();
@@ -1522,7 +1549,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                 // The permit stays with the connection - it counts what is
                 // alive, not what is borrowed. Giving it back here would let
                 // the pool grow past its maximum.
-            } catch (SQLException | RuntimeException e) {
+            } catch (SQLException | RuntimeException | Error e) {
                 // RuntimeException too: with the secret manager down, every
                 // round of this used to keep one permit per missing connection,
                 // and once it was back the pool had none left to open with.
@@ -1673,7 +1700,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
      * @return how many connections were retired immediately
      */
     public int rotateSecret(boolean closeIdleNow) {
-        rotation++;
+        rotation.incrementAndGet();
         int closed = 0;
         if (closeIdleNow) {
             for (int logical = 0; logical <= slotMask; logical++) {
@@ -1693,7 +1720,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
 
     /** How often the secret has been rotated - for metrics and for tests. */
     public long rotations() {
-        return rotation;
+        return rotation.get();
     }
 
     /** The watches this pool stops when it closes. */

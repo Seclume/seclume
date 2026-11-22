@@ -135,6 +135,14 @@ final class StatementCache {
             if (fresh == null) {
                 return false;                 // its defaults are not known
             }
+            // What the last execution left - its result set, rows unread -
+            // belongs to the borrower that ran it. Kept open, it was the
+            // next borrower's getResultSet() before that one executed.
+            java.sql.ResultSet left = statement.getResultSet();
+            if (left != null) {
+                left.close();
+            }
+            statement.getMoreResults(java.sql.Statement.CLOSE_ALL_RESULTS);
             statement.clearParameters();
             statement.clearWarnings();
             statement.clearBatch();

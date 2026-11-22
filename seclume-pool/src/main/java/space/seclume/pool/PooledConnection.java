@@ -490,6 +490,15 @@ final class PooledConnection implements Connection {
         if (session != null && session.sessionStateChanged()) {
             return false;
         }
+        // The driver's "no" is a guess from the SQL text: select
+        // app.enter_tenant(42) or a DO block sets a role or a tenant it never
+        // sees, and the renewed connection ran the borrower's next statement
+        // as the login role. Once a statement was handed out, closed or not,
+        // the session may hold what the borrower relies on - only a borrow
+        // that has run nothing yet is renewed.
+        if (handedOut != null && !handedOut.isEmpty()) {
+            return false;
+        }
         if (handedOut != null) {
             for (Statement statement : handedOut) {
                 try {
