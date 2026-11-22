@@ -47,6 +47,15 @@ All notable changes to seclume are recorded here. Versions follow
   a virtual-host style URL, and was put there as it was: `evil.example#` made a presigned URL
   that points at `evil.example`. A name S3 would not take is refused, as the SDK's presigner
   refuses it.
+- **A literal no longer comes out in a statement's fingerprint.** A backslash before a quote
+  was taken for an escape in every dialect. A literal ending in one - `'C:\data\'`, a SQL
+  Server backup path - then ran on to the quote that opened the next literal, and that one's
+  contents - a password - went into JFR events, trace spans (`db.query.text`), metric tags and
+  the drivers' messages as words. A quoted identifier ending in a backslash, `"col\"`, copied the
+  rest of the statement, literals and all, verbatim. Identifiers take a backslash for what it
+  is; `E'...'` for an escape; and where the dialect and its settings decide - MySQL's
+  `NO_BACKSLASH_ESCAPES`, PostgreSQL's `standard_conforming_strings` - the rest of the statement
+  is masked.
 
 ## [0.14.0] - 2026-11-18
 
