@@ -367,15 +367,36 @@ A password that reaches a log line is on the heap already; what is left to stop 
 reaching a file, a collector, a support ticket. `seclume-logging` looks for the application's
 own secrets in every message and stack trace and writes `[redacted:<label>]` instead:
 
+**Logback** - include the rules after Spring Boot's own, which register `%wex` and `%wEx`
+for themselves; the rule included last is the one used, by the appenders above it as well.
+Included before them, Logback's status warns that the stack traces are not masked:
+
 ```xml
 <!-- logback-spring.xml -->
-<conversionRule conversionWord="msg"
-                class="space.seclume.logging.logback.RedactingMessageConverter"/>
-<conversionRule conversionWord="xEx"
-                class="space.seclume.logging.logback.RedactingThrowableConverter"/>
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/base.xml"/>
+  <include resource="space/seclume/logging/logback/redact-rules.xml"/>
+</configuration>
 ```
 
-(`class` is the attribute's name since Logback 1.5; older versions call it `converterClass`.)
+`redact-rules.xml` masks every word a message (`%m`, `%msg`, `%message`) or a stack trace
+(`%ex`, `%exception`, `%throwable`, `%xEx` and its long forms, `%rEx`, `%rootException`,
+Spring Boot's `%wex` and `%wEx`) is written with; it needs Logback 1.5 or later. A rule
+replaces the converter of its one word: a rule for `%msg` alone leaves Spring Boot's `%m` as
+it was. What no rule reaches - the stack trace Logback adds to a pattern that has no stack
+trace word, the MDC (`%X`), key-value pairs, a JSON or other structured encoder - is masked
+by `RedactingEncoder`, which masks the whole line; one with neither a pattern nor an
+encoder, or both, reports an error and writes nothing:
+
+```xml
+<encoder class="space.seclume.logging.logback.RedactingEncoder">
+  <pattern>%d %-5level %logger - %msg%n</pattern>
+</encoder>
+
+<encoder class="space.seclume.logging.logback.RedactingEncoder">
+  <encoder class="ch.qos.logback.classic.encoder.JsonEncoder"/>
+</encoder>
+```
 
 **Log4j 2** - `%redact{...}` masks what the pattern in its braces writes. Put the message and
 the stack trace inside, and the layout writes the stack trace once, masked:

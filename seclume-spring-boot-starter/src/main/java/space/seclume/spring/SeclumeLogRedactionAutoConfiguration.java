@@ -24,8 +24,8 @@ import space.seclume.logging.SecretMasker;
  * every data source's password and {@code seclume.heapdump.secrets.<label>.*}
  * - the secrets a heap dump is redacted of - are looked for in each message
  * and stack trace that goes through seclume's Logback converters
- * ({@code conversionRule} for {@code msg} and {@code xEx} in
- * {@code logback-spring.xml}), Log4j 2's {@code %redact{...}} in
+ * ({@code redact-rules.xml} included in {@code logback-spring.xml} after
+ * Spring Boot's own, or {@code RedactingEncoder}), Log4j 2's {@code %redact{...}} in
  * {@code log4j2-spring.xml}, the {@code RedactingFormatter} of
  * java.util.logging, or {@link SecretMasker#maskInstalled}.
  *

@@ -89,6 +89,15 @@ All notable changes to seclume are recorded here. Versions follow
   escape quotes too. A secret with one of these characters went to the log unmasked. A line
   with `&` is now also read with its character references resolved - the five named ones and
   numeric ones in decimal or hex.
+- **Logback output is masked under every word Spring Boot and Logback write a message or a
+  stack trace with.** The documented rules replaced only `%msg` and `%xEx`. Spring Boot's
+  patterns write `%m` and `%wEx`, so with `logback-spring.xml` as documented neither message
+  nor stack trace was masked; `%ex`, `%throwable`, `%rEx` and `%message` were not either, nor
+  the stack trace Logback adds to a pattern that has none, nor a JSON encoder's output.
+  `<include resource="space/seclume/logging/logback/redact-rules.xml"/>`, after Spring
+  Boot's `defaults.xml` or `base.xml`, registers masking converters for all of them, and
+  `RedactingEncoder` masks a whole line - a pattern's, MDC and the added stack trace
+  included, or another encoder's.
 
 ## [0.14.0] - 2026-11-18
 

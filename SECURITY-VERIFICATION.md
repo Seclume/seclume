@@ -53,7 +53,7 @@ PASS into anything else fails before it can merge.
 |---|---|---|---|---|---|---|
 | No exception message carries a secret | A2 logs | `ErrorMessageTest` | every thrown message in production code parsed; concatenations of secret-named variables refused | PASS | static; a message built elsewhere and passed in is not seen | all |
 | A failed login's exception and log hold no secret | A2 | `LoginFailureWipeTest`, and the driver and provider tests that search a refused login's messages for the canary | the canary in a refused login; message, cause chain and captured log records searched | PASS | loggers the application adds are its own | linux-x64 |
-| The application's secrets are masked in its log lines | A2 | `SecretMaskerTest`, `LogbackRedactionTest`, `LogRedactionTest` | a real Logback configuration; the file written is searched; the masker's heap is dumped and searched for the secret | PASS | only output that goes through the converters; a secret split across log calls is not one match | all |
+| The application's secrets are masked in its log lines | A2 | `SecretMaskerTest`, `LogbackRedactionTest`, `LogbackCoverageTest`, `LogRedactionTest` | a real Logback configuration, every message and stack trace word and Spring Boot's patterns, `RedactingEncoder` around a pattern and a JSON encoder; the file written is searched; the masker's heap is dumped and searched for the secret | PASS | only output that goes through the converters; a secret split across log calls is not one match | all |
 | Debugging | A5 | - | **not tested.** A debugger attached to the JVM (JDWP) or the process (`ptrace`) can read native memory too | - | out of scope ([THREAT-MODEL.md](THREAT-MODEL.md#out-of-scope)) | - |
 
 ## TLS
