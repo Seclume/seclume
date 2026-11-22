@@ -144,7 +144,7 @@ public class RedactingEncoder extends EncoderBase<ILoggingEvent> {
                     .decode(ByteBuffer.wrap(bytes)).toString();
         } catch (CharacterCodingException notText) {
             read = StandardCharsets.ISO_8859_1;
-            text = new String(bytes, read);
+            text = new String(bytes, read); // seclume-allow: a log line, text already - masked next
         }
         String masked = SecretMasker.maskInstalled(text);
         if (masked.equals(text)) {
