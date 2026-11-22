@@ -419,7 +419,8 @@ its tag.
   in the message or in an exception's message and stack trace: its Base64, standard or
   URL-safe, padded or not, and inside a longer Base64 text - `Authorization: Basic
   base64(user:password)` whatever the user, the one or two characters the password shares with
-  its neighbours left; percent-encoded, as in a JDBC URL or a form; JSON-escaped. Secrets
+  its neighbours left; percent-encoded, as in a JDBC URL or a form; JSON-escaped; with XML's
+  and HTML's character references, as an XML formatter or layout writes it. Secrets
   shorter than six characters are not looked for: they would mask ordinary words.
 - **Which secrets:** every data source's password and `seclume.heapdump.secrets.<label>.*` -
   the same the heap dump redaction looks for. Read again once every bean is made, and then every

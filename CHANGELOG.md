@@ -83,6 +83,12 @@ All notable changes to seclume are recorded here. Versions follow
   same for the application's own secrets behind `/actuator/heapdump`. One list of encodings
   (`SecretEncodings`) now serves the search, the check after a redaction, the native patterns of
   the application's secrets and the TCK's heap scanner.
+- **The log masker finds a secret in XML and HTML output.** `java.util.logging`'s
+  `XMLFormatter`, one of the two delegates `RedactingFormatter` names, writes `&`, `<` and `>`
+  as `&amp;`, `&lt;` and `&gt;`; Log4j 2's `%enc{...}{XML}` and `{HTML}` and XML layouts
+  escape quotes too. A secret with one of these characters went to the log unmasked. A line
+  with `&` is now also read with its character references resolved - the five named ones and
+  numeric ones in decimal or hex.
 
 ## [0.14.0] - 2026-11-18
 

@@ -42,7 +42,9 @@ import space.seclume.secret.SecretScope;
  *   <li>percent-encoded, as in a URL or a form ({@code p%40ss}, and
  *       {@code URLEncoder}'s {@code +} for a blank), with the hex digits in
  *       upper or in lower case;</li>
- *   <li>JSON-escaped ({@code \"} and {@code \\}, line breaks and tabs).</li>
+ *   <li>JSON-escaped ({@code \"} and {@code \\}, line breaks and tabs);</li>
+ *   <li>with XML's and HTML's character references ({@code &amp;}, {@code &lt;},
+ *       {@code &#39;}, {@code &#x2F;}), as an XML formatter or layout writes it.</li>
  * </ul>
  * Secrets shorter than
  * {@value #SHORTEST} characters are not looked for: they would mask ordinary
@@ -472,6 +474,11 @@ public final class SecretMasker implements AutoCloseable {
         if (text.indexOf('\\') >= 0) {
             hits = viewed(scanned, text, View.JSON, hits);
         }
+        // XML and HTML: java.util.logging's XMLFormatter, Log4j 2's %enc{...}{XML}
+        // and {HTML}, XML and HTML layouts write & < > " ' as entities, named or numeric.
+        if (text.indexOf('&') >= 0) {
+            hits = viewed(scanned, text, View.MARKUP, hits);
+        }
         if (hits == null) {
             return text;
         }
@@ -548,7 +555,7 @@ public final class SecretMasker implements AutoCloseable {
     }
 
     /** How a line is read decoded. */
-    private enum View { PERCENT, FORM, JSON }
+    private enum View { PERCENT, FORM, JSON, MARKUP }
 
     /** {@code hits} and those found in {@code text} read as {@code view}. */
     private List<int[]> viewed(Index scanned, String text, View view, List<int[]> hits) {
@@ -558,8 +565,11 @@ public final class SecretMasker implements AutoCloseable {
         try (SecretScope decoded = SecretScope.allocate(Math.max(2, size * 2));
              SecretScope bytes = SecretScope.allocate(Math.max(1, size))) {
             MemorySegment out = decoded.segment();
-            int count = view == View.JSON ? unescaped(text, out, from, to)
-                    : percentDecoded(text, view == View.FORM, out, bytes.segment(), from, to);
+            int count = switch (view) {
+                case JSON -> unescaped(text, out, from, to);
+                case MARKUP -> entitiesRead(text, out, from, to);
+                default -> percentDecoded(text, view == View.FORM, out, bytes.segment(), from, to);
+            };
             if (count < 0) {
                 return hits;                          // nothing decoded: the text itself
             }
@@ -685,6 +695,92 @@ public final class SecretMasker implements AutoCloseable {
             i = next;
         }
         return changed ? at : -1;
+    }
+
+    /**
+     * {@code text} with XML's and HTML's character references read - {@code &amp;},
+     * {@code &lt;}, {@code &gt;}, {@code &quot;}, {@code &apos;}, and {@code &#NN;} or
+     * {@code &#xHH;} for any character - into {@code out}, its length, or -1 where there
+     * were none. A reference that is none of these stands for itself.
+     */
+    static int entitiesRead(String text, MemorySegment out, int[] from, int[] to) {
+        int at = 0;
+        boolean changed = false;
+        int i = 0;
+        while (i < text.length()) {
+            int end = text.charAt(i) == '&' ? semicolon(text, i) : -1;
+            int point = end > 0 ? entity(text, i + 1, end) : -1;
+            if (point < 0) {
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, text.charAt(i));
+                from[at] = i;
+                to[at] = i + 1;
+                at++;
+                i++;
+                continue;
+            }
+            for (char c : Character.toChars(point)) {
+                out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, c);
+                from[at] = i;
+                to[at] = end + 1;
+                at++;
+            }
+            changed = true;
+            i = end + 1;
+        }
+        return changed ? at : -1;
+    }
+
+    /**
+     * The {@code ;} that ends a reference begun at {@code amp}, or -1: at most 32
+     * characters on - room for leading zeros - so that an {@code &} starting none
+     * costs no scan to the end of the line.
+     */
+    private static int semicolon(String text, int amp) {
+        int last = Math.min(text.length() - 1, amp + 32);
+        for (int k = amp + 2; k <= last; k++) {
+            if (text.charAt(k) == ';') {
+                return k;
+            }
+        }
+        return -1;
+    }
+
+    /** The character the reference between {@code start} and {@code end} names, or -1. */
+    private static int entity(String text, int start, int end) {
+        String name = text.substring(start, end);
+        switch (name) {
+            case "amp": return '&';
+            case "lt": return '<';
+            case "gt": return '>';
+            case "quot": return '"';
+            case "apos": return '\'';
+            default: break;
+        }
+        if (name.length() < 2 || name.charAt(0) != '#') {
+            return -1;
+        }
+        boolean hex = name.charAt(1) == 'x' || name.charAt(1) == 'X';
+        int radix = hex ? 16 : 10;
+        int first = hex ? 2 : 1;
+        if (first == name.length()) {
+            return -1;
+        }
+        long point = 0;
+        for (int k = first; k < name.length(); k++) {
+            char c = name.charAt(k);
+            // ASCII digits only, as XML has them; leading zeros allowed.
+            int d = c >= '0' && c <= '9' ? c - '0'
+                    : hex && c >= 'a' && c <= 'f' ? c - 'a' + 10
+                    : hex && c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+            if (d < 0) {
+                return -1;
+            }
+            point = point * radix + d;
+            if (point > Character.MAX_CODE_POINT) {
+                return -1;
+            }
+        }
+        return (int) point;
     }
 
     private static boolean isHex(String text, int start, int end) {
