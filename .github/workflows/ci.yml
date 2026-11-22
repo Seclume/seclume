@@ -527,8 +527,17 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - name: Test required database coverage gate
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: The security gate names every method of its tests that exists
+        run: python3 .github/scripts/gate_methods.py --check
       - name: The Maven Central bundle stays under 1,000 files
         run: python3 .github/scripts/central_bundle.py
       - name: Test heapcheck report comparison
@@ -593,7 +602,7 @@ jobs:
           seclume-verify/src/test/resources/cbom/release-2.json
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group core --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group core --platform linux-x64
       # Line and branch coverage per module and for the security-critical
       # packages, in the job summary and as coverage.json beside the reports.
       - name: Coverage
@@ -649,6 +658,13 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
@@ -666,12 +682,12 @@ jobs:
           ls -l "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib"
       - name: The security tests
         run: |
-          tests=$("$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --tests)
+          tests=$("$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group core --tests)
           .github/scripts/mvnw-retry.sh -B -pl seclume-core,seclume-tck,seclume-heapdump,seclume-heapcheck,seclume-jpa -am test \
             -Dtest="$tests" -Dsurefire.failIfNoSpecifiedTests=false
       - name: Security gate
         if: success() || failure()
-        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group core --platform ${{ matrix.platform }}'
+        run: '"$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group core --platform ${{ matrix.platform }}'
       # Then everything else in seclume-core on this platform, not only what
       # the gate names: the platform's own code (DPAPI, CNG and the certificate
       # store on Windows, the Keychain and Homebrew's OpenSSL on macOS) has its
@@ -729,6 +745,13 @@ jobs:
       PG_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
@@ -792,7 +815,7 @@ jobs:
             -Dseclume.pgtls.port=5432 -Dseclume.pg17.port=5432
       - name: Security gate
         if: success() || failure()
-        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group postgresql --platform ${{ matrix.platform }}'
+        run: '"$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group postgresql --platform ${{ matrix.platform }}'
       - name: No test skipped for want of this job's server
         if: success() || failure()
         run: '"$(command -v python3 || command -v python)" .github/scripts/require_servers.py postgresql seclume-postgresql'
@@ -830,6 +853,13 @@ jobs:
       MY_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
@@ -884,7 +914,7 @@ jobs:
             -Dseclume.mysql.port=3306
       - name: Security gate
         if: success() || failure()
-        run: '"$(command -v python3 || command -v python)" .github/scripts/security_gate.py --group mysql --platform ${{ matrix.platform }}'
+        run: '"$(command -v python3 || command -v python)" "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group mysql --platform ${{ matrix.platform }}'
       - name: No test skipped for want of this job's server
         if: success() || failure()
         run: '"$(command -v python3 || command -v python)" .github/scripts/require_servers.py mysql seclume-mysql'
@@ -1519,6 +1549,13 @@ jobs:
         version: ['15', '18', '19rc1']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
@@ -1555,7 +1592,7 @@ jobs:
       # server with TLS, which the service above is not: a second one, here.
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group postgresql --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group postgresql --platform linux-x64
       - name: No password anywhere in the process
         env:
           PG_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -1833,6 +1870,13 @@ jobs:
             health: 'healthcheck.sh --connect --innodb_initialized'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
@@ -1885,7 +1929,7 @@ jobs:
           if-no-files-found: warn
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group mysql --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group mysql --platform linux-x64
       - name: Verify framework edge cases
         run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnMySqlTest,MyBatisOnMySqlTest,LiquibaseOnMySqlTest,JpaFieldEncryptionOnMySqlTest,JakartaDataOnMySqlTest,SpringDataOnMySqlTest,EntityShapesOnMySqlTest,HibernateEdgesOnMySqlTest,SpringJdbcOnMySqlTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 -Dseclume.spring.mysql.flavour=${{ startsWith(matrix.image, 'mariadb') && 'mariadb' || 'mysql' }}
       - name: Require executed framework tests
@@ -1935,6 +1979,13 @@ jobs:
         ports: ['1433:1433']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
@@ -1989,7 +2040,7 @@ jobs:
           if-no-files-found: warn
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group sqlserver --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group sqlserver --platform linux-x64
       - name: Verify framework edge cases
         run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnSqlServerTest,MyBatisOnSqlServerTest,LiquibaseOnSqlServerTest,JpaFieldEncryptionOnSqlServerTest,JakartaDataOnSqlServerTest,SpringDataOnSqlServerTest,EntityShapesOnSqlServerTest,HibernateEdgesOnSqlServerTest,SpringJdbcOnSqlServerTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.frameworks.sqlserver.database=seclume_test
       - name: Require executed framework tests
@@ -2045,6 +2096,13 @@ jobs:
             --health-timeout 10s --health-retries 60 \
             gvenzl/oracle-free:23-slim
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The manifest and the gate script of the base branch, not of this
+      # change (.github/scripts/trusted_gate.sh).
+      - name: The security gate as the base branch has it
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_gate.sh
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: '25'
@@ -2102,7 +2160,7 @@ jobs:
           if-no-files-found: warn
       - name: Security gate
         if: success() || failure()
-        run: python3 .github/scripts/security_gate.py --group oracle --platform linux-x64
+        run: python3 "${SECURITY_GATE:-.github/scripts/security_gate.py}" --manifest "${SECURITY_GATE_MANIFEST:-.github/security-gate.json}" --group oracle --platform linux-x64
       - name: Verify framework edge cases
         run: .github/scripts/mvnw-retry.sh -B -pl seclume-spring-test -am test -Dtest=JooqOnOracleTest,MyBatisOnOracleTest,LiquibaseOnOracleTest,JpaFieldEncryptionOnOracleTest,JakartaDataOnOracleTest,SpringDataOnOracleTest,EntityShapesOnOracleTest,HibernateEdgesOnOracleTest,SpringJdbcOnOracleTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.spring.oracle.user=seclume_spring
       - name: Require executed framework tests

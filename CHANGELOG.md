@@ -5,6 +5,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+
+- **The security gate asks for every method of a security test, not for one passing case.** One
+  passing case named anything used to count as PASS, so a gated test reduced to a placeholder
+  still let the build through. `.github/security-gate.json` now lists each entry's `methods`
+  (`gate_methods.py`), and on a pull request the gate runs with the base branch's manifest and
+  script (`trusted_gate.sh`).
+
 ## [0.14.0] - 2026-11-18
 
 ### Upgrading: what changes behaviour

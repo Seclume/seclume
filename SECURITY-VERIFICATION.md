@@ -14,10 +14,19 @@ listed test one status:
 | Status | Meaning | Lets the build through |
 |---|---|---|
 | PASS | ran, nothing skipped, nothing failed | yes |
-| FAIL | a case failed, or the test did not run at all | **no** |
+| FAIL | a case failed, a method the manifest lists did not pass, or the test did not run at all | **no** |
 | SKIPPED | every case was skipped | **no** |
 | INCONCLUSIVE | some cases ran, some were skipped | **no** |
 | NOT APPLICABLE | the test is not for this platform | yes, and says so |
+
+Each entry lists the test methods that carry the claim (`methods`, written from the test sources
+by [`gate_methods.py`](.github/scripts/gate_methods.py), which the `core` job also runs with
+`--check`). Every one of them has to pass: one passing case of the class is not enough. On a pull
+request the gate runs with the manifest and the gate script of the base branch
+([`trusted_gate.sh`](.github/scripts/trusted_gate.sh)), so a change that weakens a test cannot
+relax the gate in the same commit. A test or a method leaves the gate by a change to the manifest
+alone, merged before the change that deletes it. The workflow file is part of a pull request as
+well; this holds where changes under `.github/` need a code owner's review.
 
 A skipped security test is never counted as a passed one. Where a test may skip cases on one
 platform for a stated reason, the manifest names the platform and the reason, and the job

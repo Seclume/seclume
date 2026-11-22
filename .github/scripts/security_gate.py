@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """The security gate: did every test that carries a security claim run and pass?
 
-    security_gate.py --group core --platform linux-x64 [--root .]
+    security_gate.py --group core --platform linux-x64 [--root .] [--manifest file]
     security_gate.py --group core --tests           # the -Dtest list for Maven
 
 Reads .github/security-gate.json and the job's surefire reports and gives
 each test one status:
 
     PASS            ran, nothing skipped, nothing failed
-    FAIL            a case failed or erred - or the test did not run at all
+    FAIL            a case failed or erred, a method the entry lists under
+                    "methods" did not pass - or the test did not run at all
     SKIPPED         every case was skipped
     INCONCLUSIVE    some cases ran, some were skipped
     NOT APPLICABLE  the test is not for this platform
@@ -18,6 +19,9 @@ never a passed one: where a test may skip cases on a platform, the manifest
 names the platform and the reason, and the status is PASS with that reason in
 the table - never silently. The table goes to stdout and, in GitHub Actions,
 to the job summary; every other status is also an error annotation.
+
+On a pull request CI passes --manifest with the base branch's copy, and runs
+the base branch's copy of this script (trusted_gate.sh).
 """
 import argparse
 import glob
@@ -39,8 +43,18 @@ def read_report(path):
     return ET.fromstring(document)  # nosemgrep - checked above
 
 
-def outcomes(root, module):
-    """Every test case of the module's reports: class -> list of 'pass' / 'skip' / 'fail'."""
+def method_of(name):
+    """The test method a case belongs to: surefire writes 'm', 'm()', 'm(String)[2]' or 'm[2]'."""
+    name = (name or "").strip()
+    for stop in ("(", "["):
+        at = name.find(stop)
+        if at > 0:
+            name = name[:at]
+    return name.strip()
+
+
+def outcomes_by_method(root, module):
+    """Every test case of the module's reports: class -> list of (method, result)."""
     found = {}
     pattern = os.path.join(root, module, "target", "surefire-reports", "TEST-*.xml")
     for path in glob.glob(pattern):
@@ -51,21 +65,47 @@ def outcomes(root, module):
                 result = "skip"
             else:
                 result = "pass"
-            found.setdefault(case.get("classname"), []).append(result)
+            found.setdefault(case.get("classname"), []).append(
+                (method_of(case.get("name")), result))
     return found
 
 
+def missing_methods(entry, platform, cases):
+    """The methods the manifest names for this test that did not pass.
+
+    A class is not its claim: one passing case named anything used to count as
+    PASS, so a security test emptied down to a placeholder - or with the case
+    that carries the property deleted - still let the build through. Where the
+    manifest lists the methods, each of them has to have passed; on a platform
+    the manifest gives a reason to skip on, a skipped one counts as run.
+    """
+    wanted = entry.get("methods")
+    if not wanted:
+        return []
+    accepted = {"pass", "skip"} if entry.get("skips", {}).get(platform) else {"pass"}
+    ran = {method for method, result in cases if result in accepted}
+    return [method for method in wanted if method not in ran]
+
+
 def status(entry, platform, cases):
-    """The status of one manifest entry, and a note that says why."""
+    """The status of one manifest entry, and a note that says why.
+
+    ``cases`` is the list of (method, result) pairs of the test's class, result
+    one of 'pass', 'skip', 'fail'.
+    """
     platforms = entry.get("platforms")
     if platforms and platform not in platforms:
         return "NOT APPLICABLE", "for " + ", ".join(platforms) + " only"
     if not cases:
         return "FAIL", "did not run"
-    passed, skipped, failed = (cases.count(r) for r in ("pass", "skip", "fail"))
+    absent = missing_methods(entry, platform, cases)
+    results = [result for _, result in cases]
+    passed, skipped, failed = (results.count(r) for r in ("pass", "skip", "fail"))
     counts = f"{passed} passed, {skipped} skipped, {failed} failed"
     if failed:
         return "FAIL", counts
+    if absent:
+        return "FAIL", counts + "; did not pass: " + ", ".join(absent)
     reason = entry.get("skips", {}).get(platform)
     if skipped and reason:
         return ("PASS", f"{counts} - {reason}") if passed else ("SKIPPED", f"{counts} - {reason}")
@@ -86,7 +126,7 @@ def evaluate(manifest, group, platform, root):
     for entry in manifest["groups"][group]:
         module = entry["module"]
         if module not in cache:
-            cache[module] = outcomes(root, module)
+            cache[module] = outcomes_by_method(root, module)
         verdict, note = status(entry, platform, cache[module].get(entry["test"], []))
         rows.append((verdict, entry["test"], entry["property"], note))
     return rows
