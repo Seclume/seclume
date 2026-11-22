@@ -157,7 +157,7 @@ public final class SeclumeJwt implements AutoCloseable {
         }
         // RFC 7515 4.1.11: an extension the recipient does not understand makes
         // the token invalid - and none is understood here.
-        if (JsonOff.has(MemorySegment.ofArray(header), header.length, "crit")) {
+        if (present(header, "crit")) {
             throw new InvalidTokenException("the token names critical header parameters "
                     + "(crit), and this verifier understands none");
         }
@@ -203,9 +203,19 @@ public final class SeclumeJwt implements AutoCloseable {
         return decoded;
     }
 
+    /** Whether the token has {@code name} - and a token whose JSON cannot be read is refused. */
+    private static boolean present(byte[] json, String name) {
+        try {
+            return JsonOff.present(MemorySegment.ofArray(json), json.length, name);
+        } catch (JsonOff.NotFound e) {
+            throw new InvalidTokenException("a part of the token is not a JSON object that "
+                    + "can be read through: " + e.getMessage(), e);
+        }
+    }
+
     private static String field(byte[] json, String name) {
         MemorySegment segment = MemorySegment.ofArray(json);
-        if (!JsonOff.has(segment, json.length, name)) {
+        if (!present(json, name)) {
             return null;
         }
         byte[] out = new byte[json.length];
@@ -219,7 +229,7 @@ public final class SeclumeJwt implements AutoCloseable {
 
     private static Long number(byte[] json, String name) {
         MemorySegment segment = MemorySegment.ofArray(json);
-        if (!JsonOff.has(segment, json.length, name)) {
+        if (!present(json, name)) {
             return null;
         }
         try {
