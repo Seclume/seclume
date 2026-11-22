@@ -43,6 +43,10 @@ All notable changes to seclume are recorded here. Versions follow
   connection itself, and `connectTimeout` bounded only that: a server that took the connection
   and said nothing held the TLS handshake for good. `connectTimeout` bounds each read of the
   handshake now; the socket is handed out without a read timeout, as before.
+- **`SeclumeS3Presigner` takes bucket names only.** A bucket is the first label of the host of
+  a virtual-host style URL, and was put there as it was: `evil.example#` made a presigned URL
+  that points at `evil.example`. A name S3 would not take is refused, as the SDK's presigner
+  refuses it.
 
 ## [0.14.0] - 2026-11-18
 
