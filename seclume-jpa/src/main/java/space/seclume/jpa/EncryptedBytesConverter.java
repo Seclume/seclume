@@ -14,6 +14,13 @@ import space.seclume.field.FieldKeys;
  * binary identifier. One subclass per column, as for
  * {@link EncryptedStringConverter}, whose notes on keys, the heap and
  * searching hold here too.
+ *
+ * <p><b>A value is not bound to its row:</b> a converter is not told which
+ * entity it converts, so it encrypts without a context. Whoever can write to
+ * the table can copy a value from one row into another of the same column,
+ * and it is read there as that row's own. Where that matters - an account to
+ * pay to, a role - seal the value with the row's id instead
+ * ({@link space.seclume.field.EncryptedColumn#seal(java.lang.foreign.MemorySegment, byte[])}).
  */
 public abstract class EncryptedBytesConverter implements AttributeConverter<byte[], byte[]> {
 

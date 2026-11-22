@@ -99,6 +99,14 @@ All notable changes to seclume are recorded here. Versions follow
   `RedactingEncoder` masks a whole line - a pattern's, MDC and the added stack trace
   included, or another encoder's.
 
+### Documentation
+
+- **A JPA-converted value is not bound to its row.** `EncryptedStringConverter` and
+  `EncryptedBytesConverter` cannot use a context - a converter is not told its entity - so a
+  value copied by someone who can write to the table into another row of the same column is
+  read there as that row's. ENCRYPTION.md and the converters say so now, with `Sealed` sealed
+  with the row's id for values whose place matters.
+
 ## [0.14.0] - 2026-11-18
 
 ### Upgrading: what changes behaviour

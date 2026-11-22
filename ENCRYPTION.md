@@ -328,6 +328,17 @@ em.createQuery("from Patient where ssn = :ssn", Patient.class)
   only passes on - a token, a TOTP seed. The entity holds the ciphertext; `column.seal(...)`
   makes one from native memory and `column.open(sealed, target)` writes the plaintext into
   native memory. Nothing on the heap is ever the plaintext.
+- **A converted value is not bound to its row.** A converter is not told which entity it
+  converts, so `EncryptedStringConverter` and `EncryptedBytesConverter` encrypt without a
+  [context](#context-a-value-bound-to-its-row): whoever can write to the table - an
+  administrator, an SQL injection, a restored backup - can copy a value from one row into
+  another of the same column, and the application reads it there as that row's own. Someone
+  who enters their own bank account through the application and copies its ciphertext into
+  another customer's row has changed where that customer's payouts go, without reading or
+  forging anything. For a value whose place matters - an account to pay to, a role, an
+  address a password reset goes to - use a `Sealed` attribute sealed with the row's id,
+  `column.seal(value, id)` and `column.open(sealed, id, target)`, with an id the application
+  assigns before the row is written (a UUID); or the JDBC API with `Context.ROW_ID`.
 - A deterministic attribute is searched by `=` and `in`, also in derived queries
   (`findBySsn`). During a rotation that finds the values under the primary key; use
   `column.searchSealed(value)` with `in` on a `Sealed` attribute, or re-encrypt first.
