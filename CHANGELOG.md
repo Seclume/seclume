@@ -18,6 +18,16 @@ All notable changes to seclume are recorded here. Versions follow
   image without a digest, a Maven distribution without `distributionSha256Sum`, or an archive
   checked only against a checksum from the same server - unless `.github/unpinned-inputs.json`
   lists it, and that list may only shrink. `pinned_inputs.py --pin` pins the listed images.
+- **heapcheck: no "nothing found" for a check that looked for nothing.** A recording that names
+  no secret, checked without `--secret-file`, `--secret-dir` or `--discover`, exited 0; it is
+  now a misuse (exit 2).
+- **heapcheck leaves no management agent behind.** The dump is taken through `jcmd` first; the
+  process's JMX agent is used only when it runs already, and started only without a `jcmd`, with
+  a warning: once started, it stays open in the process until it ends.
+- **heapcheck leaves no dump in another container.** A process in another mount namespace,
+  checked without `--in-target`, wrote its dump into its own `/tmp`, where it stayed when the
+  check failed to find it. That is refused before the dump now; with `--dump-dir`, a dump the
+  process wrote out of this check's sight is deleted through `/proc/<pid>/root`.
 
 ## [0.14.0] - 2026-11-18
 

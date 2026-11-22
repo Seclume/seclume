@@ -124,4 +124,108 @@ class ProcessHeapTest {
         assertThrows(IOException.class, () -> ProcessHeap.jcmd("999999999", dump));
         assertFalse(Files.exists(dump));
     }
+
+    /** Whether the process's management agent runs - asked through attach alone. */
+    private static boolean agentRuns(Process target) throws Exception {
+        com.sun.tools.attach.VirtualMachine machine =
+                com.sun.tools.attach.VirtualMachine.attach(Long.toString(target.pid()));
+        try {
+            return machine.getAgentProperties().getProperty(
+                    "com.sun.management.jmxremote.localConnectorAddress") != null;
+        } finally {
+            machine.detach();
+        }
+    }
+
+    /**
+     * The check leaves the process as it found it: no management agent - an
+     * RMI connector without authentication, open until the process ends - is
+     * started for the dump when jcmd can take it.
+     */
+    @Test
+    void theDumpStartsNoManagementAgentInTheProcess(@TempDir Path directory) throws Exception {
+        String canary = "zlNoAgent" + Long.toHexString(System.nanoTime());
+        Process target = start(canary);
+        try {
+            assertFalse(agentRuns(target), "the agent ran before the check");
+            Path dump = directory.resolve("no-agent.hprof");
+            ProcessHeap.dump(Long.toString(target.pid()), dump);
+            assertIsTheDumpOf(dump, canary);
+            assertFalse(agentRuns(target), "the check left a management agent running");
+        } finally {
+            target.destroyForcibly();
+        }
+    }
+
+    /** An agent that runs already is used as it is. */
+    @Test
+    void aRunningAgentIsUsed(@TempDir Path directory) throws Exception {
+        String canary = "zlRunningAgent" + Long.toHexString(System.nanoTime());
+        Process target = start(canary);
+        try {
+            com.sun.tools.attach.VirtualMachine machine =
+                    com.sun.tools.attach.VirtualMachine.attach(Long.toString(target.pid()));
+            try {
+                machine.startLocalManagementAgent();
+            } finally {
+                machine.detach();
+            }
+            Path dump = directory.resolve("agent.hprof");
+            ProcessHeap.dump(Long.toString(target.pid()), dump);
+            assertIsTheDumpOf(dump, canary);
+        } finally {
+            target.destroyForcibly();
+        }
+    }
+
+    @Test
+    void aProcessOfThisFileSystemIsNotInAnother() {
+        assertFalse(HeapCheck.otherFileSystem(Long.toString(ProcessHandle.current().pid())));
+        assertFalse(HeapCheck.otherFileSystem("999999999"), "unknown is not another");
+    }
+
+    /**
+     * A process in another mount namespace - another container - would write
+     * its dump where this check cannot see it, and the dump would stay there:
+     * refused before the dump, with --in-target as the way. Needs Linux, root
+     * and unshare; skipped elsewhere.
+     */
+    @Test
+    void aProcessInAnotherFileSystemIsRefusedAndLeftWithoutADump(@TempDir Path directory)
+            throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isDirectory(Path.of("/proc/self/ns"))
+                && "root".equals(System.getProperty("user.name")), "Linux as root");
+        Process probe = new ProcessBuilder("unshare", "-m", "--propagation", "private", "true")
+                .redirectErrorStream(true).start();
+        org.junit.jupiter.api.Assumptions.assumeTrue(probe.waitFor(30, TimeUnit.SECONDS)
+                && probe.exitValue() == 0, "unshare -m");
+        String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+        Process target = new ProcessBuilder("unshare", "-m", "--propagation", "private", "sh", "-c",
+                "mount -t tmpfs tmpfs /tmp && exec \"$0\" -cp \"$1\" \"$2\" \"$3\"", java,
+                System.getProperty("java.class.path"), Target.class.getName(), "zlOtherFs")
+                .redirectErrorStream(true).start();
+        try (BufferedReader output = new BufferedReader(new InputStreamReader(
+                target.getInputStream(), StandardCharsets.UTF_8))) {
+            for (String line = output.readLine(); line != null && !line.startsWith("ready");
+                    line = output.readLine()) {
+                // the JVM's own lines
+            }
+            long pid = target.descendants().filter(p -> p.info().command().orElse("")
+                    .endsWith("java")).findFirst().map(ProcessHandle::pid).orElse(target.pid());
+            assertTrue(HeapCheck.otherFileSystem(Long.toString(pid)));
+            Path secret = Files.writeString(directory.resolve("secret"), "zlOtherFs");
+            space.seclume.tck.ChildJvm.Result result = space.seclume.tck.ChildJvm.run(
+                    HeapCheck.class, List.of("--pid", Long.toString(pid), "--secret-file",
+                            secret.toString(), "--no-attribution"), 120);
+            assertTrue(result.exitCode() == 2, result.output());
+            assertTrue(result.output().contains("--in-target"), result.output());
+            try (var left = Files.list(Path.of("/proc", Long.toString(pid), "root", "tmp"))) {
+                assertTrue(left.noneMatch(f -> f.getFileName().toString()
+                        .startsWith("seclume-heapcheck-")), "a dump was left in the process");
+            }
+        } finally {
+            target.descendants().forEach(ProcessHandle::destroyForcibly);
+            target.destroyForcibly();
+        }
+    }
 }

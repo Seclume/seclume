@@ -284,4 +284,34 @@ class CommandLineTest {
         assertEquals(2, ChildJvm.run(HeapCheck.class, List.of("--dump", dump.toString()), 60)
                 .exitCode());
     }
+
+    /**
+     * A recording that names no secret - the events that would hold the
+     * environment, properties and arguments are not in it - checked with
+     * nothing named and no discovery: nothing is looked for, so "nothing
+     * found" and exit 0 would pass a gate that checked nothing.
+     */
+    @Test
+    void aRecordingThatNamesNoSecretIsNoCleanResultOnItsOwn(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path recording = dir.resolve("quiet.jfr");
+        try (jdk.jfr.Recording quiet = new jdk.jfr.Recording()) {
+            quiet.enable("jdk.CPULoad");   // no environment, no properties, no arguments
+            quiet.start();
+            quiet.stop();
+            quiet.dump(recording);
+        }
+        assertTrue(space.seclume.heapdump.Recordings.secretSettings(recording).isEmpty());
+
+        ChildJvm.Result check = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", recording.toString()), 120);
+        assertEquals(2, check.exitCode(), check.output());
+        assertTrue(check.output().contains("names no secret"), check.output());
+        assertTrue(!check.output().contains("NOT FOUND"), check.output());
+
+        ChildJvm.Result discovered = ChildJvm.run(HeapCheck.class,
+                List.of("--dump", recording.toString(), "--discover"), 120);
+        assertEquals(0, discovered.exitCode(), "discovery is something to look for: "
+                + discovered.output());
+    }
 }

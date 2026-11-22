@@ -383,6 +383,7 @@ public final class HeapCheck {
 
         boolean takesDump = options.dumpFile() == null;
         Path dump = null;
+        Path pendingDump = null;
         try {
             AuditReport.Target target;
             if (takesDump) {
@@ -403,6 +404,21 @@ public final class HeapCheck {
                 } else {
                     writtenAs = Files.createTempFile("seclume-heapcheck-", ".hprof");
                 }
+                if (!options.inTarget() && options.keep() == null && options.dumpDir() == null
+                        && otherFileSystem(options.pid())) {
+                    // The process writes the dump into its own temporary directory: it
+                    // would not be found here, the check would fail - and the dump,
+                    // with everything the process holds, would stay there. (With
+                    // --dump-dir or --keep-dump the path may be a volume both share.)
+                    Files.deleteIfExists(writtenAs);
+                    System.err.println("process " + options.pid() + " sees another file "
+                            + "system than this check (another container): its dump would "
+                            + "be written there and not be found here. Run with --in-target, "
+                            + "which reads it through /proc/" + options.pid() + "/root and "
+                            + "deletes it there");
+                    return 2;
+                }
+                pendingDump = writtenAs;
                 dump = options.local(writtenAs);
                 Files.deleteIfExists(dump);       // the JVM insists on writing it itself
                 System.out.println("asking process " + options.pid() + " for a heap dump ...");
@@ -424,6 +440,14 @@ public final class HeapCheck {
             if (recording) {
                 Recordings.secretSettings(dump).forEach((label, value) -> recorded.add(
                         new Secret(label + " (in the recording)", value.strip(), null)));
+            }
+            if (secrets.isEmpty() && recorded.isEmpty() && !options.discover()) {
+                // Nothing to look for: "not found" would be true of anything, and
+                // exit 0 would pass a gate that checked nothing.
+                System.err.println("the recording names no secret - no environment variable, "
+                        + "system property or argument named like one - and none was given: "
+                        + "name one with --secret-file or --secret-dir, or add --discover");
+                return 2;
             }
             System.out.println((recording ? "recording is " : "dump is ")
                     + size / (1024 * 1024) + " MB, searching for "
@@ -467,6 +491,7 @@ public final class HeapCheck {
         } finally {
             if (takesDump && options.keep() == null && dump != null) {
                 deleteQuietly(dump);
+                leftInProcess(options.pid(), pendingDump, dump);
             } else if (takesDump && dump != null) {
                 System.out.println();
                 System.out.println("the dump was kept at " + dump
@@ -686,6 +711,45 @@ public final class HeapCheck {
             return InetAddress.getLocalHost().getHostName();
         } catch (IOException e) {
             return "unknown";
+        }
+    }
+
+    /**
+     * Whether the process sees another file system than this one: Linux, and
+     * its mount namespace differs. False where that cannot be told.
+     */
+    static boolean otherFileSystem(String pid) {
+        try {
+            Path mine = Path.of("/proc/self/ns/mnt");
+            Path its = Path.of("/proc", pid, "ns", "mnt");
+            return Files.exists(mine) && Files.exists(its)
+                    && !Files.readSymbolicLink(mine).equals(Files.readSymbolicLink(its));
+        } catch (IOException | UnsupportedOperationException | SecurityException unknown) {
+            return false;
+        }
+    }
+
+    /**
+     * The dump as the process wrote it, if it is not the file deleted here -
+     * a process whose file system changed under the check - deleted there, or
+     * named as left behind.
+     */
+    private static void leftInProcess(String pid, Path writtenAs, Path deletedHere) {
+        if (writtenAs == null || pid == null || !otherFileSystem(pid)) {
+            return;
+        }
+        Path absolute = writtenAs.toAbsolutePath();
+        Path there = Path.of("/proc", pid, "root").resolve(
+                absolute.getRoot().relativize(absolute).toString());
+        if (there.equals(deletedHere) || !Files.exists(there, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        try {
+            Files.delete(there);
+        } catch (IOException e) {
+            System.err.println("process " + pid + " wrote its dump to " + writtenAs + " in its "
+                    + "own file system, and it could not be deleted - delete it by hand, it "
+                    + "contains everything the process had in memory");
         }
     }
 
