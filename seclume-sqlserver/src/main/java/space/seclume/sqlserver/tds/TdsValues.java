@@ -276,6 +276,12 @@ public final class TdsValues {
         }
         int base = in.getByte(at) & 0xff;
         int properties = in.getByte(at + 1) & 0xff;
+        // MS-TDS 2.2.5.5.4: a sql_variant never holds another one. Taken as it
+        // came, each nesting cost two bytes and one recursion here - an 8016-byte
+        // value was a StackOverflowError on a 1 MiB thread stack.
+        if (base == TdsTypes.SQLVARIANT) {
+            throw WireBuffer.malformed("a sql_variant that holds a sql_variant");
+        }
         // The property count is the server's, up to 255, and what is left for
         // the value is the length minus it: a count larger than the value made
         // the value's length negative, and that went to an array allocation as
