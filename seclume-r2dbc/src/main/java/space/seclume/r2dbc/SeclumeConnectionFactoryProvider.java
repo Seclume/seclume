@@ -65,6 +65,19 @@ public final class SeclumeConnectionFactoryProvider implements ConnectionFactory
         String host = String.valueOf(options.getRequiredValue(ConnectionFactoryOptions.HOST));
         Object port = options.getValue(ConnectionFactoryOptions.PORT);
         Object database = options.getValue(ConnectionFactoryOptions.DATABASE);
+        // Host, port and database go into the URL as they are - every other
+        // option is encoded. A database of "tenant?user=postgres&x" was a
+        // query of its own: the login name, and any option not set here,
+        // came from whoever chose the database.
+        if (!host.matches("[A-Za-z0-9._\\-:\\[\\],]+")) {
+            throw new IllegalArgumentException("not a host (list): " + host);
+        }
+        if (port != null && !String.valueOf(port).matches("[0-9]{1,5}")) {
+            throw new IllegalArgumentException("not a port: " + port);
+        }
+        if (database != null && !String.valueOf(database).matches("[^?&#/%\\s\\p{Cntrl}]*")) {
+            throw new IllegalArgumentException("a database name holds none of ? & # / % or white space");
+        }
         StringBuilder url = new StringBuilder("jdbc:seclume:")
                 .append(jdbcName(protocol)).append("://").append(host);
         if (port != null) {
