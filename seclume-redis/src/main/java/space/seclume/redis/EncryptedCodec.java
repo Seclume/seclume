@@ -116,4 +116,41 @@ public final class EncryptedCodec<K, V> implements RedisCodec<K, V> {
             return out;
         }
     }
+
+    /**
+     * A value bound to the key it is stored under: the key's bytes join the
+     * associated data, so a ciphertext copied to another key no longer opens.
+     * RedisCodec cannot do this - encodeValue never sees the key.
+     */
+    public ByteBuffer encodeValueFor(K key, V value) {
+        return encryptBound(values, inner.encodeValue(value), boundContext(key));
+    }
+
+    /** {@link #encodeValueFor}'s counterpart: refuses a value stored under another key. */
+    public V decodeValueFor(K key, ByteBuffer stored) {
+        byte[] bytes = new byte[stored.remaining()];
+        stored.duplicate().get(bytes);
+        byte[] aad = boundContext(key);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment plain = arena.allocate(Math.max(1, values.plaintextLength(bytes)));
+            int length = values.decrypt(bytes, aad, plain);
+            ByteBuffer out = ByteBuffer.wrap(plain.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE));
+            plain.fill((byte) 0);
+            return inner.decodeValue(out);
+        }
+    }
+
+    private byte[] boundContext(K key) {
+        ByteBuffer k = inner.encodeKey(key);
+        byte[] aad = new byte[context.length + 1 + k.remaining()];
+        System.arraycopy(context, 0, aad, 0, context.length);
+        k.duplicate().get(aad, context.length + 1, k.remaining());
+        return aad;
+    }
+
+    private ByteBuffer encryptBound(EncryptedColumn column, ByteBuffer plain, byte[] aad) {
+        byte[] bytes = new byte[plain.remaining()];
+        plain.duplicate().get(bytes);
+        return ByteBuffer.wrap(column.encrypt(MemorySegment.ofArray(bytes), aad));
+    }
 }
