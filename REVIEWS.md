@@ -369,6 +369,143 @@ the new tests fail on it. PIT in this pull request's CI is the measure.
 - **`HostnameMatch`**: an address matches only an iPAddress entry; IPv4-mapped addresses
   compare as what they are; entries that are no name are skipped.
 
+## Rounds 6 to 16 - November 2026
+
+How these were done: each round read one area against its claims, as above, with an AI
+assistant (Claude). Maven Central could not be reached where they were done: fixes were
+compiled with `javac -Xlint:all -Werror` against the modules built from this repository, and
+new tests were run with a minimal JUnit-API shim, against the fix and against the code before
+it, where they failed unless said otherwise. Where a library was needed and not at hand it was
+built from its own source (Logback 1.6.6, Spring Boot 4.1.2's two Logback converters, the
+Jakarta Persistence `AttributeConverter`). Slow or silent servers were stand-ins that dribble
+or answer protocol text; every secret was a decoy. The tests that need a database, a broker or
+a library not at hand are for CI. "Fixed in" names the branch the fix was prepared on.
+
+## Round 6 - November 2026
+
+Scope: `seclume-heapcheck` - the recording check, `ProcessHeap`'s dump of another process.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | heapcheck | A recording that names no secret, with nothing named and no discovery, searched for nothing and exited 0. | medium | `review/heapcheck` |
+| 2 | heapcheck | `ProcessHeap` started the target's local management agent for every dump, falling back to `jcmd` only when JMX failed. The agent stays open (RMI, no authentication, local peers) until the process ends. | medium | `review/heapcheck` |
+| 3 | heapcheck | A process in another mount namespace, checked without `--in-target`, wrote the dump into its own `/tmp`: the check did not find it and failed, and the dump of everything in the heap stayed there. | medium | `review/heapcheck` |
+
+## Round 7 - November 2026
+
+Scope: the logins of `seclume-mail` (SMTP, IMAP, POP3) and `seclume-ldap`.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Mail, LDAP | The read timeout was per read. A server - or anyone on the path before STARTTLS - that sends one byte just before each read would time out held a login, and LDAP's StartTLS and handshake inside JNDI's connect, without end (1 s timeout, still blocked after 20 s). The login now has `seclume.loginBudgetFactor` (3) times the read timeout as a whole. | low | `review/login-deadlines` |
+
+### Open
+
+- **No deadline in `TlsLayers.start`.** The TLS handshake has a per-read timeout only, wherever
+  it runs; the login budget above covers mail and LDAP. One deadline for the handshake itself
+  would cover every user at once.
+
+## Round 8 - November 2026
+
+Scope: `SecretFetch` (Vault, AWS, Azure, GCP, their KMS, the metadata services) and the Redis
+socket factory.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Secret providers | `SecretFetch` passed its timeout to the connect only: a server that took the connection and said nothing held the handshake and the answer for good (`timeoutMillis=1000`, still blocked after 15 s), and every login waiting for that secret with it. | low | `review/read-timeouts` |
+| 2 | Redis | `SeclumeRedisSocketFactory` set its read timeout after the TLS handshake: a silent `rediss://` server held Jedis's `createSocket` for good. | low | `review/read-timeouts` |
+
+## Round 9 - November 2026
+
+Scope: `SeclumeSslSocketFactory` of `seclume-http`.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | HTTP | `createSocket(host, port)` opens the connection and runs seclume's TLS at once; `connectTimeout` bounded the connect only, so a silent server held the handshake for good. The layered `createSocket(socket, ...)` was not affected. | low | `review/socket-factory-handshake` |
+
+## Round 10 - November 2026
+
+Scope: `SeclumeS3Presigner` of `seclume-aws`.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | AWS | The bucket went into the host of a virtual-host style URL unchecked: a bucket `evil.example#` made a presigned "link to S3" whose host is `evil.example`. An application that takes the bucket from its user handed out links to wherever the user chose. | medium | `review/presign-bucket` |
+
+## Round 11 - November 2026
+
+Scope: `QueryFingerprint` in every dialect.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Fingerprints | A backslash was taken for an escape in every dialect and quoting form. A run masked too long ends at the quote that opens the next literal, whose contents were then read as words: `VALUES ('C:\data\', 'secret')` gave `values (?secret?`, and a quoted identifier ending in a backslash copied the rest of the statement verbatim - into JFR events, OpenTelemetry spans, Micrometer tags and `lastFingerprint`. About 37,000 leaks in 100,000 random statements before, none in 300,000 after. | high | `review/fingerprint-backslash` |
+
+## Round 12 - November 2026
+
+Scope: `JdbcUrl.redact`, the log masker's encodings, `PgSqlRewriter`.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | JDBC URL redaction | Before the query a value ended at any of `; , ( )` - wrong for SQL Server's `;`-separated values, which hold `, ( )`, and the other way round for a `;` in a MySQL key-value password; an Oracle password in quotes with a `//` in it was printed whole. 2,875 of 60,000 random passwords had a half shown before, none of 240,000 after. | medium | `review/redact-syntax` |
+| 2 | Log masker | A secret was looked for percent-encoded only as RFC 3986 strictly or `URLEncoder` encode it, and JSON-escaped only for `"` `\` and line breaks. `java.net.URI`, Spring and OkHttp encode only what their part of a URL does not allow, and Gson escapes `= ' < > &` as backslash-u: of 2,000 random passwords, 925 and 1,191 went unmasked. | medium | `review/masker-views` |
+| 3 | PostgreSQL | `PgSqlRewriter` did not tell `E'...'` apart: in `E'it\'s ?'` the `?` became `$1` and a real one after it stayed `?`. A refused statement, not an injection. | low | `review/pg-escape-strings` |
+
+## Round 13 - November 2026
+
+Scope: what the heap dump redaction, heapcheck and the TCK look for.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Heap dumps | A named secret was looked for as UTF-8, UTF-16, Latin-1 and its own Base64. In `Authorization: Basic base64(user:password)` its Base64 begins where the user name leaves it; URL-safe, percent-encoded and JSON-escaped forms were not looked for either. A redacted copy "passed its own check" with twelve Basic headers decoding to the password; heapcheck found nothing in a process that held it only in a header; `/actuator/heapdump` and the TCK's heap tests had the same patterns. One shared list (`SecretEncodings`) now. | high | `review/dump-encodings` |
+
+## Round 15 - November 2026
+
+Scope: `seclume-logging`'s Logback, Log4j 2 and java.util.logging adapters.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Logback | The documented rules replaced `%msg` and `%xEx` only, and a rule replaces the converter of its one word. Spring Boot's patterns write `%m` and `%wEx`, so with `logback-spring.xml` as documented neither message nor stack trace was masked; `%ex`, `%throwable`, `%rEx`, `%message`, the stack trace Logback adds to a pattern without one, and JSON encoders were not either. `redact-rules.xml` registers every word now, and `RedactingEncoder` masks a whole line. | high | `review/logback-coverage` |
+| 2 | Log masker | `java.util.logging`'s `XMLFormatter` writes `& < >` as entities: a secret with one of them went to the log unmasked, in the message and in the exception. A line with `&` is also read with its character references resolved now. | medium | `review/markup-escapes` |
+
+The round's own changes were reviewed once more before they were handed on: a
+`RedactingEncoder` with neither a pattern nor an encoder threw out of Logback's configuration
+(it reports an error and writes nothing now); `redact-rules.xml` included before Spring Boot's
+`defaults.xml` lost `%wex` and `%wEx` without a word (Logback's status warns now); numeric
+character references with leading zeros were not read, and non-ASCII digits were.
+
+### Open
+
+- With `seclume.logging.redact=true` and no `logback-spring.xml`, nothing is masked by Logback;
+  the starter could say so at start.
+- A pattern that cuts the message (`%.20msg` inside `%redact{...}`, a precision in
+  `SimpleFormatter`'s format) leaves the start of a secret that is cut through.
+- Log4j 2's layout appends a stack trace unmasked where `%redact{...}` has no stack trace word
+  in it; its status log could say so.
+- Spring Boot's structured logging in its own `base.xml` appenders cannot be wrapped in
+  `RedactingEncoder`; that takes an appender of the application's own.
+
+### Reviewed, nothing found
+
+- java.util.logging with `SimpleFormatter`; Log4j 2's `%redact` masks the whole inner pattern,
+  Spring Boot's `%xwEx` included (read, not run - Log4j 2 was not at hand).
+
+## Round 16 - November 2026
+
+Scope: `seclume-kubernetes` and `seclume-jpa`.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | JPA | `EncryptedStringConverter` and `EncryptedBytesConverter` encrypt without a context - a converter is not told its entity - so whoever can write to the table can copy a value into another row of the same column, and it is read there as that row's own: one's own bank account, entered through the application, into another customer's row. ENCRYPTION.md promised the binding for the JDBC API and said nothing of the converters; it does now, with `Sealed` sealed with the row's id. | low | `review/jpa-row-binding` (documentation) |
+
+### Reviewed, nothing found
+
+- **Kubernetes**: the token's placeholder is bound to the API server's `host:port`, compared
+  in lower case with IPv6 in brackets; a client pointed elsewhere, or a redirect, sends the
+  placeholder.
+- **JPA converters**: the plaintext length is exact, the buffer of a `String` attribute is
+  wiped, a value that does not authenticate leaves nothing in the target; the ring is taken
+  at the first value and kept, as the documented rotation (a new key in the ring, then a
+  restart) expects.
+
 ## The next review
 
 `SeclumeCollection`, `Iterables` and `BatchCursor` of `seclume-mongodb-driver` have been
@@ -377,3 +514,7 @@ before the fix), except the overloads of `find`, `aggregate`, `distinct` and `wa
 only pass their arguments on. Not read line by line in this round: `Indexes`, `Bsons`,
 `SeclumeDatabase` and `EncryptedFields` of that driver. A
 round adds a section here, findings and the sound alike.
+
+After round 16: the open items of rounds 7 and 15 above, and the modules not read in any
+round yet - `seclume-micronaut`, `seclume-helidon`, `seclume-mongodb-reactive`, the Spring
+Boot starter as a whole, and most of the SQL Server and PostgreSQL drivers.
