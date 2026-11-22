@@ -806,7 +806,9 @@ class MyStatement implements Statement, MySession.RowHandler {
 
     @Override
     public String enquoteNCharLiteral(String value) throws SQLException {
-        return "N" + enquoteLiteral(value);
+        String literal = enquoteLiteral(value);
+        // _utf8mb4 X'..' (MyQuoting.hex) is national already; N_utf8mb4 is no SQL.
+        return literal.startsWith("'") ? "N" + literal : literal;
     }
 
     @Override

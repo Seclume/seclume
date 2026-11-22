@@ -804,6 +804,15 @@ public final class MySession implements AutoCloseable {
         }
     }
 
+    /** A HandshakeResponse field ends at the first zero byte; one inside would shift every field after it. */
+    private static String handshakeValue(String what, String value) throws SQLException {
+        if (value.indexOf('\0') >= 0) {
+            throw new SQLException(what + " holds a zero byte, which would end it and shift "
+                    + "the fields after it", "08001");
+        }
+        return value;
+    }
+
     /**
      * Writes the login answer.
      *
@@ -823,8 +832,8 @@ public final class MySession implements AutoCloseable {
             out.putByte(CHARSET_UTF8MB4);
             out.putZeroes(23);                     // Fueller, so will es das Protokoll
             // The URL's user, or a dynamic secret's own (Vault's database engine).
-            out.putCString(space.seclume.secret.DynamicUser.loginUser(settings.user(),
-                    settings.secret()));
+            out.putCString(handshakeValue("user", space.seclume.secret.DynamicUser.loginUser(settings.user(),
+                    settings.secret())));
 
             int lengthAt = out.position();
             out.putByte((byte) 0);                 // a placeholder for the length
@@ -838,7 +847,7 @@ public final class MySession implements AutoCloseable {
             out.putByteAt(lengthAt, (byte) written);
 
             if (MyCapabilities.has(clientCapabilities, MyCapabilities.CONNECT_WITH_DB)) {
-                out.putCString(settings.database());
+                out.putCString(handshakeValue("database", settings.database()));
             }
             if (MyCapabilities.has(clientCapabilities, MyCapabilities.PLUGIN_AUTH)) {
                 out.putCString(plugin);

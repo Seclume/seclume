@@ -28,6 +28,9 @@ final class MyQuoting {
      *                           the server says so with every answer
      */
     static String literal(String value, boolean noBackslashEscapes) {
+        if (!ascii(value)) {
+            return hex(value);
+        }
         StringBuilder literal = new StringBuilder(value.length() + 8).append('\'');
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
@@ -64,6 +67,32 @@ final class MyQuoting {
             return identifier;
         }
         return "`" + identifier.replace("`", "``") + "`";
+    }
+
+    /**
+     * A value with any character beyond ASCII as {@code _utf8mb4 X'...'}: hex
+     * digits are ASCII, so no client character set can join a byte of the
+     * value with the escaping backslash after it. In GBK, Big5 or SJIS - a
+     * server with skip-character-set-client-handshake, an init_connect, or a
+     * SET NAMES - the UTF-8 of {@code \u4e2d} ended in a lead byte that took
+     * the backslash, and {@code \u4e2d\\' or 1=1 -- } was SQL.
+     */
+    static String hex(String value) {
+        byte[] utf8 = value.getBytes(java.nio.charset.StandardCharsets.UTF_8); // seclume-allow: a literal for SQL text - a String already, not a secret
+        StringBuilder out = new StringBuilder(utf8.length * 2 + 14).append("_utf8mb4 X'");
+        for (byte b : utf8) {
+            out.append(Character.forDigit((b >> 4) & 0xf, 16)).append(Character.forDigit(b & 0xf, 16));
+        }
+        return out.append('\'').toString();
+    }
+
+    static boolean ascii(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) >= 0x80) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Letters, digits and underscores after a letter: what needs no quotes in any mode. */

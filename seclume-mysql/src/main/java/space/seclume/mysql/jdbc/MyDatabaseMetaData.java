@@ -106,6 +106,9 @@ final class MyDatabaseMetaData implements DatabaseMetaData {
 
     /** A literal for a query - quotes and backslash escaped. */
     private static String literal(String value) {
+        if (!MyQuoting.ascii(value)) {
+            return MyQuoting.hex(value);
+        }
         return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'";
     }
 
