@@ -119,7 +119,7 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
      * would be the one conversion that loses something.
      */
     @Override
-    protected String stringAt(int column) {
+    protected String stringAt(int column) throws SQLException {
         int oid = block.fields().get(column).typeOid();
         if (binaryAt(column)) {
             // The bytes are a number, not text. Rendering them here keeps
@@ -134,7 +134,7 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
                     default -> Long.toString(integerAt(column));
                 };
             } catch (SQLException unreadable) {
-                throw new IllegalStateException(unreadable);
+                throw unreadable;
             }
         }
         if (oid == PgOids.FLOAT4) {
@@ -234,7 +234,7 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
     }
 
     @Override
-    protected double doubleAt(int column) {
+    protected double doubleAt(int column) throws SQLException {
         if (block.fields().get(column).typeOid() == PgOids.MONEY) {
             return money(stringAt(column));
         }
@@ -248,8 +248,9 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
                         ? Float.intBitsToFloat((int) bits)
                         : Double.longBitsToDouble(bits);
             } catch (SQLException impossible) {
-                // integerAt only refuses a width no float has.
-                throw new IllegalStateException("a float of " + length + " bytes", impossible);
+                // integerAt only refuses a width no float has - a hostile or
+                // broken server can still send one: an SQLException, as JDBC says.
+                throw new SQLException("a float of " + length + " bytes", "22003", impossible);
             }
         }
         return space.seclume.internal.jdbc.TextNumber.decimalDouble(block.data(),
@@ -278,7 +279,7 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
 
     /** {@code bytea} arrives in the text format as {@code \x...}. */
     @Override
-    protected byte[] bytesAt(int column) {
+    protected byte[] bytesAt(int column) throws SQLException {
         int offset = block.offset(row, column);
         int length = block.length(row, column);
         if (length >= 2 && block.byteAt(offset) == '\\' && block.byteAt(offset + 1) == 'x') {
@@ -302,7 +303,7 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
         if (c >= 'A' && c <= 'F') {
             return c - 'A' + 10;
         }
-        throw new IllegalStateException("not a hex digit in a bytea value: " + (char) c);
+        throw new IllegalArgumentException("not a hex digit in a bytea value");
     }
 
     /**

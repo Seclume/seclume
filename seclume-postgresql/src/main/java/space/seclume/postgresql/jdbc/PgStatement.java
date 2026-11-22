@@ -147,7 +147,8 @@ class PgStatement implements Statement, PgSession.RowHandler {
      */
     final void underDeadline(String sql, Work body) throws SQLException {
         try (space.seclume.internal.jdbc.Deadline deadline =
-                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow)) {
+                     space.seclume.internal.jdbc.Deadline.of(queryTimeout, this::stopNow,
+                             () -> connection.session().transport().close())) {
             try {
                 body.run();
             } catch (SQLException failed) {
@@ -316,7 +317,12 @@ class PgStatement implements Statement, PgSession.RowHandler {
             session.executeMore(executeLimit(), this);
         } finally {
             session.endCollect();
-            collected.adopt(session::exchangeBuffer);
+            if (session.isOpen()) {
+                // A connection that broke while the rows arrived has freed
+                // its buffers: swapping would read freed memory and replace
+                // the real failure with "Already closed".
+                collected.adopt(session::exchangeBuffer);
+            }
             collected = null;
             collecting = null;
         }
@@ -383,7 +389,7 @@ class PgStatement implements Statement, PgSession.RowHandler {
             throw e;
         } finally {
             session.endCollect();
-            if (collected != null) {
+            if (collected != null && session.isOpen()) {
                 // The buffer that holds the rows becomes the memory of this
                 // result; the session gets the empty one in exchange.
                 collected.adopt(session::exchangeBuffer);
@@ -484,6 +490,11 @@ class PgStatement implements Statement, PgSession.RowHandler {
     @Override
     public void row(space.seclume.postgresql.Row row) throws SQLException {
         if (answers > 0) {
+            if (laterBlock == null) {
+                // A DataRow with no RowDescription before it: not PostgreSQL.
+                throw new SQLException("the server sent a row for a result it never described",
+                        "08P01");
+            }
             // A later statement of the text: its own block, copied - the
             // receive buffer goes to the first result.
             if (maxRows == 0 || laterRows < maxRows) {

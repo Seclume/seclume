@@ -60,7 +60,7 @@ final class PgArrayText {
         if (parser.peek() != '{') {
             throw malformed(text);
         }
-        List<Object> value = parser.readBraces();
+        List<Object> value = parser.readBraces(1);
         parser.skipSpace();
         if (parser.at != parser.text.length()) {
             throw malformed(text);
@@ -68,7 +68,16 @@ final class PgArrayText {
         return value;
     }
 
-    private List<Object> readBraces() throws SQLException {
+    /** PostgreSQL's MAXDIM: no array it writes has more dimensions. */
+    private static final int MAX_DIMENSIONS = 6;
+
+    private List<Object> readBraces(int depth) throws SQLException {
+        if (depth > MAX_DIMENSIONS) {
+            // One recursion per brace: a hostile server's "{{{{..." was a
+            // StackOverflowError out of getArray.
+            throw new SQLException("an array of more than " + MAX_DIMENSIONS
+                    + " dimensions - not one PostgreSQL writes", "22P02");
+        }
         expect('{');
         List<Object> elements = new ArrayList<>();
         skipSpace();
@@ -78,7 +87,7 @@ final class PgArrayText {
         }
         while (true) {
             skipSpace();
-            elements.add(peek() == '{' ? readBraces() : readElement());
+            elements.add(peek() == '{' ? readBraces(depth + 1) : readElement());
             skipSpace();
             char next = next();
             if (next == '}') {

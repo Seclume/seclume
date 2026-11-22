@@ -543,6 +543,15 @@ public final class PgSession implements AutoCloseable {
     /** The user this login went out as: the URL's, or a dynamic secret's own (Vault). */
     private String loginUser;
 
+    /** A StartupMessage value ends at the first zero byte; one inside would start a parameter of its own. */
+    private static String startupValue(String what, String value) throws SQLException {
+        if (value.indexOf('\0') >= 0) {
+            throw new SQLException(what + " holds a zero byte, which would end it and add a "
+                    + "startup parameter of its own", "08001");
+        }
+        return value;
+    }
+
     private void startup(Settings settings) throws SQLException {
         // The server does not send the database back among its parameters, so
         // it is kept here - getCatalog() has to answer with something, and
@@ -554,9 +563,9 @@ public final class PgSession implements AutoCloseable {
             out.putInt(PgProtocol.VERSION_3);
             loginUser = space.seclume.secret.DynamicUser.loginUser(settings.user(),
                     settings.secret());
-            out.putCString("user").putCString(loginUser);
-            out.putCString("database").putCString(settings.database());
-            out.putCString("application_name").putCString(settings.applicationName());
+            out.putCString("user").putCString(startupValue("user", loginUser));
+            out.putCString("database").putCString(startupValue("database", settings.database()));
+            out.putCString("application_name").putCString(startupValue("applicationName", settings.applicationName()));
             out.putCString("client_encoding").putCString("UTF8");
             // The JVM's zone, as pgjdbc sends it: ::date, date_trunc and
             // timestamptz text then agree with the vendor driver.
@@ -627,11 +636,16 @@ public final class PgSession implements AutoCloseable {
                     throw readError();
                 }
                 if (tag != PgProtocol.AUTHENTICATION) {
+                    if (tag == PgProtocol.READY_FOR_QUERY) {
+                        // The login ends with AuthenticationOk and nothing else:
+                        // every check below (requireAuth, SCRAM's server proof,
+                        // Kerberos' mutual authentication) hangs on it.
+                        throw new java.sql.SQLInvalidAuthorizationSpecException(
+                                "the server sent ReadyForQuery before AuthenticationOk - "
+                                + "refused as a server that skipped the login", "28000");
+                    }
                     // ParameterStatus and friends may already arrive here.
                     handleAsynchronous(tag);
-                    if (tag == PgProtocol.READY_FOR_QUERY) {
-                        return;
-                    }
                     continue;
                 }
                 int code = in.getInt();
