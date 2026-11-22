@@ -125,6 +125,15 @@ public final class SecretMasker implements AutoCloseable {
     private volatile boolean closed;
     /** Wiped for a checkpoint; the next {@link #mask} makes a new key and reads the secrets. */
     private volatile boolean forgotten;
+    /** The forms by label, kept for a refresh whose provider fails. */
+    private Map<String, List<Form>> byLabel = new LinkedHashMap<>();
+    /** A secret could not be read and nothing earlier is kept for it - retry soon. */
+    private volatile boolean incomplete;
+
+    /** Whether every secret is looked for; false asks the scheduler to retry early. */
+    public boolean complete() {
+        return !incomplete;
+    }
 
     /**
      * @param providers the secrets to look for, by the label a masked one is
@@ -166,6 +175,7 @@ public final class SecretMasker implements AutoCloseable {
             return;
         }
         index = Index.EMPTY;
+        byLabel = new LinkedHashMap<>();
         key.close();
         forgotten = true;
     }
@@ -199,17 +209,33 @@ public final class SecretMasker implements AutoCloseable {
     /** Reads every secret again and keeps its fingerprints instead of the old ones. */
     public synchronized void refresh() {
         List<Form> next = new ArrayList<>();
+        Map<String, List<Form>> kept = new LinkedHashMap<>();
+        boolean missing = false;
         for (Map.Entry<String, SecretProvider> entry : providers.get().entrySet()) {
+            List<Form> mine = new ArrayList<>();
             try (SecretScope secret = SecretScope.fromProvider(entry.getValue())) {
                 if (secret.length() > 0) {
-                    forms(entry.getKey(), secret.secret(), secret.length(), next);
+                    forms(entry.getKey(), secret.secret(), secret.length(), mine);
                 }
             } catch (RuntimeException unavailable) {
+                // Fail closed: what was looked for until now stays looked for.
+                List<Form> before = byLabel.get(entry.getKey());
+                if (before != null) {
+                    mine = before;
+                } else {
+                    missing = true;
+                }
                 LOG.log(System.Logger.Level.WARNING, "seclume: the secret " + entry.getKey()
-                        + " could not be read, so log lines are not masked for it: "
+                        + " could not be read; " + (before != null
+                        ? "the forms read before are still looked for: "
+                        : "log lines are not masked for it until it can be: ")
                         + unavailable.getMessage());
             }
+            kept.put(entry.getKey(), mine);
+            next.addAll(mine);
         }
+        byLabel = kept;
+        incomplete = missing;
         // Longest first: where two overlap, the longer one wins.
         next.sort(Comparator.comparingInt(Form::length).reversed());
         index = Index.of(next, base());
