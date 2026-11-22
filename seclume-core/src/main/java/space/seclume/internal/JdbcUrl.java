@@ -249,19 +249,33 @@ public final class JdbcUrl {
      * password may be quoted and have one.
      */
     private static void hideLoginPassword(String url, boolean[] hidden) {
-        int authority = url.indexOf("//");
+        // A // in quotes may be an Oracle password's - "a//b" - or the start of
+        // a quoted authority. Taken for the authority only, the Oracle rule never
+        // applied and the whole password was shown; so both readings are made,
+        // and whatever either hides is hidden.
+        int anywhere = url.indexOf("//");
+        int outside = firstOutsideQuotes(url, "//");
+        hideOracleLogin(url, hidden, outside);
+        hideAuthorityLogin(url, hidden, anywhere);
+        if (outside != anywhere) {
+            hideAuthorityLogin(url, hidden, outside);
+        }
+    }
+
+    private static void hideOracleLogin(String url, boolean[] hidden, int authority) {
         int oracleAt = firstOutsideQuotes(url, '@');
         if (oracleAt >= 0 && (authority < 0 || oracleAt < authority)) {
             int slash = url.indexOf('/');
             if (slash >= 0 && slash < oracleAt) {
                 java.util.Arrays.fill(hidden, slash + 1, oracleAt, true);
-                return;
             }
             // No user/password before that @: Oracle's EZConnect "thin:@//"
-            // with a user:password@ typed into its authority. Returning here
-            // showed that password in the message (JdbcUrlRedactEdgeTest) -
-            // the authority's rule below applies to it as to any other URL.
+            // with a user:password@ typed into its authority - the authority's
+            // rule applies to it as to any other URL (JdbcUrlRedactEdgeTest).
         }
+    }
+
+    private static void hideAuthorityLogin(String url, boolean[] hidden, int authority) {
         if (authority < 0) {
             return;
         }
@@ -277,6 +291,19 @@ public final class JdbcUrl {
         if (at > authority && colon >= 0 && colon < at) {
             java.util.Arrays.fill(hidden, colon + 1, at, true);
         }
+    }
+
+    private static int firstOutsideQuotes(String text, String wanted) {
+        boolean quoted = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '"') {
+                quoted = !quoted;
+            } else if (!quoted && text.startsWith(wanted, i)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static int firstOutsideQuotes(String text, char wanted) {
@@ -308,10 +335,20 @@ public final class JdbcUrl {
         boolean[] loginHidden = hidden.clone();
         int i = 0;
         boolean quoted = false;
+        // Which syntax a value is in: inside ( ) - MySQL's key-value hosts, an
+        // Oracle descriptor - values end at , and ); outside, where ; separates
+        // the settings - SQL Server's, jTDS's, DB2's - only a ; ends one, and
+        // a , ( ) " in it is the value's. One set for both cut a SQL Server
+        // password at its ( or , and a MySQL one at its ;, the rest shown.
+        int depth = 0;
         while (i < url.length()) {
             char c = url.charAt(i);
             if (c == '"') {
                 quoted = !quoted;
+            } else if (!quoted && c == '(') {
+                depth++;
+            } else if (!quoted && c == ')' && depth > 0) {
+                depth--;
             }
             // A ? in the login's password is the password's, not the query's.
             if (quoted || (c != '=' && c != '?') || (c == '?' && loginHidden[i])) {
@@ -322,6 +359,12 @@ public final class JdbcUrl {
                 break;
             }
             int end = i + 1;
+            if (end < url.length() && url.charAt(end) == '(') {
+                // address=(host=...)(...), DESCRIPTION=(ADDRESS=...): what follows
+                // is structure, whose own values are hidden as such.
+                i = end;
+                continue;
+            }
             if (end < url.length() && url.charAt(end) == '{') {
                 end++;
                 while (end < url.length()) {
@@ -336,7 +379,8 @@ public final class JdbcUrl {
                     end++;
                 }
             } else {
-                while (end < url.length() && ";,()".indexOf(url.charAt(end)) < 0) {
+                String ends = depth > 0 ? ",)" : ";";
+                while (end < url.length() && ends.indexOf(url.charAt(end)) < 0) {
                     end++;
                 }
             }

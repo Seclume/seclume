@@ -56,6 +56,13 @@ All notable changes to seclume are recorded here. Versions follow
   is; `E'...'` for an escape; and where the dialect and its settings decide - MySQL's
   `NO_BACKSLASH_ESCAPES`, PostgreSQL's `standard_conforming_strings` - the rest of the statement
   is masked.
+- **`JdbcUrl.redact` hides a password whole, whatever its characters.** Before the query, a value
+  ended at any of `; , ( )`: a SQL Server password with a `(`, `,` or `"` in it was cut there and
+  the rest shown, and a MySQL key-value password at its `;`. And a `//` inside an Oracle
+  password in quotes was taken for an authority, so the whole password was shown. Values end
+  now as the syntax around them says - `;` at the top level, `,` and `)` inside parentheses -
+  and both readings of a `//` in quotes are hidden. Redacted URLs are what refusals,
+  `seclume-verify --migrate` and the logs print.
 
 ## [0.14.0] - 2026-11-18
 
