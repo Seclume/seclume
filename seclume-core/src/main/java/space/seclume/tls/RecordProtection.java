@@ -53,8 +53,13 @@ public final class RecordProtection implements AutoCloseable {
     /** The header is type, two version bytes and two length bytes. */
     public static final int HEADER = 5;
     private static final int MAX_PLAINTEXT = 16384;
-    /** RFC 8446 section 5.2: at most 2^14 + 256 bytes of ciphertext, the tag included. */
-    private static final int MAX_INNER = MAX_PLAINTEXT + 256 - AesGcm.TAG;
+    /**
+     * RFC 8446 section 5.4: TLSInnerPlaintext - content, type and padding - is
+     * at most 2^14 + 1 bytes, tighter than the 2^14 + 256 of ciphertext that
+     * section 5.2 allows. RecordStream checked it before opening; this layer
+     * let 255 bytes more through to whoever called it directly.
+     */
+    private static final int MAX_INNER = MAX_PLAINTEXT + 1;
 
     /** TLS 1.2: the salt in front of the explicit nonce. */
     private static final int SALT = 4;

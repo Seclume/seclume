@@ -68,6 +68,29 @@ class RecordLimitsTest {
         }
     }
 
+    /**
+     * RFC 8446 section 5.4: an inner plaintext longer than 2^14 + 1 bytes is
+     * record_overflow - refused before decrypting, and at 2^14 + 1 still
+     * opened (here it does not authenticate, which is a different answer).
+     */
+    @Test
+    void aTls13InnerPlaintextBeyondTwoToTheFourteenPlusOneIsRefused() {
+        try (Arena arena = Arena.ofConfined(); RecordProtection v13 = tls13(arena)) {
+            for (int inner : new int[] {MAX_PLAINTEXT + 2, MAX_PLAINTEXT + 216, MAX_PLAINTEXT + 256 - TAG}) {
+                int length = RecordProtection.HEADER + inner + TAG;
+                MemorySegment record = arena.allocate(length);
+                record.set(ValueLayout.JAVA_BYTE, 0, (byte) 23);
+                assertThrows(IllegalArgumentException.class,
+                        () -> v13.open(record, 0, length, arena.allocate(inner), 0), inner + " bytes");
+            }
+            int length = RecordProtection.HEADER + MAX_PLAINTEXT + 1 + TAG;
+            MemorySegment record = arena.allocate(length);
+            record.set(ValueLayout.JAVA_BYTE, 0, (byte) 23);
+            assertNull(v13.open(record, 0, length, arena.allocate(MAX_PLAINTEXT + 1), 0),
+                    "2^14 + 1 is within the limit: decrypted, and refused only for its tag");
+        }
+    }
+
     @Test
     void aTls13RecordOfNothingButZeroesHasNoContentTypeAndIsRefused() {
         try (Arena arena = Arena.ofConfined(); RecordProtection sender = tls13(arena); RecordProtection receiver = tls13(arena)) {
