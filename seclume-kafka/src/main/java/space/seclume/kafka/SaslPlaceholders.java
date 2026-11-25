@@ -1,7 +1,6 @@
 package space.seclume.kafka;
 
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.util.HexFormat; // seclume-allow: a random nonce for placeholders - public
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,8 +19,6 @@ import space.seclume.secret.SecretScope;
  * request never have gone.
  */
 final class SaslPlaceholders {
-
-    private static final SecureRandom RANDOM = new SecureRandom();
 
     static final byte[] PREFIX = "seclume-kafka-".getBytes(StandardCharsets.US_ASCII); // seclume-allow: the placeholder prefix, no secret
     private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce - public
@@ -51,7 +48,7 @@ final class SaslPlaceholders {
 
     private static byte[] nonce() {
         byte[] bytes = new byte[12];
-        RANDOM.nextBytes(bytes);
+        space.seclume.internal.Entropy.fill(bytes);
         return bytes;
     }
 }

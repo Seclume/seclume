@@ -1,7 +1,6 @@
 package space.seclume.aws;
 
 import java.lang.foreign.MemorySegment;
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -44,7 +43,6 @@ abstract class TemporaryCredentials {
     static final long RETRY_SECONDS = 5;
     private static final System.Logger LOG =
             System.getLogger(TemporaryCredentials.class.getName());
-    private static final SecureRandom RANDOM = new SecureRandom();
     private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce for the placeholder - public
     private static final Map<String, Generation> BY_PLACEHOLDER = new ConcurrentHashMap<>();
 
@@ -176,7 +174,7 @@ abstract class TemporaryCredentials {
 
     private static byte[] nonce() {
         byte[] bytes = new byte[8];
-        RANDOM.nextBytes(bytes);
+        space.seclume.internal.Entropy.fill(bytes);
         return bytes;
     }
 }
