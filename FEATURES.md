@@ -61,6 +61,11 @@ providers each have a page of their own: [TLS.md](TLS.md),
   - **Keys:** agreed by Diffie-Hellman on the group the server sends. The private exponent,
     the shared secret, the AES keys and the checksum keystream all stay in native memory, and
     the exponent is used in constant time.
+  - **Not authenticated.** The Diffie-Hellman exchange proves nothing about who answers: anybody
+    in the middle can run one exchange with the client and another with the server and read
+    everything, as with `tls=require`. The O5LOGON login still does not hand the password over,
+    but the session is not private from such a party. Where that matters, use TCPS with
+    `tls=verify-full` or `tlsPin`.
   - **A session that moves** to another host is refused under native encryption: its
     checksum keystream cannot leave the process. Use TCPS on seclume's own TLS instead.
   - **Shown** against Oracle Free 23 with both settings REQUIRED (AES256, SHA256,
