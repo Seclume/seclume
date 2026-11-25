@@ -143,7 +143,9 @@ public final class SeclumeLettuce {
      * own - shut down with it by {@link RedisClusterClient#shutdown()}.
      * Every seed and every cluster node discovered on topology refresh or
      * redirect has its certificate checked against its own host name or IP
-     * address and receives the password from native memory.
+     * address. The password goes from native memory to the URL's hosts and to
+     * those {@code cluster-hosts=} allows; a node discovery names beyond them
+     * gets the placeholder.
      */
     public static RedisClusterClient clusterClient(String url) {
         RedisUrl parsed = RedisUrl.parse(url);

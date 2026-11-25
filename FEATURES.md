@@ -1012,7 +1012,9 @@ written in the placeholder's place, together with its RESP length, just before i
   sees a plain connection. Each node's engine checks that node's own certificate and host name or
   IP address (`tlsRootCert=`, `tlsPin=`) — whether it is a seed node, a cluster shard discovered
   on topology refresh or redirect, a Sentinel, or the master Sentinel resolves — and puts the
-  password into the cipher from native memory.
+  password into the cipher from native memory: for the URL's hosts and those `cluster-hosts=` or
+  `master-hosts=` allow (a host, an IP, a `.suffix`, `*` for any). A node discovery names beyond
+  them gets the placeholder, and a forged redirect gets no password.
 - over `redis://` and `redis-sentinel://`, by the first handler before the socket, which hands the
   socket a direct buffer over the native memory and wipes it once the socket has taken it.
 
