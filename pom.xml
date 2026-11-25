@@ -134,7 +134,7 @@
       <dependency>
         <groupId>at.yawk.lz4</groupId>
         <artifactId>lz4-java</artifactId>
-        <version>1.14.0</version>
+        <version>1.14.1</version>
       </dependency>
       <!-- Pinned for CVE-2026-93451 (buffer overflow on malformed input) and
            CVE-2026-108106 (unbounded allocation while decompressing), fixed

@@ -19,17 +19,17 @@
     <spring.boot.version>4.1.2</spring.boot.version>
     <spring-framework.version>7.0.10</spring-framework.version>
     <tomcat.version>11.0.29</tomcat.version>
-    <spring-cloud-aws.version>4.2.1</spring-cloud-aws.version>
-    <aws-sdk.version>2.57.13</aws-sdk.version>
+    <spring-cloud-aws.version>4.2.2</spring-cloud-aws.version>
+    <aws-sdk.version>2.59.3</aws-sdk.version>
     <spring-ldap.version>4.1.2</spring-ldap.version>
     <sshd-core.version>2.20.1</sshd-core.version>
     <spring-integration.version>7.1.2</spring-integration.version>
     <jakarta.mail-api.version>2.1.5</jakarta.mail-api.version>
     <angus-mail.version>2.0.5</angus-mail.version>
     <elasticsearch-client.version>9.5.6</elasticsearch-client.version>
-    <opensearch-client.version>3.10.0</opensearch-client.version>
+    <opensearch-client.version>3.11.0</opensearch-client.version>
     <spring-amqp.version>4.1.2</spring-amqp.version>
-    <jnats.version>2.26.4</jnats.version>
+    <jnats.version>2.27.0</jnats.version>
     <spring-data-redis.version>4.1.2</spring-data-redis.version>
     <lettuce.version>7.9.0.RELEASE</lettuce.version>
     <micrometer.version>1.16.7</micrometer.version>
@@ -37,8 +37,8 @@
     <jackson-annotations.version>2.23</jackson-annotations.version>
     <jackson.version>2.18.12</jackson.version>
     <jackson3.version>3.3.0</jackson3.version>
-    <amqp-client.version>5.37.1</amqp-client.version>
-    <netty.version>4.1.140.Final</netty.version>
+    <amqp-client.version>5.38.0</amqp-client.version>
+    <netty.version>4.1.141.Final</netty.version>
     <log4j.version>2.26.1</log4j.version>
   </properties>
 

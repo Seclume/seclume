@@ -22,7 +22,7 @@
     <!-- The Hibernate that Spring Boot ${spring.boot.version} brings; its
          annotation processor writes the Jakarta Data repositories of the
          tests and has to be the same release. -->
-    <hibernate.version>7.4.15.Final</hibernate.version>
+    <hibernate.version>7.4.16.Final</hibernate.version>
     <jakarta.data.version>1.0.2</jakarta.data.version>
     <!-- Spring Boot 4 brings its own JUnit version and it has to win
          here: the parent project's is older, and the difference shows as a
@@ -120,7 +120,7 @@
     <dependency>
       <groupId>org.jooq</groupId>
       <artifactId>jooq</artifactId>
-      <version>3.21.9</version>
+      <version>3.21.10</version>
       <scope>test</scope>
     </dependency>
     <dependency>
