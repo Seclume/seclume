@@ -494,7 +494,7 @@ public final class SpiffeWorkloadApi {
             }
             int n = space.seclume.internal.Base64Off.decode(payload.segment(), 0, encoded,
                     decoded.segment(), 0);
-            if (!space.seclume.internal.JsonOff.has(decoded.segment(), n, "exp")) {
+            if (!space.seclume.internal.JsonOff.present(decoded.segment(), n, "exp")) {
                 return null;
             }
             return Instant.ofEpochSecond(space.seclume.internal.JsonOff.number(

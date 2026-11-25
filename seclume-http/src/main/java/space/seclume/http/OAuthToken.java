@@ -410,7 +410,7 @@ final class OAuthToken implements BearerSource {
     }
 
     private static long announced(MemorySegment json, int length) {
-        if (!JsonOff.has(json, length, "expires_in")) {
+        if (!JsonOff.present(json, length, "expires_in")) {
             return DEFAULT_LIFETIME_SECONDS;
         }
         try {

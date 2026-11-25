@@ -58,7 +58,7 @@ final class MetadataToken {
                         + "resource or scope asked for is wrong; 404 that the identity named "
                         + "does not exist");
             }
-            if (!JsonOff.has(answer.segment(), response.bodyLength(), "access_token")) {
+            if (!JsonOff.present(answer.segment(), response.bodyLength(), "access_token")) {
                 throw new SecretUnavailableException(who + " answered without an access_token");
             }
             // Into a scratch segment the size of the whole answer first, so

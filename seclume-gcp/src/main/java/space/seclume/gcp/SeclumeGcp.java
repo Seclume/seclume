@@ -147,7 +147,7 @@ public final class SeclumeGcp {
     }
 
     private static String optional(SecretScope json, MemorySegment text, String name) {
-        return JsonOff.has(json.segment(), json.length(), name) ? field(json, text, name) : null;
+        return JsonOff.present(json.segment(), json.length(), name) ? field(json, text, name) : null;
     }
 
     private static String ascii(MemorySegment bytes, int length) {

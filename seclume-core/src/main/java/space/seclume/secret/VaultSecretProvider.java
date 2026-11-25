@@ -362,7 +362,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 int length = extract(answer, fresh.segment());
                 fresh.length(length);
                 Instant now = clock.instant();
-                long lease = JsonOff.has(answer.segment(), answer.length(), "lease_duration")
+                long lease = JsonOff.present(answer.segment(), answer.length(), "lease_duration")
                         ? JsonOff.number(answer.segment(), answer.length(), "lease_duration")
                         : 0;
                 // A lease longer than this is not one Vault hands out (its
@@ -399,7 +399,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
 
     /** A field that is no secret - a lease id, a user name - as text; null when absent or empty. */
     private static String text(SecretScope answer, String... field) {
-        if (!JsonOff.has(answer.segment(), answer.length(), field)) {
+        if (!JsonOff.present(answer.segment(), answer.length(), field)) {
             return null;
         }
         try (Arena arena = Arena.ofConfined()) {
@@ -416,7 +416,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
 
     /** KV v2 nests the data one level deeper than everything else does. */
     private int extract(SecretScope answer, MemorySegment out) {
-        if (JsonOff.has(answer.segment(), answer.length(), "data", "data", field)) {
+        if (JsonOff.present(answer.segment(), answer.length(), "data", "data", field)) {
             return JsonOff.string(answer.segment(), answer.length(), out, "data", "data", field);
         }
         return JsonOff.string(answer.segment(), answer.length(), out, "data", field);

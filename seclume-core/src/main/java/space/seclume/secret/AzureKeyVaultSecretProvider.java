@@ -114,7 +114,7 @@ public final class AzureKeyVaultSecretProvider implements SecretProvider, Expiri
             }
             answer.length(response.bodyLength());
 
-            expiresAt = JsonOff.has(answer.segment(), answer.length(), "attributes", "exp")
+            expiresAt = JsonOff.present(answer.segment(), answer.length(), "attributes", "exp")
                     ? Instant.ofEpochSecond(
                             JsonOff.number(answer.segment(), answer.length(), "attributes", "exp"))
                     : null;

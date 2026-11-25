@@ -493,7 +493,7 @@ interface VaultLoginBody extends AutoCloseable {
         }
 
         private static String optional(MemorySegment json, int length, String field) {
-            if (!JsonOff.has(json, length, field)) {
+            if (!JsonOff.present(json, length, field)) {
                 return null;
             }
             try (Arena arena = Arena.ofConfined()) {
