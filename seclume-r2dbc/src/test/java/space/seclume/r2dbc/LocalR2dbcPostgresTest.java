@@ -65,7 +65,7 @@ class LocalR2dbcPostgresTest {
                 + "&trustServerCertificate=true";
         factory = ConnectionFactories.get("r2dbc:seclume:postgresql://seclume_test@" + HOST + ":"
                 + PORT + "/seclume_test?provider=file&path="
-                + password.toString().replace('\\', '/') + "&options=trustServerCertificate%3Dtrue");
+                + password.toString().replace('\\', '/') + "&trustServerCertificate=true");
         run("drop table if exists zl_r2dbc");
         run("create table zl_r2dbc (id serial primary key, name text, n int)");
     }

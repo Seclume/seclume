@@ -104,13 +104,47 @@ public final class SeclumeConnectionFactoryProvider implements ConnectionFactory
                 continue;
             }
             if (name.equals("options")) {
-                url.append(separator).append(value);
+                url.append(separator).append(checkedOptions(String.valueOf(value)));
             } else {
                 url.append(separator).append(name).append('=').append(encode(value));
             }
             separator = '&';
         }
         return url.toString();
+    }
+
+    /**
+     * The raw query of {@code options}, refused where it names an option
+     * that has a place of its own or decides where a secret comes from or
+     * whom the connection trusts. It was appended as it came, so it could set
+     * provider, path or tls - whatever the PASSED_ON list encodes - from a
+     * string meant for tuning.
+     */
+    static String checkedOptions(String query) {
+        for (String pair : query.split("&")) {
+            if (pair.isEmpty()) {
+                continue;
+            }
+            int equals = pair.indexOf('=');
+            String key = java.net.URLDecoder.decode(equals < 0 ? pair : pair.substring(0, equals),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            String normal = key.replace("-", "").toLowerCase(Locale.ROOT);
+            boolean own = PASSED_ON.stream().anyMatch(name -> name.toLowerCase(Locale.ROOT)
+                    .equals(normal));
+            if (own || normal.startsWith("tls") || normal.startsWith("ssl")
+                    || normal.startsWith("vault") || normal.startsWith("client")
+                    || java.util.Set.of("user", "password", "command", "verify", "url",
+                            "containeruri", "stsendpoint").contains(normal)) {
+                throw new IllegalArgumentException("options may not set " + key
+                        + " - give it as an option of its own");
+            }
+            for (int i = 0; i < pair.length(); i++) {
+                if (pair.charAt(i) < 0x20 || pair.charAt(i) == '#') {
+                    throw new IllegalArgumentException("options holds a control character or #");
+                }
+            }
+        }
+        return query;
     }
 
     @Override

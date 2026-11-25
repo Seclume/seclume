@@ -82,7 +82,7 @@ class LocalR2dbcFourDatabasesTest {
     static List<Db> databases() {
         return List.of(
                 new Db("PostgreSQL", "postgresql", 5433, "seclume_test", "seclume_test",
-                        ".local-pgtls-password", "&options=trustServerCertificate%3Dtrue",
+                        ".local-pgtls-password", "&trustServerCertificate=true",
                         "$1", "$2", "id serial primary key, name varchar(40), n int",
                         "drop table if exists %s",
                         "select generate_series(1, 1000)::bigint"),

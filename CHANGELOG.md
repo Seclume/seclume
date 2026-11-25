@@ -7,6 +7,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **R2DBC: `options` may not set an option that has its own** - `provider`, `path`, `tls...`,
+  `trustServerCertificate`, `vault...`, `user` and the like. It was appended to the JDBC URL as it
+  came; give those as options of their own (`?trustServerCertificate=true`).
 - **Elasticsearch: a nested field name is refused** (`field("address.street", ...)`). Only a
   document's top-level fields are encrypted; the nested one went to the cluster in the clear.
 - **SQL Server: the session context is set read-only.** An application that sets the same
