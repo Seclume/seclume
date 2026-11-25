@@ -7,6 +7,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A Shamir share is not written where its readers cannot be restricted** - a file system
+  with neither POSIX permissions nor ACLs (FAT32, exFAT, some network shares). It was written
+  with the medium's defaults; `-Dseclume.shamir.allowUnprotected=true` where the medium is
+  protected otherwise.
 - **A control character in user, database or application name is refused when the URL is
   read** (`IllegalArgumentException`), for all four drivers, before a socket opens. Each driver
   frames these fields its own way, and a control character has ended one or started another.
