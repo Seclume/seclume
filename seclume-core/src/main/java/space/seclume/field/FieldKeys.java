@@ -489,6 +489,7 @@ public final class FieldKeys implements AutoCloseable {
                                     + "32-byte key (44 characters)");
                         }
                         MemorySegment.copy(given.secret(), 0, key.segment(), 0, KEY_LENGTH);
+                        refuseTrivial(id, key);
                         key.length(KEY_LENGTH);
                         return key;
                     }
@@ -504,12 +505,29 @@ public final class FieldKeys implements AutoCloseable {
                         throw new IllegalArgumentException("key " + id + " is " + decoded
                                 + " bytes; field encryption takes 32 (AES-256)");
                     }
+                    refuseTrivial(id, key);
                     key.length(KEY_LENGTH);
                     return key;
                 } catch (RuntimeException e) {
                     key.close();
                     throw e;
                 }
+            }
+        }
+
+        /**
+         * A key of 32 zero bytes - a file from /dev/zero, an empty vault
+         * field, AAAA...= - is no key: everything under it is readable by
+         * anybody who tries the obvious.
+         */
+        private static void refuseTrivial(int id, SecretScope key) {
+            int any = 0;
+            for (int i = 0; i < KEY_LENGTH; i++) {
+                any |= key.segment().get(ValueLayout.JAVA_BYTE, i);
+            }
+            if (any == 0) {
+                throw new IllegalArgumentException("key " + id + " is 32 zero bytes - a file "
+                        + "of zeros or an empty field, not a key");
             }
         }
 

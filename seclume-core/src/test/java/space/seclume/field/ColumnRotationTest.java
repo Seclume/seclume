@@ -139,7 +139,7 @@ class ColumnRotationTest {
             assertEquals(Map.of(2, 23L), after.keys().get("secret"));
             assertEquals(0, after.remaining());
         }
-        try (FieldKeys two = ring(2, new byte[32], KEY2)) {
+        try (FieldKeys two = ring(2, FieldEncryptionTest.otherKey(), KEY2)) {
             // Key 1 replaced by nonsense: everything reads under key 2 alone.
             EncryptedColumn secret = two.column("zl.secret", Mode.RANDOMIZED);
             EncryptedColumn ssn = two.column("zl.ssn", Mode.DETERMINISTIC);

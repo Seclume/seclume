@@ -183,7 +183,7 @@ class FieldEncryptionPropertyTest {
 
     @Test
     void aRandomizedColumnNeverRepeatsANonce() {
-        try (FieldKeys keys = FieldEncryptionTest.ring(1, new byte[32])) {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, FieldEncryptionTest.otherKey())) {
             EncryptedColumn column = keys.column("t.c", Mode.RANDOMIZED);
             java.util.Set<String> nonces = new java.util.HashSet<>();
             for (int i = 0; i < 20_000; i++) {
@@ -197,7 +197,7 @@ class FieldEncryptionPropertyTest {
     @Test
     void anythingAtAllEndsInAValueOrAFieldEncryptionException() {
         Random random = new Random(SEED + 1);
-        try (FieldKeys keys = FieldEncryptionTest.ring(1, new byte[32]);
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, FieldEncryptionTest.otherKey());
              SecretScope out = SecretScope.allocate(512)) {
             EncryptedColumn[] columns = {keys.column("t.c", Mode.RANDOMIZED),
                     keys.column("t.c", Mode.DETERMINISTIC)};
@@ -228,7 +228,7 @@ class FieldEncryptionPropertyTest {
 
     @Test
     void aNullValueIsRefusedNotEncrypted() {
-        try (FieldKeys keys = FieldEncryptionTest.ring(1, new byte[32])) {
+        try (FieldKeys keys = FieldEncryptionTest.ring(1, FieldEncryptionTest.otherKey())) {
             assertThrows(IllegalArgumentException.class,
                     () -> keys.column("t.c", Mode.RANDOMIZED).encrypt(null));
             assertThrows(FieldEncryptionException.class, () -> keys.column("t.c", Mode.RANDOMIZED)

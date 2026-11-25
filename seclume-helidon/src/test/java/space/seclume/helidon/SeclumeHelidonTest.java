@@ -39,6 +39,9 @@ class SeclumeHelidonTest {
     @Test
     void poolsAndKeysFromConfig() throws Exception {
         byte[] key = new byte[32];
+        for (int i = 0; i < key.length; i++) {
+            key[i] = (byte) (i + 1);                // not zeros, which FieldKeys refuses
+        }
         Path file = Files.writeString(directory.resolve("key"), Base64.getEncoder().encodeToString(key));
         SeclumePool orders;
         FieldKeys keys;
