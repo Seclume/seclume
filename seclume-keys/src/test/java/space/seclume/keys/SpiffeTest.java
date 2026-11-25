@@ -469,7 +469,9 @@ class SpiffeTest {
      * Federation: a partner of other.org is trusted by the CAs other.org's
      * bundle names - which comes with this workload's SVID - and only while it
      * does; an SVID from other.org's CA that claims to be of example.org is
-     * refused, its chain not leading to example.org's CAs.
+     * refused, its chain not leading to example.org's CAs. A federated
+     * domain's workload is let in only when peer-ids names it: without them,
+     * only the workload's own trust domain is.
      */
     @Test
     void aFederatedTrustDomainIsTrustedByItsOwnCas() throws Exception {
@@ -486,12 +488,23 @@ class SpiffeTest {
                      // trusts the server, and it is the server that has to refuse
                      () -> FakeWorkloadApi.x509SvidResponse("spiffe://example.org/impostor",
                              impostor.certificate(), impostor.key(), ca))) {
-            SeclumeKeys.Spiffe server = SeclumeKeys.spiffe("socket=unix://" + ours.socket());
+            SSLContext partnerClient = SeclumeKeys.spiffeSslContext("socket=unix://"
+                    + theirs.socket() + "&peer-ids=" + ORDERS);
+
+            // Without peer-ids, a bundle for other.org does not make its workloads peers.
+            SeclumeKeys.Spiffe ownDomainOnly = SeclumeKeys.spiffe("socket=unix://" + ours.socket());
+            SSLContext closed = SSLContext.getInstance("TLSv1.3");
+            closed.init(ownDomainOnly.keys().getKeyManagers(),
+                    ownDomainOnly.trust().getTrustManagers(), null);
+            assertThrows(Exception.class, () -> mutual(closed, partnerClient),
+                    "a federated workload was let in without peer-ids naming it");
+
+            // The impostor's id is named too: only the chain can refuse it.
+            SeclumeKeys.Spiffe server = SeclumeKeys.spiffe("socket=unix://" + ours.socket()
+                    + "&peer-ids=" + PARTNER + ",spiffe://example.org/impostor");
             SSLContext serving = SSLContext.getInstance("TLSv1.3");
             serving.init(server.keys().getKeyManagers(), server.trust().getTrustManagers(),
                     null);
-            SSLContext partnerClient = SeclumeKeys.spiffeSslContext("socket=unix://"
-                    + theirs.socket() + "&peer-ids=" + ORDERS);
             assertEquals(PARTNER, SpiffeTrustManager.spiffeId(mutual(serving, partnerClient)));
 
             SSLContext impostorClient = SeclumeKeys.spiffeSslContext("socket=unix://"

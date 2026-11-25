@@ -51,7 +51,8 @@ class LongSecretsTest {
         String head = "GET /x HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: Bearer " + first
                 + "\r\nX-Api-Key: " + second + "\r\nX-Again: " + second + "\r\n\r\n";
         assertEquals("GET /x HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: Bearer " + token
-                + "\r\nX-Api-Key: " + key + "\r\nX-Again: " + key + "\r\n\r\n", rewritten(head));
+                // X-Again is no credential header: its placeholder goes as it is.
+                + "\r\nX-Api-Key: " + key + "\r\nX-Again: " + second + "\r\n\r\n", rewritten(head));
     }
 
     @Test
