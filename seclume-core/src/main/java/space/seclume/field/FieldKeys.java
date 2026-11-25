@@ -272,10 +272,25 @@ public final class FieldKeys implements AutoCloseable {
         }
     }
 
+    /**
+     * After a failed reload, how long every use fails at once with that
+     * failure instead of asking the provider again: one Vault or KMS request
+     * per database value, right after a restore when the network is not up
+     * yet, was a load amplifier and a bill.
+     */
+    static final long RELOAD_BACKOFF_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+
+    private long reloadFailedAt;
+    private RuntimeException reloadFailure;
+
     /** Reads the keys again and derives every column's and index's anew. */
     private synchronized void reload() {
         if (!forgotten || closed) {
             return;
+        }
+        if (reloadFailure != null && System.nanoTime() - reloadFailedAt < RELOAD_BACKOFF_NANOS) {
+            throw new IllegalStateException("the field keys could not be read again a moment "
+                    + "ago - not asked again yet", reloadFailure);
         }
         use.writeLock().lock();
         try {
@@ -286,8 +301,11 @@ public final class FieldKeys implements AutoCloseable {
                 }
             } catch (RuntimeException e) {
                 read.values().forEach(SecretScope::close);
+                reloadFailure = e;
+                reloadFailedAt = System.nanoTime();
                 throw e;
             }
+            reloadFailure = null;
             keys = Collections.unmodifiableSortedMap(read);
             try {
                 for (EncryptedColumn column : columns.values()) {

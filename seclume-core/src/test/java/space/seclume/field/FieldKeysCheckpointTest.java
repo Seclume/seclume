@@ -129,7 +129,8 @@ class FieldKeysCheckpointTest {
     }
 
     @Test
-    void aKeySourceThatIsGoneAfterTheRestoreFailsTheUseAndTheNextOneTriesAgain() {
+    void aKeySourceThatIsGoneAfterTheRestoreFailsTheUseAndTheNextOneTriesAgain()
+            throws InterruptedException {
         Key one = new Key(3);
         Checkpoint.wipeAll();                    // what other tests left cached
         long before = SecretScope.open();
@@ -142,6 +143,11 @@ class FieldKeysCheckpointTest {
             assertThrows(IllegalStateException.class, () -> decrypt(column, value));
             assertEquals(before, SecretScope.open(), "a failed reload leaves nothing open");
             one.failing.set(false);
+            // Not at once: a failed reload holds the next ones off for a
+            // moment, or every value would ask the key source again.
+            assertThrows(IllegalStateException.class, () -> decrypt(column, value));
+            Thread.sleep(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                    FieldKeys.RELOAD_BACKOFF_NANOS) + 100);
             assertEquals("secret value", decrypt(column, value));
         }
     }
