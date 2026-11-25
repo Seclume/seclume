@@ -73,6 +73,22 @@ class PatroniTopologyTest {
         }
     }
 
+    /**
+     * An answer nested without end - over plain HTTP anybody's - was a
+     * StackOverflowError out of connect, which the pool does not catch.
+     */
+    @Test
+    void nestingDeeperThan64IsRefused() {
+        String deep = "[".repeat(65) + "]".repeat(65);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> PatroniTopology.parse("{\"members\": " + deep + "}"));
+        String deeper = "[".repeat(100_000);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> PatroniTopology.parse("{\"members\": " + deeper + "}"));
+        PatroniTopology.parse("{\"x\": " + "[".repeat(60) + "]".repeat(60)
+                + ", \"members\": []}");                                  // within: read
+    }
+
     @Test
     void noAnswerMeansNoMembers() {
         assertTrue(PatroniTopology.of("http://127.0.0.1:1").hosts(TargetServer.PRIMARY).isEmpty());

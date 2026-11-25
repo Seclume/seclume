@@ -40,6 +40,29 @@ class TdsValuesMalformedTest {
         }
     }
 
+    /**
+     * MS-TDS: a sql_variant never holds another. Taken as it came, each level
+     * cost two bytes and a recursion - 8016 bytes were a StackOverflowError.
+     */
+    @Test
+    void aVariantInsideAVariantIsMalformed() {
+        int[] nested = new int[8016];
+        for (int i = 0; i < nested.length; i += 2) {
+            nested[i] = TdsTypes.SQLVARIANT;
+            nested[i + 1] = 0;
+        }
+        try (WireBuffer in = buffer(nested)) {
+            // Refused at the first level for what it is - not 4008 levels
+            // down, where the bytes ran out.
+            WireBuffer.Truncated text = assertThrows(WireBuffer.Truncated.class,
+                    () -> TdsValues.asText(in, TdsTypes.SQLVARIANT, 0, nested.length, 0));
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    text.getMessage().contains("holds a sql_variant"), text.getMessage());
+            assertThrows(WireBuffer.Truncated.class,
+                    () -> TdsValues.asLong(in, TdsTypes.SQLVARIANT, 0, nested.length));
+        }
+    }
+
     @Test
     void aVariantTooShortForItsHeaderIsRefused() {
         try (WireBuffer in = buffer(TdsTypes.VARCHAR)) {
