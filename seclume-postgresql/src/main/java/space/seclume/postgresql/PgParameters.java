@@ -75,6 +75,17 @@ public final class PgParameters {
         return index >= 1 && index <= count ? values[index - 1] : null;
     }
 
+    /** The values bound natively - setSensitive's - for a server error that quotes one. */
+    java.util.List<space.seclume.internal.jdbc.NativeValue> sensitive() {
+        java.util.List<space.seclume.internal.jdbc.NativeValue> found = new java.util.ArrayList<>();
+        for (Object value : values) {
+            if (value instanceof space.seclume.internal.jdbc.NativeValue nativeValue) {
+                found.add(nativeValue);
+            }
+        }
+        return found;
+    }
+
     /** Writes the values into the Bind message. */
     void write(WireBuffer out) {
         // All parameters in the same format - one format tag is enough.

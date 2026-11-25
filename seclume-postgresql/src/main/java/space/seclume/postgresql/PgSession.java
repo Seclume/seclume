@@ -1517,6 +1517,7 @@ public final class PgSession implements AutoCloseable {
             WireBuffer out = command(PgProtocol.BIND);
             out.putCString("");                       // the unnamed portal
             out.putCString(statement);
+            sensitive = parameters.sensitive();
             parameters.write(out);
             List<Field> asked = writeResultFormats(out, known);
             channel.end();
@@ -2237,6 +2238,7 @@ public final class PgSession implements AutoCloseable {
         WireBuffer out = command(PgProtocol.BIND);
         out.putCString("");                       // the unnamed portal
         out.putCString(statement);
+        sensitive = parameters.sensitive();
         parameters.write(out);
         out.putShort((short) 0);                  // the result in text format
         channel.end();
@@ -2642,9 +2644,19 @@ public final class PgSession implements AutoCloseable {
         channel.endMessage();
     }
 
+    /**
+     * The values the statement under way bound with setSensitive - masked in an
+     * ErrorResponse before it is decoded; see {@link space.seclume.internal.jdbc.SensitiveEcho}.
+     */
+    private java.util.List<space.seclume.internal.jdbc.NativeValue> sensitive = java.util.List.of();
+
     /** Reads an ErrorResponse into a {@link PgException}. */
     private PgException readError() {
         WireBuffer in = channel.message();
+        if (!sensitive.isEmpty()) {
+            space.seclume.internal.jdbc.SensitiveEcho.mask(in.segment(), in.position(),
+                    in.position() + channel.messageRemaining(), sensitive);
+        }
         String message = "unknown error";
         String sqlState = "XX000";
         String severity = "ERROR";
