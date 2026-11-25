@@ -65,6 +65,8 @@ All notable changes to seclume are recorded here. Versions follow
   violation in `ncrypt.dll`, as the OpenSSL key had been.
 - **The log masker keeps asking for an early refresh while a secret was never read**; one failed
   read made the next one look complete.
+- **A pooled statement's `getConnection()` is the pool's handle**, not the driver's connection
+  behind it: closed there it closed under the pool, and kept it outlived the borrow.
 - **SQL Server: the driver's own `sp_describe_undeclared_parameters` question no longer reaches a
   `StatementListener`**, nor its failure as a failed statement the application never ran.
 

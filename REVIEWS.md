@@ -434,6 +434,7 @@ protocol text or dribble bytes.
 | 53 | `SensitiveParameters` | A value bound with `setSensitive` came back in the server's error - PostgreSQL's DETAIL, MySQL's and SQL Server's messages - as a String. The receive buffer is masked before it is decoded. Oracle's errors quote no values. | medium | #PR |
 | 54 | CNG signing key | Closing a Windows CNG key while another thread signed was an access violation in `ncrypt.dll`; finding 14's fix covered OpenSSL only. | medium | #PR |
 | 55 | Log masker | A secret never read left an empty entry, and the next failed refresh took it for one read before: no early retry, the secret never masked. | low | #PR |
+| 56 | Pool statements | `statement.getConnection()` answered the driver's connection behind the handle: closed there, it closed under the pool; kept, it outlived the borrow as the next borrower's session. Every statement the pool lends answers the handle. | low | #PR |
 
 ### Mutation testing of the security paths
 

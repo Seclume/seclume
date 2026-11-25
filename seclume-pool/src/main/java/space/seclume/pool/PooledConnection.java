@@ -548,8 +548,38 @@ final class PooledConnection implements Connection {
      * statement - one of them would be forgotten, and forgetting one here means
      * rebuilding under an open statement.
      */
+    @SuppressWarnings("unchecked") // each handle implements what it wraps
     private <T> T record(T result) {
         if (result instanceof Statement statement) {
+            recordStatement(statement);
+            return (T) handed(statement);
+        }
+        if (result instanceof Savepoint) {
+            set(SAVEPOINT_STANDING, true);
+        }
+        return result;
+    }
+
+    /**
+     * The statement as the borrower gets it: its getConnection() is this
+     * handle, not the driver's connection - closed there it closed under the
+     * pool, and kept it outlived the borrow as the next borrower's session.
+     */
+    private Statement handed(Statement statement) {
+        if (statement instanceof CachedPreparedStatement cached) {
+            return cached;                               // a handle already
+        }
+        if (statement instanceof java.sql.CallableStatement call) {
+            return new HandedCallableStatement(call, this);
+        }
+        if (statement instanceof PreparedStatement prepared) {
+            return new HandedPreparedStatement(prepared, this);
+        }
+        return new HandedStatement(statement, this);
+    }
+
+    private void recordStatement(Statement statement) {
+        {
             if (!is(AUTO_COMMIT_ON)) {
                 // Inside a transaction a statement is work, whether or not it
                 // is still open by the time anything breaks.
@@ -563,10 +593,7 @@ final class PooledConnection implements Connection {
             } else {
                 handedOut.add(statement);
             }
-        } else if (result instanceof Savepoint) {
-            set(SAVEPOINT_STANDING, true);
         }
-        return result;
     }
 
     private void run(SqlAction action) throws SQLException {
