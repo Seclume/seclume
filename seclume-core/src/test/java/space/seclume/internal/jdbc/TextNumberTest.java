@@ -91,6 +91,21 @@ class TextNumberTest {
     }
 
     /**
+     * Beyond a long the value wrapped without a word: 18446744073709551621
+     * (2^64 + 5) read as 5, an account balance as something else entirely.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"9223372036854775808", "-9223372036854775809",
+        "18446744073709551621", "99999999999999999999", "-18446744073709551621"})
+    void beyondALongIsRefusedAtBothEnds(String text) {
+        try (WireBuffer buffer = new WireBuffer(64)) {
+            buffer.putText(text);
+            assertThrows(NumberFormatException.class,
+                    () -> TextNumber.decimal(buffer, 0, text.length()), text);
+        }
+    }
+
+    /**
      * The fast path has to agree with the JDK's parser bit for bit.
      *
      * <p>Not "close enough": a driver that answers 0.1 + 1e-17 where every
