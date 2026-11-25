@@ -37,6 +37,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Logging: masking that masks nothing is said.** With `seclume.logging.redact=true` and no
+  seclume converter or `RedactingEncoder` in Logback's configuration, the starter warns at
+  start (`seclume.logging.redact.strict=true` refuses to start); Log4j 2's status log warns
+  about a `%redact{...}` without a stack trace word.
 - **A secret provider that fails at the login is an `SQLException`.** Its failure - a file not
   there, Vault not reachable - left `DriverManager.getConnection` as
   `SecretUnavailableException`, past every pool and retry that catches `SQLException`.

@@ -406,7 +406,40 @@ the stack trace inside, and the layout writes the stack trace once, masked:
 <PatternLayout pattern="%d %-5level %logger - %redact{%msg%n%throwable}"/>
 ```
 
-The plugin is in Log4j's own index in the jar; no `packages` attribute is needed.
+The plugin is in Log4j's own index in the jar; no `packages` attribute is needed. A
+`%redact{...}` with no stack trace word inside leaves the stack trace to the layout, which
+appends it after the converter, unmasked; Log4j's status log warns about it.
+
+**Spring Boot's structured logging** (`logging.structured.format.console=ecs` and the like)
+is written by the appenders of Spring Boot's own `base.xml`, whose encoders cannot be wrapped
+from outside. Give the format an appender of your own and wrap its encoder:
+
+```xml
+<!-- logback-spring.xml -->
+<configuration>
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+  <include resource="space/seclume/logging/logback/redact-rules.xml"/>
+  <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="space.seclume.logging.logback.RedactingEncoder">
+      <encoder class="org.springframework.boot.logging.logback.StructuredLogEncoder">
+        <format>ecs</format>
+      </encoder>
+    </encoder>
+  </appender>
+  <root level="INFO"><appender-ref ref="JSON"/></root>
+</configuration>
+```
+
+**Cut lines are masked as cut.** A pattern that shortens the message before the masker sees it
+- `%.20msg` inside Log4j 2's `%redact{...}`, a precision in the format of the formatter
+`RedactingFormatter` wraps - can cut a secret in two, and the masker only recognises a secret
+whole: the part that is left is written. Cut after masking (`%.20redact{%msg}`) or not at all.
+Logback's `%.20msg` is cut after the rule's converter has masked it, and is safe.
+
+**Is anything masked?** With `seclume.logging.redact=true`, the starter checks at start that
+Logback runs one of seclume's converters or a `RedactingEncoder`, and warns when it does not -
+the switch alone installs the masker and masks no line. `seclume.logging.redact.strict=true`
+refuses to start instead.
 
 **java.util.logging**, and `System.Logger`, which writes there unless something else is
 installed - `RedactingFormatter` masks what another formatter makes of a record:

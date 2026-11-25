@@ -51,10 +51,48 @@ public class SeclumeLogRedactionAutoConfiguration {
             throw new IllegalStateException("seclume.logging.refresh-interval is how often the "
                     + "secrets are read again - a positive duration, not " + interval);
         }
+        boolean strict = Binder.get(environment)
+                .bind("seclume.logging.redact.strict", Boolean.class).orElse(false);
         return new LogRedaction(() -> {
             RedactionSecrets found = secrets.getIfAvailable();
             return found == null ? Map.of() : found.providers();
-        }, interval);
+        }, interval, strict);
+    }
+
+    private static final System.Logger LOG =
+            System.getLogger(SeclumeLogRedactionAutoConfiguration.class.getName());
+
+    /**
+     * The masker is installed; whether Logback uses it is another matter.
+     * Without seclume's converters in its configuration - no
+     * {@code logback-spring.xml} including {@code redact-rules.xml}, no
+     * {@code RedactingEncoder} - not one line is masked, and the switch looked
+     * like protection. Said at start; refused with
+     * {@code seclume.logging.redact.strict=true}.
+     *
+     * @return the warning, or null when there is nothing to say
+     */
+    static String checkLogback(Boolean active, boolean strict) {
+        if (active == null || active) {
+            return null;                            // not Logback, or Logback masks
+        }
+        String warning = "seclume: seclume.logging.redact=true, and Logback masks nothing - no "
+                + "converter or encoder of seclume's is in its configuration. Include "
+                + "space/seclume/logging/logback/redact-rules.xml after Spring Boot's "
+                + "defaults.xml in logback-spring.xml, or wrap the encoder in a RedactingEncoder.";
+        if (strict) {
+            throw new IllegalStateException(warning + " (seclume.logging.redact.strict=true)");
+        }
+        LOG.log(System.Logger.Level.WARNING, warning);
+        return warning;
+    }
+
+    private static Boolean logbackMasks() {
+        if (!org.springframework.util.ClassUtils.isPresent("ch.qos.logback.classic.LoggerContext",
+                SeclumeLogRedactionAutoConfiguration.class.getClassLoader())) {
+            return null;
+        }
+        return space.seclume.logging.logback.LogbackMasking.active();
     }
 
     /** The installed masker, refreshed on a schedule; closing it uninstalls it. */
@@ -62,9 +100,11 @@ public class SeclumeLogRedactionAutoConfiguration {
 
         private final SecretMasker masker;
         private final ScheduledExecutorService refresher;
+        private final boolean strict;
 
         LogRedaction(java.util.function.Supplier<Map<String, space.seclume.secret.SecretProvider>>
-                providers, Duration interval) {
+                providers, Duration interval, boolean strict) {
+            this.strict = strict;
             this.masker = new SecretMasker(providers);
             SecretMasker.install(masker);
             this.refresher = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -85,6 +125,7 @@ public class SeclumeLogRedactionAutoConfiguration {
         @Override
         public void afterSingletonsInstantiated() {
             masker.refresh();
+            checkLogback(logbackMasks(), strict);
         }
 
         @Override

@@ -97,6 +97,7 @@ public class RedactingEncoder extends EncoderBase<ILoggingEvent> {
             addError("RedactingEncoder: the encoder it masks did not start");
             return;
         }
+        LogbackMasking.inUse(getContext());
         super.start();
     }
 

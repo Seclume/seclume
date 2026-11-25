@@ -54,7 +54,23 @@ public final class RedactingConverter extends LogEventPatternConverter {
             return null;
         }
         PatternParser parser = PatternLayout.createPatternParser(configuration);
-        return new RedactingConverter(parser.parse(options[0]));
+        RedactingConverter converter = new RedactingConverter(parser.parse(options[0]));
+        String warning = throwableWarning(options[0], converter.handlesThrowable());
+        if (warning != null) {
+            StatusLogger.getLogger().warn(warning);
+        }
+        return converter;
+    }
+
+    /**
+     * Without a stack trace word inside {@code %redact{...}}, the layout
+     * appends the stack trace itself (alwaysWriteExceptions) - after the
+     * converter, unmasked.
+     */
+    static String throwableWarning(String pattern, boolean handlesThrowable) {
+        return handlesThrowable ? null : "seclume: %redact{" + pattern + "} has no stack trace "
+                + "word in it, so the layout appends a stack trace after it, unmasked. Put "
+                + "%throwable (or %ex, %xEx) inside %redact{...}.";
     }
 
     @Override

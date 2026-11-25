@@ -27,6 +27,7 @@ public class RedactingMessageConverter extends MessageConverter {
     @Override
     public void start() {
         super.start();
+        LogbackMasking.inUse(getContext());
         RuleCheck.warnAboutOtherRules(this);
     }
 

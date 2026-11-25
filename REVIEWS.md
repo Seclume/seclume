@@ -609,16 +609,17 @@ The round's own changes were reviewed once more before they were handed on: a
 `defaults.xml` lost `%wex` and `%wEx` without a word (Logback's status warns now); numeric
 character references with leading zeros were not read, and non-ASCII digits were.
 
-### Open
+### Open, since closed (#PR)
 
-- With `seclume.logging.redact=true` and no `logback-spring.xml`, nothing is masked by Logback;
-  the starter could say so at start.
+- With `seclume.logging.redact=true` and no `logback-spring.xml`, nothing is masked by Logback:
+  the starter says so at start, and `seclume.logging.redact.strict=true` refuses to start.
 - A pattern that cuts the message (`%.20msg` inside `%redact{...}`, a precision in
-  `SimpleFormatter`'s format) leaves the start of a secret that is cut through.
+  `SimpleFormatter`'s format) leaves the start of a secret that is cut through: documented in
+  DIAGNOSTICS.md, with the order that works.
 - Log4j 2's layout appends a stack trace unmasked where `%redact{...}` has no stack trace word
-  in it; its status log could say so.
+  in it: its status log says so.
 - Spring Boot's structured logging in its own `base.xml` appenders cannot be wrapped in
-  `RedactingEncoder`; that takes an appender of the application's own.
+  `RedactingEncoder`: DIAGNOSTICS.md shows the appender of the application's own.
 
 ### Reviewed, nothing found
 
