@@ -62,6 +62,58 @@ public final class TlsLayers {
      */
     public static TlsLayer start(TlsStack stack, Transport transport, String host, int port,
             boolean verify, ClientIdentity identity, String alpn) throws IOException {
+        return watched(transport, () -> startNow(stack, transport, host, port, verify, identity,
+                alpn));
+    }
+
+    /** One handshake, for {@link #watched}. */
+    private interface Handshake {
+        TlsLayer run() throws IOException;
+    }
+
+    /**
+     * The handshake under a deadline of its own: {@code seclume.loginBudgetFactor}
+     * (3) times the transport's network timeout. That timeout counts only
+     * silence, and a server that sends a byte before each one ran out held
+     * the handshake for as long as it liked. The deadline is the handshake's
+     * and ends with it - a connection being migrated later never meets it.
+     * No network timeout, no deadline: zero waits for ever, as before.
+     */
+    private static TlsLayer watched(Transport transport, Handshake handshake) throws IOException {
+        int millis = transport.networkTimeoutMillis();
+        if (millis <= 0) {
+            return handshake.run();
+        }
+        long budget = millis * (long) Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
+        // 0 running, 1 done, 2 the deadline came first.
+        java.util.concurrent.atomic.AtomicInteger state = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.ScheduledFuture<?> watch = Transports.after(budget, () -> {
+            if (state.compareAndSet(0, 2)) {
+                transport.close();
+            }
+        });
+        TlsLayer layer = null;
+        try {
+            layer = handshake.run();
+        } catch (IOException | RuntimeException failure) {
+            if (state.get() == 2) {
+                throw new IOException("the TLS handshake did not finish within " + budget
+                        + " ms (seclume.loginBudgetFactor x the network timeout) - the server "
+                        + "kept it going without completing it", failure);
+            }
+            throw failure;
+        } finally {
+            watch.cancel(false);
+        }
+        if (!state.compareAndSet(0, 1)) {
+            closeQuietly(layer);
+            throw new IOException("the TLS handshake did not finish within " + budget + " ms");
+        }
+        return layer;
+    }
+
+    private static TlsLayer startNow(TlsStack stack, Transport transport, String host, int port,
+            boolean verify, ClientIdentity identity, String alpn) throws IOException {
         // AUTO is the default and means the own stack: TLS 1.3, and the TLS 1.2
         // profile for a server without it. JSSE only when asked for by name.
         if (stack == TlsStack.AUTO) {
@@ -124,6 +176,11 @@ public final class TlsLayers {
      */
     public static TlsLayer startTls12(Transport transport, String host, int port, boolean verify,
             ClientIdentity identity) throws IOException {
+        return watched(transport, () -> startTls12Now(transport, host, port, verify, identity));
+    }
+
+    private static TlsLayer startTls12Now(Transport transport, String host, int port,
+            boolean verify, ClientIdentity identity) throws IOException {
         space.seclume.jfr.SeclumeEvents.TlsHandshake event =
                 space.seclume.jfr.Observed.beginHandshake();
         TlsLayer layer = null;

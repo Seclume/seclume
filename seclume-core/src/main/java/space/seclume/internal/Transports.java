@@ -144,6 +144,11 @@ public final class Transports {
                 });
     }
 
+    /** Runs {@code task} after {@code millis}, on the thread that watches logins. */
+    static java.util.concurrent.ScheduledFuture<?> after(long millis, Runnable task) {
+        return Budget.SERVICE.schedule(task, millis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
     /** The login is done: lifts the watch {@link #open} set on it. */
     public static void loggedIn(Transport transport) {
         java.util.concurrent.ScheduledFuture<?> budget = LOGINS.remove(transport);
