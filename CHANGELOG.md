@@ -5,7 +5,54 @@ All notable changes to seclume are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Upgrading: what changes behaviour
+
+- **A key the JDBC URL gives twice is refused** (`IllegalArgumentException` naming the key).
+  The last value used to win, so `...?tls=verify-full&...&tls=off` was off. Give each option
+  once; `Properties` still override the URL.
+- **Patroni may name only the URL's own hosts.** A `/cluster` answer can reorder the servers
+  the URL lists, not add one. List every member in the URL.
+- **SPIFFE: without `peer-ids`, only the workload's own trust domain is a peer.** A federated
+  domain's workload used to be accepted as any server and client. Name federated peers in
+  `peer-ids`.
+- **An HTTP credential placeholder is written only into credential headers**
+  (`Authorization`, `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `X-Auth-Token`). Elsewhere it
+  goes as it is.
+- **`Driver.connect` throws only `SQLException`.** A secret provider's or a URL's unchecked
+  failure is SQLSTATE 08001 with it as the cause.
+- **The pool's grade warns for an encrypted connection whose server was not checked**
+  (`tls=prefer`, `require`); `Secured.serverAuthenticated()` says which it is.
+
 ### Fixed
+
+- **A secret provider that fails at the login is an `SQLException`.** Its failure - a file not
+  there, Vault not reachable - left `DriverManager.getConnection` as
+  `SecretUnavailableException`, past every pool and retry that catches `SQLException`.
+- **JGit credentials can be bound to their remote.** `SeclumeGit.credentials(user, spec)`
+  bound its placeholder to the first server that asked - a submodule's host from someone
+  else's `.gitmodules`, if it asked first. `credentials(user, spec, remoteUrl)` binds it to the
+  remote's host and port.
+- **A TLS handshake has a deadline of its own**: `seclume.loginBudgetFactor` (3) times the
+  network timeout. A server that sent a byte before each read timeout ran out held it for as
+  long as it liked.
+- **MySQL, SQL Server and Oracle close a statement's connection when the server ignores its
+  cancellation** after the query timeout and a grace, as PostgreSQL did.
+- **`AccessLogVerifier.Result.vouched()`**: whether a key vouches for every entry. `holds()`
+  was true for a chain written from scratch with its checkpoints left out.
+- **A JSON answer broken before a field is an error, not that field's absence** - an expiry,
+  a lease or a renewal flag of Vault, Azure Key Vault, the metadata endpoints, SPIFFE, OAuth or
+  Google Cloud was skipped for an answer that could not be read that far.
+- **Oracle: a short ROWID or DATE is SQLSTATE 22000**, and **SQL Server: a value cut short is
+  08S01** - both used to leave the getter as an unchecked exception.
+- **Heap dump discovery looks for a discovered credential in every encoding**, and finds a
+  bare `Basic` or `Bearer` value held without its header name (`http-credential-value`).
+- **The default result limit reads the URL's options**: `maxResultRows=` in another option's
+  value (`applicationName=report-maxResultRows=5`) meant no limit.
+- **R2DBC: a result cancelled after its first row leaves no statement open** - the pool found
+  it open on every return and counted a leak.
+- **LDAP: the same server registered twice with the same `tlsPin` is the same trust**; it was
+  refused as another certificate.
+- **The TLS record layer refuses an inner plaintext beyond 2^14 + 1 bytes** on every path.
 
 - **The security gate asks for every method of a security test, not for one passing case.** One
   passing case named anything used to count as PASS, so a gated test reduced to a placeholder
@@ -101,6 +148,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Documentation
 
+- **A Kafka value is not bound to its record's key, nor a Redis value to its key** unless it is
+  written with `EncryptedCodec.encodeValueFor`. Within a topic or a name, whoever can write to
+  the broker or to Redis can copy one key's value under another.
 - **A JPA-converted value is not bound to its row.** `EncryptedStringConverter` and
   `EncryptedBytesConverter` cannot use a context - a converter is not told its entity - so a
   value copied by someone who can write to the table into another row of the same column is

@@ -321,7 +321,8 @@ where they failed. The database tests added are for CI.
   absolute path, the read end opened first, and the watchdog's timeouts.
 - **SCRAM** in PostgreSQL, Kafka and MongoDB: the server nonce must extend ours, at least
   4096 iterations, the server signature is checked before success is believed, and
-  PostgreSQL refuses an `AuthenticationOk` that skipped it.
+  PostgreSQL refuses an `AuthenticationOk` that skipped it - and, since the audit, a
+  `ReadyForQuery` in place of it (Audit, finding 8).
 - **SPIFFE trust manager**: the chain must lead to the bundle of the trust domain the SVID
   names, and exactly one URI SAN is allowed.
 - **HTTP/2 rewriting**: padding and priority are bounded, Huffman is refused, every block
@@ -369,6 +370,107 @@ the new tests fail on it. PIT in this pull request's CI is the measure.
 - **`HostnameMatch`**: an address matches only an iPAddress entry; IPv4-mapped addresses
   compare as what they are; entries that are no name are skipped.
 
+## Audit - November 2026
+
+Scope: the whole repository, read against its claims (THREAT-MODEL.md, FEATURES.md,
+ENCRYPTION.md, DIAGNOSTICS.md, the Javadoc), with an AI assistant (Claude). Every finding was
+shown with a proof of concept using decoy secrets and stand-in servers that only answer
+protocol text or dribble bytes.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | CI security gate | A gated test passed when any single case passed, and the gate read its manifest from the change under review (GHSA-r2cr-rj9g-qrhc). | process | #PR |
+| 2 | Build inputs | Container images by tag, the Maven wrapper without `distributionSha256Sum`; a wrong dependency checksum was a warning. | process | #PR |
+| 3 | `ForbiddenApiTest` | None of eight evasions was found (double space, fully qualified name, `Charset.decode`, `clone()`, `Scanner`, an allow comment inside a literal or on the line before, a line break). | process | open |
+| 4 | `ErrorMessageTest` | One of five ways to put a secret into an exception message was found. | process | open |
+| 5 | Secret providers | `provider=process` in a JDBC URL ran a program; an application that takes URLs or properties from its users ran their commands. | high | #PR |
+| 6 | Pool statement cache | A cached statement kept the result set of its last execution: the next borrower read the previous borrower's (tenant's) rows through `getResultSet()`. | low | #PR |
+| 7 | Pool renewal | A borrow that had handed out a statement could still be renewed; a session change the driver did not see (`select app.enter_tenant(42)`) was lost and the next statement ran as the login role. | medium | #PR |
+| 8 | PostgreSQL | A `ReadyForQuery` during the login ended it as a success: no `AuthenticationOk`, so neither `requireAuth`, nor SCRAM's server signature, nor Kerberos' mutual authentication was checked. Under `tls=prefer`/`require` anybody in the middle was taken for the database with `requireAuth=scram-sha-256` set. Round 4 listed the SCRAM check as sound; it held for `AuthenticationOk` only. | medium | #PR |
+| 9 | MySQL quoting | In GBK, Big5 or SJIS a lead byte took the escaping backslash, and a literal became SQL; values beyond ASCII now go as `_utf8mb4 X'...'`. | medium | #PR |
+| 10 | Heap dump endpoint | A secret that could not be read was skipped, and the dump went out as redacted with it inside. | high | #PR |
+| 11 | HTTP credential placeholders | A placeholder was replaced in every header line; typed into a query, a cookie or `X-Opaque-Id` it went out as the secret. | high | #PR |
+| 12 | R2DBC | Host, port and database went into the URL unchecked: a database with a query of its own set the login, the STS endpoint and any other option. | high | #PR |
+| 13 | JWT | `crit`, `exp` and `nbf` were looked up in a way that answered "absent" for JSON that could not be read up to the field: an expired token with such a payload passed. | low | #PR |
+| 14 | OpenSSL signing key | `close()` freed the key while another thread signed: a use after free (SIGSEGV, heap corruption). | medium | #PR |
+| 15 | Pool rotation | A login under way during `rotateSecret()` was kept and lent with the old secret. | medium | #PR |
+| 16 | Pool session context | A resolver that threw lost the connection; two such requests emptied a pool of two. | medium | #PR |
+| 17 | PostgreSQL startup | A zero byte in user, database or `applicationName` began a startup parameter of its own (`options=-c search_path=...`). | medium | #PR |
+| 18 | MySQL handshake | A zero byte in user or database shifted the fields of the HandshakeResponse. | medium | #PR |
+| 19 | Oracle descriptor | Service and host went into `(DESCRIPTION=...)` unchecked: a service name added `SERVICE_NAME` or `INSTANCE_NAME` of its own. | medium | #PR |
+| 20 | Numbers (PostgreSQL, MySQL, Oracle) | Values beyond a long wrapped silently: 18446744073709551621 read as 5. | medium | #PR |
+| 21 | Vault KV | A KV secret without a lease was read once and never again; a rotation in Vault never arrived. | medium | #PR |
+| 22 | HTTP placeholders | Placeholders were a shared nonce and a counter: one seen in a log named all others. | medium | #PR |
+| 23 | Log masker refresh | A secret that could not be read on refresh was dropped from the masker until the next one. | medium | #PR |
+| 24 | AWS temporary credentials | The secret key and session token were not wiped before a CRaC or SnapStart checkpoint. | medium | #PR |
+| 25 | Field encryption shredding | A shred while the subject's key was being read let the reader cache the shredded key and read on. | medium | #PR |
+| 26 | Access log verify | With a key, a log without a single signed checkpoint passed; anyone who can write the file rebuilds the chain. The library's `Result.vouched()` asks what `seclume-verify audit` asks. | medium | #PR |
+| 27 | `seclume-verify migrate` | Option values from the source URL were written unencoded: `applicationName=billing&tls=off` turned TLS off. | medium | #PR |
+| 28 | Patroni topology | A member not in the URL, named by the REST answer over plain HTTP, was connected to with the password. The drivers pass the URL's hosts; an answer may reorder them, not add one. | medium | #PR |
+| 29 | Redis codec | A ciphertext copied to another key opened there; `encodeValueFor`/`decodeValueFor` bind it to the key, and ENCRYPTION.md says what the codec alone does not. | medium | #PR |
+| 30 | SPIFFE trust | Without `peer-ids` any workload of any federated trust domain was trusted as a server (as FEATURES.md said). Only the workload's own trust domain is, now. | medium | #PR |
+| 31 | Driver login | A server dribbling bytes held a login, and the pool's thread and permit, without end. | low | #PR |
+| 32 | Query timeout | A server that ignores the cancellation held a statement without end; a kill stage closes the connection after a grace, in all four drivers. | low | #PR |
+| 33 | Pool probes | The capacity and idle-limit probes had no timeout; a connection closed by the probe's deadline was lent. | low | #PR |
+| 34 | Pool error paths | An `Error` (`StackOverflowError`) kept the permit; housekeeping died on one. | low | #PR |
+| 35 | Patroni nesting | A nested answer was a `StackOverflowError` out of connect. | low | #PR |
+| 36 | PostgreSQL arrays | `{{{{...` was a `StackOverflowError` out of `getArray()`. | low | #PR |
+| 37 | SQL Server `sql_variant` | A `sql_variant` holding a `sql_variant` recursed; 8016 bytes were a `StackOverflowError`. | low | #PR |
+| 38 | Oracle JSON | Cycles and shared nodes: 17 bytes a `StackOverflowError`, 206 bytes an `OutOfMemoryError`. | medium | #PR |
+| 39 | Oracle DH | The server's DH group and an exponent as long as the prime: years of CPU in connect. | low | #PR |
+| 40 | PostgreSQL statement | A break while rows arrived swapped released buffers; a `DataRow` without `RowDescription` was taken. | low | #PR |
+| 41 | Result set values | Unreadable values of a hostile server escaped as `IllegalStateException` and the like. | low | #PR |
+| 42 | Connection assessment | `tls=prefer` and `require` - encrypted, server not authenticated - gave no warning. `Secured.serverAuthenticated()` says which it is, and the grade asks it. | low | #PR |
+| 43 | Driver login | A secret provider's `RuntimeException` during the login left the driver as an unchecked exception, past callers that catch `SQLException`. | low | #PR |
+| 44 | LDAP | `SeclumeLdap.register` compared the trust choice through `String.valueOf`; with a pin (a `byte[]`) the same registration was refused as different. A functional bug that fails safe. | low | #PR |
+| 45 | Result set values | A short Oracle ROWID or DATE, and a SQL Server value cut short, left the getter as an index or state exception. | low | #PR |
+| 46 | JDBC URL | A key given twice took its last value: `tls=verify-full&...&tls=off` was off. A key given twice is refused. | medium | #PR |
+| 47 | Kafka encryption | A value is bound to its topic, not to its record's key; within a topic it can be copied under another key. Documented, and pinned by a test. | medium | #PR |
+| 48 | JGit credentials | The placeholder was bound to the first server that asked, a submodule's host among them. `SeclumeGit.credentials(user, spec, remoteUrl)` binds it to the remote. | medium | #PR |
+| 49 | Spring result limit | Whether the URL set a limit was a text search: the word in another option's value meant no limit. | low | #PR |
+| 50 | TLS handshake | The handshake had a per-read timeout only; it has a deadline of its own, wherever it runs. | low | #PR |
+| 51 | Secret providers' JSON | Vault, Azure Key Vault, the metadata endpoints, SPIFFE, OAuth and Google Cloud read an expiry, a lease or a flag as absent from an answer that could not be read up to it. | low | #PR |
+
+### Mutation testing of the security paths
+
+PIT was unavailable in the review sandbox, so the unchanged core tests (2,398, incl.
+Wycheproof; Jazzer fuzz tests excluded) ran under a JUnit-subset shim against source mutants
+(negated and boundary comparisons, `&&`/`||`, flipped boolean returns, removed guards, removed
+negations).
+
+Score: 357 of 425 mutants killed (84 %). Per class: `AesGcmSiv`, `Base64Off`,
+`ChannelBinding` 100 %; `HostnameMatch` 92 %; `AesGcm` 89 % (the survivor is equivalent below
+2^24 blocks); `JsonOff` 85 %; `Scram` 83 %; `ShamirShares` 79 %; `SessionState` 68 %;
+`ConstantTime` 60 %.
+
+Test gaps to close: SCRAM server nonce not starting with or equal to the client nonce;
+channel-binding data in client-final; `ConstantTime.equals` with different lengths;
+share-file permissions (POSIX/ACL); share MAGIC, CRC boundary, mixed thresholds; share-count
+bounds; `JsonOff` truncated object, raw NUL in strings, zero length; `HostnameMatch` empty
+inputs, `"1.2.3."`, `"[]"`; `SessionState` pre-filter negatives; SCRAM iteration-count digit
+boundary. CI: pitest-maven on the security packages with `mutationThreshold=85`.
+
+### Open
+
+- `ForbiddenApiTest` and `ErrorMessageTest` read lines, not code (findings 3 and 4).
+- MD5 and `mysql_native_password` over an unauthenticated connection (round 4, "Open") are
+  still a decision with compatibility cost.
+
+### Looked at and found sound
+
+- **Logins**: SQL Server refuses a login without LOGINACK, needs the Kerberos context completed
+  and refuses a server without encryption; an access token goes only to a server whose
+  certificate was checked. Oracle's O5LOGON requires and checks AUTH_SVR_RESPONSE; native
+  encryption is AES and SHA-2 only, its checksum compared in constant time. MySQL refuses a
+  server without TLS under require and verify-full. No driver but PostgreSQL had a second way
+  out of its login.
+- **LDAP**: the StartTLS answer is read, plaintext sent after it refused, TLS always verified,
+  placeholders random.
+- **JWT**: the structure is parsed, not searched; alg must match, crit is refused, only canonical
+  base64url, the MAC compared in constant time.
+- **Field encryption**, MongoDB's EncryptedFields included: header and context in the AAD, one
+  key per column, the commitment checked before GCM-SIV.
+
 ## Rounds 6 to 16 - November 2026
 
 How these were done: each round read one area against its claims, as above, with an AI
@@ -379,7 +481,7 @@ it, where they failed unless said otherwise. Where a library was needed and not 
 built from its own source (Logback 1.6.6, Spring Boot 4.1.2's two Logback converters, the
 Jakarta Persistence `AttributeConverter`). Slow or silent servers were stand-ins that dribble
 or answer protocol text; every secret was a decoy. The tests that need a database, a broker or
-a library not at hand are for CI. "Fixed in" names the branch the fix was prepared on.
+a library not at hand are for CI. "Fixed in" names the pull request.
 
 ## Round 6 - November 2026
 
@@ -387,9 +489,9 @@ Scope: `seclume-heapcheck` - the recording check, `ProcessHeap`'s dump of anothe
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | heapcheck | A recording that names no secret, with nothing named and no discovery, searched for nothing and exited 0. | medium | `review/heapcheck` |
-| 2 | heapcheck | `ProcessHeap` started the target's local management agent for every dump, falling back to `jcmd` only when JMX failed. The agent stays open (RMI, no authentication, local peers) until the process ends. | medium | `review/heapcheck` |
-| 3 | heapcheck | A process in another mount namespace, checked without `--in-target`, wrote the dump into its own `/tmp`: the check did not find it and failed, and the dump of everything in the heap stayed there. | medium | `review/heapcheck` |
+| 1 | heapcheck | A recording that names no secret, with nothing named and no discovery, searched for nothing and exited 0. | medium | #PR |
+| 2 | heapcheck | `ProcessHeap` started the target's local management agent for every dump, falling back to `jcmd` only when JMX failed. The agent stays open (RMI, no authentication, local peers) until the process ends. | medium | #PR |
+| 3 | heapcheck | A process in another mount namespace, checked without `--in-target`, wrote the dump into its own `/tmp`: the check did not find it and failed, and the dump of everything in the heap stayed there. | medium | #PR |
 
 ## Round 7 - November 2026
 
@@ -397,13 +499,12 @@ Scope: the logins of `seclume-mail` (SMTP, IMAP, POP3) and `seclume-ldap`.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | Mail, LDAP | The read timeout was per read. A server - or anyone on the path before STARTTLS - that sends one byte just before each read would time out held a login, and LDAP's StartTLS and handshake inside JNDI's connect, without end (1 s timeout, still blocked after 20 s). The login now has `seclume.loginBudgetFactor` (3) times the read timeout as a whole. | low | `review/login-deadlines` |
+| 1 | Mail, LDAP | The read timeout was per read. A server - or anyone on the path before STARTTLS - that sends one byte just before each read would time out held a login, and LDAP's StartTLS and handshake inside JNDI's connect, without end (1 s timeout, still blocked after 20 s). The login now has `seclume.loginBudgetFactor` (3) times the read timeout as a whole. | low | #PR |
 
 ### Open
 
-- **No deadline in `TlsLayers.start`.** The TLS handshake has a per-read timeout only, wherever
-  it runs; the login budget above covers mail and LDAP. One deadline for the handshake itself
-  would cover every user at once.
+None. The deadline for the TLS handshake itself, wherever it runs, came with the audit
+(finding 50).
 
 ## Round 8 - November 2026
 
@@ -412,8 +513,8 @@ socket factory.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | Secret providers | `SecretFetch` passed its timeout to the connect only: a server that took the connection and said nothing held the handshake and the answer for good (`timeoutMillis=1000`, still blocked after 15 s), and every login waiting for that secret with it. | low | `review/read-timeouts` |
-| 2 | Redis | `SeclumeRedisSocketFactory` set its read timeout after the TLS handshake: a silent `rediss://` server held Jedis's `createSocket` for good. | low | `review/read-timeouts` |
+| 1 | Secret providers | `SecretFetch` passed its timeout to the connect only: a server that took the connection and said nothing held the handshake and the answer for good (`timeoutMillis=1000`, still blocked after 15 s), and every login waiting for that secret with it. | low | #PR |
+| 2 | Redis | `SeclumeRedisSocketFactory` set its read timeout after the TLS handshake: a silent `rediss://` server held Jedis's `createSocket` for good. | low | #PR |
 
 ## Round 9 - November 2026
 
@@ -421,7 +522,7 @@ Scope: `SeclumeSslSocketFactory` of `seclume-http`.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | HTTP | `createSocket(host, port)` opens the connection and runs seclume's TLS at once; `connectTimeout` bounded the connect only, so a silent server held the handshake for good. The layered `createSocket(socket, ...)` was not affected. | low | `review/socket-factory-handshake` |
+| 1 | HTTP | `createSocket(host, port)` opens the connection and runs seclume's TLS at once; `connectTimeout` bounded the connect only, so a silent server held the handshake for good. The layered `createSocket(socket, ...)` was not affected. | low | #PR |
 
 ## Round 10 - November 2026
 
@@ -429,7 +530,7 @@ Scope: `SeclumeS3Presigner` of `seclume-aws`.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | AWS | The bucket went into the host of a virtual-host style URL unchecked: a bucket `evil.example#` made a presigned "link to S3" whose host is `evil.example`. An application that takes the bucket from its user handed out links to wherever the user chose. | medium | `review/presign-bucket` |
+| 1 | AWS | The bucket went into the host of a virtual-host style URL unchecked: a bucket `evil.example#` made a presigned "link to S3" whose host is `evil.example`. An application that takes the bucket from its user handed out links to wherever the user chose. | medium | #PR |
 
 ## Round 11 - November 2026
 
@@ -437,7 +538,7 @@ Scope: `QueryFingerprint` in every dialect.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | Fingerprints | A backslash was taken for an escape in every dialect and quoting form. A run masked too long ends at the quote that opens the next literal, whose contents were then read as words: `VALUES ('C:\data\', 'secret')` gave `values (?secret?`, and a quoted identifier ending in a backslash copied the rest of the statement verbatim - into JFR events, OpenTelemetry spans, Micrometer tags and `lastFingerprint`. About 37,000 leaks in 100,000 random statements before, none in 300,000 after. | high | `review/fingerprint-backslash` |
+| 1 | Fingerprints | A backslash was taken for an escape in every dialect and quoting form. A run masked too long ends at the quote that opens the next literal, whose contents were then read as words: `VALUES ('C:\data\', 'secret')` gave `values (?secret?`, and a quoted identifier ending in a backslash copied the rest of the statement verbatim - into JFR events, OpenTelemetry spans, Micrometer tags and `lastFingerprint`. About 37,000 leaks in 100,000 random statements before, none in 300,000 after. | high | #PR |
 
 ## Round 12 - November 2026
 
@@ -445,9 +546,9 @@ Scope: `JdbcUrl.redact`, the log masker's encodings, `PgSqlRewriter`.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | JDBC URL redaction | Before the query a value ended at any of `; , ( )` - wrong for SQL Server's `;`-separated values, which hold `, ( )`, and the other way round for a `;` in a MySQL key-value password; an Oracle password in quotes with a `//` in it was printed whole. 2,875 of 60,000 random passwords had a half shown before, none of 240,000 after. | medium | `review/redact-syntax` |
-| 2 | Log masker | A secret was looked for percent-encoded only as RFC 3986 strictly or `URLEncoder` encode it, and JSON-escaped only for `"` `\` and line breaks. `java.net.URI`, Spring and OkHttp encode only what their part of a URL does not allow, and Gson escapes `= ' < > &` as backslash-u: of 2,000 random passwords, 925 and 1,191 went unmasked. | medium | `review/masker-views` |
-| 3 | PostgreSQL | `PgSqlRewriter` did not tell `E'...'` apart: in `E'it\'s ?'` the `?` became `$1` and a real one after it stayed `?`. A refused statement, not an injection. | low | `review/pg-escape-strings` |
+| 1 | JDBC URL redaction | Before the query a value ended at any of `; , ( )` - wrong for SQL Server's `;`-separated values, which hold `, ( )`, and the other way round for a `;` in a MySQL key-value password; an Oracle password in quotes with a `//` in it was printed whole. 2,875 of 60,000 random passwords had a half shown before, none of 240,000 after. | medium | #PR |
+| 2 | Log masker | A secret was looked for percent-encoded only as RFC 3986 strictly or `URLEncoder` encode it, and JSON-escaped only for `"` `\` and line breaks. `java.net.URI`, Spring and OkHttp encode only what their part of a URL does not allow, and Gson escapes `= ' < > &` as backslash-u: of 2,000 random passwords, 925 and 1,191 went unmasked. | medium | #PR |
+| 3 | PostgreSQL | `PgSqlRewriter` did not tell `E'...'` apart: in `E'it\'s ?'` the `?` became `$1` and a real one after it stayed `?`. A refused statement, not an injection. | low | #PR |
 
 ## Round 13 - November 2026
 
@@ -455,14 +556,14 @@ Scope: what the heap dump redaction, heapcheck and the TCK look for.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | Heap dumps | A named secret was looked for as UTF-8, UTF-16, Latin-1 and its own Base64. In `Authorization: Basic base64(user:password)` its Base64 begins where the user name leaves it; URL-safe, percent-encoded and JSON-escaped forms were not looked for either. A redacted copy "passed its own check" with twelve Basic headers decoding to the password; heapcheck found nothing in a process that held it only in a header; `/actuator/heapdump` and the TCK's heap tests had the same patterns. One shared list (`SecretEncodings`) now. | high | `review/dump-encodings` |
+| 1 | Heap dumps | A named secret was looked for as UTF-8, UTF-16, Latin-1 and its own Base64. In `Authorization: Basic base64(user:password)` its Base64 begins where the user name leaves it; URL-safe, percent-encoded and JSON-escaped forms were not looked for either. A redacted copy "passed its own check" with twelve Basic headers decoding to the password; heapcheck found nothing in a process that held it only in a header; `/actuator/heapdump` and the TCK's heap tests had the same patterns. One shared list (`SecretEncodings`) now. | high | #PR |
 
 ## Round 14 - November 2026
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | Heap dump discovery | Copies of a discovered credential were looked for as its own padded Base64 only: a discovered URL password also held in a Basic value `base64("app:" + pw)`, and a discovered token as URL-safe Base64, stayed in the redacted copy, which passed its own check. Echoes take the encodings list now. | medium | `review/discovery-echoes` |
-| 2 | Discovery detector `http-authorization` | Only `Authorization: Basic <b64>` in one string was found. HTTP clients keep the value apart from its name (Apache `BasicHeader`, the JDK's `HttpClient`, Spring's `HttpHeaders`); `Basic <b64>` alone, in lower case, or the bare Base64 stayed in the copy, decodable. A second detector, `http-credential-value`, takes a bare `Basic` value that decodes to `user:password` and a `Bearer` token of twenty characters or more, in any case. | medium | `review/bare-credentials` |
+| 1 | Heap dump discovery | Copies of a discovered credential were looked for as its own padded Base64 only: a discovered URL password also held in a Basic value `base64("app:" + pw)`, and a discovered token as URL-safe Base64, stayed in the redacted copy, which passed its own check. Echoes take the encodings list now. | medium | #PR |
+| 2 | Discovery detector `http-authorization` | Only `Authorization: Basic <b64>` in one string was found. HTTP clients keep the value apart from its name (Apache `BasicHeader`, the JDK's `HttpClient`, Spring's `HttpHeaders`); `Basic <b64>` alone, in lower case, or the bare Base64 stayed in the copy, decodable. A second detector, `http-credential-value`, takes a bare `Basic` value that decodes to `user:password` and a `Bearer` token of twenty characters or more, in any case. | medium | #PR |
 
 ### Open
 
@@ -482,8 +583,8 @@ Scope: `seclume-logging`'s Logback, Log4j 2 and java.util.logging adapters.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | Logback | The documented rules replaced `%msg` and `%xEx` only, and a rule replaces the converter of its one word. Spring Boot's patterns write `%m` and `%wEx`, so with `logback-spring.xml` as documented neither message nor stack trace was masked; `%ex`, `%throwable`, `%rEx`, `%message`, the stack trace Logback adds to a pattern without one, and JSON encoders were not either. `redact-rules.xml` registers every word now, and `RedactingEncoder` masks a whole line. | high | `review/logback-coverage` |
-| 2 | Log masker | `java.util.logging`'s `XMLFormatter` writes `& < >` as entities: a secret with one of them went to the log unmasked, in the message and in the exception. A line with `&` is also read with its character references resolved now. | medium | `review/markup-escapes` |
+| 1 | Logback | The documented rules replaced `%msg` and `%xEx` only, and a rule replaces the converter of its one word. Spring Boot's patterns write `%m` and `%wEx`, so with `logback-spring.xml` as documented neither message nor stack trace was masked; `%ex`, `%throwable`, `%rEx`, `%message`, the stack trace Logback adds to a pattern without one, and JSON encoders were not either. `redact-rules.xml` registers every word now, and `RedactingEncoder` masks a whole line. | high | #PR |
+| 2 | Log masker | `java.util.logging`'s `XMLFormatter` writes `& < >` as entities: a secret with one of them went to the log unmasked, in the message and in the exception. A line with `&` is also read with its character references resolved now. | medium | #PR |
 
 The round's own changes were reviewed once more before they were handed on: a
 `RedactingEncoder` with neither a pattern nor an encoder threw out of Logback's configuration
@@ -513,7 +614,7 @@ Scope: `seclume-kubernetes` and `seclume-jpa`.
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | JPA | `EncryptedStringConverter` and `EncryptedBytesConverter` encrypt without a context - a converter is not told its entity - so whoever can write to the table can copy a value into another row of the same column, and it is read there as that row's own: one's own bank account, entered through the application, into another customer's row. ENCRYPTION.md promised the binding for the JDBC API and said nothing of the converters; it does now, with `Sealed` sealed with the row's id. | low | `review/jpa-row-binding` (documentation) |
+| 1 | JPA | `EncryptedStringConverter` and `EncryptedBytesConverter` encrypt without a context - a converter is not told its entity - so whoever can write to the table can copy a value into another row of the same column, and it is read there as that row's own: one's own bank account, entered through the application, into another customer's row. ENCRYPTION.md promised the binding for the JDBC API and said nothing of the converters; it does now, with `Sealed` sealed with the row's id. | low | #PR (documentation) |
 
 ### Reviewed, nothing found
 
