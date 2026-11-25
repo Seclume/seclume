@@ -1070,11 +1070,17 @@ public final class PgSession implements AutoCloseable {
             fields = List.of();
 
             SQLException failure = null;
+            // In the simple protocol every result that has rows describes
+            // them first. A row before that was read against the columns of
+            // nothing - or of the statement before, in a multi-statement
+            // string.
+            boolean described = false;
             while (true) {
                 byte tag = channel.nextMessage();
                 switch (tag) {
                     case PgProtocol.ROW_DESCRIPTION -> {
                         readRowDescription();
+                        described = true;
                         if (handler != null && failure == null) {
                             try {
                                 handler.described();
@@ -1084,6 +1090,9 @@ public final class PgSession implements AutoCloseable {
                         }
                     }
                     case PgProtocol.DATA_ROW -> {
+                        if (!described) {
+                            throw WireBuffer.malformed("a DataRow with no RowDescription before it");
+                        }
                         Row row = readDataRow();
                         if (handler != null && failure == null) {
                             // A handler that refuses the row - a result limit,
@@ -1101,6 +1110,7 @@ public final class PgSession implements AutoCloseable {
                     }
                     case PgProtocol.COMMAND_COMPLETE -> {
                         lastCommandTag = commandComplete();
+                        described = false;
                         channel.endMessage();
                         if (handler != null && failure == null) {
                             try {
@@ -2833,8 +2843,13 @@ public final class PgSession implements AutoCloseable {
     private SQLException brokenConnection(String what, Exception cause) {
         String flight = channel.flightTail();
         channel.close();
+        // A message the server sent whole but wrong is a protocol violation,
+        // not a line that went dead - the connection is lost either way, the
+        // class tells an operator which of the two to look for.
+        String state = cause instanceof WireBuffer.Truncated cut && !cut.endOfData()
+                ? "08P01" : "08006";
         return new SQLNonTransientConnectionException(
-                flight == null ? what : what + " - " + flight, "08006", cause);
+                flight == null ? what : what + " - " + flight, state, cause);
     }
 
     /** What this connection last sent and received - see space.seclume.Flight. */

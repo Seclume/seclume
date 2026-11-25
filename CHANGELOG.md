@@ -7,6 +7,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **PostgreSQL: a malformed answer is SQLState `08P01`**, a line that went dead stays `08006`.
+  Both lose the connection; the class says which to look for. A DataRow before any
+  RowDescription in a simple query is such an answer now; it was read against no columns.
 - **R2DBC takes its session context from the Reactor context.** A `SeclumeSessionContext` was
   asked on whichever thread borrowed - an event loop when a connection was free, a thread of the
   pool's when it had to wait - so a request had its tenant at low load and lost it under load.
