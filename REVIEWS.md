@@ -436,6 +436,10 @@ protocol text or dribble bytes.
 | 55 | Log masker | A secret never read left an empty entry, and the next failed refresh took it for one read before: no early retry, the secret never masked. | low | #PR |
 | 56 | Pool statements | `statement.getConnection()` answered the driver's connection behind the handle: closed there, it closed under the pool; kept, it outlived the borrow as the next borrower's session. Every statement the pool lends answers the handle. | low | #PR |
 | 57 | Redis discovery | Every node a cluster redirect, a topology refresh or a Sentinel named got the password: one forged `-MOVED` or Sentinel answer sent it where it pointed. Discovered nodes need the URL or `cluster-hosts=` / `master-hosts=`; others get the placeholder. | high | #PR |
+| 58 | PostgreSQL | A RowDescription claiming binary for a column asked for as text was believed, and the bytes decoded by the binary reader. A format the driver never asks for is refused. | low | #PR |
+| 59 | Oracle native encryption | FEATURES.md did not say that its Diffie-Hellman exchange authenticates nobody: a party in the middle reads the session. It does now. | doc | #PR |
+| 60 | Keychain | The CFData the keychain returned was freed with the password in it. Zeroed before CFRelease. | low | #PR |
+| 61 | DPAPI | CryptUnprotectData ran without CRYPTPROTECT_UI_FORBIDDEN: a blob protected with a prompt waited on a server for nobody. | low | #PR |
 
 ### Mutation testing of the security paths
 

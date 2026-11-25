@@ -71,6 +71,10 @@ All notable changes to seclume are recorded here. Versions follow
   read made the next one look complete.
 - **A pooled statement's `getConnection()` is the pool's handle**, not the driver's connection
   behind it: closed there it closed under the pool, and kept it outlived the borrow.
+- **PostgreSQL refuses a column format it never asked for**; a binary claim for a text column was
+  decoded by the binary reader.
+- **DPAPI never shows a prompt** (`CRYPTPROTECT_UI_FORBIDDEN`), and **the macOS keychain's copy of a
+  secret is zeroed before it is freed**.
 - **SQL Server: the driver's own `sp_describe_undeclared_parameters` question no longer reaches a
   `StatementListener`**, nor its failure as a failed statement the application never ran.
 
