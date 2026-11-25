@@ -84,7 +84,7 @@ final class VarcharParameters {
                 + (declared.isEmpty() ? "" : ", @params = N'" + declared.replace("'", "''") + "'");
         boolean[] varchar = new boolean[parameters.count()];
         boolean any = false;
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = internal(connection.createStatement());
              ResultSet rows = statement.executeQuery(question)) { // nosemgrep: java.lang.security.audit.formatted-sql-string.formatted-sql-string
             while (rows.next()) {
                 String name = rows.getString("name");
@@ -105,6 +105,14 @@ final class VarcharParameters {
             return NONE;
         }
         return any ? varchar : NONE;
+    }
+
+    /** The driver's own statement: no listener hears of it. */
+    private static Statement internal(Statement statement) {
+        if (statement instanceof TdsStatement own) {
+            own.internal = true;
+        }
+        return statement;
     }
 
     /** Forgets every answer - for a test that changes a column's type. */
