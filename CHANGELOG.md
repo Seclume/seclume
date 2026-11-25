@@ -7,6 +7,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A control character in user, database or application name is refused when the URL is
+  read** (`IllegalArgumentException`), for all four drivers, before a socket opens. Each driver
+  frames these fields its own way, and a control character has ended one or started another.
 - **PostgreSQL: a malformed answer is SQLState `08P01`**, a line that went dead stays `08006`.
   Both lose the connection; the class says which to look for. A DataRow before any
   RowDescription in a simple query is such an answer now; it was read against no columns.

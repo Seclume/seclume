@@ -176,7 +176,35 @@ public final class JdbcUrl {
         if (database.isEmpty()) {
             database = options.getOrDefault("database", "");
         }
+        identityPlain("the database", database);
+        for (Map.Entry<String, String> option : options.entrySet()) {
+            if (IDENTITY.contains(normalize(option.getKey()))) {
+                identityPlain("the option " + option.getKey(), option.getValue());
+            }
+        }
         return new Parsed(hosts.first().host(), hosts.first().port(), database, options, hosts);
+    }
+
+    /**
+     * The options every driver writes into its login as text - each protocol
+     * frames them its own way (a NUL, a length, a key=value list), and a
+     * control character in one has ended a field or started another in all
+     * four before. Refused here, once, before any socket is opened.
+     */
+    private static final java.util.Set<String> IDENTITY = java.util.Set.of("user", "username",
+            "database", "databasename", "applicationname", "programname", "servicename");
+
+    private static void identityPlain(String what, String value) {
+        if (value == null) {
+            return;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                throw new IllegalArgumentException(what + " holds a control character (at "
+                        + i + ") - refused, it would end its field in the login");
+            }
+        }
     }
 
     /**
