@@ -582,7 +582,24 @@ public final class Topology implements AutoCloseable {
                 .exception(error).build();
     }
 
+    /**
+     * A replica set has at most 50 members. A server naming more - in hosts,
+     * passives and arbiters together - would have a pool and a monitor opened
+     * for each, as many as it likes; its answer is taken for a broken one.
+     */
+    static final int MAX_MEMBERS = 50;
+
     static ServerDescription describe(ServerAddress address, BsonDocument hello, long rttNanos) {
+        int named = 0;
+        for (String field : new String[] {"hosts", "passives", "arbiters"}) {
+            if (hello.containsKey(field) && hello.get(field).isArray()) {
+                named += hello.getArray(field).size();
+            }
+        }
+        if (named > MAX_MEMBERS) {
+            return unknown(address, new com.mongodb.MongoClientException("the server names "
+                    + named + " replica set members; a replica set has at most " + MAX_MEMBERS));
+        }
         ServerType type;
         if ("isdbgrid".equals(hello.getString("msg", new BsonString("")).getValue())) {
             type = ServerType.SHARD_ROUTER;
