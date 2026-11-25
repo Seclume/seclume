@@ -226,6 +226,12 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
      * and not after it.
      */
     void collect(TdsSession session, Execution execution) throws SQLException {
+        if (internal) {
+            // The driver's own question, not the application's statement: no
+            // span, no event, and nothing it does counts as session state.
+            collectInto(session, execution);
+            return;
+        }
         // Every statement this driver runs passes here. See space.seclume.jfr.
         space.seclume.jfr.Observed.Statement event =
                 space.seclume.jfr.Observed.beginQuery("sqlserver");
@@ -243,6 +249,14 @@ class TdsStatement implements Statement, TokenStream.RowHandler {
 
     /** How many rows the last collect took over - for the recording. */
     private long rowsCollected;
+
+    /**
+     * A statement the driver runs for itself - VarcharParameters' question to
+     * sp_describe_undeclared_parameters. A listener was told of it, and of its
+     * failure when the server could not describe a statement: a failed
+     * statement in the application's traces that the application never ran.
+     */
+    boolean internal;
 
     private void collectInto(TdsSession session, Execution execution) throws SQLException {
         inOrder = inOrderNext;
