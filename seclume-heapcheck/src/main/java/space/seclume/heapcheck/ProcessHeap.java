@@ -72,6 +72,14 @@ final class ProcessHeap {
             // of its life - or, without a JDK's jcmd, by starting it after all.
             String running = machine.getAgentProperties()
                     .getProperty("com.sun.management.jmxremote.localConnectorAddress");
+            if (running != null && !localConnector(running)) {
+                // The address is the examined process's to say, and JMX over
+                // RMI or JNDI to an address of its choosing is a door into
+                // this one. Only the local connector's own form is taken.
+                System.err.println("process " + pid + " names a management agent at an address "
+                        + "that is not a local connector - not used");
+                running = null;
+            }
             IOException jcmdRefused = null;
             if (running == null && jcmdPresent()) {
                 try {
@@ -114,6 +122,26 @@ final class ProcessHeap {
             return jvm;
         } finally {
             machine.detach();
+        }
+    }
+
+    /**
+     * Whether {@code address} is what a local management agent publishes:
+     * {@code service:jmx:rmi://} to the loopback address, a stub and no
+     * {@code /jndi/} lookup.
+     */
+    static boolean localConnector(String address) {
+        try {
+            JMXServiceURL url = new JMXServiceURL(address);
+            String host = url.getHost();
+            // Literal forms only: a name would be looked up, and the name is
+            // the examined process's choice.
+            boolean loopback = host == null || host.isEmpty()
+                    || java.util.Set.of("127.0.0.1", "localhost", "::1", "[::1]").contains(host);
+            return "rmi".equals(url.getProtocol()) && loopback
+                    && !url.getURLPath().contains("/jndi/");
+        } catch (java.io.IOException | RuntimeException malformed) {
+            return false;
         }
     }
 
