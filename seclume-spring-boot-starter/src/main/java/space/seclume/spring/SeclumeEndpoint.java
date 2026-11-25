@@ -92,7 +92,8 @@ public final class SeclumeEndpoint {
                 source.put("serverCapacity", server);
             }
         } catch (SQLException | RuntimeException e) {
-            source.put("error", e.getClass().getSimpleName() + ": " + e.getMessage());
+            source.put("error", e instanceof SQLException sql ? SeclumePoolHealth.outward(sql)
+                    : e.getClass().getSimpleName());
         }
         return source;
     }

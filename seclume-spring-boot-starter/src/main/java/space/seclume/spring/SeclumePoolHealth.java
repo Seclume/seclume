@@ -52,11 +52,20 @@ public final class SeclumePoolHealth implements HealthIndicator {
                 // SeclumeAssessment: a warning must not take the instance out.
                 assess(pool, statistics, connection, detail);
             } catch (SQLException e) {
-                return down(health, name, statistics, e.getMessage());
+                // The server's words stay in the log: a health endpoint is
+                // often anonymous, and "password authentication failed for
+                // user app" or a host name is nothing to answer it with.
+                return down(health, name, statistics, outward(e));
             }
             health.withDetail(name, detail);
         }
         return health.build();
+    }
+
+    /** What may leave the process about a failure: its kind and SQLState, not its text. */
+    static String outward(SQLException e) {
+        return e.getClass().getSimpleName()
+                + (e.getSQLState() == null ? "" : " (SQLState " + e.getSQLState() + ")");
     }
 
     /**
