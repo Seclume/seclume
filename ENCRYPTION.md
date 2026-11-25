@@ -453,7 +453,7 @@ es.index(i -> i.index("patients").document(patients.encrypt(document)));
 | MongoDB | the field's column | the column; the document only with a context passed to `encrypt` / `readInto` | `EncryptedFields.eq`, under every key of the ring |
 | Kafka | `kafka.<topic>.value` / `.key` | the topic - a record copied to another topic does not open; not the record's key | a deterministic key keeps its partition |
 | Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name; the key only through `encodeValueFor` / `decodeValueFor` | an encrypted key is found by `GET` again, not by a pattern |
-| Elasticsearch | `search.<index>.<field>` | index and field | a deterministic field by an exact `terms` query, through a rotation |
+| Elasticsearch | `search.<index>.<field>` (`search:<length>:<index>.<field>` for an index with a dot) | index and field | a deterministic field by an exact `terms` query, through a rotation |
 
 A `null` - a Kafka tombstone, a missing field - stays `null`. A record or value that does not open
 with the ring is an error (`SerializationException` for Kafka, so a consumer can dead-letter it),

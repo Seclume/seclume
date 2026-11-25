@@ -139,7 +139,19 @@ public final class EncryptedDocument {
     }
 
     private EncryptedColumn column(String field) {
-        return ring.column("search." + index + "." + field, fields.get(field));
+        return ring.column(columnName(index, field), fields.get(field));
+    }
+
+    /**
+     * The column's name, which its key is derived from. "search." + index +
+     * "." + field was one name for index a, field b.c and for index a.b,
+     * field c: a value of one opened as the other's. An index with a dot is
+     * named with its length in front now; one without keeps the name it had,
+     * so what it holds stays readable.
+     */
+    static String columnName(String index, String field) {
+        return index.indexOf('.') < 0 ? "search." + index + "." + field
+                : "search:" + index.length() + ":" + index + "." + field;
     }
 
     private static MemorySegment utf8(String text) {

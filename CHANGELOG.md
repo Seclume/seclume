@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **Elasticsearch: an index whose name has a dot gets a column name of its own.**
+  `search.<index>.<field>` named index `a`, field `b.c` and index `a.b`, field `c` alike, so one
+  key opened the other's values. An index with a dot is now `search:<length>:<index>.<field>`;
+  values encrypted in such an index before have to be encrypted again (read with 0.14, write
+  with this). An index without a dot keeps its name and its data.
 - **A Shamir share is not written where its readers cannot be restricted** - a file system
   with neither POSIX permissions nor ACLs (FAT32, exFAT, some network shares). It was written
   with the medium's defaults; `-Dseclume.shamir.allowUnprotected=true` where the medium is
