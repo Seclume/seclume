@@ -122,6 +122,37 @@ class TrustStoreInMemoryTest {
         }
     }
 
+    /**
+     * A key entry in a trust store is a key of this side's, not an anchor -
+     * JSSE's trust manager takes only certificate entries. The factory took
+     * the certificate of every entry, and a store that also held a client key
+     * trusted whoever presented that key's certificate.
+     */
+    @Test
+    void aKeyEntryIsNoTrustAnchor() throws Exception {
+        KeyStore otherKeys = KeyStore.getInstance("PKCS12");
+        try (InputStream in = Files.newInputStream(directory.resolve("other.p12"))) {
+            otherKeys.load(in, PASSWORD.toCharArray());
+        }
+        KeyStore mixed = KeyStore.getInstance("PKCS12");
+        mixed.load(null, null);
+        mixed.setCertificateEntry("broker", certificate("broker"));
+        mixed.setKeyEntry("client", otherKeys.getKey("other", PASSWORD.toCharArray()),
+                PASSWORD.toCharArray(), otherKeys.getCertificateChain("other"));
+        Path store = directory.resolve("mixed-trust.p12");
+        try (OutputStream out = Files.newOutputStream(store)) {
+            mixed.store(out, PASSWORD.toCharArray());
+        }
+        try (SeclumeSslEngineFactory factory = configured(Map.of(
+                "ssl.truststore.type", "PKCS12",
+                "ssl.truststore.location", store.toString(),
+                "ssl.truststore.password", new Password(PASSWORD)))) {
+            handshake(factory, broker);
+            assertThrows(IOException.class, () -> handshake(factory, other),
+                    "a key entry's certificate was trusted");
+        }
+    }
+
     private static TreeSet<String> trustFilesInTheTemporaryDirectory() throws IOException {
         TreeSet<String> names = new TreeSet<>();
         try (DirectoryStream<Path> files = Files.newDirectoryStream(

@@ -184,6 +184,12 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
             store.load(in, storePassword);
             StringBuilder pem = new StringBuilder();
             for (String alias : Collections.list(store.aliases())) {
+                if (!store.isCertificateEntry(alias)) {
+                    // A key entry's certificate is that key's own, not a
+                    // trust anchor - JSSE's trust manager takes only
+                    // certificate entries, and so does this now.
+                    continue;
+                }
                 Certificate certificate = store.getCertificate(alias);
                 if (certificate != null) {
                     pem.append("-----BEGIN CERTIFICATE-----\n")
