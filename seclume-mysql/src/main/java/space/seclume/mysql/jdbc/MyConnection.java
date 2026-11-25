@@ -104,12 +104,33 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
                 java.time.Duration.ofSeconds(1));
     }
 
+    /**
+     * The user variable for a context name. MySQL has no dot in a variable's
+     * name: app.tenant_id and app_tenant.id were one @app_tenant_id, the
+     * second set overwriting the first without a word. Two names for one
+     * variable are refused.
+     */
+    static String contextVariable(java.util.Map<String, String> names, String name)
+            throws SQLException {
+        String variable = "@" + name.replace('.', '_');
+        String earlier = names.putIfAbsent(variable, name);
+        if (earlier != null && !earlier.equals(name)) {
+            throw new SQLException("the session context names " + earlier + " and " + name
+                    + " are one MySQL variable, " + variable + " - give them names that "
+                    + "differ in more than a dot", "22023");
+        }
+        return variable;
+    }
+
+    /** Which context name each user variable was set for, until the session is reset. */
+    private final java.util.Map<String, String> contextNames = new java.util.HashMap<>();
+
     /** See {@link space.seclume.SessionContext}: a user variable, with the next statement. */
     @Override
     public void setSessionContext(String name, String value) throws SQLException {
         checkOpen();
         space.seclume.internal.jdbc.ContextValues.check(name, value);
-        String variable = "@" + name.replace('.', '_');
+        String variable = contextVariable(contextNames, name);
         String literal = space.seclume.internal.jdbc.ContextValues.hexUtf8(value);
         sessionState.note("set " + variable + " = " + literal);
         session.runLater(variable, literal);
@@ -179,6 +200,7 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
         int wantedIsolation = isolation;
         boolean wantedReadOnly = readOnly;
         session.dropPendingVariables();
+        contextNames.clear();
         // Sent now, answered before the next borrower's first command - not
         // waited for here, where nobody needs the answer.
         session.resetConnectionLater();
