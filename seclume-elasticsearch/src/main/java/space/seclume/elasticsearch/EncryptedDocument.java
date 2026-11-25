@@ -67,6 +67,13 @@ public final class EncryptedDocument {
         if (name == null || name.isBlank() || mode == null) {
             throw new IllegalArgumentException("a field needs a name and a mode");
         }
+        if (name.indexOf('.') >= 0) {
+            // Only the document's own fields are encrypted: "address.street"
+            // was taken, matched nothing at the top, and the nested street
+            // went to the cluster in the clear without a word.
+            throw new IllegalArgumentException("field " + name + " is nested - only a "
+                    + "document's top-level fields are encrypted; encrypt the object it is in");
+        }
         fields.put(name, mode);
         return this;
     }

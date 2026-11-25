@@ -24,4 +24,16 @@ class ColumnNameTest {
         assertEquals("search.patients.address.zip",
                 EncryptedDocument.columnName("patients", "address.zip"));
     }
+
+    /** A nested field went to the cluster in the clear: only top-level fields are encrypted. */
+    @Test
+    void aNestedFieldIsRefused() throws Exception {
+        try (space.seclume.field.FieldKeys keys = space.seclume.field.FieldKeys.builder()
+                .key(1, EncryptedDocumentTest.key(1)).build()) {
+            EncryptedDocument patients = EncryptedDocument.of(keys, "patients");
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> patients.field("address.street",
+                            space.seclume.field.EncryptedColumn.Mode.RANDOMIZED));
+        }
+    }
 }

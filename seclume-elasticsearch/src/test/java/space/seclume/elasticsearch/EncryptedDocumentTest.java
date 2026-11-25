@@ -23,7 +23,7 @@ import space.seclume.secret.SecretProvider;
 /** Documents with encrypted fields: the rest untouched, deterministic fields found, a rotation searched. */
 class EncryptedDocumentTest {
 
-    private static SecretProvider key(int seed) {
+    static SecretProvider key(int seed) {
         return new SecretProvider() {
             @Override
             public int writeSecret(MemorySegment target) {

@@ -7,6 +7,8 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **Elasticsearch: a nested field name is refused** (`field("address.street", ...)`). Only a
+  document's top-level fields are encrypted; the nested one went to the cluster in the clear.
 - **SQL Server: the session context is set read-only.** An application that sets the same
   key again within one borrow gets an error; an SQL injection can no longer rewrite the tenant.
   The reset on return still clears it.
