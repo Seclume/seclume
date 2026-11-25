@@ -414,7 +414,8 @@ class CloudVaultProvidersTest {
     /** A secret with an expiry reports it, and the pool can act on it. */
     @Test
     void azureReportsAnExpiryWhenTheSecretHasOne() throws Exception {
-        long exp = Instant.parse("2026-09-21T00:00:00Z").getEpochSecond();
+        // In the future: a past exp is taken as no end (see AzurePastExpiryTest).
+        long exp = Instant.parse("2036-09-21T00:00:00Z").getEpochSecond();
         String answer = "{\"value\":\"rotating\",\"attributes\":{\"enabled\":true,"
                 + "\"exp\":" + exp + "}}";
 
