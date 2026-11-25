@@ -626,6 +626,13 @@ public final class PgSession implements AutoCloseable {
         }
     }
 
+    /**
+     * The login, from the startup message to AuthenticationOk. The login ends
+     * at AuthenticationOk and nowhere else - every check hangs on it: the
+     * SCRAM server signature, requireAuth, GSSAPI's mutual authentication. A
+     * second way out - a ReadyForQuery or an error read as the end - is a way
+     * round all of them, and was one (audit, finding 8).
+     */
     private void authenticating(Settings settings) throws IOException, SQLException {
         space.seclume.internal.Gssapi.Context gss = null;
         try (SecretScope secret = SecretScope.fromProvider(settings.secret());

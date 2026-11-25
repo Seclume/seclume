@@ -109,6 +109,10 @@ provider=keychain         service=orders-db              account=app   # account
                           # as stored by: security add-generic-password -s orders-db -a app -w
 ```
 
+`process` runs a command, which a URL or configuration that someone else can write turns into
+running their command: it is refused unless the JVM is started with
+`-Dseclume.secret.process.allowed=true`.
+
 `libsecret` reads the item as libsecret's own `SecretValue`, which lives in libsecret's
 non-pageable memory and is wiped when released; the bytes go from there into the target. It
 matches the attributes only, so an item stored under any schema is found. Tested against
@@ -178,6 +182,9 @@ as long as Vault extends it; when the role's `max_ttl` caps the renewal, a new c
 fetched. **Closing the provider revokes the lease**, and Vault drops the user at once.
 Tested against a real Vault and PostgreSQL (`.github/scripts/vault_fixtures.sh`), and the
 same fixture against OpenBao.
+
+A KV secret has no lease, so nothing says when it changed: it is read again once it is
+`seclume.vault.kvMaxAgeSeconds` old (60 by default), so that a rotation reaches the pool.
 
 #### Logging in instead of a token file
 

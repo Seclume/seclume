@@ -169,7 +169,12 @@ public final class JsonOff {
         }
     }
 
-    /** Whether the path exists at all - for an optional field. */
+    /**
+     * Whether the path can be read - for an optional field whose absence
+     * changes nothing. Not for a check: a document broken in front of the
+     * field reads as false here, and a check that applies a claim only when
+     * it is there skips it. Checks ask {@link #present}.
+     */
     public static boolean has(MemorySegment json, int length, String... path) {
         try {
             new Cursor(json, length).walk(path);

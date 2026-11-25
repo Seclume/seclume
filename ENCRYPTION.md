@@ -448,6 +448,9 @@ es.index(i -> i.index("patients").document(patients.encrypt(document)));
 
 | | Column key | Bound to | Searchable |
 |---|---|---|---|
+| JDBC, R2DBC | the column's name | the column; the row only with a [context](#context-a-value-bound-to-its-row) (`Context.ROW_ID`, a tenant's id) | a deterministic column without a context, by equality |
+| JPA converter | the attribute's column | the column - never the row: a converter is not told its entity | a deterministic attribute, by equality |
+| MongoDB | the field's column | the column; the document only with a context passed to `encrypt` / `readInto` | `EncryptedFields.eq`, under every key of the ring |
 | Kafka | `kafka.<topic>.value` / `.key` | the topic - a record copied to another topic does not open; not the record's key | a deterministic key keeps its partition |
 | Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name; the key only through `encodeValueFor` / `decodeValueFor` | an encrypted key is found by `GET` again, not by a pattern |
 | Elasticsearch | `search.<index>.<field>` | index and field | a deterministic field by an exact `terms` query, through a rotation |

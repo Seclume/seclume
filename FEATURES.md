@@ -260,6 +260,24 @@ providers each have a page of their own: [TLS.md](TLS.md),
   four against a relay that lets the COMMIT through and drops the answer: the client is told
   "unknown", and the row is there.
 
+## Time limits
+
+A server that answers slowly, or a byte at a time, holds a thread for as long as nothing
+bounds it - a network timeout counts only silence. Each wait below has a bound of its own,
+set by a system property:
+
+| Property | Default | Bounds |
+|---|---|---|
+| `connectTimeout` (URL option) | per driver | the TCP connect, and each read during the login |
+| `seclume.loginBudgetFactor` | `3` | the whole login - TLS handshake, authentication, a secret fetched for it - at its base timeout times this factor, however steadily the server dribbles |
+| `seclume.queryTimeoutGraceSeconds` | the query timeout itself, 2 to 30 s | how long after a query timeout's cancellation the statement may still run before the connection is closed - for a server that ignores the cancellation |
+| `seclume.pool.probeSeconds` | `5` | the pool's own questions on a new connection (how many sessions the server allows, its idle limit); a connection whose question ran out of time is closed and not lent |
+| `seclume.vault.kvMaxAgeSeconds` | `60` | how old a Vault KV secret, which has no lease, may get before it is read again; a leased secret follows its lease |
+
+The login budget's base is one setting with two meanings: for the drivers it is the connect
+timeout; for an HTTPS secret fetch (`timeout-millis`), LDAP and mail it is the read timeout,
+which for them also bounds every read after the login.
+
 ## Secrets in columns, not only in the login
 
 **`Sensitive` and `SensitiveParameters`** read a column that holds a secret straight into
