@@ -71,6 +71,33 @@ public final class TrustChoice {
         boolean namesAnchors() {
             return rootCert != null || certificates != null;
         }
+
+        /**
+         * The same trust: the same CA file, the same certificates and the same
+         * pin by its bytes. A record compares an array by identity, so two
+         * registrations of one server with the same pin were taken for two
+         * different trusts.
+         */
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Choice that && java.util.Objects.equals(rootCert, that.rootCert)
+                    && java.util.Arrays.equals(pin, that.pin)
+                    && java.util.Objects.equals(certificates, that.certificates);
+        }
+
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(rootCert, java.util.Arrays.hashCode(pin), certificates);
+        }
+
+        @Override
+        public String toString() {
+            return "Choice[rootCert=" + rootCert + ", pin="
+                    + (pin == null ? "none"
+                    : "sha256/" + Base64.getEncoder().encodeToString(pin)) // seclume-allow: a pin, public by design
+                    + ", certificates="
+                    + (certificates == null ? "none" : "given") + "]";
+        }
     }
 
     /**

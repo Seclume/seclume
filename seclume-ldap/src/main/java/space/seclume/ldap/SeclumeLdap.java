@@ -90,7 +90,7 @@ public final class SeclumeLdap {
     private static SeclumeLdap register(LdapSettings settings) {
         LdapSettings earlier = BY_AUTHORITY.putIfAbsent(settings.authority(), settings);
         if (earlier != null) {
-            if (!Objects.equals(String.valueOf(earlier.trust), String.valueOf(settings.trust))) {
+            if (!Objects.equals(earlier.trust, settings.trust)) {
                 throw new IllegalArgumentException(settings.authority() + " is already set up with "
                         + "another tlsRootCert/tlsPin; one server has one certificate");
             }
