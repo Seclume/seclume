@@ -212,6 +212,11 @@ public final class TdsChannel implements AutoCloseable {
         return tls == null ? null : tls.description();
     }
 
+    /** Whether the server was authenticated, see {@code Secured.serverAuthenticated}; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return tls == null ? null : tls.serverAuthenticated();
+    }
+
     // ---- writing ---------------------------------------------------------
 
     /** Starts a message; the header is filled in when it is sent. */

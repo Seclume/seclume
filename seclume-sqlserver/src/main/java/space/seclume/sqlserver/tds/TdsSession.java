@@ -1806,6 +1806,11 @@ public final class TdsSession implements AutoCloseable {
         return channel.tlsDescription();
     }
 
+    /** Whether the server was authenticated; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return channel.serverAuthenticated();
+    }
+
     /** The database the session is in. */
     public String database() {
         return database;

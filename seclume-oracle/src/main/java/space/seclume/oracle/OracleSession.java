@@ -434,6 +434,11 @@ public final class OracleSession implements AutoCloseable {
         return channel.tlsDescription();
     }
 
+    /** Whether the server was authenticated; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return channel.serverAuthenticated();
+    }
+
     /**
      * Runs a statement that answers one row of one column, and hands back that
      * value as text.

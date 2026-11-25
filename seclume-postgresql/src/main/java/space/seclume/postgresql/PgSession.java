@@ -521,6 +521,11 @@ public final class PgSession implements AutoCloseable {
         return channel.tlsDescription();
     }
 
+    /** Whether the server was authenticated; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return channel.serverAuthenticated();
+    }
+
     /**
      * The JVM's default zone as PostgreSQL reads it. Java's {@code GMT+1}
      * means one hour east, POSIX's one hour west, so the sign flips - the same

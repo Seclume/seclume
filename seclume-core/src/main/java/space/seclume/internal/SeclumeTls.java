@@ -37,6 +37,8 @@ import space.seclume.tls.TlsConnection;
 public final class SeclumeTls implements TlsLayer {
 
     private final TlsConnection connection;
+    /** Set by {@link TlsLayers} once the handshake is checked; null when thawed. */
+    private volatile Boolean authenticated;
 
     private SeclumeTls(TlsConnection connection) {
         this.connection = connection;
@@ -135,6 +137,15 @@ public final class SeclumeTls implements TlsLayer {
      * stack were never reached at all. An operator has the same problem for
      * the same reason.
      */
+    @Override
+    public Boolean serverAuthenticated() {
+        return authenticated;
+    }
+
+    void authenticated(boolean checked) {
+        authenticated = checked;
+    }
+
     @Override
     public String description() {
         return connection.description() + " (seclume)";

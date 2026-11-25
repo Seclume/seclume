@@ -108,6 +108,7 @@ public final class TlsLayers {
                     throw wrongKey;
                 }
             }
+            authenticated(layer, verify || pinned);
             return layer;
         } finally {
             space.seclume.jfr.Observed.endHandshake(event, host + ":" + port,
@@ -151,10 +152,20 @@ public final class TlsLayers {
                     throw wrongKey;
                 }
             }
+            authenticated(layer, verify || pinned);
             return layer;
         } finally {
             space.seclume.jfr.Observed.endHandshake(event, host + ":" + port, "seclume",
                     layer == null ? null : layer.description());
+        }
+    }
+
+    /** A pin compared, or a chain and host name checked: the server is who it says. */
+    private static void authenticated(TlsLayer layer, boolean checked) {
+        if (layer instanceof SeclumeTls own) {
+            own.authenticated(checked);
+        } else if (layer instanceof TlsChannel jdk) {
+            jdk.authenticated(checked);
         }
     }
 

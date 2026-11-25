@@ -1210,6 +1210,11 @@ public final class PgConnection
         return session.tlsDescription();
     }
 
+    @Override
+    public Boolean serverAuthenticated() {
+        return session.serverAuthenticated();
+    }
+
 
     // ---- the flight recorder, see space.seclume.Flight -------------------
 

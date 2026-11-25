@@ -115,6 +115,11 @@ public final class MyChannel implements AutoCloseable {
         return tls == null ? null : tls.description();
     }
 
+    /** Whether the server was authenticated, see {@code Secured.serverAuthenticated}; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return tls == null ? null : tls.serverAuthenticated();
+    }
+
     /** A channel on a transport somebody else opened - see MySession#resume. */
     public static MyChannel over(space.seclume.internal.Transport transport) {
         return new MyChannel(transport);

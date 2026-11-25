@@ -1002,6 +1002,11 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
         return session.tlsDescription();
     }
 
+    @Override
+    public Boolean serverAuthenticated() {
+        return session.serverAuthenticated();
+    }
+
 
     // ---- the flight recorder, see space.seclume.Flight -------------------
 

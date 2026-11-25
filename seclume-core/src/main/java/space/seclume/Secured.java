@@ -61,6 +61,18 @@ public interface Secured {
     }
 
     /**
+     * Whether the server was authenticated: its certificate chain and host
+     * name checked ({@code tls=verify-full}), or its key compared with
+     * {@code tlsPin}. False where the connection is encrypted but the server
+     * not checked ({@code tls=prefer} or {@code require}) - a man in the
+     * middle can read it. {@code null} in the clear, or where the driver
+     * cannot say.
+     */
+    default Boolean serverAuthenticated() {
+        return null;
+    }
+
+    /**
      * The facts of any seclume connection - also through a pool.
      *
      * @throws SQLException if this is not a seclume connection

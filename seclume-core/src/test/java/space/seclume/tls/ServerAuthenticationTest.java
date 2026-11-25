@@ -1,5 +1,6 @@
 package space.seclume.tls;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -52,6 +53,7 @@ class ServerAuthenticationTest {
     static Path directory;
 
     private static Path caFile;
+    private static String serverPin;
 
     @BeforeAll
     static void startAnAuthority() throws Exception {
@@ -66,6 +68,8 @@ class ServerAuthenticationTest {
         KeyManagerFactory keys = KeyManagerFactory.getInstance(
                 KeyManagerFactory.getDefaultAlgorithm());
         keys.init(store, TestCertificates.PASSWORD.toCharArray());
+        serverPin = TrustChoice.pinOf((java.security.cert.X509Certificate) store.getCertificate(
+                Collections.list(store.aliases()).get(0)));
         serverContext = SSLContext.getInstance("TLS");
         serverContext.init(keys.getKeyManagers(), null, null);
 
@@ -118,16 +122,63 @@ class ServerAuthenticationTest {
         }
     }
 
+    /**
+     * Whether the server was authenticated, as the layer reports it to
+     * {@code Secured.serverAuthenticated}: a chain checked or a pin compared
+     * is, a handshake that checked nothing (tls=prefer, require) is not - on
+     * both stacks, so that a pool's grade cannot call an unchecked server safe.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"SECLUME", "JSSE"})
+    void theLayerSaysWhetherTheServerWasAuthenticated(String stackName) throws Exception {
+        TlsStack stack = TlsStack.valueOf(stackName);
+        TrustChoice.Choice ca = TrustChoice.of(Map.of(TrustChoice.ROOT_CERT, caFile.toString()));
+        TrustChoice.Choice pin = TrustChoice.of(Map.of(TrustChoice.PIN, serverPin));
+        try (SSLServerSocket listener = listen("TLSv1.3")) {
+            try (TlsLayer checked = handshake(listener, stack, ca, true)) {
+                assertEquals(Boolean.TRUE, checked.serverAuthenticated(), "verify-full");
+            }
+            try (TlsLayer unchecked = handshake(listener, stack, null, false)) {
+                assertEquals(Boolean.FALSE, unchecked.serverAuthenticated(), "require");
+            }
+            try (TlsLayer pinned = handshake(listener, stack, pin, false)) {
+                assertEquals(Boolean.TRUE, pinned.serverAuthenticated(), "tlsPin");
+            }
+        }
+    }
+
+    private static TlsLayer handshake(SSLServerSocket listener, TlsStack stack,
+            TrustChoice.Choice choice, boolean verify) throws Exception {
+        int port = listener.getLocalPort();
+        return TrustChoice.using(choice, () -> {
+            try {
+                SocketTransport transport = SocketTransport.connect("localhost", port, 5000);
+                return TlsLayers.start(stack, transport, "localhost", port, verify);
+            } catch (IOException e) {
+                throw new SQLException(e);
+            }
+        });
+    }
+
     private static SSLServerSocket listen(String protocol) throws IOException {
         SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()
                 .createServerSocket(0, 50, InetAddress.getLoopbackAddress());
         listener.setEnabledProtocols(new String[] {protocol});
         Thread server = new Thread(() -> {
             while (!listener.isClosed()) {
-                try (Socket socket = listener.accept()) {
-                    socket.getInputStream().read();        // runs the handshake, then waits
+                try {
+                    Socket accepted = listener.accept();
+                    // Each in its own thread: one that waits on a connection
+                    // the client left open holds up no other.
+                    Thread.ofVirtual().start(() -> {
+                        try (Socket socket = accepted) {
+                            socket.getInputStream().read();    // runs the handshake, then waits
+                        } catch (IOException ignored) {
+                            // a refused handshake, or the client gone
+                        }
+                    });
                 } catch (IOException ignored) {
-                    // a refused handshake, or the listener closing
+                    // the listener closing
                 }
             }
         });

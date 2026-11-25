@@ -737,6 +737,11 @@ public final class MySession implements AutoCloseable {
         return channel.tlsDescription();
     }
 
+    /** Whether the server was authenticated; null without TLS. */
+    public Boolean serverAuthenticated() {
+        return channel.serverAuthenticated();
+    }
+
     /** What the greeting packet holds - the scramble sits beside it, off-heap. */
     private record Handshake(String version, long connectionId, int capabilities, String plugin) {
     }

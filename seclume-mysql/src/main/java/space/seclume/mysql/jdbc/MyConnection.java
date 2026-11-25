@@ -930,6 +930,11 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
         return session.tlsDescription();
     }
 
+    @Override
+    public Boolean serverAuthenticated() {
+        return session.serverAuthenticated();
+    }
+
 
     // ---- the flight recorder, see space.seclume.Flight -------------------
 

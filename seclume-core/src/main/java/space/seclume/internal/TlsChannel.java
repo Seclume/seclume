@@ -52,6 +52,8 @@ public final class TlsChannel implements TlsLayer {
 
     /** What was offered, so the handshake can check what came back. */
     private final String alpn;
+    /** Set by {@link TlsLayers} once the handshake is checked. */
+    private volatile Boolean authenticated;
 
     private TlsChannel(SSLEngine engine, Transport channel, String alpn) {
         this.engine = engine;
@@ -309,6 +311,15 @@ public final class TlsChannel implements TlsLayer {
 
     public String cipherSuite() {
         return engine.getSession().getCipherSuite();
+    }
+
+    @Override
+    public Boolean serverAuthenticated() {
+        return authenticated;
+    }
+
+    void authenticated(boolean checked) {
+        authenticated = checked;
     }
 
     @Override

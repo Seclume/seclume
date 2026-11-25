@@ -73,7 +73,7 @@ public final class SeclumePoolHealth implements HealthIndicator {
             Secured secured = connection.unwrap(Secured.class);
             java.security.cert.X509Certificate shown = secured.serverCertificate();
             detail.putAll(SeclumeAssessment.of(secured.authenticationMethod(),
-                    secured.tlsDescription(),
+                    secured.tlsDescription(), secured.serverAuthenticated(),
                     shown == null ? null : shown.getNotAfter().toInstant(), statistics,
                     pool.settings().getMaximumPoolSize(), pool.resetsRefused(),
                     Instant.now()).asMap());
