@@ -20,6 +20,10 @@ All notable changes to seclume are recorded here. Versions follow
   goes as it is.
 - **`Driver.connect` throws only `SQLException`.** A secret provider's or a URL's unchecked
   failure is SQLSTATE 08001 with it as the cause.
+- **Redis: a node discovery names gets the password only if the URL or `cluster-hosts=` /
+  `master-hosts=` allows it** (a host, an IP, a `.suffix`, or `*`). One forged `-MOVED` or Sentinel
+  answer sent the password where it pointed. A cluster whose nodes are not all in the URL, or a
+  Sentinel whose master is not, needs the option.
 - **The pool's grade warns for an encrypted connection whose server was not checked**
   (`tls=prefer`, `require`); `Secured.serverAuthenticated()` says which it is.
 

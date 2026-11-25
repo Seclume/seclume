@@ -435,6 +435,7 @@ protocol text or dribble bytes.
 | 54 | CNG signing key | Closing a Windows CNG key while another thread signed was an access violation in `ncrypt.dll`; finding 14's fix covered OpenSSL only. | medium | #PR |
 | 55 | Log masker | A secret never read left an empty entry, and the next failed refresh took it for one read before: no early retry, the secret never masked. | low | #PR |
 | 56 | Pool statements | `statement.getConnection()` answered the driver's connection behind the handle: closed there, it closed under the pool; kept, it outlived the borrow as the next borrower's session. Every statement the pool lends answers the handle. | low | #PR |
+| 57 | Redis discovery | Every node a cluster redirect, a topology refresh or a Sentinel named got the password: one forged `-MOVED` or Sentinel answer sent it where it pointed. Discovered nodes need the URL or `cluster-hosts=` / `master-hosts=`; others get the placeholder. | high | #PR |
 
 ### Mutation testing of the security paths
 
