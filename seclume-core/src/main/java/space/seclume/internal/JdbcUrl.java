@@ -171,15 +171,28 @@ public final class JdbcUrl {
         return new Parsed(hosts.first().host(), hosts.first().port(), database, options, hosts);
     }
 
+    /**
+     * The query's options. A key given twice is refused: the last one used to
+     * win, so {@code ...?tls=verify-full&...&tls=off} was off, and anything
+     * that appended an option to an application's URL - a migration, a
+     * template, a value someone else chose - could turn a protection off.
+     * Keys compare as {@link #normalize} has them: {@code tls-Pin} is
+     * {@code tlspin}.
+     */
     private static void parseQuery(String query, Map<String, String> into) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
         for (String pair : query.split("&")) {
             if (pair.isEmpty()) {
                 continue;
             }
             int equals = pair.indexOf('=');
-            String key = equals < 0 ? pair : pair.substring(0, equals);
+            String key = decode(equals < 0 ? pair : pair.substring(0, equals));
             String value = equals < 0 ? "" : pair.substring(equals + 1);
-            into.put(decode(key), decode(value));
+            if (!seen.add(normalize(key))) {
+                throw new IllegalArgumentException("the URL gives " + key + " twice - which one "
+                        + "counts would be a guess; give it once");
+            }
+            into.put(key, decode(value));
         }
     }
 
