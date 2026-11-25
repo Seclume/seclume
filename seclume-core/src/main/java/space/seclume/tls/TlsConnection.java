@@ -51,6 +51,17 @@ public final class TlsConnection implements Transport {
     private static final int NEW_SESSION_TICKET = Handshake.NEW_SESSION_TICKET;
     private static final int KEY_UPDATE = 24;
 
+    /**
+     * Records sent under one key before this side changes it on its own. RFC
+     * 8446 section 5.5 puts AES-GCM's limit at 2^24.5 full records; the peer
+     * was the only one to ask for a new key, and one that never did let the
+     * client go past it. TLS 1.2 has no KeyUpdate.
+     */
+    static final long KEY_UPDATE_AFTER = 1L << 24;
+
+    /** {@link #KEY_UPDATE_AFTER}, per connection - a test lowers it for its own one. */
+    private long keyUpdateAfter = KEY_UPDATE_AFTER;
+
     /** Not final: see {@link #replaceTransport}. */
     private Transport underlying;
     private final RecordStream records;
@@ -225,6 +236,10 @@ public final class TlsConnection implements Transport {
         int total = from.remaining();
         while (from.hasRemaining()) {
             int chunk = Math.min(from.remaining(), RecordStream.MAX_PLAINTEXT);
+            RecordProtection sending = records.writeProtection();
+            if (!sending.isTls12() && sending.sequence() >= keyUpdateAfter) {
+                answerKeyUpdate();                  // a KeyUpdate of our own, not requesting one
+            }
             try {
                 records.write(RecordProtection.APPLICATION_DATA, MemorySegment.ofBuffer(from), 0,
                         chunk);
