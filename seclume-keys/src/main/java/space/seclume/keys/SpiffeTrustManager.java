@@ -68,6 +68,7 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
             throw new CertificateException("the peer's SPIFFE ID is malformed: "
                     + e.getMessage(), e);
         }
+        leafOnly(chain[0]);
         if (peers.isEmpty() && !domain.equals(own.get())) {
             // A federated domain's workloads are trusted for what they are named
             // for, not for anything: without peer-ids only this workload's own.
@@ -96,6 +97,25 @@ final class SpiffeTrustManager extends X509ExtendedTrustManager {
         if (!peers.isEmpty() && !peers.contains(id)) {
             throw new CertificateException("the peer is " + id + ", which is not one of "
                     + peers);
+        }
+    }
+
+    /**
+     * An X509-SVID's leaf as the specification has it: not a CA, and where
+     * it says what its key is for, for signatures and not for signing
+     * certificates or CRLs. A CA certificate with a SPIFFE URI in it passed
+     * as a peer's leaf - this trust manager is not the JDK's, which would
+     * have checked the key usage.
+     */
+    static void leafOnly(X509Certificate leaf) throws CertificateException {
+        if (leaf.getBasicConstraints() != -1) {
+            throw new CertificateException("the peer's SVID is a CA certificate, not a leaf");
+        }
+        boolean[] usage = leaf.getKeyUsage();
+        if (usage != null && (!usage[0] || (usage.length > 5 && usage[5])
+                || (usage.length > 6 && usage[6]))) {
+            throw new CertificateException("the peer's SVID is not for digital signatures "
+                    + "only - it may sign certificates or CRLs, or not sign at all");
         }
     }
 

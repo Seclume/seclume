@@ -448,6 +448,7 @@ protocol text or dribble bytes.
 | 67 | SQL Server | A MAX value's announced total was never compared with the chunks that followed; ten bytes announced and four sent read as four. A known total has to match. | note | #PR |
 | 68 | R2DBC | The session context was asked on the borrowing thread, which under R2DBC is an event loop or a thread of the pool's; a tenant held in the Reactor context was never seen, and the same request ran with its tenant at low load and without it under load. A ReactiveSessionContext is resolved on the subscriber and handed to the pool by name (`BorrowContext`); the starter wires the bean and warns when only a blocking one is there. | medium | #PR |
 | 69 | PostgreSQL | A DataRow before any RowDescription was read against the columns of nothing, or of the statement before. It is a protocol violation now, and a malformed answer is reported as `08P01` rather than as a broken line. | low | #PR |
+| 70 | SPIFFE | A CA certificate with a SPIFFE URI, issued by the trust domain's CA, passed as a peer's leaf: the trust manager is seclume's own and checked no key usage. The leaf has to be no CA and, where it says, for digital signatures only (X509-SVID). | medium | #PR |
 
 ### Mutation testing of the security paths
 

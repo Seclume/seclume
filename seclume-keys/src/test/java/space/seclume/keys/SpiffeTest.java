@@ -527,6 +527,36 @@ class SpiffeTest {
     }
 
     /**
+     * The X509-SVID specification: a leaf is no CA and does not sign
+     * certificates. A CA certificate carrying a SPIFFE URI, issued by the
+     * trust domain's own CA, was accepted as a peer's leaf.
+     */
+    @Test
+    void aCaCertificateIsNoSvid() throws Exception {
+        openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+                "-subj", "/O=example.org", "-keyout", "sub-ca.key", "-out", "sub-ca.csr");
+        Files.writeString(directory.resolve("sub-ca.ext"), "subjectAltName=URI:" + ORDERS
+                + "\nbasicConstraints=critical,CA:TRUE\nkeyUsage=keyCertSign\n");
+        openssl("x509", "-req", "-in", "sub-ca.csr", "-CA", "ca.pem", "-CAkey", "ca.key",
+                "-CAcreateserial", "-days", "2", "-extfile", "sub-ca.ext", "-outform", "DER",
+                "-out", "sub-ca.der");
+        java.security.cert.CertificateFactory factory =
+                java.security.cert.CertificateFactory.getInstance("X.509");
+        X509Certificate subCa = (X509Certificate) factory.generateCertificate(
+                new java.io.ByteArrayInputStream(Files.readAllBytes(
+                        directory.resolve("sub-ca.der"))));
+        X509Certificate root = (X509Certificate) factory.generateCertificate(
+                new java.io.ByteArrayInputStream(ca));
+        SpiffeTrustManager trust = new SpiffeTrustManager(domain -> List.of(root),
+                () -> List.of(root), java.util.Set.of(), () -> "example.org");
+        assertThrows(java.security.cert.CertificateException.class,
+                () -> trust.check(new X509Certificate[] {subCa}));
+        X509Certificate leaf = (X509Certificate) factory.generateCertificate(
+                new java.io.ByteArrayInputStream(first.certificate()));
+        trust.check(new X509Certificate[] {leaf});
+    }
+
+    /**
      * Before the first SVID the workload has no trust domain and no bundle:
      * nobody is a peer yet - not with peer-ids naming them either. A control:
      * it holds before the federation fix too.
