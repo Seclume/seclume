@@ -430,6 +430,10 @@ protocol text or dribble bytes.
 | 49 | Spring result limit | Whether the URL set a limit was a text search: the word in another option's value meant no limit. | low | #PR |
 | 50 | TLS handshake | The handshake had a per-read timeout only; it has a deadline of its own, wherever it runs. | low | #PR |
 | 51 | Secret providers' JSON | Vault, Azure Key Vault, the metadata endpoints, SPIFFE, OAuth and Google Cloud read an expiry, a lease or a flag as absent from an answer that could not be read up to it. | low | #PR |
+| 52 | LDAP | The service account's placeholder, typed into a login form whose user name maps to the service account's DN, bound as the service account: a user's bind looks like the context source's own. `serviceBindsOnly()` and `asService`; the starter's context source uses them. | medium | #PR |
+| 53 | `SensitiveParameters` | A value bound with `setSensitive` came back in the server's error - PostgreSQL's DETAIL, MySQL's and SQL Server's messages - as a String. The receive buffer is masked before it is decoded. Oracle's errors quote no values. | medium | #PR |
+| 54 | CNG signing key | Closing a Windows CNG key while another thread signed was an access violation in `ncrypt.dll`; finding 14's fix covered OpenSSL only. | medium | #PR |
+| 55 | Log masker | A secret never read left an empty entry, and the next failed refresh took it for one read before: no early retry, the secret never masked. | low | #PR |
 
 ### Mutation testing of the security paths
 

@@ -53,6 +53,20 @@ All notable changes to seclume are recorded here. Versions follow
 - **LDAP: the same server registered twice with the same `tlsPin` is the same trust**; it was
   refused as another certificate.
 - **The TLS record layer refuses an inner plaintext beyond 2^14 + 1 bytes** on every path.
+- **The LDAP service account's placeholder is no login for a user.** Read from a heap dump and
+  typed into a login form whose user name maps to the service account's DN, it logged the user in
+  as the service account. `SeclumeLdap.serviceBindsOnly()` writes it in only for binds opened
+  through `SeclumeLdap.asService`; the starter's context source opens its own contexts so.
+- **A value bound with `setSensitive` is masked in the server's error.** PostgreSQL's
+  `DETAIL: Key (...)=(...) already exists`, MySQL's `Duplicate entry '...'` and SQL Server's
+  `The duplicate key value is (...)` quoted it, and it became a String in every log that printed
+  the exception.
+- **A Windows CNG signing key is not freed while another thread signs with it** - an access
+  violation in `ncrypt.dll`, as the OpenSSL key had been.
+- **The log masker keeps asking for an early refresh while a secret was never read**; one failed
+  read made the next one look complete.
+- **SQL Server: the driver's own `sp_describe_undeclared_parameters` question no longer reaches a
+  `StatementListener`**, nor its failure as a failed statement the application never ran.
 
 - **The security gate asks for every method of a security test, not for one passing case.** One
   passing case named anything used to count as PASS, so a gated test reduced to a placeholder
