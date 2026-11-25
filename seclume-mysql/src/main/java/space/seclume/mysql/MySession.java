@@ -1604,6 +1604,7 @@ public final class MySession implements AutoCloseable {
             out.putIntLe(statement.statementId());
             out.putByte((byte) 0);                   // no cursor
             out.putIntLe(1);                         // iterations, always 1
+            sensitive = parameters.sensitive();
             parameters.write(out, statement.parameterCount());
             channel.end();
             channel.flush();
@@ -1765,6 +1766,7 @@ public final class MySession implements AutoCloseable {
         out.putIntLe(statement.statementId());
         out.putByte((byte) 0);                    // no cursor
         out.putIntLe(1);                          // one repetition
+        sensitive = parameters.sensitive();
         parameters.write(out, statement.parameterCount());
         channel.end();
         pipelineGroup++;
@@ -1875,6 +1877,7 @@ public final class MySession implements AutoCloseable {
             out.putIntLe(statement.statementId());
             out.putByte(CURSOR_TYPE_READ_ONLY);
             out.putIntLe(1);                         // one repetition
+            sensitive = parameters.sensitive();
             parameters.write(out, statement.parameterCount());
             channel.end();
             channel.flush();
@@ -1991,6 +1994,7 @@ public final class MySession implements AutoCloseable {
                     out.putIntLe(statement.statementId());
                     out.putByte((byte) 0);               // no cursor
                     out.putIntLe(1);                     // iterations, always 1
+                    sensitive = parameters.sensitive();
                     parameters.write(out, statement.parameterCount());
                     channel.end();
                     at++;
@@ -2502,8 +2506,17 @@ public final class MySession implements AutoCloseable {
      * on 25.09.2026: an error packet with state 08 left the session open.
      */
     private SQLException serverError(WireBuffer in, String context) {
+        if (!sensitive.isEmpty()) {
+            // Duplicate entry '...' for key ...: the value is in the message
+            // itself - masked before it becomes one. See SensitiveEcho.
+            space.seclume.internal.jdbc.SensitiveEcho.mask(in.segment(), in.position(),
+                    in.position() + in.remaining(), sensitive);
+        }
         return readError(in, context);
     }
+
+    /** The values the statement under way bound with setSensitive. */
+    private java.util.List<space.seclume.internal.jdbc.NativeValue> sensitive = java.util.List.of();
 
     /** After the error packet has been consumed: close on a connection-class state. */
     private void closeIfConnectionFailure(SQLException failure) {
