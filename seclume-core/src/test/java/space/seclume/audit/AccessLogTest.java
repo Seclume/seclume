@@ -263,6 +263,33 @@ class AccessLogTest {
         }
     }
 
+    /**
+     * A chain without its checkpoints holds - anyone who can write the file
+     * can write one - but no key vouches for it; nor for entries written
+     * after the last checkpoint.
+     */
+    @Test
+    void aLogNoCheckpointVouchesForHoldsAndIsNotVouched() throws IOException {
+        try (PrivateSigningKey key = key()) {
+            Path file = signedLog(key, 4);
+            assertTrue(AccessLogVerifier.verify(file, key.publicKey()).vouched(), "the control");
+            assertFalse(AccessLogVerifier.verify(file, null).vouched(), "checked against no key");
+            List<String> lines = lines(file);
+            List<String> forged = new java.util.ArrayList<>();
+            for (String line : lines) {
+                if (line.contains("\"event\":\"checkpoint\"")) {
+                    break;                         // the chain up to the first checkpoint
+                }
+                forged.add(line);
+            }
+            write(file, forged);
+            AccessLogVerifier.Result result = AccessLogVerifier.verify(file, key.publicKey());
+            assertTrue(result.holds(), result.problems().toString());
+            assertEquals(0, result.checkpoints());
+            assertFalse(result.vouched(), "a chain without one signature was vouched for");
+        }
+    }
+
     /** The one thing the chain cannot see on its own - said by a test, not hidden. */
     @Test
     void aCutOffTailHoldsAndIsVisibleOnlyAgainstACopyKeptElsewhere() throws IOException {

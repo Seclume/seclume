@@ -41,9 +41,23 @@ public final class AccessLogVerifier {
     public record Result(long first, long entries, long checkpoints, long signedUpTo, String head,
             List<String> problems) {
 
-        /** Whether nothing was found wrong. */
+        /**
+         * Whether nothing was found wrong - which proves nothing against
+         * someone who can write the file: a chain written from scratch, its
+         * checkpoints left out, holds. See {@link #vouched()}.
+         */
         public boolean holds() {
             return problems.isEmpty();
+        }
+
+        /**
+         * Whether the signing key vouches for every entry: the log holds, it
+         * was checked against a key, at least one checkpoint's signature
+         * held, and no entry follows the last one. This, not {@link #holds()},
+         * is what a check against forgery asks.
+         */
+        public boolean vouched() {
+            return holds() && checkpoints > 0 && unsigned() == 0;
         }
 
         /** Entries after the last held checkpoint - written, but not yet vouched for. */
