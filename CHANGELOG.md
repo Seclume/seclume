@@ -56,6 +56,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Pool: `rotateSecret(closeIdleNow, grace)`** closes connections still lent out under the old
+  login once the grace is over. A connection held for good - a batch, a leak - kept the old login
+  until `maxLifetime`, which is what a rotation after a leaked password is meant to end.
 - **Logging: masking that masks nothing is said.** With `seclume.logging.redact=true` and no
   seclume converter or `RedactingEncoder` in Logback's configuration, the starter warns at
   start (`seclume.logging.redact.strict=true` refuses to start); Log4j 2's status log warns

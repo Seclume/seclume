@@ -1726,6 +1726,36 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
         return closed;
     }
 
+    /**
+     * {@link #rotateSecret(boolean)}, and after {@code grace} the connections
+     * still lent out under the old login are closed under their borrowers.
+     * Without it a connection held for good - a batch, a leak - kept the old
+     * login until maxLifetime, which is what a rotation after a leaked
+     * password is meant to end. The borrower's next call fails.
+     *
+     * @return how many idle connections were closed at once
+     */
+    public int rotateSecret(boolean closeIdleNow, java.time.Duration grace) {
+        if (grace == null || grace.isNegative()) {
+            throw new IllegalArgumentException("a grace of zero or more, not " + grace);
+        }
+        List<PoolEntry> before = new ArrayList<>(entries);
+        int closedNow = rotateSecret(closeIdleNow);
+        Thread.ofVirtual().name(settings.getName() + "-rotation-grace").start(() -> {
+            try {
+                Thread.sleep(grace);
+            } catch (InterruptedException e) {
+                return;
+            }
+            for (PoolEntry entry : before) {
+                if (entry.state() == PoolEntry.State.IN_USE && entry.isRetiringOnReturn()) {
+                    retire(entry);
+                }
+            }
+        });
+        return closedNow;
+    }
+
     /** How often the secret has been rotated - for metrics and for tests. */
     public long rotations() {
         return rotation.get();
