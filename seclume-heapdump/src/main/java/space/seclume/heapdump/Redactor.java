@@ -611,11 +611,23 @@ public final class Redactor {
             int most = 0;
             for (ByteBuffer value : wholes) {
                 byte[] ascii = bytes(value);
-                // seclume-allow: the searcher needs the pattern it hunts for
-                byte[] base64 = Base64.getEncoder().encode(ascii);
-                most = Math.max(most, register(new Needle.Pattern("Base64", base64,
-                        Fill.ASCII)));
                 most = Math.max(most, addText(ascii));
+                // Every encoding a named secret is looked for in: an URL's
+                // password lies in Basic base64("app:" + password) too, at
+                // whatever offset "app:" leaves it, and a token as URL-safe
+                // Base64. Only aligned, padded Base64 was looked for, and the
+                // copy that kept the others passed its own check.
+                String text = new String(ascii, java.nio.charset.StandardCharsets.ISO_8859_1); // seclume-allow: the searcher holds what it hunts for
+                for (Map.Entry<String, byte[]> form : Encodings.ofText(text).entrySet()) {
+                    String label = form.getKey();
+                    byte[] pattern = form.getValue();
+                    if (label.startsWith("UTF-") || label.equals("ISO-8859-1")
+                            || pattern.length < 4) {
+                        continue;                          // the plain forms: addText's
+                    }
+                    most = Math.max(most, register(new Needle.Pattern(label, pattern,
+                            Fill.ASCII)));
+                }
             }
             for (ByteBuffer piece : pieces) {
                 if (!wholes.contains(piece)) {
