@@ -71,13 +71,30 @@ public final class ColumnRotation {
      * @param conflicts values that changed while they were being moved - left as the application wrote them
      * @param lastId    the {@code id} of the last row read: where a stopped run continues
      * @param done      whether the end of the table was reached
+     * @param unreadable values that did not open with the ring - tampered with, damaged, or
+     *                   under a key no longer in it - left as they are
+     * @param unreadableIds the row ids of the first {@value #IDS_KEPT} of them, to look at
      */
     public record Progress(long rows, long rotated, long current, long conflicts, Object lastId,
-            boolean done) {
+            boolean done, long unreadable, List<Object> unreadableIds) {
+
+        /** How many ids of unreadable rows a progress keeps. */
+        public static final int IDS_KEPT = 100;
+
+        public Progress {
+            unreadableIds = List.copyOf(unreadableIds);
+        }
 
         Progress plus(Progress batch) {
+            List<Object> ids = new ArrayList<>(unreadableIds);
+            for (Object one : batch.unreadableIds) {
+                if (ids.size() < IDS_KEPT) {
+                    ids.add(one);
+                }
+            }
             return new Progress(rows + batch.rows, rotated + batch.rotated, current + batch.current,
-                    conflicts + batch.conflicts, batch.lastId == null ? lastId : batch.lastId, batch.done);
+                    conflicts + batch.conflicts, batch.lastId == null ? lastId : batch.lastId,
+                    batch.done, unreadable + batch.unreadable, ids);
         }
     }
 
@@ -136,7 +153,7 @@ public final class ColumnRotation {
      * what it did. The connection's auto-commit is restored afterwards.
      */
     public Progress run(Connection connection) throws SQLException {
-        Progress total = new Progress(0, 0, 0, 0, after, false);
+        Progress total = new Progress(0, 0, 0, 0, after, false, 0, List.of());
         Object from = after;
         while (true) {
             Progress batch = step(connection, from);
@@ -206,6 +223,8 @@ public final class ColumnRotation {
         long rotated = 0;
         long current = 0;
         long conflicts = 0;
+        long unreadable = 0;
+        List<Object> unreadableIds = new ArrayList<>();
         for (int r = 0; r < ids.size(); r++) {
             Object rowId = ids.get(r);
             byte[][] row = values.get(r);
@@ -217,7 +236,18 @@ public final class ColumnRotation {
                 }
                 Column column = columns.get(c);
                 if (column.column().needsReencryption(row[c])) {
-                    fresh[c] = column.column().reencrypt(row[c], context(column, rowId));
+                    try {
+                        fresh[c] = column.column().reencrypt(row[c], context(column, rowId));
+                    } catch (FieldEncryptionException doesNotOpen) {
+                        // One value that does not open - tampered with, damaged,
+                        // under a key gone from the ring - stopped the whole
+                        // rotation. It is left as it is and counted, with its id.
+                        unreadable++;
+                        if (unreadableIds.size() < Progress.IDS_KEPT) {
+                            unreadableIds.add(rowId);
+                        }
+                        continue;
+                    }
                     changed.add(c);
                 } else {
                     current++;
@@ -251,7 +281,8 @@ public final class ColumnRotation {
             }
         }
         Object last = ids.isEmpty() ? after : ids.get(ids.size() - 1);
-        return new Progress(ids.size(), rotated, current, conflicts, last, ids.size() < batchSize);
+        return new Progress(ids.size(), rotated, current, conflicts, last, ids.size() < batchSize,
+                unreadable, unreadableIds);
     }
 
     private static byte[] context(Column column, Object rowId) {

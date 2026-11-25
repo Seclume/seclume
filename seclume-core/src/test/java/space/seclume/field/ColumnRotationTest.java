@@ -155,6 +155,26 @@ class ColumnRotationTest {
         }
     }
 
+    /**
+     * One value that did not open - tampered with, damaged, under a key no
+     * longer in the ring - stopped the whole rotation with a
+     * FieldEncryptionException. It is left as it is and counted, with its id,
+     * and every other row is rotated.
+     */
+    @Test
+    void aValueThatDoesNotOpenIsCountedNotFatal() throws SQLException {
+        Table table = table(9);
+        byte[] tampered = table.rows.get(4)[0];
+        tampered[tampered.length - 1] ^= 1;                  // the tag no longer fits
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            Progress done = rotation(both, 4, null, null).run(connection(table));
+            assertEquals(1, done.unreadable());
+            assertEquals(List.of(4), done.unreadableIds());
+            assertEquals(9 + 6 - 1, done.rotated(), "the other values were not moved");
+            assertTrue(done.done());
+        }
+    }
+
     @Test
     void aSecondRunHasNothingToDo() throws SQLException {
         Table table = table(12);

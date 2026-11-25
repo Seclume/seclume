@@ -7,6 +7,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A column rotation goes past a value that does not open.** One tampered or damaged value,
+  or one under a key no longer in the ring, stopped the whole rotation with a
+  `FieldEncryptionException`. It is left as it is and counted: `Progress` has `unreadable()` and
+  `unreadableIds()` (the first 100) now.
 - **R2DBC: `options` may not set an option that has its own** - `provider`, `path`, `tls...`,
   `trustServerCertificate`, `vault...`, `user` and the like. It was appended to the JDBC URL as it
   came; give those as options of their own (`?trustServerCertificate=true`).
