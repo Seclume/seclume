@@ -221,10 +221,13 @@ public final class SecretMasker implements AutoCloseable {
                 }
             } catch (RuntimeException unavailable) {
                 // Fail closed: what was looked for until now stays looked for.
+                // A label that was never read is no earlier reading: its empty
+                // list kept the next failed refresh from asking for a retry.
                 List<Form> before = byLabel.get(entry.getKey());
-                if (before != null) {
+                if (before != null && !before.isEmpty()) {
                     mine = before;
                 } else {
+                    before = null;
                     missing = true;
                 }
                 LOG.log(System.Logger.Level.WARNING, "seclume: the secret " + entry.getKey()
