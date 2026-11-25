@@ -7,6 +7,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **`verify=false` on a secret source is for this machine only.** Vault, transit, a KMS and the
+  cloud metadata services sent their token and secret to whoever answered with it, wherever the
+  host was. Off loopback it takes `-Dseclume.allowUnverifiedSecretSources=true` now.
 - **A field encryption key of 32 zero bytes is refused** - a file from `/dev/zero`, an empty
   vault field, `AAAA...=`. Everything under such a key is readable by anybody who tries it.
 - **JWT `leeway` is 0 to 300 seconds.** It was taken as given; `leeway=99999999` let an

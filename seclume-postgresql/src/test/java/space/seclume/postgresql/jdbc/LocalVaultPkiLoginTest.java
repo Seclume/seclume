@@ -34,6 +34,12 @@ import space.seclume.tck.TestHosts;
 @Timeout(120)
 class LocalVaultPkiLoginTest {
 
+    static {
+        // The fixture's Vault has a certificate made for one run and sits on
+        // another host: verify=false there takes the switch.
+        System.setProperty("seclume.allowUnverifiedSecretSources", "true");
+    }
+
     private static String host;
     private static Path pgCa;
     private static Path token;

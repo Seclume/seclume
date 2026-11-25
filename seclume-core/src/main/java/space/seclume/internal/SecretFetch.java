@@ -153,10 +153,31 @@ public final class SecretFetch {
     public record SecretBody(MemorySegment value, int length) {
     }
 
+    /**
+     * verify=false sends the token and the secret to whoever answers. That
+     * is a test setup's choice for a server on this machine; anywhere else it
+     * takes -Dseclume.allowUnverifiedSecretSources=true, which a URL cannot
+     * set.
+     */
+    static void unverifiedOnlyWhereAllowed(String host, boolean verify) throws IOException {
+        if (verify || Boolean.getBoolean("seclume.allowUnverifiedSecretSources")) {
+            return;
+        }
+        String bare = host.startsWith("[") && host.endsWith("]")
+                ? host.substring(1, host.length() - 1) : host;
+        if (bare.equals("localhost") || bare.equals("::1") || bare.startsWith("127.")) {
+            return;
+        }
+        throw new IOException("verify=false for " + host + " would send the credential to an "
+                + "unchecked server - refused off this machine unless "
+                + "-Dseclume.allowUnverifiedSecretSources=true");
+    }
+
     private static Response send(String host, int port, boolean verify, int timeoutMillis,
             String method, String path, Map<String, String> headers,
             List<SecretHeader> secretHeaders, String requestBody, SecretBody secretBody,
             MemorySegment body) throws IOException {
+        unverifiedOnlyWhereAllowed(host, verify);
 
         try (SocketTransport socket = timed(SocketTransport.connect(host, port, timeoutMillis),
                      timeoutMillis);
