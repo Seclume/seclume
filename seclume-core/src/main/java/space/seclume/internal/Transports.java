@@ -162,6 +162,37 @@ public final class Transports {
         }
     }
 
+    /**
+     * The one provider of {@code name}, or null. The first of two used to
+     * win without a word: a second jar offering the same name - an old
+     * version, or one put there to carry the connections - decided by class
+     * path order which of them saw every byte. Two are an error now, naming
+     * both.
+     */
+    static TransportProvider only(String name, Iterable<TransportProvider> providers)
+            throws IOException {
+        TransportProvider found = null;
+        for (TransportProvider provider : providers) {
+            if (!name.equalsIgnoreCase(provider.name())) {
+                continue;
+            }
+            if (found != null) {
+                throw new IOException("two transports are called '" + name + "': "
+                        + where(found) + " and " + where(provider) + " - remove one");
+            }
+            found = provider;
+        }
+        return found;
+    }
+
+    private static String where(TransportProvider provider) {
+        java.security.CodeSource source = provider.getClass().getProtectionDomain()
+                .getCodeSource();
+        return provider.getClass().getName()
+                + (source == null || source.getLocation() == null ? ""
+                        : " from " + source.getLocation());
+    }
+
     private static Transport connect(String kind, String host, int port,
                                      int connectTimeoutMillis) throws IOException {
         String chosen = CHOSEN.get();
@@ -176,10 +207,8 @@ public final class Transports {
         if (DEFAULT.equals(name)) {
             return SocketTransport.connect(host, port, connectTimeoutMillis);
         }
-        for (TransportProvider provider : ServiceLoader.load(TransportProvider.class)) {
-            if (!name.equalsIgnoreCase(provider.name())) {
-                continue;
-            }
+        TransportProvider provider = only(name, ServiceLoader.load(TransportProvider.class));
+        if (provider != null) {
             if (orSocket && !provider.available()) {
                 return SocketTransport.connect(host, port, connectTimeoutMillis);
             }
