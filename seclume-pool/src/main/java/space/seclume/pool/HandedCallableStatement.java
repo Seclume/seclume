@@ -235,12 +235,12 @@ final class HandedCallableStatement implements java.sql.CallableStatement {
 
     @Override
     public byte[] getBytes(java.lang.String a0) throws java.sql.SQLException {
-        return statement.getBytes(a0);
+        return statement.getBytes(a0); // seclume-allow: delegation - the driver's value, handed on
     }
 
     @Override
     public byte[] getBytes(int a0) throws java.sql.SQLException {
-        return statement.getBytes(a0);
+        return statement.getBytes(a0); // seclume-allow: delegation - the driver's value, handed on
     }
 
     @Override

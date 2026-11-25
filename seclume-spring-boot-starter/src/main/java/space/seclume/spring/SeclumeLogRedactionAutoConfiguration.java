@@ -81,7 +81,8 @@ public class SeclumeLogRedactionAutoConfiguration {
                 + "space/seclume/logging/logback/redact-rules.xml after Spring Boot's "
                 + "defaults.xml in logback-spring.xml, or wrap the encoder in a RedactingEncoder.";
         if (strict) {
-            throw new IllegalStateException(warning + " (seclume.logging.redact.strict=true)");
+            throw new IllegalStateException(warning + " Refused to start because "
+                    + "seclume.logging.redact.strict=true asks for masking that works.");
         }
         LOG.log(System.Logger.Level.WARNING, warning);
         return warning;
