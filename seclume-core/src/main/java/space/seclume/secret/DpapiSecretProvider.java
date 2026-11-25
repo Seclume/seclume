@@ -45,6 +45,10 @@ import space.seclume.internal.Utf;
  */
 public final class DpapiSecretProvider implements SecretProvider {
 
+    /** dwFlags of CryptUnprotectData: fail rather than show a prompt. */
+    static final int CRYPTPROTECT_UI_FORBIDDEN = 0x1;
+
+
     private static final MethodHandle CRYPT_UNPROTECT_DATA;
     private static final MethodHandle LOCAL_FREE;
 
@@ -143,9 +147,12 @@ public final class DpapiSecretProvider implements SecretProvider {
                     BLOB_DATA.set(entropyBlob, 0L, entropyBytes);
                 }
 
+                // CRYPTPROTECT_UI_FORBIDDEN: a blob protected with a prompt
+                // would otherwise open a dialog on a server's session and wait
+                // for nobody - an error is the answer instead.
                 int ok = (int) CRYPT_UNPROTECT_DATA.invokeExact(
                         in, MemorySegment.NULL, entropyBlob, MemorySegment.NULL,
-                        MemorySegment.NULL, 0, out);
+                        MemorySegment.NULL, CRYPTPROTECT_UI_FORBIDDEN, out);
                 if (ok == 0) {
                     throw new SecretUnavailableException(
                             "CryptUnprotectData failed for " + path
