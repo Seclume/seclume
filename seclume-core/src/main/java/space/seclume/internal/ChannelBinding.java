@@ -48,7 +48,7 @@ public final class ChannelBinding {
      *         instead would give up exactly the protection it exists for.
      */
     public static int endPoint(X509Certificate certificate, MemorySegment out) {
-        HashAlgorithm algorithm = hashFor(certificate.getSigAlgName());
+        HashAlgorithm algorithm = hashOf(certificate);
         byte[] der; // seclume-allow: the server's certificate is public information, not a secret
         try {
             der = certificate.getEncoded();
@@ -59,6 +59,31 @@ public final class ChannelBinding {
         MemorySegment source = MemorySegment.ofArray(der);
         algorithm.hash(source, 0, der.length, out, 0);
         return algorithm.digestLength();
+    }
+
+    /**
+     * The hash of {@code certificate}'s signature: from its name, or - for
+     * RSASSA-PSS, whose name says no hash - from its parameters, as RFC 5929
+     * says. A PSS certificate made the login fail where the server offered
+     * SCRAM-SHA-256-PLUS.
+     */
+    static HashAlgorithm hashOf(X509Certificate certificate) {
+        String name = certificate.getSigAlgName();
+        if (name != null && name.toUpperCase(Locale.ROOT).replace("-", "").equals("RSASSAPSS")
+                && certificate.getSigAlgParams() != null) {
+            try {
+                java.security.AlgorithmParameters parameters =
+                        java.security.AlgorithmParameters.getInstance("RSASSA-PSS");
+                parameters.init(certificate.getSigAlgParams());
+                String digest = parameters.getParameterSpec(
+                        java.security.spec.PSSParameterSpec.class).getDigestAlgorithm();
+                return hashFor(digest.replace("-", "") + "withRSA");
+            } catch (java.security.GeneralSecurityException | java.io.IOException unreadable) {
+                throw new IllegalArgumentException("the server's RSASSA-PSS certificate has "
+                        + "parameters that cannot be read: " + unreadable.getMessage(), unreadable);
+            }
+        }
+        return hashFor(name);
     }
 
     /**
