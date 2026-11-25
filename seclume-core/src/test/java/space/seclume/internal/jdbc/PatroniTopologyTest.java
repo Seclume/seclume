@@ -55,6 +55,24 @@ class PatroniTopologyTest {
         }
     }
 
+    /**
+     * The driver's URL decides which servers Patroni may name: a member the
+     * answer lists that is not one of the URL's hosts - an answer over plain
+     * HTTP, or from an endpoint taken over - is not connected to.
+     */
+    @Test
+    void aUrlsPatroniNamesOnlyTheUrlsOwnHosts() throws IOException {
+        try (ServerSocket patroni = serve(CLUSTER, new AtomicInteger())) {
+            String prefix = "jdbc:seclume:postgresql:";
+            space.seclume.internal.JdbcUrl.Parsed parsed = space.seclume.internal.JdbcUrl.parse(
+                    prefix + "//10.0.0.1:5432,10.0.0.2:5433/app?patroni=http://127.0.0.1:"
+                            + patroni.getLocalPort(), null, prefix, 5432);
+            assertEquals("[10.0.0.2:5433, 10.0.0.1:5432]",
+                    parsed.hosts().topology().hosts(TargetServer.PRIMARY).toString(),
+                    "10.0.0.4 is no host of the URL");
+        }
+    }
+
     @Test
     void noAnswerMeansNoMembers() {
         assertTrue(PatroniTopology.of("http://127.0.0.1:1").hosts(TargetServer.PRIMARY).isEmpty());

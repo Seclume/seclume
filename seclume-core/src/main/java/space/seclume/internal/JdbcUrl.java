@@ -141,8 +141,16 @@ public final class JdbcUrl {
         }
         // Several servers, separated by commas, are allowed here: that is how
         // failover is configured, and the same spelling other drivers use.
-        HostList hosts = HostList.parse(
-                hostPort.isEmpty() ? "127.0.0.1" : hostPort, defaultPort)
+        HostList written = HostList.parse(
+                hostPort.isEmpty() ? "127.0.0.1" : hostPort, defaultPort);
+        // Patroni names the members; only the URL's own hosts may be one. An
+        // answer over plain HTTP, or from a host taken over, would otherwise
+        // send the login to any server it names.
+        java.util.List<String> urlHosts = new java.util.ArrayList<>();
+        for (HostList.Host host : written.hosts()) {
+            urlHosts.add(host.host());
+        }
+        HostList hosts = written
                 // targetServerType=primary|secondary|any, the name pgjdbc
                 // uses. It belongs on the list rather than on the connection:
                 // it says which of these servers to take, and with one server
@@ -156,7 +164,7 @@ public final class JdbcUrl {
                 // patroni=http://db1:8008,...: the cluster says where its leader
                 // is now - see PatroniTopology.
                 .discovering(space.seclume.internal.jdbc.PatroniTopology.of(
-                        options.get("patroni")));
+                        options.get("patroni"), urlHosts));
         // aurora=true: the instances an Aurora cluster reported, remembered
         // for the next connect - see AuroraTopology.
         space.seclume.internal.jdbc.AuroraTopology aurora =
