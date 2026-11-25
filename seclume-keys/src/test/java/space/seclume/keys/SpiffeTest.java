@@ -527,6 +527,26 @@ class SpiffeTest {
     }
 
     /**
+     * Before the first SVID the workload has no trust domain and no bundle:
+     * nobody is a peer yet - not with peer-ids naming them either. A control:
+     * it holds before the federation fix too.
+     */
+    @Test
+    void beforeTheFirstSvidNothingIsTrusted() throws Exception {
+        X509Certificate peer = (X509Certificate) java.security.cert.CertificateFactory
+                .getInstance("X.509").generateCertificate(
+                        new java.io.ByteArrayInputStream(first.certificate()));
+        SpiffeTrustManager unknown = new SpiffeTrustManager(domain -> List.of(), List::of,
+                java.util.Set.of(), () -> null);
+        assertThrows(java.security.cert.CertificateException.class,
+                () -> unknown.check(new X509Certificate[] {peer}));
+        SpiffeTrustManager named = new SpiffeTrustManager(domain -> List.of(), List::of,
+                java.util.Set.of(ORDERS), () -> null);
+        assertThrows(java.security.cert.CertificateException.class,
+                () -> named.check(new X509Certificate[] {peer}));
+    }
+
+    /**
      * A JWT-SVID as a secret provider: the audiences asked for, the token
      * written through native memory into the caller's scope, its exp the end
      * a pool goes by; an agent without one, and no audience, said so.
