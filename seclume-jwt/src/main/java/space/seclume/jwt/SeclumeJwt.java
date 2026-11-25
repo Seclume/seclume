@@ -67,8 +67,17 @@ public final class SeclumeJwt implements AutoCloseable {
             throw new IllegalArgumentException("leeway is a number of seconds, not '" + leeway
                     + "'", e);
         }
+        if (seconds < 0 || seconds > MAX_LEEWAY_SECONDS) {
+            key.close();
+            // leeway=99999999 was three years in which an expired token passed.
+            throw new IllegalArgumentException("leeway is 0 to " + MAX_LEEWAY_SECONDS
+                    + " seconds of clock skew, not " + seconds);
+        }
         return new SeclumeJwt(key, Duration.ofSeconds(seconds));
     }
+
+    /** Clock skew, not a second lifetime: five minutes at most. */
+    static final long MAX_LEEWAY_SECONDS = 300;
 
     /**
      * A signer over a provider the caller has already made - for a library

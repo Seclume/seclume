@@ -51,6 +51,22 @@ class SeclumeJwtTest {
         return alg + "?provider=file&path=" + key.toString().replace('\\', '/') + extra;
     }
 
+    /**
+     * leeway was parsed and taken as it came: leeway=99999999 was three years
+     * in which an expired token passed. It is clock skew, five minutes at most.
+     */
+    @Test
+    void leewayIsClockSkewNotALifetime(@TempDir Path dir) throws Exception {
+        Path key = file(dir, "hs", KEY);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> SeclumeJwt.of(spec("HS256", key, "&leeway=99999999")));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> SeclumeJwt.of(spec("HS256", key, "&leeway=-1")));
+        try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, "&leeway=300"))) {
+            org.junit.jupiter.api.Assertions.assertNotNull(jwt);
+        }
+    }
+
     /** Signing and checking are Signature events - a failed check says so. */
     @Test
     void signaturesAreRecorded(@TempDir Path dir) throws Exception {

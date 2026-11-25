@@ -7,6 +7,8 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **JWT `leeway` is 0 to 300 seconds.** It was taken as given; `leeway=99999999` let an
+  expired token pass for three years.
 - **Elasticsearch: an index whose name has a dot gets a column name of its own.**
   `search.<index>.<field>` named index `a`, field `b.c` and index `a.b`, field `c` alike, so one
   key opened the other's values. An index with a dot is now `search:<length>:<index>.<field>`;
