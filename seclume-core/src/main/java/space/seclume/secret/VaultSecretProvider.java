@@ -113,6 +113,16 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     /** Set when the user was handed out: the password read next is that user's, unchanged. */
     private boolean userHandedOut;
     /**
+     * Which credential each thread was handed the user of. Two logins at a
+     * refresh: one took user U1, the other's currentUser() fetched U2 and P2,
+     * and the first then read P2 - a login that failed. The thread's own
+     * user's password is written, the one before kept for that.
+     */
+    private final ThreadLocal<Long> handedGeneration = new ThreadLocal<>();
+    private long generation;
+    private SecretScope previousCredential;
+    private long previousGeneration = -1;
+    /**
      * With a {@link VaultLogin}: the login the credential in hand was fetched
      * under. Vault revokes a lease together with the token that created it,
      * so that token's end is the credential's end too.
@@ -171,6 +181,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
             validUntil = null;
             wiped.close();
         }
+        if (previousCredential != null) {
+            previousCredential.close();
+            previousCredential = null;
+        }
     }
 
     @Override
@@ -182,6 +196,19 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     public synchronized int writeSecret(MemorySegment target) {
         if (closed) {
             throw new SecretUnavailableException("this Vault provider is closed");
+        }
+        Long mine = handedGeneration.get();
+        handedGeneration.remove();
+        if (mine != null && mine != generation && mine == previousGeneration
+                && previousCredential != null) {
+            // This thread's user is the one before: its password, not the new one.
+            int length = previousCredential.length();
+            if (length > target.byteSize()) {
+                throw new SecretUnavailableException("the secret from " + path + " is " + length
+                        + " bytes and does not fit into the " + target.byteSize() + " provided");
+            }
+            MemorySegment.copy(previousCredential.segment(), 0, target, 0, length);
+            return length;
         }
         if (cached == null || (dueForRefresh() && !userHandedOut)) {
             renewOrRefresh();
@@ -240,6 +267,7 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
             renewOrRefresh();
         }
         userHandedOut = true;
+        handedGeneration.set(generation);
         return username;
     }
 
@@ -381,9 +409,13 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
                 // nests its fields one level deeper and names no user here.
                 username = text(answer, "data", "username");
                 tokenGeneration = login == null ? 0 : login.generation();
-                if (previous != null) {
-                    previous.close();           // the old credential is wiped, not dropped
+                if (previousCredential != null) {
+                    previousCredential.close();     // two back: wiped, not dropped
                 }
+                // The one before stays for a login that took its user already.
+                previousCredential = previous;
+                previousGeneration = generation;
+                generation++;
             } catch (Throwable e) {
                 fresh.close();
                 throw e;
@@ -473,6 +505,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
             if (cached != null) {
                 cached.close();
                 cached = null;
+            }
+            if (previousCredential != null) {
+                previousCredential.close();
+                previousCredential = null;
             }
         } finally {
             token.close();

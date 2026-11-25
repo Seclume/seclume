@@ -292,6 +292,33 @@ class VaultSecretProviderTest {
         }
     }
 
+    /**
+     * Two logins at a refresh: the first took user U1, the second's
+     * currentUser() fetched U2 with P2 - and the first then read P2, a login
+     * that failed. Each thread gets the password of the user it was handed.
+     */
+    @Test
+    void aLoginGetsThePasswordOfItsOwnUserAcrossARefresh() throws Exception {
+        Instant start = Instant.parse("2026-09-20T12:00:00Z");
+        MovingClock clock = new MovingClock(start);
+        try (FakeVault vault = new FakeVault(200,
+                "{\"lease_duration\":3600,\"data\":{\"username\":\"u1\",\"password\":\"p1\"}}",
+                "{\"lease_duration\":3600,\"data\":{\"username\":\"u2\",\"password\":\"p2\"}}");
+             VaultSecretProvider provider = provider(vault, "database/creds/app", clock)) {
+            assertEquals("u1", provider.currentUser());              // the first login, here
+            clock.advance(Duration.ofMinutes(40));                   // past halfway
+            String[] other = new String[2];
+            Thread second = Thread.ofPlatform().start(() -> {
+                other[0] = provider.currentUser();
+                other[1] = read(provider);
+            });
+            second.join();
+            assertEquals("u2", other[0]);
+            assertEquals("p2", other[1]);
+            assertEquals("p1", read(provider), "the first login got the second one's password");
+        }
+    }
+
     /** Halfway through the lease it fetches again, and the new one is used. */
     @Test
     void itRefreshesHalfwayThroughTheLease() throws Exception {
