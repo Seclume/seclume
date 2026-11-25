@@ -79,10 +79,6 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "input": "https://fastdl.mongodb.org/windows/$zip  (checksum from the same server)"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
       "input": "mariadb:11.4"
     },
     {

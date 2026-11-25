@@ -990,12 +990,13 @@ jobs:
         if: runner.os == 'Windows'
         env:
           MONGODB_VERSION: 8.0.34
+          # Pinned here, not read from the server that serves the zip: a
+          # checksum from the same host vouches for nothing that host changes.
+          MONGODB_SHA256: 6b021a0864494e4decf278b36477a29eb36072432773e4e62c2f42c302630db0
         run: |
           zip="mongodb-windows-x86_64-$MONGODB_VERSION.zip"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/$zip" "https://fastdl.mongodb.org/windows/$zip"
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$zip.sha256" \
-            "https://fastdl.mongodb.org/windows/$zip.sha256"
-          (cd "$RUNNER_TEMP" && sha256sum -c "$zip.sha256")
+          echo "$MONGODB_SHA256  $RUNNER_TEMP/$zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/$zip" -d "$RUNNER_TEMP/mongodb-dist"
           bin="$(ls -d "$RUNNER_TEMP"/mongodb-dist/*/bin | head -1)"
           "$bin/mongod.exe" --version | head -1
