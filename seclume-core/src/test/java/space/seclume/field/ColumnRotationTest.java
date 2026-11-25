@@ -175,6 +175,21 @@ class ColumnRotationTest {
         }
     }
 
+    /** A key with values under it was taken out of the ring, and they were lost. */
+    @Test
+    void aKeyWithValuesUnderItIsNotRetired() throws SQLException {
+        Table table = table(6);
+        try (FieldKeys both = ring(2, KEY1, KEY2)) {
+            ColumnRotation rotation = rotation(both, 10, null, null);
+            assertThrows(IllegalStateException.class,
+                    () -> rotation.census(connection(table)).requireNoneUnder(1));
+            assertThrows(IllegalStateException.class,
+                    () -> rotation.census(connection(table)).requireNoneUnder(2), "the primary");
+            rotation.run(connection(table));
+            rotation.census(connection(table)).requireNoneUnder(1);
+        }
+    }
+
     @Test
     void aSecondRunHasNothingToDo() throws SQLException {
         Table table = table(12);

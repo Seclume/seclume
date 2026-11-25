@@ -106,6 +106,32 @@ public final class ColumnRotation {
      */
     public record Census(Map<String, Map<Integer, Long>> keys, int primary) {
 
+        /**
+         * Before a key leaves the ring: refused while any value is still
+         * counted under it. Nothing stopped a key from being taken out with
+         * values under it, and those were lost for good.
+         *
+         * @throws IllegalStateException naming the columns that still hold values under it
+         */
+        public void requireNoneUnder(int key) {
+            List<String> holding = new ArrayList<>();
+            for (Map.Entry<String, Map<Integer, Long>> column : keys.entrySet()) {
+                Long count = column.getValue().get(key);
+                if (count != null && count > 0) {
+                    holding.add(column.getKey() + " (" + count + ")");
+                }
+            }
+            if (key == primary) {
+                throw new IllegalStateException("key " + key + " is the primary - make another "
+                        + "one primary and rotate first");
+            }
+            if (!holding.isEmpty()) {
+                throw new IllegalStateException("key " + key + " still has values under it in "
+                        + String.join(", ", holding) + " - rotate them first, or they are lost "
+                        + "with the key");
+            }
+        }
+
         /** Values under another key than the primary - what a rotation still has to do. */
         public long remaining() {
             long remaining = 0;

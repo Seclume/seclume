@@ -213,7 +213,9 @@ transaction per batch. A value is written back only `where id = ? and column = <
 a row the application changed in the meantime is left as the application wrote it - under the
 primary key, since it writes with the same ring - and counted as a conflict. A value already
 under the primary key is not touched, so a second run writes nothing, and a stopped one continues
-from `Progress.lastId()` with `.after(lastId)`. `Context.ROW_ID` is for columns whose values are
+from `Progress.lastId()` with `.after(lastId)`. Before a key leaves the ring, `rotation.census(connection).requireNoneUnder(key)` refuses
+while any value is still counted under it - taken out, those values are lost for good.
+`Context.ROW_ID` is for columns whose values are
 bound to their row's id ([Context](#context-a-value-bound-to-its-row)). The columns must compare
 by value in a `where` - `bytea`, `varbinary`, `raw`, not an Oracle `BLOB`.
 
