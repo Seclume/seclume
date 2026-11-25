@@ -320,7 +320,7 @@ public class Scram implements AutoCloseable {
 
         int nonceLength = attributeLength(data, offset, length, 'r');
         int noncePosition = attributePosition(data, offset, length, 'r');
-        if (nonceLength < clientNonceLength
+        if (nonceLength <= clientNonceLength
                 || !ConstantTime.equals(data, noncePosition, clientNonce, 0, clientNonceLength)) {
             throw new IllegalStateException(
                     "the server nonce does not start with ours - refusing to continue");
