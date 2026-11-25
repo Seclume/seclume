@@ -61,4 +61,43 @@ public final class SensitiveEcho {
         }
         return masked;
     }
+
+    /**
+     * The same for text the server writes as UTF-16LE - SQL Server's messages:
+     * each byte of a value is looked for as a character, its high byte zero.
+     */
+    public static int maskWide(MemorySegment buffer, long from, long to, List<NativeValue> values) {
+        int masked = 0;
+        for (NativeValue value : values) {
+            MemorySegment needle;
+            long length;
+            try {
+                needle = value.memory();
+                length = value.length();
+                needle.get(ValueLayout.JAVA_BYTE, 0);
+            } catch (IllegalStateException | IndexOutOfBoundsException released) {
+                continue;                     // gone, or empty: nothing to find
+            }
+            if (length < SHORTEST || length * 2 > to - from) {
+                continue;
+            }
+            // Compared where it lies, byte for byte: no copy of it on the heap.
+            outer:
+            for (long at = from; at + length * 2 <= to; at++) {
+                for (long i = 0; i < length; i++) {
+                    if (buffer.get(ValueLayout.JAVA_BYTE, at + 2 * i)
+                            != needle.get(ValueLayout.JAVA_BYTE, i)
+                            || buffer.get(ValueLayout.JAVA_BYTE, at + 2 * i + 1) != 0) {
+                        continue outer;
+                    }
+                }
+                for (long i = 0; i < length; i++) {
+                    buffer.set(ValueLayout.JAVA_BYTE, at + 2 * i, (byte) '*');
+                }
+                masked++;
+                at += length * 2 - 1;
+            }
+        }
+        return masked;
+    }
 }

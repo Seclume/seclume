@@ -63,6 +63,17 @@ public final class TdsParameters {
     private static final int DAYS_1970 = 719162;
 
     private Object[] values = new Object[8]; // seclume-allow: statement parameters, user payload and never a secret
+
+    /** The values bound natively - setSensitive's - for a server message that quotes one. */
+    java.util.List<space.seclume.internal.jdbc.NativeValue> sensitive() {
+        java.util.List<space.seclume.internal.jdbc.NativeValue> found = new java.util.ArrayList<>();
+        for (Object value : values) {
+            if (value instanceof space.seclume.internal.jdbc.NativeValue nativeValue) {
+                found.add(nativeValue);
+            }
+        }
+        return found;
+    }
     private int count;
     /** Which parameters the server compares with a varchar - see preferVarchar; null for none. */
     private boolean[] varchar;

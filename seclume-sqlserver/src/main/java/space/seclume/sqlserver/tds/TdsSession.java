@@ -876,6 +876,7 @@ public final class TdsSession implements AutoCloseable {
             out.putShortLe((short) 0);                // no options
             TdsParameters.writeStatementText(out, sql);
             TdsParameters.writeStatementText(out, declaration);
+            sensitive = parameters.sensitive();
             parameters.writeAll(out);
             channel.send(Tds.TYPE_RPC);
             return readAnswer(handler);
@@ -979,6 +980,7 @@ public final class TdsSession implements AutoCloseable {
                 // follows as one more argument and the values behind it -
                 // the same two things sp_executesql takes.
                 TdsParameters.writeStatementText(out, declaration);
+                sensitive = parameters.sensitive();
                 parameters.writeAll(out);
             }
             channel.send(Tds.TYPE_RPC);
@@ -1106,6 +1108,7 @@ public final class TdsSession implements AutoCloseable {
             TdsParameters.writeOutputInt(out, "", null);        // @handle, OUTPUT
             TdsParameters.writeStatementText(out, declaration); // @params
             TdsParameters.writeStatementText(out, sql);         // @stmt
+            sensitive = parameters.sensitive();
             parameters.writeAll(out);
             channel.send(Tds.TYPE_RPC);
 
@@ -1212,6 +1215,7 @@ public final class TdsSession implements AutoCloseable {
                     out.putShortLe((short) PROC_SP_EXECUTE);
                     out.putShortLe((short) 0);        // no options
                     TdsParameters.writeInt(out, "", prepared.handle());
+                    sensitive = parameters.sensitive();
                     parameters.writeAll(out);
                     channel.sendFull(Tds.TYPE_RPC);   // full packets leave now
                     at++;
@@ -1350,6 +1354,7 @@ public final class TdsSession implements AutoCloseable {
         out.putShortLe((short) PROC_SP_EXECUTE);
         out.putShortLe((short) 0);                // no options
         TdsParameters.writeInt(out, "", prepared.handle());
+        sensitive = parameters.sensitive();
         parameters.writeAll(out);
         pipelineGroup++;
         pipelineSql.add(sql);
@@ -1532,6 +1537,9 @@ public final class TdsSession implements AutoCloseable {
         return updateCount;
     }
 
+    /** The values the statement under way bound with setSensitive. */
+    private java.util.List<space.seclume.internal.jdbc.NativeValue> sensitive = java.util.List.of();
+
     /** Reads the answer and raises whatever the server complained about. */
     private TokenStream readAnswer(TokenStream.RowHandler handler)
             throws IOException, SQLException {
@@ -1545,6 +1553,8 @@ public final class TdsSession implements AutoCloseable {
     private TokenStream readAnswer(TokenStream.RowHandler handler, int expectedCounts)
             throws IOException, SQLException {
         TokenStream tokens = new TokenStream();
+        tokens.sensitive(sensitive);
+        sensitive = java.util.List.of();
         if (expectedCounts > 0) {
             tokens.expectCounts(expectedCounts);
         }
