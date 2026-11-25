@@ -46,6 +46,12 @@ public final class SeclumeDriver implements Driver {
             // The DriverManager asks around; null means "not mine".
             return null;
         }
+        // A provider's or a URL's unchecked failure, as the SQLException
+        // every pool and retry catches.
+        return space.seclume.internal.jdbc.ConnectFailures.translated(() -> open(url, properties));
+    }
+
+    private Connection open(String url, Properties properties) throws SQLException {
         PgSession.Settings settings = SeclumeUrl.settings(url, properties);
         boolean pooler = SeclumeUrl.transactionPooler(url, properties);
         PgConnection connection = new PgConnection(space.seclume.internal.TrustChoice.using(
