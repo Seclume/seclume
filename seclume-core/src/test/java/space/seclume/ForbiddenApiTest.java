@@ -33,8 +33,6 @@ import org.junit.jupiter.api.Test;
  */
 class ForbiddenApiTest {
 
-    private static final String ALLOW_MARKER = "seclume-allow:";
-
     private static final Map<String, String> FORBIDDEN = Map.ofEntries(
             Map.entry("new String(", "a String keeps the secret on the heap forever"),
             Map.entry(".getBytes(", "String.getBytes copies the secret into a heap array"),
@@ -109,82 +107,55 @@ class ForbiddenApiTest {
         return sources;
     }
 
-    private static void check(Path file, List<String> findings) throws IOException {
-        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
-        boolean inBlockComment = false;
-        for (int i = 0; i < lines.size(); i++) {
-            String raw = lines.get(i);
-            String code = strip(raw, inBlockComment);
-            inBlockComment = blockCommentContinues(raw, inBlockComment);
-            // The reason may stand on the line itself or above it - a long
-            // line would otherwise become unreadable.
-            boolean allowed = raw.contains(ALLOW_MARKER)
-                    || (i > 0 && lines.get(i - 1).contains(ALLOW_MARKER));
-            if (allowed) {
-                continue;
+    /**
+     * Shapes a substring cannot catch: a charset's {@code decode} - a String
+     * out of whatever bytes it is given - a {@code Scanner}, and a heap copy
+     * of an array handed to a buffer.
+     */
+    private static final Map<java.util.regex.Pattern, String> FORBIDDEN_SHAPES = Map.of(
+            java.util.regex.Pattern.compile(
+                    "(?:Charset|charset|UTF_8|US_ASCII|ISO_8859_1|UTF_16(?:BE|LE)?)\\.decode\\("),
+            "a charset's decode makes a String of the bytes",
+            java.util.regex.Pattern.compile("new (?:java\\.util\\.)?Scanner\\("),
+            "a Scanner reads into Strings",
+            java.util.regex.Pattern.compile("\\.wrap\\([^;]*?\\.clone\\(\\)\\)"),
+            "a cloned array is one more heap copy, out of reach of the wipe");
+
+    static void check(Path file, List<String> findings) throws IOException {
+        check(file.toString(), Files.readString(file, StandardCharsets.UTF_8), findings);
+    }
+
+    /**
+     * The rules against {@code source} as code: comments and literals out,
+     * white space folded, {@code java.lang.} dropped - see {@link SourceScan}.
+     * Read line by line, {@code new  String(}, {@code new java.lang.String(},
+     * a line break before the parenthesis and an allow marker in a literal
+     * all went by.
+     */
+    static void check(String name, String source, List<String> findings) {
+        SourceScan scan = SourceScan.of(source);
+        java.util.Set<Integer> reported = new java.util.TreeSet<>();
+        for (Map.Entry<String, String> rule : FORBIDDEN.entrySet()) {
+            for (int at = scan.code.indexOf(rule.getKey()); at >= 0;
+                    at = scan.code.indexOf(rule.getKey(), at + 1)) {
+                report(scan, name, at, rule.getKey(), rule.getValue(), findings, reported);
             }
-            for (Map.Entry<String, String> rule : FORBIDDEN.entrySet()) {
-                if (code.contains(rule.getKey())) {
-                    findings.add(file + ":" + (i + 1) + " uses " + rule.getKey()
-                            + " - " + rule.getValue());
-                }
+        }
+        for (Map.Entry<java.util.regex.Pattern, String> rule : FORBIDDEN_SHAPES.entrySet()) {
+            java.util.regex.Matcher m = rule.getKey().matcher(scan.code);
+            while (m.find()) {
+                report(scan, name, m.start(), m.group(), rule.getValue(), findings, reported);
             }
         }
     }
 
-    /** Strips comments and string literals; only real code remains. */
-    private static String strip(String line, boolean inBlockComment) {
-        StringBuilder out = new StringBuilder(line.length());
-        boolean comment = inBlockComment;
-        boolean inString = false;
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            char next = i + 1 < line.length() ? line.charAt(i + 1) : '\0';
-            if (comment) {
-                if (c == '*' && next == '/') {
-                    comment = false;
-                    i++;
-                }
-                continue;
-            }
-            if (inString) {
-                if (c == '\\') {
-                    i++;
-                } else if (c == '"') {
-                    inString = false;
-                }
-                continue;
-            }
-            if (c == '/' && next == '*') {
-                comment = true;
-                i++;
-                continue;
-            }
-            if (c == '/' && next == '/') {
-                break;
-            }
-            if (c == '"') {
-                inString = true;
-                continue;
-            }
-            out.append(c);
+    private static void report(SourceScan scan, String name, int at, String what, String why,
+            List<String> findings, java.util.Set<Integer> reported) {
+        int line = scan.line(at);
+        if (scan.allowed(line)) {
+            return;
         }
-        return out.toString();
-    }
-
-    private static boolean blockCommentContinues(String line, boolean inBlockComment) {
-        boolean comment = inBlockComment;
-        for (int i = 0; i < line.length() - 1; i++) {
-            if (!comment && line.charAt(i) == '/' && line.charAt(i + 1) == '*') {
-                comment = true;
-                i++;
-            } else if (comment && line.charAt(i) == '*' && line.charAt(i + 1) == '/') {
-                comment = false;
-                i++;
-            } else if (!comment && line.charAt(i) == '/' && line.charAt(i + 1) == '/') {
-                break;
-            }
-        }
-        return comment;
+        findings.add(name + ":" + line + " uses " + what + " - " + why);
+        reported.add(line);
     }
 }

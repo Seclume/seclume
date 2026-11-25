@@ -112,7 +112,7 @@ final class Http2Requests {
                     + (inBlock ? " into a header block" : " without a header block to continue"));
         }
         if (!headers) {
-            sink.write(ByteBuffer.wrap(header.clone()));
+            sink.write(ByteBuffer.wrap(header.clone())); // seclume-allow: the frame's nine-byte header, not its payload
             passing = length;
             return;
         }

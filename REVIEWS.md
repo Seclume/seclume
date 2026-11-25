@@ -381,8 +381,8 @@ protocol text or dribble bytes.
 |---|------|---------|----------|----------|
 | 1 | CI security gate | A gated test passed when any single case passed, and the gate read its manifest from the change under review (GHSA-r2cr-rj9g-qrhc). | process | #PR |
 | 2 | Build inputs | Container images by tag, the Maven wrapper without `distributionSha256Sum`; a wrong dependency checksum was a warning. | process | #PR |
-| 3 | `ForbiddenApiTest` | None of eight evasions was found (double space, fully qualified name, `Charset.decode`, `clone()`, `Scanner`, an allow comment inside a literal or on the line before, a line break). | process | open |
-| 4 | `ErrorMessageTest` | One of five ways to put a secret into an exception message was found. | process | open |
+| 3 | `ForbiddenApiTest` | None of eight evasions was found (double space, fully qualified name, `Charset.decode`, `clone()`, `Scanner`, an allow comment inside a literal or on the line before, a line break). The check reads code now, comments and literals out across lines; seven are reported. A marker on a comment line of its own still frees the line under it - it is as plain in a diff as one at the end of the line. | process | #PR |
+| 4 | `ErrorMessageTest` | One of five ways to put a secret into an exception message was found. `apiKey`, `pw`, `bearer` and a message built in a local variable are found now; `key` and `auth` are left out, as they name options far more often than secrets. | process | #PR |
 | 5 | Secret providers | `provider=process` in a JDBC URL ran a program; an application that takes URLs or properties from its users ran their commands. | high | #PR |
 | 6 | Pool statement cache | A cached statement kept the result set of its last execution: the next borrower read the previous borrower's (tenant's) rows through `getResultSet()`. | low | #PR |
 | 7 | Pool renewal | A borrow that had handed out a statement could still be renewed; a session change the driver did not see (`select app.enter_tenant(42)`) was lost and the next statement ran as the login role. | medium | #PR |
@@ -452,7 +452,6 @@ boundary. CI: pitest-maven on the security packages with `mutationThreshold=85`.
 
 ### Open
 
-- `ForbiddenApiTest` and `ErrorMessageTest` read lines, not code (findings 3 and 4).
 - MD5 and `mysql_native_password` over an unauthenticated connection (round 4, "Open") are
   still a decision with compatibility cost.
 

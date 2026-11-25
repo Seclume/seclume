@@ -658,7 +658,7 @@ public final class Attribution {
         /** A class or field name - a symbol of the class files, never a secret. */
         String utf8(int length) throws IOException {
             ByteBuffer bytes = bytes(length);
-            return StandardCharsets.UTF_8.decode(bytes).toString();
+            return StandardCharsets.UTF_8.decode(bytes).toString(); // seclume-allow: a symbol of the class files
         }
 
         void skip(long bytes) {
