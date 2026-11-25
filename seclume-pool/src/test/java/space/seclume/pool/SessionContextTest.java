@@ -137,6 +137,35 @@ class SessionContextTest {
         }
     }
 
+    /**
+     * SQL Server: the tenant is set read-only, so an SQL injection later in
+     * the same borrow cannot rewrite it with a sp_set_session_context of its
+     * own; the reset on return still clears it for the next borrower.
+     */
+    @org.junit.jupiter.api.Test
+    void sqlServersTenantCannotBeRewrittenWithinTheBorrow() throws Exception {
+        Db db = databases().get(2);
+        PoolSettings settings = settings();
+        settings.setSessionContext(() -> Map.of(db.key(), "acme"));
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings)) {
+            try (Connection connection = pool.getConnection();
+                 Statement statement = connection.createStatement()) {
+                assertThrows(SQLException.class, () -> statement.execute(
+                        "exec sp_set_session_context N'" + db.key() + "', N'evil'"));
+                try (ResultSet rows = statement.executeQuery(db.read())) {
+                    rows.next();
+                    assertEquals("acme", rows.getString(1));
+                }
+            }
+            try (Connection again = pool.getConnection();
+                 Statement statement = again.createStatement();
+                 ResultSet rows = statement.executeQuery(db.read())) {
+                rows.next();
+                assertEquals("acme", rows.getString(1), "set again for the next borrow");
+            }
+        }
+    }
+
     private static PoolSettings settings() {
         PoolSettings settings = new PoolSettings();
         settings.setName("context");

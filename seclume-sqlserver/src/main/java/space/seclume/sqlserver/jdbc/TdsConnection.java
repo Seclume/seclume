@@ -114,9 +114,12 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
     public void setSessionContext(String name, String value) throws SQLException {
         checkOpen();
         space.seclume.internal.jdbc.ContextValues.check(name, value);
+        // Read-only: an SQL injection later in the same borrow cannot rewrite
+        // the tenant with a sp_set_session_context of its own. The reset on
+        // return (sp_reset_connection) still clears it.
         String sql = "exec sp_set_session_context "
                 + space.seclume.internal.jdbc.ContextValues.nString(name) + ", "
-                + space.seclume.internal.jdbc.ContextValues.nString(value);
+                + space.seclume.internal.jdbc.ContextValues.nString(value) + ", 1";
         sessionState.note(sql);
         session.contextLater(sql);
     }

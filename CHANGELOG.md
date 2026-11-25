@@ -7,6 +7,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **SQL Server: the session context is set read-only.** An application that sets the same
+  key again within one borrow gets an error; an SQL injection can no longer rewrite the tenant.
+  The reset on return still clears it.
 - **`verify=false` on a secret source is for this machine only.** Vault, transit, a KMS and the
   cloud metadata services sent their token and secret to whoever answered with it, wherever the
   host was. Off loopback it takes `-Dseclume.allowUnverifiedSecretSources=true` now.
