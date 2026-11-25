@@ -87,6 +87,36 @@ final class Lane implements AutoCloseable {
     private final AtomicBoolean draining = new AtomicBoolean();
     final Scheduler scheduler = Schedulers.fromExecutor(this::enqueue);
 
+    /**
+     * The statements results still hold. A result cancelled after its first
+     * row - {@code next()} - closes its statement in a task of its own, and a
+     * {@code usingWhen}'s {@code Connection.close()} can be queued before it:
+     * the pool then found the statement open on every return and counted a
+     * leak. The connection closes what is left here before it goes.
+     */
+    private final java.util.Set<java.sql.Statement> open =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    void opened(java.sql.Statement statement) {
+        open.add(statement);
+    }
+
+    void closed(java.sql.Statement statement) {
+        open.remove(statement);
+    }
+
+    /** On the lane, before the connection closes: what no result closed yet. */
+    void closeOpenStatements() {
+        for (java.sql.Statement statement : open) {
+            try {
+                statement.close();
+            } catch (java.sql.SQLException ignored) {
+                // closed either way, with the connection
+            }
+        }
+        open.clear();
+    }
+
     private void enqueue(Runnable task) {
         if (closed) {
             throw new RejectedExecutionException("this connection is closed");

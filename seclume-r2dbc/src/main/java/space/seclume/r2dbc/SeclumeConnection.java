@@ -227,7 +227,10 @@ final class SeclumeConnection implements Connection, Wrapped<java.sql.Connection
         // asks next - validate() in R2DBC's own suite - has to see it closed,
         // or hands a task to a thread that is about to go.
         return Mono.defer(() -> lane.isClosed() ? Mono.empty()
-                : lane.run(jdbc::close)
+                : lane.run(() -> {
+                    lane.closeOpenStatements();
+                    jdbc.close();
+                })
                         .onErrorResume(failure -> Mono.fromRunnable(lane::close)
                                 .then(Mono.error(failure)))
                         .then(Mono.fromRunnable(lane::close)));

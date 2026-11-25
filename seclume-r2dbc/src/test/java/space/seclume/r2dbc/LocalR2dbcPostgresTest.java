@@ -59,8 +59,9 @@ class LocalR2dbcPostgresTest {
         } catch (IOException e) {
             Assumptions.abort("no PostgreSQL on " + HOST + ":" + PORT);
         }
-        jdbcUrl = "jdbc:seclume:postgresql://seclume_test@" + HOST + ":" + PORT
-                + "/seclume_test?provider=file&path=" + password.toString().replace('\\', '/')
+        // A seclume JDBC URL names its user in user=, never before the host.
+        jdbcUrl = "jdbc:seclume:postgresql://" + HOST + ":" + PORT
+                + "/seclume_test?user=seclume_test&provider=file&path=" + password.toString().replace('\\', '/')
                 + "&trustServerCertificate=true";
         factory = ConnectionFactories.get("r2dbc:seclume:postgresql://seclume_test@" + HOST + ":"
                 + PORT + "/seclume_test?provider=file&path="
