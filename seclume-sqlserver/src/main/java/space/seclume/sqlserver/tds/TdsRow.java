@@ -227,10 +227,12 @@ public final class TdsRow {
         if (measuring) {
             // Only where it ends - see read: nothing moves until the whole
             // row is known to be there.
+            long sum = 0;
             for (int q = p; ; ) {
                 int chunk = in.getIntLe(q);
                 q += 4;
                 if (chunk == 0) {
+                    checkTotal(total, sum);
                     return q;
                 }
                 if (chunk < 0) {
@@ -238,6 +240,7 @@ public final class TdsRow {
                 }
                 in.getByte(q + chunk - 1);             // there, or Truncated
                 q += chunk;
+                sum += chunk;
             }
         }
         int valueAt = p;
@@ -259,8 +262,21 @@ public final class TdsRow {
             written += chunk;
             p += chunk;
         }
+        checkTotal(total, written);
         set(index, valueAt, written);
         return p;
+    }
+
+    /**
+     * A known total has to be what the chunks add up to. A server announcing
+     * one length and sending another is a malformed stream, and a reader that
+     * trusted either one alone would cut a value short or run into the next.
+     */
+    private static void checkTotal(long total, long sum) throws IOException {
+        if (total != PLP_UNKNOWN && total != sum) {
+            throw new IOException("a value announced as " + total
+                    + " bytes arrived as " + sum);
+        }
     }
 
     private boolean isNullBitSet(int bitmaskAt, int column) {
