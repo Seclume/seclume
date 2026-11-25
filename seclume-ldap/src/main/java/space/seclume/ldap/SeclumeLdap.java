@@ -1,6 +1,5 @@
 package space.seclume.ldap;
 
-import java.security.SecureRandom;
 import java.util.Base64; // seclume-allow: encodes the placeholder's random bits - not a secret
 import java.util.Hashtable;
 import java.util.Map;
@@ -66,7 +65,6 @@ public final class SeclumeLdap {
      */
     static final String PLACEHOLDER_PREFIX = "seclume-ldap-binds-in-native-memory:";
 
-    private static final SecureRandom RANDOM = new SecureRandom();
     static final Map<String, LdapSettings> BY_PLACEHOLDER = new ConcurrentHashMap<>();
 
     /** Placeholders written in only for binds opened through {@link #asService}. */
@@ -139,7 +137,7 @@ public final class SeclumeLdap {
         String placeholder;
         do {
             byte[] random = new byte[18];
-            RANDOM.nextBytes(random);
+            space.seclume.internal.Entropy.fill(random);
             placeholder = PLACEHOLDER_PREFIX
                     + Base64.getUrlEncoder().withoutPadding().encodeToString(random); // seclume-allow: the placeholder - not a secret
         } while (BY_PLACEHOLDER.putIfAbsent(placeholder, settings) != null);

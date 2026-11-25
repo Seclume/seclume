@@ -5,7 +5,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.util.HexFormat; // seclume-allow: a random placeholder - public
 
 import space.seclume.internal.SeclumeSslEngine;
@@ -39,7 +38,6 @@ import space.seclume.secret.SecretScope;
  */
 final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
 
-    private static final SecureRandom RANDOM = new SecureRandom();
 
     private static final int MAX_DIGITS = 10;
 
@@ -85,7 +83,7 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
     /** A new random placeholder. */
     static String newPlaceholder() {
         byte[] random = new byte[16];
-        RANDOM.nextBytes(random);
+        space.seclume.internal.Entropy.fill(random);
         return "seclume-redis-" + HexFormat.of().formatHex(random); // seclume-allow: a random placeholder - public
     }
 

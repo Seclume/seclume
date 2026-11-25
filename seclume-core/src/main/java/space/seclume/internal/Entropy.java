@@ -48,6 +48,21 @@ public final class Entropy {
     private Entropy() {
     }
 
+    /**
+     * Fills a heap array - a nonce, a placeholder, nothing secret once it is
+     * sent - from the same kernel source. A heap segment cannot go to the
+     * native call, which would fall back to SecureRandom without a word: the
+     * bytes are drawn into native memory and copied over.
+     */
+    public static void fill(byte[] target) {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment drawn = arena.allocate(Math.max(1, target.length));
+            fill(drawn, 0, target.length);
+            MemorySegment.copy(drawn, ValueLayout.JAVA_BYTE, 0, target, 0, target.length);
+            drawn.fill((byte) 0);
+        }
+    }
+
     /** Fills the whole segment with random bytes. */
     public static void fill(MemorySegment target) {
         fill(target, 0, target.byteSize());

@@ -1,7 +1,6 @@
 package space.seclume.http;
 
 import java.io.IOException;
-import java.security.SecureRandom;
 import java.util.Collection;
 import java.util.HexFormat; // seclume-allow: a random nonce for placeholders - public
 import java.util.Locale;
@@ -34,7 +33,6 @@ import space.seclume.secret.SecretProvider;
 final class CredentialPlaceholders {
 
     static final String PREFIX = "seclume-cred-";
-    private static final SecureRandom RANDOM = new SecureRandom();
     private static final String NONCE = HexFormat.of().formatHex(nonce()); // seclume-allow: a random nonce - public
     private static final AtomicLong NEXT = new AtomicLong();
     private static final Map<String, Registration> PROVIDERS = new ConcurrentHashMap<>();
@@ -126,13 +124,13 @@ final class CredentialPlaceholders {
 
     private static byte[] nonce16() {
         byte[] bytes = new byte[16];
-        RANDOM.nextBytes(bytes);
+        space.seclume.internal.Entropy.fill(bytes);
         return bytes;
     }
 
     private static byte[] nonce() {
         byte[] bytes = new byte[12];
-        RANDOM.nextBytes(bytes);
+        space.seclume.internal.Entropy.fill(bytes);
         return bytes;
     }
 }
