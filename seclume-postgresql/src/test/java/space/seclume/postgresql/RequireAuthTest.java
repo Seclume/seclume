@@ -94,6 +94,42 @@ class RequireAuthTest {
         }
     }
 
+    /**
+     * A ReadyForQuery in place of any login: it ended the login as a success,
+     * so neither requireAuth nor SCRAM's server signature was ever checked -
+     * anybody in the middle under tls=prefer was taken for the database.
+     */
+    @Test
+    void aReadyForQueryWithoutAnyLoginIsRefused() throws Exception {
+        for (String requireAuth : new String[] {"scram-sha-256", null}) {
+            try (ServerSocket listener = listener()) {
+                CompletableFuture<Void> served = CompletableFuture.runAsync(() -> {
+                    try (Socket socket = listener.accept();
+                         DataInputStream in = new DataInputStream(socket.getInputStream())) {
+                        OutputStream out = socket.getOutputStream();
+                        in.readNBytes(in.readInt() - 4);             // the startup message
+                        out.write('Z');
+                        writeInt(out, 5);
+                        out.write('I');
+                        out.flush();
+                        in.read();                                   // until the client goes
+                    } catch (IOException gone) {
+                        // the client hung up - what it should do
+                    }
+                });
+                SQLException refused = assertThrows(SQLException.class,
+                        () -> PgSession.open(settings(listener.getLocalPort(), requireAuth)).close(),
+                        "requireAuth=" + requireAuth);
+                // Refused at the login, not found out later by a statement
+                // that times out against a server with nothing behind it.
+                assertEquals("28000", refused.getSQLState(), refused.getMessage());
+                assertTrue(refused.getMessage().contains("before AuthenticationOk"),
+                        refused.getMessage());
+                served.get(10, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     private static void assertRefusedUnanswered(int request, String requireAuth, String says)
             throws Exception {
         try (ServerSocket listener = listener()) {
