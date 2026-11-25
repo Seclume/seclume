@@ -104,6 +104,13 @@ public final class CngSigningKey implements PrivateSigningKey {
 
     private final Kind kind;
     private long key;
+    /**
+     * Held to read {@link #key} and use it, and for writing to free it: close()
+     * freed the handle while another thread signed with it - an access
+     * violation in ncrypt.dll, or a heap corrupted in silence.
+     */
+    private final java.util.concurrent.locks.ReentrantReadWriteLock use =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
 
     private CngSigningKey(Kind kind, long key) {
         this.kind = kind;
@@ -313,6 +320,15 @@ public final class CngSigningKey implements PrivateSigningKey {
 
     @Override
     public byte[] publicKey() {
+        use.readLock().lock();
+        try {
+            return publicKeyOpen();
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    private byte[] publicKeyOpen() {
         checkOpen();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment out = arena.allocate(4096);
@@ -361,6 +377,17 @@ public final class CngSigningKey implements PrivateSigningKey {
 
     @Override
     public int sign(String digest, boolean pss, MemorySegment message, long length,
+            MemorySegment signature) {
+        use.readLock().lock();
+        try {
+            return signOpen(digest, pss, message, length, signature);
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    /** Under the read lock: the handle cannot be freed while CNG holds it. */
+    private int signOpen(String digest, boolean pss, MemorySegment message, long length,
             MemorySegment signature) {
         checkOpen();
         if (digest == null) {
@@ -467,15 +494,20 @@ public final class CngSigningKey implements PrivateSigningKey {
     }
 
     @Override
-    public synchronized void close() {
-        if (key != 0) {
-            try {
-                FREE.invokeExact(key);
-            } catch (Throwable ignored) {
-                // nothing else frees it
+    public void close() {
+        use.writeLock().lock();
+        try {
+            if (key != 0) {
+                try {
+                    FREE.invokeExact(key);
+                } catch (Throwable ignored) {
+                    // nothing else frees it
+                }
+                key = 0;
+                LiveKeys.closed(this);
             }
-            key = 0;
-            LiveKeys.closed(this);
+        } finally {
+            use.writeLock().unlock();
         }
     }
 
