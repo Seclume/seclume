@@ -17,3 +17,6 @@ __pycache__/
 
 # Jazzer writes a reproducer here when a fuzz campaign finds something
 crash-*
+
+# Atomikos transaction logs written by the framework tests
+tmlog*.log
