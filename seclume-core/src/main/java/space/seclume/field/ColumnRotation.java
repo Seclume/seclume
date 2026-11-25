@@ -53,7 +53,12 @@ public final class ColumnRotation {
     public enum Context {
         /** Nothing: {@link EncryptedColumn#encrypt(java.lang.foreign.MemorySegment)}. */
         NONE,
-        /** The row's {@code id}, as its text in UTF-8 - a value copied into another row is refused there. */
+        /**
+         * The row's {@code id} - a value copied into another row is refused
+         * there. Encoded as {@link #rowIdContext}: binary ids as their bytes,
+         * decimals without trailing zeros, everything else as its text in
+         * UTF-8 - what the application binds when it writes.
+         */
         ROW_ID
     }
 
@@ -252,6 +257,24 @@ public final class ColumnRotation {
     private static byte[] context(Column column, Object rowId) {
         if (column.context() == Context.NONE) {
             return new byte[0];
+        }
+        return rowIdContext(rowId);
+    }
+
+    /**
+     * A row id as a context. String.valueOf made a byte[] id (RAW, BINARY, a
+     * UUID as bytes) its identity in memory - "[B@1a2b..." - and no value
+     * opened; a BigDecimal was 17 or 17.0 depending on the driver. Binary ids
+     * are their bytes, decimals are stripped of trailing zeros, and the rest
+     * is its text as before - so what was written keeps opening.
+     */
+    public static byte[] rowIdContext(Object rowId) {
+        if (rowId instanceof byte[] bytes) {
+            return bytes.clone();
+        }
+        if (rowId instanceof java.math.BigDecimal decimal) {
+            String plain = decimal.signum() == 0 ? "0" : decimal.stripTrailingZeros().toPlainString();
+            return plain.getBytes(StandardCharsets.UTF_8); // seclume-allow: a row id, not a secret
         }
         return String.valueOf(rowId).getBytes(StandardCharsets.UTF_8); // seclume-allow: a row id, not a secret
     }
