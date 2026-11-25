@@ -26,7 +26,11 @@ class ProcessQuiesceTest {
     void withoutAPoolAnOpenSecretRefusesTheCheckpoint() {
         try (SecretScope open = SecretScope.allocate(16)) {
             assertTrue(open.segment().byteSize() >= 16);
-            assertThrows(IllegalStateException.class, () -> SeclumeCrac.quiesceProcess(200));
+            IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> SeclumeCrac.quiesceProcess(200));
+            // The count alone named nobody (#58): where the secret came from, or how to find out.
+            assertTrue(refused.getMessage().contains("seclume.debug.scopes")
+                    || refused.getMessage().contains("opened at"), refused.getMessage());
         }
         assertFalse(Checkpoint.holding(), "a refused checkpoint holds nothing");
     }

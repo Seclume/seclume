@@ -100,6 +100,41 @@ public final class SecretScope implements AutoCloseable {
         this.segment = allocated;
         this.length = 0;
         ALLOCATIONS.incrementAndGet();
+        if (TRACE) {
+            ORIGINS.put(this, origin());
+        }
+    }
+
+    /**
+     * {@code -Dseclume.debug.scopes=true}: each open scope remembers who
+     * opened it, so that a refused checkpoint can say where the open secret
+     * came from - with the count alone, #58 had nobody to point at. Off by
+     * default: a stack walk per secret is not free.
+     */
+    private static final boolean TRACE = Boolean.getBoolean("seclume.debug.scopes");
+    private static final java.util.Map<SecretScope, String> ORIGINS =
+            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
+
+    private static String origin() {
+        return StackWalker.getInstance().walk(frames -> frames
+                .map(StackWalker.StackFrame::toStackTraceElement)
+                .filter(frame -> !frame.getClassName().equals(SecretScope.class.getName()))
+                .findFirst().map(StackTraceElement::toString).orElse("?"));
+    }
+
+    /**
+     * Where the scopes open now were opened, distinct, at most {@code limit} -
+     * empty unless {@code -Dseclume.debug.scopes=true}.
+     */
+    public static java.util.List<String> openedAt(int limit) {
+        synchronized (ORIGINS) {
+            return ORIGINS.values().stream().distinct().limit(limit).toList();
+        }
+    }
+
+    /** Whether open scopes remember where they were opened. */
+    public static boolean tracingOrigins() {
+        return TRACE;
     }
 
     /** An empty segment in its own shared arena, closable from any thread. */
@@ -334,6 +369,9 @@ public final class SecretScope implements AutoCloseable {
             segment.fill((byte) 0);
         } finally {
             CLOSES.incrementAndGet();
+            if (TRACE) {
+                ORIGINS.remove(this);
+            }
             // Always, not only when the page was pinned: MemoryLock counted
             // this segment's pages whether or not mlock worked, and a count
             // never given back keeps the page pinned for good once another

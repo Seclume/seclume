@@ -153,6 +153,15 @@ public final class SeclumeCrac {
         }
     }
 
+    /** Where the open secrets were opened, with -Dseclume.debug.scopes=true; else how to find out. */
+    private static String secretsOpenedAt() {
+        if (!SecretScope.tracingOrigins()) {
+            return " (-Dseclume.debug.scopes=true names where they were opened)";
+        }
+        List<String> where = SecretScope.openedAt(5);
+        return where.isEmpty() ? "" : " (opened at " + String.join(", ", where) + ")";
+    }
+
     /** Who opened the TLS connections still open, distinct: class names only. */
     private static String openedBy() {
         java.util.List<String> by = space.seclume.internal.LiveTls.origins().stream().distinct()
@@ -229,7 +238,8 @@ public final class SeclumeCrac {
             }
             if (System.nanoTime() - deadline >= 0) {
                 throw new IllegalStateException("seclume refuses the checkpoint: after " + millis
-                        + " ms " + secrets + " secret(s) are still open, " + keys
+                        + " ms " + secrets + " secret(s) are still open" + secretsOpenedAt()
+                        + ", " + keys
                         + " private key(s) held" + heldBy() + " and " + tls + " TLS connection(s) "
                         + "open" + openedBy() + "; an image taken now would contain their keys - "
                         + "close the clients before the checkpoint "
