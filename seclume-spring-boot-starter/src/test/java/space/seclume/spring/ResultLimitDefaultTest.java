@@ -34,6 +34,25 @@ class ResultLimitDefaultTest {
         assertEquals(off, SeclumeDataSources.withResultLimit("main", off, 4 * GB));
     }
 
+    /**
+     * The word in a path or in another option's value is no limit: the URL
+     * gets one. A text search used to find it there and set none.
+     */
+    @Test
+    void theWordElsewhereInTheUrlIsNoLimit() {
+        assertEquals("jdbc:seclume:postgresql://db/app?applicationName=report-maxResultRows=5"
+                        + "&maxResultBytes=268435456",
+                SeclumeDataSources.withResultLimit("main",
+                        "jdbc:seclume:postgresql://db/app?applicationName=report-maxResultRows=5",
+                        4 * GB));
+        assertEquals("jdbc:seclume:postgresql://db/maxResultBytes=1?user=u&maxResultBytes=268435456",
+                SeclumeDataSources.withResultLimit("main",
+                        "jdbc:seclume:postgresql://db/maxResultBytes=1?user=u", 4 * GB));
+        String spelled = "jdbc:seclume:postgresql://db/app?max-result-bytes=1048576";
+        assertEquals(spelled, SeclumeDataSources.withResultLimit("main", spelled, 4 * GB),
+                "a key spelled as the drivers accept it is the limit");
+    }
+
     @Test
     void aFragmentStaysAtTheEnd() {
         assertEquals("jdbc:seclume:postgresql://db/app?user=u&maxResultBytes=268435456#x",
