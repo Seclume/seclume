@@ -1830,6 +1830,12 @@ source.setBaseEnvironmentProperties(ldap.socketFactory());
   registered server, it goes out as it is and the server refuses it; with
   `authentication=kerberos` it starts no Kerberos bind then. It is 144 random bits after a
   fixed prefix, not a counter one could guess.
+- **Not even as the service account itself:** a login form whose user name maps to the
+  application's own DN (`{0}@example.com` and `svc-app`) binds as that DN, and on the wire such a
+  bind looks like the application's. A registration made `serviceBindsOnly()` has its placeholder
+  replaced only in binds opened through `SeclumeLdap.asService(() -> new InitialDirContext(env))`;
+  the Spring Boot context source opens its own contexts that way, so a user's bind - Spring
+  Security's `BindAuthenticator` - goes out with the placeholder and is refused.
 - **Spring Boot:** `seclume.ldap.url=ldaps://...` or `ldap://...` makes the
   `LdapContextSource` bean. Boot's `LdapTemplate` and Spring Security's LDAP authentication
   use it.
