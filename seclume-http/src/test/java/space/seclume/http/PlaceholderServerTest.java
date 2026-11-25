@@ -123,6 +123,7 @@ class PlaceholderServerTest {
         IOException refused = assertThrows(IOException.class,
                 () -> rewritten(bearer(forged), "git.example.com:443"));
         assertTrue(refused.getMessage().contains("did not hand out"), refused.getMessage());
+        assertTrue(CredentialPlaceholders.unknownSeen() > 0, "refused without being counted");
     }
 
     @Test

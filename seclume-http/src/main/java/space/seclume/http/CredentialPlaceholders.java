@@ -54,6 +54,15 @@ final class CredentialPlaceholders {
         }
     }
 
+    /** Placeholders seen that this process did not hand out. */
+    private static final java.util.concurrent.atomic.AtomicLong UNKNOWN =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /** How many placeholders this process did not hand out were refused - for metrics. */
+    static long unknownSeen() {
+        return UNKNOWN.get();
+    }
+
     /** Every this many registrations the growth is said. */
     static final int WARN_EVERY = 10_000;
 
@@ -105,6 +114,16 @@ final class CredentialPlaceholders {
     static SecretProvider provider(String placeholder, String server) throws IOException {
         Registration registration = PROVIDERS.get(placeholder);
         if (registration == null) {
+            // Not a typo: a placeholder nobody here made is someone guessing
+            // at, or replaying, what this process substitutes. Counted and
+            // said, not only refused.
+            long seen = UNKNOWN.incrementAndGet();
+            if (Long.bitCount(seen) == 1) {                 // 1, 2, 4, 8 ... - said, not flooded
+                System.getLogger(CredentialPlaceholders.class.getName()).log(
+                        System.Logger.Level.WARNING, "seclume: a request to " + server
+                        + " carried a credential placeholder this process did not hand out ("
+                        + seen + " so far) - refused");
+            }
             throw new IOException("a credential placeholder this process did not hand out");
         }
         return registration.goesTo(normalize(server)) ? registration.provider() : null;
