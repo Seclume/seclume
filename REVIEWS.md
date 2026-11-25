@@ -457,18 +457,18 @@ Scope: what the heap dump redaction, heapcheck and the TCK look for.
 |---|------|---------|----------|----------|
 | 1 | Heap dumps | A named secret was looked for as UTF-8, UTF-16, Latin-1 and its own Base64. In `Authorization: Basic base64(user:password)` its Base64 begins where the user name leaves it; URL-safe, percent-encoded and JSON-escaped forms were not looked for either. A redacted copy "passed its own check" with twelve Basic headers decoding to the password; heapcheck found nothing in a process that held it only in a header; `/actuator/heapdump` and the TCK's heap tests had the same patterns. One shared list (`SecretEncodings`) now. | high | `review/dump-encodings` |
 
-## Round 14 - November 2026 (checked, not changed)
+## Round 14 - November 2026
 
 | # | Area | Finding | Severity | Fixed in |
 |---|------|---------|----------|----------|
-| 1 | Heap dump discovery | Copies of a discovered credential were looked for as its own padded Base64 only: a discovered URL password also held in a Basic value `base64("app:" + pw)`, and a discovered token as URL-safe Base64, stayed in the redacted copy, which passed its own check. | medium | open |
-| 2 | Discovery detector `http-authorization` | Only `Authorization: Basic <b64>` in one string was found. HTTP clients keep the value apart from its name (Apache `BasicHeader`, the JDK's `HttpClient`, Spring's `HttpHeaders`); `Basic <b64>` alone, in lower case, or the bare Base64 stayed in the copy, decodable. | medium | open |
+| 1 | Heap dump discovery | Copies of a discovered credential were looked for as its own padded Base64 only: a discovered URL password also held in a Basic value `base64("app:" + pw)`, and a discovered token as URL-safe Base64, stayed in the redacted copy, which passed its own check. Echoes take the encodings list now. | medium | `review/discovery-echoes` |
+| 2 | Discovery detector `http-authorization` | Only `Authorization: Basic <b64>` in one string was found. HTTP clients keep the value apart from its name (Apache `BasicHeader`, the JDK's `HttpClient`, Spring's `HttpHeaders`); `Basic <b64>` alone, in lower case, or the bare Base64 stayed in the copy, decodable. A second detector, `http-credential-value`, takes a bare `Basic` value that decodes to `user:password` and a `Bearer` token of twenty characters or more, in any case. | medium | `review/bare-credentials` |
 
 ### Open
 
-- Discovery's echoes should use the same `SecretEncodings` as named secrets (finding 1).
-- The detector should take a bare `Basic <b64>` and `Bearer <token>` value, in any case, with
-  a least length against false alarms (finding 2).
+- Base64 of `user:password` held with neither `Authorization:` nor `Basic` before it is not
+  found: without a word to anchor on, every Base64 run of a dump would have to be decoded, and
+  most of what decodes to text with a colon in it is no credential (finding 2).
 
 ### Reviewed, nothing found
 
