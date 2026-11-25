@@ -32,13 +32,38 @@ public class SeclumeLdapAutoConfiguration {
 
     @Bean
     public LdapContextSource ldapContextSource(Environment environment) {
-        SeclumeLdap ldap = SeclumeLdap.of(environment.getRequiredProperty("seclume.ldap.url"));
-        LdapContextSource source = new LdapContextSource();
+        SeclumeLdap ldap = SeclumeLdap.of(environment.getRequiredProperty("seclume.ldap.url"))
+                .serviceBindsOnly();
+        // The context source's own contexts are the service account's; a
+        // user's bind (getContext(dn, password) - Spring Security's
+        // BindAuthenticator) is not marked, so the placeholder typed into a
+        // login form is no way in as the service account.
+        LdapContextSource source = new LdapContextSource() {
+            @Override
+            public javax.naming.directory.DirContext getReadOnlyContext() {
+                return service(super::getReadOnlyContext);
+            }
+
+            @Override
+            public javax.naming.directory.DirContext getReadWriteContext() {
+                return service(super::getReadWriteContext);
+            }
+        };
         source.setUrl(ldap.url());
         source.setBase(ldap.base());
         source.setUserDn(ldap.user());
         source.setPassword(ldap.password());
         source.setBaseEnvironmentProperties(ldap.socketFactory());
         return source;
+    }
+
+    private static javax.naming.directory.DirContext service(
+            java.util.function.Supplier<javax.naming.directory.DirContext> context) {
+        try {
+            return SeclumeLdap.asService(context::get);
+        } catch (javax.naming.NamingException unreachable) {
+            // Spring LDAP throws its own unchecked exceptions; asService adds none.
+            throw new IllegalStateException(unreachable);
+        }
     }
 }

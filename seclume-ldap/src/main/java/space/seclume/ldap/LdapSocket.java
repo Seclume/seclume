@@ -395,6 +395,12 @@ final class LdapSocket extends Socket {
                                 ? new String(password, StandardCharsets.US_ASCII) : null; // seclume-allow: the placeholder - no secret
                         LdapSettings registered = typed == null ? null
                                 : SeclumeLdap.BY_PLACEHOLDER.get(typed);
+                        if (registered != null && SeclumeLdap.SERVICE_ONLY.contains(typed)
+                                && !SeclumeLdap.inService()) {
+                            // Typed into a login form, not opened by the
+                            // application: it goes as it is, and is refused.
+                            registered = null;
+                        }
                         if (registered != null && madeFor(registered, message,
                                 (int) (name + nameHeader[0]), (int) nameHeader[1])) {
                             if (registered.kerberos) {

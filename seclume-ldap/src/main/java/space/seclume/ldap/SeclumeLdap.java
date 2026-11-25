@@ -68,6 +68,42 @@ public final class SeclumeLdap {
 
     private static final SecureRandom RANDOM = new SecureRandom();
     static final Map<String, LdapSettings> BY_PLACEHOLDER = new ConcurrentHashMap<>();
+
+    /** Placeholders written in only for binds opened through {@link #asService}. */
+    static final java.util.Set<String> SERVICE_ONLY = ConcurrentHashMap.newKeySet();
+
+    /** Set while a service bind is opened - see {@link #asService}. */
+    private static final ThreadLocal<Boolean> SERVICE = new ThreadLocal<>();
+
+    /** Opens a directory context, or anything else that binds - for {@link #asService}. */
+    public interface Opening<T> {
+        T open() throws javax.naming.NamingException;
+    }
+
+    /**
+     * Runs {@code opening} as the application's own bind: a placeholder made
+     * {@link #serviceBindsOnly()} is written in only here. JNDI binds in the
+     * thread that asks for the context, so the bind of the context opened
+     * here is the only one that carries the mark.
+     */
+    public static <T> T asService(Opening<T> opening) throws javax.naming.NamingException {
+        Boolean before = SERVICE.get();
+        SERVICE.set(Boolean.TRUE);
+        try {
+            return opening.open();
+        } finally {
+            if (before == null) {
+                SERVICE.remove();
+            } else {
+                SERVICE.set(before);
+            }
+        }
+    }
+
+    /** Whether the bind being written now was opened through {@link #asService}. */
+    static boolean inService() {
+        return Boolean.TRUE.equals(SERVICE.get());
+    }
     static final Map<String, LdapSettings> BY_AUTHORITY = new ConcurrentHashMap<>();
 
     private final LdapSettings settings;
@@ -123,6 +159,18 @@ public final class SeclumeLdap {
     /** The bind DN, or the SASL authorization identity (empty by default for Kerberos). */
     public String user() {
         return settings.user;
+    }
+
+    /**
+     * This placeholder becomes the password only in binds opened through
+     * {@link #asService} - the application's own. A login form whose user
+     * name maps to the service account's DN ({@code {0}@example.com} and
+     * {@code svc-app}) and whose password is the placeholder - read from a heap
+     * dump - binds with the placeholder as it is, and is refused. Returns this.
+     */
+    public SeclumeLdap serviceBindsOnly() {
+        SERVICE_ONLY.add(placeholder);
+        return this;
     }
 
     /** The placeholder to give as the password - never the password. */
