@@ -151,8 +151,18 @@ public class Scram implements AutoCloseable {
             throw new IllegalStateException(MIN_ITERATIONS_PROPERTY + " is a number of 1 to "
                     + MAX_ITERATIONS + ", not " + number);
         }
+        if (minimum < DEFAULT_MIN_ITERATIONS && WEAKENED_SAID.compareAndSet(false, true)) {
+            // A lowered floor is a weakened login: an eavesdropper's offline
+            // guessing gets cheaper by the same factor. Said once.
+            System.getLogger(Scram.class.getName()).log(System.Logger.Level.WARNING,
+                    "seclume: " + MIN_ITERATIONS_PROPERTY + "=" + minimum + " - SCRAM logins "
+                    + "below RFC 7677's 4096 iterations are accepted");
+        }
         return minimum;
     }
+
+    private static final java.util.concurrent.atomic.AtomicBoolean WEAKENED_SAID =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     /**
      * The fewest iterations this login accepts, instead of
