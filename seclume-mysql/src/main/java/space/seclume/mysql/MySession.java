@@ -2535,7 +2535,7 @@ public final class MySession implements AutoCloseable {
             in.skip(1);
             sqlState = in.readString(5);
         }
-        String message = in.readString(in.remaining());
+        String message = space.seclume.internal.ServerText.printable(in.readString(in.remaining()));
         return failure(context + ": " + message, sqlState, errorNumber);
     }
 

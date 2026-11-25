@@ -354,7 +354,7 @@ public final class TokenStream {
             space.seclume.internal.jdbc.SensitiveEcho.maskWide(in.segment(), p,
                     p + 2L * messageChars, sensitive);
         }
-        String message = utf16(in, p, messageChars);
+        String message = space.seclume.internal.ServerText.printable(utf16(in, p, messageChars));
         if (isError) {
             SQLException next = new SQLException(
                     message + " (error " + number + ", severity " + severity + ")",

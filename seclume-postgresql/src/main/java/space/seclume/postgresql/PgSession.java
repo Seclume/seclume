@@ -2721,7 +2721,8 @@ public final class PgSession implements AutoCloseable {
             }
         }
         channel.endMessage();
-        return new PgException(message, sqlState, severity, detail);
+        return new PgException(space.seclume.internal.ServerText.printable(message), sqlState,
+                severity, space.seclume.internal.ServerText.printable(detail));
     }
 
     private SQLException protocolError(String message) {
