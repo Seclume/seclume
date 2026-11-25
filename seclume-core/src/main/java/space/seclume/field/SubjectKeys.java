@@ -60,6 +60,17 @@ public final class SubjectKeys implements AutoCloseable {
     private final java.util.Map<String, Long> shreds = new java.util.HashMap<>();
     private final int cached;
     private final LinkedHashMap<String, FieldKeys> rings;
+    /** When each cached ring was read from the store (System.nanoTime()); guarded by this. */
+    private final java.util.Map<String, Long> readAt = new java.util.HashMap<>();
+    /** {@link #MAX_AGE_NANOS} for this instance - a test lowers it for its own. */
+    private long maxAgeNanos = MAX_AGE_NANOS;
+    /**
+     * How long a cached ring is trusted: a shred on another node - the key gone
+     * from the shared store - reaches this one when its ring is read again. It
+     * was cached until evicted, which on a busy subject is never.
+     */
+    static final long MAX_AGE_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(
+            Long.getLong("seclume.subjectKeys.maxAgeSeconds", 60));
     private boolean closed;
 
     private SubjectKeys(FieldKeys ring, SubjectKeyStore store, int cached) {
@@ -70,6 +81,7 @@ public final class SubjectKeys implements AutoCloseable {
             @Override
             protected boolean removeEldestEntry(Map.Entry<String, FieldKeys> eldest) {
                 if (size() > SubjectKeys.this.cached) {
+                    readAt.remove(eldest.getKey());
                     eldest.getValue().close();
                     return true;
                 }
@@ -87,6 +99,7 @@ public final class SubjectKeys implements AutoCloseable {
             open.close();
         }
         rings.clear();
+        readAt.clear();
     }
 
     /** Subject keys wrapped by {@code ring}, kept in {@code store}, the last 1000 used cached. */
@@ -146,6 +159,7 @@ public final class SubjectKeys implements AutoCloseable {
         synchronized (this) {
             shreds.merge(subject, 1L, Long::sum);    // a ring being opened meanwhile is not cached
             FieldKeys open = rings.remove(subject);
+            readAt.remove(subject);
             if (open != null) {
                 open.close();
             }
@@ -161,7 +175,13 @@ public final class SubjectKeys implements AutoCloseable {
             }
             FieldKeys open = rings.get(subject);
             if (open != null) {
-                return open;
+                Long at = readAt.get(subject);
+                if (at != null && System.nanoTime() - at < maxAgeNanos) {
+                    return open;
+                }
+                rings.remove(subject);               // read again: it may be shredded elsewhere
+                readAt.remove(subject);
+                open.close();
             }
         }
         long seen;
@@ -214,6 +234,7 @@ public final class SubjectKeys implements AutoCloseable {
                 return raced;
             }
             rings.put(subject, subjectRing);
+            readAt.put(subject, System.nanoTime());
             return subjectRing;
         }
     }
@@ -248,6 +269,7 @@ public final class SubjectKeys implements AutoCloseable {
             open.close();
         }
         rings.clear();
+        readAt.clear();
     }
 
     @Override

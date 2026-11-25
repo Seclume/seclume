@@ -64,6 +64,32 @@ class SubjectKeysTest {
         }
     }
 
+    /**
+     * Two nodes over one store: a subject shredded on one reached the other
+     * only when its cached ring fell out of the cache - on a busy subject,
+     * never. A cached ring is read again once it is older than its maximum age.
+     */
+    @Test
+    void aShredElsewhereReachesThisNodeWithinTheMaximumAge() throws Exception {
+        SubjectKeyStore store = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys here = SubjectKeys.of(master, store);
+             SubjectKeys there = SubjectKeys.of(master, store)) {
+            java.lang.reflect.Field age = SubjectKeys.class.getDeclaredField("maxAgeNanos");
+            age.setAccessible(true);
+            age.setLong(here, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(100));
+            byte[] stored = here.column("customer-1", "customer.email", Mode.RANDOMIZED)
+                    .encrypt(text("alice@example.org"));
+            assertEquals("alice@example.org", read(here.existingColumn("customer-1",
+                    "customer.email", Mode.RANDOMIZED), stored));
+            assertTrue(there.shred("customer-1"));
+            Thread.sleep(200);
+            assertThrows(RuntimeException.class, () -> read(here.existingColumn("customer-1",
+                    "customer.email", Mode.RANDOMIZED), stored),
+                    "the shredded subject was still read here");
+        }
+    }
+
     @Test
     void eachSubjectReadsItsOwnAndNoOneElses() {
         try (FieldKeys master = ring(1, MASTER1);
