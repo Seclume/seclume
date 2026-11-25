@@ -55,6 +55,15 @@ final class JwtSettings {
                 && !options.containsKey("max-length") && !options.containsKey("maxLength")) {
             options.put("max-length", "16384");                  // a PEM private key
         }
+        if (audience == null || audience.isBlank()) {
+            // A token without aud is good at every service that trusts its
+            // issuer - some APIs want none (a GitHub App's), so it is said,
+            // not refused.
+            System.getLogger(JwtSettings.class.getName()).log(System.Logger.Level.WARNING,
+                    "seclume: auth=jwt without jwt-aud - the token is accepted by every service "
+                    + "that trusts " + issuer + ", not only this one. Set jwt-aud where the "
+                    + "API checks it.");
+        }
         return new JwtSettings(alg, issuer, subject, audience, kid, ttlSeconds);
     }
 }
