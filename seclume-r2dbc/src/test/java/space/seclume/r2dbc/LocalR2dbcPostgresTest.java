@@ -220,6 +220,32 @@ class LocalR2dbcPostgresTest {
     }
 
     /**
+     * A borrow cancelled while it waited for a connection - a client that hung
+     * up - got the connection once one was free, and Reactor discarded it
+     * unclosed: IN_USE for good. maximumPoolSize such cancels emptied the
+     * pool. The late connection is closed - given back - now.
+     */
+    @Test
+    void aBorrowCancelledWhileWaitingGivesItsConnectionBack() throws Exception {
+        space.seclume.pool.PoolSettings settings = new space.seclume.pool.PoolSettings();
+        settings.setMaximumPoolSize(1);
+        settings.setMinimumIdle(0);
+        settings.setConnectionTimeout(Duration.ofSeconds(10));
+        try (space.seclume.pool.SeclumePool pool = new space.seclume.pool.SeclumePool(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(jdbcUrl), settings)) {
+            ConnectionFactory pooled = SeclumeConnectionFactory.over(pool, "postgresql");
+            Connection held = Mono.from(pooled.create()).block(WAIT);
+            reactor.core.Disposable waiting = Mono.from(pooled.create()).subscribe();
+            Thread.sleep(300);                                // waiting for the one connection
+            waiting.dispose();                                // the client hangs up
+            Mono.from(held.close()).block(WAIT);              // the connection comes free
+            Thread.sleep(500);                                // the cancelled borrow takes it
+            Connection next = Mono.from(pooled.create()).block(Duration.ofSeconds(8));
+            Mono.from(next.close()).block(WAIT);
+        }
+    }
+
+    /**
      * A result read to its end is closed before its completion reaches
      * whoever closes the connection: the pool saw the statement still open
      * on every return, closed it as one the borrower forgot, and warned of a

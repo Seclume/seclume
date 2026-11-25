@@ -86,18 +86,40 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
                 }
             }
             Lane lane = new Lane();
-            return lane.callWaiting(() -> {
-                java.sql.Connection jdbc = source.getConnection();
-                try {
-                    Placeholders.Dialect spoken = dialect != null ? dialect
-                            : Placeholders.Dialect.ofProduct(
-                                    jdbc.getMetaData().getDatabaseProductName());
-                    return (Connection) new SeclumeConnection(jdbc, lane, spoken);
-                } catch (java.sql.SQLException | RuntimeException e) {
-                    jdbc.close();
-                    throw e;
-                }
-            }).doOnError(failure -> lane.close());
+            // A borrow cancelled while it waited - a client that hung up -
+            // still got its connection once one was free, and Reactor dropped
+            // the late value unclosed: IN_USE for good, and maximumPoolSize
+            // cancels emptied the pool. Cancelled, the late one is closed.
+            return Mono.<Connection>create(sink -> {
+                java.util.concurrent.atomic.AtomicBoolean gone =
+                        new java.util.concurrent.atomic.AtomicBoolean();
+                sink.onCancel(() -> gone.set(true));
+                Thread.ofVirtual().name("seclume-r2dbc-borrow").start(() -> {
+                    java.sql.Connection jdbc;
+                    try {
+                        jdbc = source.getConnection();
+                    } catch (java.sql.SQLException | RuntimeException e) {
+                        lane.close();
+                        sink.error(Errors.translate(e));
+                        return;
+                    }
+                    if (gone.get()) {
+                        lane.close();
+                        closeQuietly(jdbc);
+                        return;
+                    }
+                    try {
+                        Placeholders.Dialect spoken = dialect != null ? dialect
+                                : Placeholders.Dialect.ofProduct(
+                                        jdbc.getMetaData().getDatabaseProductName());
+                        sink.success(new SeclumeConnection(jdbc, lane, spoken));
+                    } catch (java.sql.SQLException | RuntimeException e) {
+                        lane.close();
+                        closeQuietly(jdbc);
+                        sink.error(Errors.translate(e));
+                    }
+                });
+            }).doOnDiscard(Connection.class, late -> Mono.from(late.close()).subscribe());
         });
     }
 
@@ -130,7 +152,8 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
                 jdbc.close();
                 throw e;
             }
-        }).doOnError(failure -> lane.close());
+        }).doOnError(failure -> lane.close())
+                .doOnDiscard(Connection.class, late -> Mono.from(late.close()).subscribe());
     }
 
     private static void closeQuietly(java.sql.Connection jdbc) {
