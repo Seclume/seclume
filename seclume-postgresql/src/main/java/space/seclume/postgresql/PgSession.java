@@ -549,7 +549,7 @@ public final class PgSession implements AutoCloseable {
     private String loginUser;
 
     /** A StartupMessage value ends at the first zero byte; one inside would start a parameter of its own. */
-    private static String startupValue(String what, String value) throws SQLException {
+    static String startupValue(String what, String value) throws SQLException {
         if (value.indexOf('\0') >= 0) {
             throw new SQLException(what + " holds a zero byte, which would end it and add a "
                     + "startup parameter of its own", "08001");

@@ -810,7 +810,7 @@ public final class MySession implements AutoCloseable {
     }
 
     /** A HandshakeResponse field ends at the first zero byte; one inside would shift every field after it. */
-    private static String handshakeValue(String what, String value) throws SQLException {
+    static String handshakeValue(String what, String value) throws SQLException {
         if (value.indexOf('\0') >= 0) {
             throw new SQLException(what + " holds a zero byte, which would end it and shift "
                     + "the fields after it", "08001");
