@@ -256,6 +256,64 @@ class SubjectKeysTest {
         }
     }
 
+    /**
+     * A shred while the subject's key was being read let the reader cache the
+     * key just deleted and read on with it - the shredded subject readable
+     * again from that instance until it closed.
+     */
+    @Test
+    void aShredDuringAReadLeavesNothingToRead() throws Exception {
+        SubjectKeyStore shared = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1)) {
+            byte[] value;
+            try (SubjectKeys writer = SubjectKeys.of(master, shared)) {
+                value = writer.column("ann", "c", Mode.RANDOMIZED).encrypt(text("A"));
+            }
+            java.util.concurrent.CountDownLatch loading = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.CountDownLatch shredded = new java.util.concurrent.CountDownLatch(1);
+            SubjectKeyStore slow = new SubjectKeyStore() {
+                @Override
+                public byte[] load(String subject) {
+                    byte[] wrapped = shared.load(subject);     // read before the shred
+                    loading.countDown();
+                    try {
+                        shredded.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return wrapped;
+                }
+
+                @Override
+                public boolean insert(String subject, byte[] wrapped) {
+                    return shared.insert(subject, wrapped);
+                }
+
+                @Override
+                public boolean delete(String subject) {
+                    return shared.delete(subject);
+                }
+            };
+            try (SubjectKeys subjects = SubjectKeys.of(master, slow)) {
+                java.util.concurrent.CompletableFuture<String> reader =
+                        java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                                read(subjects.existingColumn("ann", "c", Mode.RANDOMIZED), value));
+                loading.await();
+                subjects.shred("ann");
+                shredded.countDown();
+                java.util.concurrent.ExecutionException failed = assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> reader.get(10, java.util.concurrent.TimeUnit.SECONDS));
+                assertTrue(failed.getCause() instanceof FieldEncryptionException,
+                        String.valueOf(failed.getCause()));
+            }
+            try (SubjectKeys after = SubjectKeys.of(master, shared)) {
+                assertThrows(FieldEncryptionException.class,
+                        () -> after.existingColumn("ann", "c", Mode.RANDOMIZED));
+            }
+        }
+    }
+
     @Test
     void subjectRingsDoNotFloodTheInventory() {
         try (FieldKeys master = ring(1, MASTER1);
