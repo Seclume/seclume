@@ -79,6 +79,11 @@ All notable changes to seclume are recorded here. Versions follow
   cancels emptied the pool. **`setStatementTimeout` and `setLockWaitTimeout` take effect** (the query
   timeout on every statement; `lock_timeout`, `innodb_lock_wait_timeout`, `LOCK_TIMEOUT`); they
   answered success and set nothing. Oracle has no session lock timeout and says so.
+- **CRaC and SnapStart without a seclume pool**: wiping, the wait for open secrets and keys, the
+  hold and OpenSSL's reseed after the restore ran only inside a pool's resource. An application
+  using seclume for TLS alone got none of it, and every clone of its image drew the same random TLS
+  key shares. They are a process resource of their own, registered when `seclume-crac` loads
+  (`SeclumeCrac.registerProcess()` says so in code).
 - **SQL Server: the driver's own `sp_describe_undeclared_parameters` question no longer reaches a
   `StatementListener`**, nor its failure as a failed statement the application never ran.
 

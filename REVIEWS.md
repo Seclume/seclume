@@ -442,6 +442,7 @@ protocol text or dribble bytes.
 | 61 | DPAPI | CryptUnprotectData ran without CRYPTPROTECT_UI_FORBIDDEN: a blob protected with a prompt waited on a server for nobody. | low | #PR |
 | 62 | R2DBC | A borrow cancelled while it waited for a connection got it later and dropped it unclosed: maximumPoolSize cancels - clients hanging up under load - emptied the pool. | medium | #PR |
 | 63 | R2DBC | setStatementTimeout and setLockWaitTimeout answered success and set nothing. They take effect now; Oracle's lock timeout is refused. | low | #PR |
+| 64 | CRaC | Wiping, the wait for secrets, the hold and OpenSSL's reseed after a restore ran only in a pool's resource: without a seclume pool, clones of an image drew the same TLS key shares and kept keys in the image. A process resource does them now. | high | #PR |
 
 ### Mutation testing of the security paths
 

@@ -43,6 +43,36 @@ public final class SeclumeCrac {
     private SeclumeCrac() {
     }
 
+    /**
+     * The process's own part: wiping what is cached, waiting for open secrets
+     * and keys, holding new ones, and reseeding OpenSSL's generator after the
+     * restore. It ran only inside a pool's resource - an application using
+     * seclume for TLS without a seclume pool (seclume-keys behind Tomcat, the
+     * HTTP, Kafka, Redis or MongoDB clients) got none of it, and every clone of
+     * its image drew the same "random" TLS key shares. Registered when this
+     * class is loaded, before any pool: CRaC asks the pools first before a
+     * checkpoint and this first after the restore.
+     */
+    private static final Resource PROCESS = new ProcessResource();
+
+    static {
+        REGISTERED.add(PROCESS);
+        Core.getGlobalContext().register(PROCESS);
+    }
+
+    /**
+     * Registers the process's part - for an application without a seclume
+     * pool. Loading this class does it; calling this says so in the code.
+     */
+    public static void registerProcess() {
+        // the static initializer has run by now
+    }
+
+    /** Whether the process's part is registered - for a test. */
+    static boolean processRegistered() {
+        return REGISTERED.contains(PROCESS);
+    }
+
     /** Makes {@code pool} give up its connections before a checkpoint and resume after. */
     public static void register(SeclumePool pool) {
         Resource resource = new PoolResource(pool);
@@ -148,17 +178,90 @@ public final class SeclumeCrac {
         }
     }
 
+    /**
+     * The pool's part: suspended, and its borrowed connections back - within
+     * {@link #QUIESCE_MILLIS}, or the checkpoint is refused and it resumes.
+     */
+    static void quiescePool(SeclumePool pool, long millis) throws InterruptedException {
+        pool.suspend();
+        long deadline = System.nanoTime() + millis * 1_000_000L;
+        while (pool.activeCount() > 0) {
+            if (System.nanoTime() - deadline >= 0) {
+                pool.resume();
+                throw new IllegalStateException("seclume refuses the checkpoint: after " + millis
+                        + " ms " + pool.activeCount() + " connection(s) are still borrowed "
+                        + "(seclume.crac.quiesceMillis sets the wait)");
+            }
+            Thread.sleep(20);
+        }
+    }
+
+    /**
+     * The process's part before a checkpoint: what is cached wiped, no secret
+     * open and no key held - within {@link #QUIESCE_MILLIS}, or the checkpoint
+     * is refused - and then no new secret until the restore.
+     */
+    static void quiesceProcess(long millis) throws InterruptedException {
+        long deadline = System.nanoTime() + millis * 1_000_000L;
+        while (true) {
+            Checkpoint.wipeAll();
+            long secrets = SecretScope.open();
+            int keys = PrivateSigningKey.held();
+            if (secrets == 0 && keys == 0) {
+                if (!HOLD_SECRETS) {
+                    return;
+                }
+                Checkpoint.hold();
+                if (SecretScope.open() == 0 && PrivateSigningKey.held() == 0) {
+                    return;
+                }
+                Checkpoint.release();
+                continue;
+            }
+            if (System.nanoTime() - deadline >= 0) {
+                throw new IllegalStateException("seclume refuses the checkpoint: after " + millis
+                        + " ms " + secrets + " secret(s) are still open and " + keys
+                        + " private key(s) held" + heldBy() + "; an image taken now would "
+                        + "contain them (seclume.crac.quiesceMillis sets the wait)");
+            }
+            Thread.sleep(20);
+        }
+    }
+
+    /** The process's part after the restore - or a refused checkpoint. */
+    static void restoredProcess() {
+        try {
+            OpenSslRandom.reseed();
+        } finally {
+            Checkpoint.release();
+        }
+    }
+
     private record PoolResource(SeclumePool pool) implements Resource {
 
-        /** See {@link SeclumeCrac#quiesce}; an exception here aborts the checkpoint. */
+        /** See {@link SeclumeCrac#quiescePool}; an exception here aborts the checkpoint. */
         @Override
         public void beforeCheckpoint(Context<? extends Resource> context) throws Exception {
-            quiesce(pool, QUIESCE_MILLIS);
+            quiescePool(pool, QUIESCE_MILLIS);
         }
 
         @Override
         public void afterRestore(Context<? extends Resource> context) {
-            restored(pool);
+            pool.resume();
+        }
+    }
+
+    private static final class ProcessResource implements Resource {
+
+        /** See {@link SeclumeCrac#quiesceProcess}; an exception here aborts the checkpoint. */
+        @Override
+        public void beforeCheckpoint(Context<? extends Resource> context) throws Exception {
+            quiesceProcess(QUIESCE_MILLIS);
+        }
+
+        @Override
+        public void afterRestore(Context<? extends Resource> context) {
+            restoredProcess();
         }
     }
 }
