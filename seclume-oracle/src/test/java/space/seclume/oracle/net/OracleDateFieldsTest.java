@@ -27,7 +27,7 @@ class OracleDateFieldsTest {
         "Australia/Lord_Howe", "Pacific/Apia"};
 
     @Test
-    void theFieldsAreTheValueTheTextWas() {
+    void theFieldsAreTheValueTheTextWas() throws java.sql.SQLException {
         TimeZone before = TimeZone.getDefault();
         try {
             for (String zone : ZONES) {

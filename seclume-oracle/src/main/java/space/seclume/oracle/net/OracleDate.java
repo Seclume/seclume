@@ -52,7 +52,8 @@ public final class OracleDate {
      * @param length the bytes the column carries - seven for a date, more for
      *               a timestamp
      */
-    public static String toText(MemorySegment in, long at, int length) {
+    public static String toText(MemorySegment in, long at, int length)
+            throws java.sql.SQLException {
         if (length < DATE_LENGTH) {
             return "";
         }
@@ -120,7 +121,7 @@ public final class OracleDate {
         }
         java.time.LocalDateTime value;
         try {
-            value = fields(in, at, length);
+            value = read(in, at, length);
         } catch (java.time.DateTimeException unreadable) {
             return null;                                   // the text way says why
         }
@@ -135,7 +136,23 @@ public final class OracleDate {
      * database's zone. Neither is the local time the value names - see
      * {@link #zoneMinutes} and {@link #regionId}.
      */
-    public static java.time.LocalDateTime fields(MemorySegment in, long at, int length) {
+    public static java.time.LocalDateTime fields(MemorySegment in, long at, int length)
+            throws java.sql.SQLException {
+        if (length < DATE_LENGTH) {
+            // Read anyway, the bytes after the cell - or past the buffer, an
+            // IndexOutOfBoundsException out of the getter.
+            throw new java.sql.SQLException("a date of " + length + " bytes, where it takes "
+                    + DATE_LENGTH, "22000");
+        }
+        try {
+            return read(in, at, length);
+        } catch (java.time.DateTimeException impossible) {
+            throw new java.sql.SQLException("the server sent a date that does not exist: "
+                    + impossible.getMessage(), "22007", impossible);
+        }
+    }
+
+    private static java.time.LocalDateTime read(MemorySegment in, long at, int length) {
         int nanos = 0;
         if (length >= DATE_LENGTH + 4) {
             for (int i = 0; i < 4; i++) {

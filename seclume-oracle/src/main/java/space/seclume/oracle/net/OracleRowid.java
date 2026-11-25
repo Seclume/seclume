@@ -23,12 +23,20 @@ public final class OracleRowid {
     }
 
     /** The printed form of the rowid in the cell at {@code at}. */
-    public static String toText(MemorySegment in, long at, int length) {
+    public static String toText(MemorySegment in, long at, int length)
+            throws java.sql.SQLException {
         long[] fields = new long[5];
         long p = at;
         for (int i = 0; i < 5 && p < at + length; i++) {
             int count = in.get(ValueLayout.JAVA_BYTE, p) & 0x7f;
             p++;
+            // A count past the cell's end read the next cell, or past the
+            // buffer: an IndexOutOfBoundsException out of a getter, which
+            // catch (SQLException e) does not catch.
+            if (count > 8 || p + count > at + length) {
+                throw new java.sql.SQLException("a ROWID of " + length + " bytes announces a "
+                        + "field of " + count + " beyond its end", "22000");
+            }
             long value = 0;
             for (int b = 0; b < count; b++) {
                 value = (value << 8) | (in.get(ValueLayout.JAVA_BYTE, p + b) & 0xff);

@@ -318,7 +318,7 @@ public final class OracleJson {
     }
 
     /** A date or a timestamp, as json_serialize writes it: ISO text in quotes. */
-    private void moment(int length, StringBuilder out) {
+    private void moment(int length, StringBuilder out) throws SQLException {
         String text = OracleDate.toText(in, pos, length).replace(' ', 'T');
         pos += length;
         if (length >= OracleDate.DATE_LENGTH + 4) {

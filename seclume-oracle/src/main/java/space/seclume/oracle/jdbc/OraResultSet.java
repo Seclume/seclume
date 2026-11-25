@@ -293,6 +293,10 @@ public final class OraResultSet extends ReadOnlyResultSet implements space.seclu
         int at = block.offset(column);
         int length = block.length(column);
         java.time.ZoneId zone;
+        if (length < OracleDate.DATE_LENGTH + 6) {
+            throw new SQLException("a timestamp with time zone of " + length + " bytes, where "
+                    + "it takes " + (OracleDate.DATE_LENGTH + 6), "22000");
+        }
         if (OracleDate.isRegion(in, at, length)) {
             String name = lobSession().regionName(OracleDate.regionId(in, at));
             try {
