@@ -446,6 +446,7 @@ protocol text or dribble bytes.
 | 65 | CRaC | TLS connections outside the pool - MongoDB, HTTP keep-alive, Redis, Kafka - were not counted before a checkpoint, and their traffic keys went into the image. Open connections of the own stack are counted and refuse the checkpoint. | medium | #PR |
 | 66 | TLS | In TLS 1.3 an ECDSA scheme names its curve; a P-384 key's CertificateVerify under `ecdsa_secp256r1_sha256` was accepted. The 1.3 path checks the curve; TLS 1.2, where the code point names only the hash, does not. | low | #PR |
 | 67 | SQL Server | A MAX value's announced total was never compared with the chunks that followed; ten bytes announced and four sent read as four. A known total has to match. | note | #PR |
+| 68 | R2DBC | The session context was asked on the borrowing thread, which under R2DBC is an event loop or a thread of the pool's; a tenant held in the Reactor context was never seen, and the same request ran with its tenant at low load and without it under load. A ReactiveSessionContext is resolved on the subscriber and handed to the pool by name (`BorrowContext`); the starter wires the bean and warns when only a blocking one is there. | medium | #PR |
 
 ### Mutation testing of the security paths
 

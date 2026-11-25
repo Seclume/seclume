@@ -382,7 +382,10 @@ message names the oldest holders. Beyond that, what matters is what a connection
   `SeclumeSessionContext` bean in Spring, every borrow gives the connection the context of the
   moment, such as `app.tenant_id` for a row-level security policy, and the reset on return
   takes it off. On PostgreSQL and MySQL it rides with the first statement at no cost. See
-  `space.seclume.SessionContext` for where each database keeps it.
+  `space.seclume.SessionContext` for where each database keeps it. Under R2DBC the borrowing
+  thread is an event loop or a thread of the pool's, so the tenant comes from the Reactor
+  context instead: `SeclumeConnectionFactory.withSessionContext(...)`, or a
+  `ReactiveSessionContext` bean in Spring.
 - **Statements left open are closed on return.** Each one is a server cursor on Oracle
   (`ORA-01000` after enough of them) and result memory on the others. They are logged with
   their fingerprint; with `leak-detection-threshold` set, the log also shows where each

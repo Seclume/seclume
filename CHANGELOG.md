@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **R2DBC takes its session context from the Reactor context.** A `SeclumeSessionContext` was
+  asked on whichever thread borrowed - an event loop when a connection was free, a thread of the
+  pool's when it had to wait - so a request had its tenant at low load and lost it under load.
+  Declare a `ReactiveSessionContext` bean (or call `SeclumeConnectionFactory.withSessionContext`);
+  the starter warns at start-up when R2DBC is on and only a blocking context is there.
 - **A key the JDBC URL gives twice is refused** (`IllegalArgumentException` naming the key).
   The last value used to win, so `...?tls=verify-full&...&tls=off` was off. Give each option
   once; `Properties` still override the URL.

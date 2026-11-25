@@ -366,7 +366,9 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
     /** Hands out a connection taken for this borrow - the tail of every borrow. */
     private Connection lend(PoolEntry entry, long now) throws SQLException {
         entry.setQuietly(PoolEntry.State.IN_USE);
-        boolean withContext = settings.getSessionContext() != null && applySessionContext(entry);
+        java.util.Map<String, String> named = space.seclume.BorrowContext.named();
+        boolean withContext = (named != null || settings.getSessionContext() != null)
+                && applySessionContext(entry, named);
         boolean watched = !settings.getLeakDetectionThreshold().isZero();
         PoolListener told = listener;
         if (told != null) {
@@ -391,11 +393,16 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
      * {@link PoolSettings#getSessionContext()}. A connection that cannot take
      * it is not handed out: a request that expected its tenant to be set and
      * runs without it is exactly the failure this exists to prevent.
+     *
+     * <p>A context the borrower named - {@link space.seclume.BorrowContext},
+     * as R2DBC does from the Reactor context - is taken as it is, and the
+     * supplier, which reads the thread, is not asked.
      */
-    private boolean applySessionContext(PoolEntry entry) throws SQLException {
+    private boolean applySessionContext(PoolEntry entry, java.util.Map<String, String> named)
+            throws SQLException {
         java.util.Map<String, String> context;
         try {
-            context = settings.getSessionContext().get();
+            context = named != null ? named : settings.getSessionContext().get();
         } catch (RuntimeException | Error e) {
             // Nothing was set yet: the connection goes back as it came. Not
             // handed back, it was lost for good - a request without a tenant

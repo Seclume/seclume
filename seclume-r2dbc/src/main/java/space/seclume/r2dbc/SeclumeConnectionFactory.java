@@ -33,10 +33,28 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
 
     private final DataSource source;
     private final Placeholders.Dialect dialect;
+    private final ReactiveSessionContext sessionContext;
 
-    private SeclumeConnectionFactory(DataSource source, Placeholders.Dialect dialect) {
+    private SeclumeConnectionFactory(DataSource source, Placeholders.Dialect dialect,
+            ReactiveSessionContext sessionContext) {
         this.source = source;
         this.dialect = dialect;
+        this.sessionContext = sessionContext;
+    }
+
+    private SeclumeConnectionFactory(DataSource source, Placeholders.Dialect dialect) {
+        this(source, dialect, null);
+    }
+
+    /**
+     * This factory, with every connection carrying the session context
+     * {@code context} resolves from the subscriber's Reactor context - see
+     * {@link ReactiveSessionContext}. The pool's own supplier, which reads
+     * the borrowing thread, is not asked for these connections.
+     */
+    public SeclumeConnectionFactory withSessionContext(ReactiveSessionContext context) {
+        return new SeclumeConnectionFactory(source, dialect,
+                Objects.requireNonNull(context, "context"));
     }
 
     /**
@@ -66,61 +84,90 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
 
     @Override
     public Mono<Connection> create() {
-        return Mono.defer(() -> {
-            // A pool with a connection ready lends it without waiting for
-            // anything: taken on the subscriber's thread, it saves the hop to
-            // a virtual thread of its own - a carrier woken and parked again
-            // for a borrow that blocks on nothing (R2dbcPoolBenchmark under
-            // JFR: ForkJoinPool.deactivate was the top frame, 16 %).
-            // Anything that could wait - no free connection, a reset not yet
-            // answered, a validation due - is the lane's, as before.
-            if (dialect != null && source instanceof space.seclume.ImmediateBorrow ready) {
+        if (sessionContext == null) {
+            return Mono.defer(() -> borrow(null));
+        }
+        // Resolved where the subscriber's context is - not on the thread the
+        // borrow happens to run on - and handed to the pool by name.
+        return Mono.defer(() -> Mono.from(sessionContext.current()))
+                .defaultIfEmpty(java.util.Map.of())
+                .flatMap(this::borrow);
+    }
+
+    private static java.sql.Connection named(java.util.Map<String, String> context,
+            java.util.concurrent.Callable<java.sql.Connection> borrow) throws java.sql.SQLException {
+        if (context == null) {
+            try {
+                return borrow.call();
+            } catch (java.sql.SQLException | RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new java.sql.SQLException(e);
+            }
+        }
+        try {
+            return space.seclume.BorrowContext.with(context, borrow);
+        } catch (java.sql.SQLException | RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new java.sql.SQLException(e);
+        }
+    }
+
+    private Mono<Connection> borrow(java.util.Map<String, String> context) {
+        // A pool with a connection ready lends it without waiting for
+        // anything: taken on the subscriber's thread, it saves the hop to
+        // a virtual thread of its own - a carrier woken and parked again
+        // for a borrow that blocks on nothing (R2dbcPoolBenchmark under
+        // JFR: ForkJoinPool.deactivate was the top frame, 16 %).
+        // Anything that could wait - no free connection, a reset not yet
+        // answered, a validation due - is the lane's, as before.
+        if (dialect != null && source instanceof space.seclume.ImmediateBorrow ready) {
+            java.sql.Connection jdbc;
+            try {
+                jdbc = named(context, ready::getConnectionIfReady);
+            } catch (java.sql.SQLException | RuntimeException e) {
+                return Mono.error(Errors.translate(e));
+            }
+            if (jdbc != null) {
+                return describe(jdbc);
+            }
+        }
+        Lane lane = new Lane();
+        // A borrow cancelled while it waited - a client that hung up -
+        // still got its connection once one was free, and Reactor dropped
+        // the late value unclosed: IN_USE for good, and maximumPoolSize
+        // cancels emptied the pool. Cancelled, the late one is closed.
+        return Mono.<Connection>create(sink -> {
+            java.util.concurrent.atomic.AtomicBoolean gone =
+                    new java.util.concurrent.atomic.AtomicBoolean();
+            sink.onCancel(() -> gone.set(true));
+            Thread.ofVirtual().name("seclume-r2dbc-borrow").start(() -> {
                 java.sql.Connection jdbc;
                 try {
-                    jdbc = ready.getConnectionIfReady();
+                    jdbc = named(context, source::getConnection);
                 } catch (java.sql.SQLException | RuntimeException e) {
-                    return Mono.error(Errors.translate(e));
+                    lane.close();
+                    sink.error(Errors.translate(e));
+                    return;
                 }
-                if (jdbc != null) {
-                    return describe(jdbc);
+                if (gone.get()) {
+                    lane.close();
+                    closeQuietly(jdbc);
+                    return;
                 }
-            }
-            Lane lane = new Lane();
-            // A borrow cancelled while it waited - a client that hung up -
-            // still got its connection once one was free, and Reactor dropped
-            // the late value unclosed: IN_USE for good, and maximumPoolSize
-            // cancels emptied the pool. Cancelled, the late one is closed.
-            return Mono.<Connection>create(sink -> {
-                java.util.concurrent.atomic.AtomicBoolean gone =
-                        new java.util.concurrent.atomic.AtomicBoolean();
-                sink.onCancel(() -> gone.set(true));
-                Thread.ofVirtual().name("seclume-r2dbc-borrow").start(() -> {
-                    java.sql.Connection jdbc;
-                    try {
-                        jdbc = source.getConnection();
-                    } catch (java.sql.SQLException | RuntimeException e) {
-                        lane.close();
-                        sink.error(Errors.translate(e));
-                        return;
-                    }
-                    if (gone.get()) {
-                        lane.close();
-                        closeQuietly(jdbc);
-                        return;
-                    }
-                    try {
-                        Placeholders.Dialect spoken = dialect != null ? dialect
-                                : Placeholders.Dialect.ofProduct(
-                                        jdbc.getMetaData().getDatabaseProductName());
-                        sink.success(new SeclumeConnection(jdbc, lane, spoken));
-                    } catch (java.sql.SQLException | RuntimeException e) {
-                        lane.close();
-                        closeQuietly(jdbc);
-                        sink.error(Errors.translate(e));
-                    }
-                });
-            }).doOnDiscard(Connection.class, late -> Mono.from(late.close()).subscribe());
-        });
+                try {
+                    Placeholders.Dialect spoken = dialect != null ? dialect
+                            : Placeholders.Dialect.ofProduct(
+                                    jdbc.getMetaData().getDatabaseProductName());
+                    sink.success(new SeclumeConnection(jdbc, lane, spoken));
+                } catch (java.sql.SQLException | RuntimeException e) {
+                    lane.close();
+                    closeQuietly(jdbc);
+                    sink.error(Errors.translate(e));
+                }
+            });
+        }).doOnDiscard(Connection.class, late -> Mono.from(late.close()).subscribe());
     }
 
     /**
