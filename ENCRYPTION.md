@@ -459,6 +459,14 @@ A `null` - a Kafka tombstone, a missing field - stays `null`. A record or value 
 with the ring is an error (`SerializationException` for Kafka, so a consumer can dead-letter it),
 never a wrong value. Elasticsearch values are bound to their field, not their document.
 
+**Encrypted keys are equal across codecs of one name.** `withEncryptedKeys` encrypts a key
+deterministically, so that `GET` finds it again - and so the same key is the same ciphertext in
+every codec with that name. With several tenants in one Redis, give each its own name.
+
+**A search over old keys finds no value written with a context.** `searchTerms` and
+`EncryptedFields.eq` compute the terms without a context; a deterministic column whose values
+carry one (a tenant's id) is searched within that context by the application, not by them.
+
 **Within a topic, within a name, values can be swapped.** Kafka does not show a value's serializer
 the record's key, and Lettuce does not hand the key to the value codec: whoever can write to the
 broker or to Redis can put account-17's `credit 5000` under account-99, and it is read there as

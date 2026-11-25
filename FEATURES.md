@@ -217,7 +217,10 @@ providers each have a page of their own: [TLS.md](TLS.md),
 - **Behind PgBouncer or RDS Proxy.** Prepared statements work behind PgBouncer 1.21 and
   later in transaction mode. With `proxyMode=transaction`, read-only and the isolation level
   travel in each transaction's own `BEGIN` instead of being set on the shared server
-  session, where they would reach the next client.
+  session, where they would reach the next client. MySQL behind ProxySQL or RDS Proxy and SQL Server behind a
+  multiplexing proxy have no such mode: there the session context and session settings of one
+  client can reach the next, so pin the connection (`multiplexing=0` in ProxySQL) or keep
+  tenants apart in other ways.
 - **CockroachDB and YugabyteDB** run on the PostgreSQL driver, each with a password:
   CockroachDB over TLS with SCRAM-SHA-256, YugabyteDB with md5. The tests assert which method
   the server asked for, so neither can quietly stop asking.
@@ -1271,6 +1274,12 @@ all of them, for the access token that was issued, and for both Basic base64 for
 found, and the control (the token read into a `String` on purpose) is. The protocol (every
 way a body ends, connection reuse, the retry, the origin rule, a wrong certificate) is covered
 by `SeclumeHttpTest`, `SpringRestClientTest` and `OAuthClientCredentialsTest`.
+
+**A placeholder is not a secret, and not a field for user data.** The placeholder that stands
+in for the credential is replaced only in the credential headers (`Authorization`,
+`Proxy-Authorization`, `X-API-Key`, `api-key`, `X-Auth-Token`) - never in the request line, a
+cookie, a referer or a body. Written anywhere else, it is sent as it is. Keep it to the
+credential's place, and out of headers that carry what a user typed.
 
 ## Signing keys: JWT and webhooks
 

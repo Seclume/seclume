@@ -75,3 +75,9 @@ Every claim with its test, method, result, limits and platform:
 release gate: CI fails when one of them is missing, skipped or failed, on Linux x86_64 and ARM64
 and on Windows. How the test strategy got here and what it still lacks:
 [TEST-STRATEGY-REPORT.md](TEST-STRATEGY-REPORT.md).
+
+## The JDK underneath
+
+seclume decodes untrusted Base64 with `java.util.Base64` in places - a JWT's parts before their
+MAC is checked, among others. Run a patched JDK: on unpatched JVMs with AVX-512 VBMI, CVE-2026-114938
+makes that decoder reachable from outside. seclume needs Java 25; take its latest update.

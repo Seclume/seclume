@@ -34,6 +34,15 @@ OAuth token was refused the same way already). MySQL has an opt-out for whoever 
 the certificate yet: `allowCleartextOverUnverifiedTls=true` in the URL, or
 `-Dseclume.mysql.allowCleartextOverUnverifiedTls=true` for the whole process.
 
+**Revocation is not checked.** As with the JDK's default, a server certificate is checked
+against its CA and its name, not against OCSP or a CRL: a revoked certificate whose key leaked
+is accepted until it expires. Keep server certificates short-lived where that matters.
+
+**Silence and deadlines are different things.** The network timeout ends a read that hears
+nothing; a server that sends a byte now and then never trips it. The login budget
+(`seclume.loginBudgetFactor`) and the query timeout's grace (`seclume.queryTimeoutGraceSeconds`)
+are deadlines on the whole exchange - see [FEATURES.md](FEATURES.md#time-limits).
+
 ## A CA the JVM does not know, without switching the check off
 
 A server whose CA the JVM does not know (an internal CA, a cloud provider's, a self-signed
