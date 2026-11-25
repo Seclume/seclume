@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Timeout;
  * {@code connectTimeout} bounded the connect only.
  */
 @Timeout(60)
+@SuppressWarnings("try") // the accepted sockets are held open, never used
 class SilentHandshakeTest {
 
     @Test

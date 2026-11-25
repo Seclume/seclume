@@ -131,7 +131,6 @@ public final class Transports {
         return opened;
     }
 
-    /** The login is done: lifts the watch {@link #open} set on it. */
     /** Logins under way, and what closes each when its budget is spent. */
     private static final java.util.Map<Transport, java.util.concurrent.ScheduledFuture<?>> LOGINS =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -145,6 +144,7 @@ public final class Transports {
                 });
     }
 
+    /** The login is done: lifts the watch {@link #open} set on it. */
     public static void loggedIn(Transport transport) {
         java.util.concurrent.ScheduledFuture<?> budget = LOGINS.remove(transport);
         if (budget != null) {

@@ -97,10 +97,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     /** Ten years. See {@link #refresh}. */
     static final long MAX_LEASE_SECONDS = 10L * 366 * 24 * 3600;
 
-    /** The credential in hand, or {@code null} before the first fetch. */
     /** How long a KV secret is used before it is read again ({@code seclume.vault.kvMaxAgeSeconds}). */
     static final java.time.Duration STATIC_MAX_AGE =
             java.time.Duration.ofSeconds(Long.getLong("seclume.vault.kvMaxAgeSeconds", 60));
+    /** The credential in hand, or {@code null} before the first fetch. */
     private SecretScope cached;
     private Instant fetchedAt;
     private Instant validUntil;

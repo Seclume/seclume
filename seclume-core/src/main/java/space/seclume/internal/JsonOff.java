@@ -142,7 +142,6 @@ public final class JsonOff {
         return literal.equals("true");
     }
 
-    /** Whether the path exists at all - for an optional field. */
     /** A field that the document - read to its end without fault - does not have. */
     public static final class Absent extends NotFound {
         private static final long serialVersionUID = 1L;
@@ -170,6 +169,7 @@ public final class JsonOff {
         }
     }
 
+    /** Whether the path exists at all - for an optional field. */
     public static boolean has(MemorySegment json, int length, String... path) {
         try {
             new Cursor(json, length).walk(path);

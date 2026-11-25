@@ -315,7 +315,6 @@ final class HttpFraming {
         }
     }
 
-    /** One header line, secrets written in, into {@code out}. */
     /**
      * The header lines a credential is written into. Any other line - a
      * correlation id, a referer, a cookie the application filled from what a
@@ -335,6 +334,7 @@ final class HttpFraming {
         return false;
     }
 
+    /** One header line, secrets written in, into {@code out}. */
     private static void rewriteLine(byte[] bytes, int from, int to, Room out, String server)
             throws IOException {
         if (!credentialHeader(bytes, from, to)) {

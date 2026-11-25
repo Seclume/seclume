@@ -249,16 +249,16 @@ final class SpiffeKeyManager extends RotatingKeyManager {
         return bundle;
     }
 
-    /**
-     * The CAs a peer of {@code domain} is checked against: the workload's own
-     * bundle for its own trust domain, a federated one's for another - none for
-     * a domain it does not federate with.
-     */
     /** The trust domain of this workload's current SVID, or null before the first. */
     String trustDomain() {
         return trustDomain;
     }
 
+    /**
+     * The CAs a peer of {@code domain} is checked against: the workload's own
+     * bundle for its own trust domain, a federated one's for another - none for
+     * a domain it does not federate with.
+     */
     List<X509Certificate> bundleFor(String domain) {
         if (domain.equals(trustDomain)) {
             return bundle;

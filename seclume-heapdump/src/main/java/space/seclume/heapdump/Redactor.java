@@ -127,7 +127,7 @@ public final class Redactor {
         public record Pattern(String encoding, byte[] bytes, Fill fill) {
         }
 
-        /** A secret that is text - in every encoding {@link space.seclume.tck.SecretEncodings} names. */
+        /** A secret that is text - in every encoding {@link Encodings} names. */
         public static Needle text(String label, String secret) {
             if (secret.isEmpty()) {
                 throw new IllegalArgumentException("an empty secret matches everywhere");
@@ -135,7 +135,7 @@ public final class Redactor {
             // The searcher holds what it hunts for - in its own process, which
             // is why a Needle is built by a caller that is not the application.
             List<Pattern> patterns = new ArrayList<>();
-            space.seclume.tck.SecretEncodings.ofText(secret).forEach((encoding, bytes) ->
+            Encodings.ofText(secret).forEach((encoding, bytes) ->
                     patterns.add(new Pattern(encoding, bytes, switch (encoding) {
                         case "UTF-16BE" -> Fill.UTF16_BE;
                         case "UTF-16LE" -> Fill.UTF16_LE;
@@ -150,7 +150,7 @@ public final class Redactor {
                 throw new IllegalArgumentException("an empty secret matches everywhere");
             }
             List<Pattern> patterns = new ArrayList<>();
-            space.seclume.tck.SecretEncodings.ofBytes(secret).forEach((encoding, bytes) ->
+            Encodings.ofBytes(secret).forEach((encoding, bytes) ->
                     patterns.add(new Pattern(encoding, bytes,
                             encoding.equals("bytes") ? Fill.ZERO : Fill.ASCII)));
             return new Needle(label, List.copyOf(patterns));

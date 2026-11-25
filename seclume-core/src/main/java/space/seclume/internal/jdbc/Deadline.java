@@ -197,10 +197,10 @@ public final class Deadline implements AutoCloseable {
         }
     }
 
-    /** Stops the clock. Harmless twice, and harmless after it has fired. */
     /** Set by close(), under this object's lock: the kill stage then does nothing. */
     private boolean finished;
 
+    /** Stops the clock. Harmless twice, and harmless after it has fired. */
     @Override
     public void close() {
         if (killer != null) {

@@ -24,6 +24,7 @@ import redis.clients.jedis.exceptions.JedisConnectionException;
 class SilentServerTest {
 
     @Test
+    @SuppressWarnings("try") // the accepted socket is held open, never used
     void aSilentServerIsGivenUpOnAfterTheTimeout() throws Exception {
         Path secret = Files.createTempFile("redis", ".pw");
         try (ServerSocket silent = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {

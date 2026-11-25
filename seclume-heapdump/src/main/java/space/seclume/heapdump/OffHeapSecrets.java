@@ -102,7 +102,7 @@ public interface OffHeapSecrets {
      * Its Base64 inside a longer Base64 text - {@code Basic base64(user:password)}
      * - at each of the three places a byte can start, standard and URL-safe: the
      * stretch made of the secret's bytes alone, when it is long enough not to be
-     * found anywhere by chance (see {@link space.seclume.tck.SecretEncodings}).
+     * found anywhere by chance (see {@link Encodings}).
      */
     private static void embedded(MemorySegment data, SegmentAllocator allocator, List<Pattern> patterns) {
         for (int offset = 0; offset < 3; offset++) {
@@ -230,7 +230,7 @@ public interface OffHeapSecrets {
         /**
          * The Base64 of {@code data} where it starts {@code offset} bytes into a
          * group: the characters that depend on its bytes alone, or null when
-         * there are fewer than {@link space.seclume.tck.SecretEncodings}'s eight.
+         * there are fewer than {@link Encodings}'s eight.
          */
         static MemorySegment base64Inside(MemorySegment data, int offset, boolean urlSafe,
                 SegmentAllocator allocator) {

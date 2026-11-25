@@ -467,6 +467,7 @@ final class LdapSocket extends Socket {
      * and {@code NO_PROTECTION} ({@code 0x01}) before queueing the final
      * {@code BindResponse} for JNDI's reader thread.
      */
+    @SuppressWarnings("try") // the deadline is held for its effect: it closes a stalled bind
     private void bindKerberos(byte[] message, int opStart, int op, LdapSettings registered)
             throws IOException {
         byte[] msgIdBytes = Arrays.copyOfRange(message, opStart, op);
