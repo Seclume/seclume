@@ -448,14 +448,22 @@ es.index(i -> i.index("patients").document(patients.encrypt(document)));
 
 | | Column key | Bound to | Searchable |
 |---|---|---|---|
-| Kafka | `kafka.<topic>.value` / `.key` | the topic - a record copied to another topic does not open | a deterministic key keeps its partition |
-| Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name | an encrypted key is found by `GET` again, not by a pattern |
+| Kafka | `kafka.<topic>.value` / `.key` | the topic - a record copied to another topic does not open; not the record's key | a deterministic key keeps its partition |
+| Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name; the key only through `encodeValueFor` / `decodeValueFor` | an encrypted key is found by `GET` again, not by a pattern |
 | Elasticsearch | `search.<index>.<field>` | index and field | a deterministic field by an exact `terms` query, through a rotation |
 
 A `null` - a Kafka tombstone, a missing field - stays `null`. A record or value that does not open
 with the ring is an error (`SerializationException` for Kafka, so a consumer can dead-letter it),
-never a wrong value. Lettuce does not hand the key to the value codec, so a Redis value is not
-bound to its key; Elasticsearch values are bound to their field, not their document.
+never a wrong value. Elasticsearch values are bound to their field, not their document.
+
+**Within a topic, within a name, values can be swapped.** Kafka does not show a value's serializer
+the record's key, and Lettuce does not hand the key to the value codec: whoever can write to the
+broker or to Redis can put account-17's `credit 5000` under account-99, and it is read there as
+account-99's own - as a JPA converter's value can be copied into another row. For Redis values
+where the key matters, `EncryptedCodec.encodeValueFor(key, value)` and `decodeValueFor(key, stored)`
+bind the value to its key, and it is refused under any other (`KeyBindingTest`); for Kafka, keep
+such values in a topic of their own, or put the key into the value (`RecordKeyBindingTest` pins
+that the serializers do not bind it).
 
 Tested on their own (`EncryptedRecordsTest`, `EncryptedCodecTest`, `EncryptedDocumentTest`: back as
 they went, never in the clear, other topic, name, index, field or ring refused, a rotation read

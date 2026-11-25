@@ -25,7 +25,10 @@ import space.seclume.field.FieldKeys;
  *
  * <p>Each topic has its own column key ({@code kafka.<topic>.value}, or
  * {@code .key}), and the topic's name is bound to every value: a record
- * copied into another topic does not decrypt there. A key is best encrypted
+ * copied into another topic does not decrypt there. The record's key is not:
+ * Kafka does not show a value's serializer the key, so within a topic a value
+ * copied under another key - account-17's balance as account-99's - decrypts
+ * as that key's own. Whoever can write to the broker can do that. A key is best encrypted
  * {@link Mode#DETERMINISTIC}, so that equal keys still go to the same
  * partition; a value {@link Mode#RANDOMIZED}.
  *

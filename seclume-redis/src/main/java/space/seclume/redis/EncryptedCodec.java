@@ -30,8 +30,11 @@ import space.seclume.field.FieldKeys;
  *
  * <p>A value written under one {@code name} does not open under another. A
  * value read back from a key it was not written for does: Lettuce's codec does
- * not hand the key to {@code decodeValue}, so binding a value to its key is not
- * possible here - use different names for data that must not be swapped.
+ * not hand the key to {@code decodeValue}, so whoever can write to Redis can
+ * copy one key's value under another, and it is read there as that key's own.
+ * Where the key matters - a balance, a role - write the value with
+ * {@link #encodeValueFor} and read it with {@link #decodeValueFor}: it is
+ * bound to its key and refused under any other.
  */
 public final class EncryptedCodec<K, V> implements RedisCodec<K, V> {
 
