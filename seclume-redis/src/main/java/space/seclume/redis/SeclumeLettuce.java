@@ -206,6 +206,11 @@ public final class SeclumeLettuce {
                 : uri.withAuthentication(url.user(), placeholder.toCharArray())).build();
     }
 
+    private static final System.Logger LOG = System.getLogger(SeclumeLettuce.class.getName());
+
+    /** Matches no placeholder: a node not allowed has nothing rewritten. */
+    private static final String NOT_HERE = "seclume-redis: no password for this node";
+
     private static NettyCustomizer customizer(RedisUrl url, String placeholder,
                                               String sentinelPlaceholder) {
         return new NettyCustomizer() {
@@ -218,9 +223,19 @@ public final class SeclumeLettuce {
                             throws Exception {
                         String host = hostOf(remoteAddress, url);
                         int port = portOf(remoteAddress, url);
+                        // A node discovery named and nobody allowed gets the
+                        // placeholders as they are - no secret is written for it.
+                        boolean allowed = url.mayReceive(host);
+                        if (!allowed) {
+                            LOG.log(System.Logger.Level.WARNING, "seclume: the Redis node "
+                                    + host + ":" + port + " was named by discovery and is not "
+                                    + "among the URL's hosts or cluster-hosts/master-hosts - it "
+                                    + "gets no password");
+                        }
                         RespPasswordRewriter rewriter = new RespPasswordRewriter(
-                                placeholder, url.secret(),
-                                sentinelPlaceholder, url.sentinelSecret(),
+                                allowed ? placeholder : NOT_HERE, url.secret(),
+                                allowed ? sentinelPlaceholder : null,
+                                allowed ? url.sentinelSecret() : null,
                                 host + ":" + port);
                         if (url.tls()) {
                             SslHandler tls = new SslHandler(new SeclumeSslEngine(

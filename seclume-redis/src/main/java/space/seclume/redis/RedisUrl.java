@@ -25,7 +25,31 @@ import space.seclume.secret.SecretProviders;
  */
 record RedisUrl(List<Node> nodes, String user, String sentinelMasterId, String sentinelUser,
                 SecretProvider sentinelSecret, boolean tls, TrustChoice.Choice trust,
-                int connectTimeout, int timeout, SecretProvider secret) {
+                int connectTimeout, int timeout, SecretProvider secret, List<String> discovered) {
+
+    /**
+     * Whether a node that discovery named - a cluster redirect, a topology
+     * refresh, the master a Sentinel names - may be given the password: a host
+     * of the URL, or one {@code cluster-hosts=} / {@code master-hosts=} allows
+     * (a host, an IP, a {@code .suffix}, or {@code *} for any). Anything else
+     * gets the placeholder: one forged {@code -MOVED} or Sentinel answer used to
+     * send the password where it pointed.
+     */
+    boolean mayReceive(String host) {
+        String name = host.toLowerCase(java.util.Locale.ROOT);
+        for (Node node : nodes) {
+            if (node.host().equalsIgnoreCase(name)) {
+                return true;
+            }
+        }
+        for (String allowed : discovered) {
+            if (allowed.equals("*") || allowed.equals(name)
+                    || (allowed.startsWith(".") && name.endsWith(allowed))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     record Node(String host, int port) {
     }
@@ -112,6 +136,18 @@ record RedisUrl(List<Node> nodes, String user, String sentinelMasterId, String s
         String sentinelAuth = removeFirst(options, "sentinelAuth", "sentinel-auth");
         String rootCert = options.remove(TrustChoice.ROOT_CERT);
         String pin = options.remove(TrustChoice.PIN);
+        List<String> discovered = new ArrayList<>();
+        for (String key : new String[] {"cluster-hosts", "clusterHosts", "master-hosts",
+                "masterHosts"}) {
+            String value = options.remove(key);
+            if (value != null) {
+                for (String one : value.split(",")) {
+                    if (!one.isBlank()) {
+                        discovered.add(one.trim().toLowerCase(java.util.Locale.ROOT));
+                    }
+                }
+            }
+        }
         int connectTimeout = Integer.parseInt(options.getOrDefault("connectTimeout", "5000"));
         int timeout = Integer.parseInt(options.getOrDefault("timeout", "2000"));
         options.remove("connectTimeout");
@@ -152,7 +188,8 @@ record RedisUrl(List<Node> nodes, String user, String sentinelMasterId, String s
             sentinelSecret = secret;
         }
         return new RedisUrl(List.copyOf(nodes), user, sentinelMasterId, sentinelUser,
-                sentinelSecret, tls, trust, connectTimeout, timeout, secret);
+                sentinelSecret, tls, trust, connectTimeout, timeout, secret,
+                List.copyOf(discovered));
     }
 
     private static List<Node> parseNodes(String authority, int defaultPort) {

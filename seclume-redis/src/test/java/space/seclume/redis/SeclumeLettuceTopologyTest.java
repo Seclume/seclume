@@ -117,6 +117,7 @@ class SeclumeLettuceTopologyTest {
 
             String url = "rediss://localhost:" + node1.port()
                     + "?user=orders&tlsRootCert=" + slash(caPem)
+                    + "&cluster-hosts=127.0.0.1"
                     + "&provider=file&path=" + slash(redisSecretFile);
             RedisClusterClient cluster = SeclumeLettuce.clusterClient(url);
             try (StatefulRedisClusterConnection<String, String> conn = cluster.connect()) {
@@ -154,6 +155,34 @@ class SeclumeLettuceTopologyTest {
             }
         }
         java.util.Arrays.fill(expectedPw, (byte) 0);
+    }
+
+    /**
+     * A node that discovery names - a forged -MOVED, a Sentinel answer - and
+     * that neither the URL nor cluster-hosts allows gets the placeholder, not
+     * the password: its login fails, and the password never left for it.
+     */
+    @Test
+    void aDiscoveredNodeNobodyAllowedGetsNoPassword() throws Exception {
+        byte[] expectedPw = readTrimmedBytes(redisSecretFile);
+        try (FakeRedisNode master = FakeRedisNode.standaloneNode(loopbackTls, "orders", expectedPw);
+             FakeRedisNode sentinel = FakeRedisNode.sentinelNode(
+                     localhostTls, "orders", expectedPw, "mymaster", "127.0.0.1", master.port())) {
+            String url = "rediss-sentinel://localhost:" + sentinel.port()
+                    + "?sentinelMasterId=mymaster&sentinelAuth=true"
+                    + "&user=orders&provider=file&path=" + slash(redisSecretFile)
+                    + "&tlsRootCert=" + slash(caPem);
+            RedisClient client = SeclumeLettuce.client(url);
+            try {
+                assertThrows(Exception.class, () -> client.connect().close());
+            } finally {
+                client.shutdown();
+            }
+            assertEquals(0, master.authenticatedCount.get(),
+                    "the master the Sentinel named got the password");
+        } finally {
+            java.util.Arrays.fill(expectedPw, (byte) 0);
+        }
     }
 
     @Test
@@ -195,7 +224,7 @@ class SeclumeLettuceTopologyTest {
              FakeRedisNode sentinel = FakeRedisNode.sentinelNode(
                      localhostTls, "guard", sentinelPw, "mymaster", "127.0.0.1", master.port())) {
             String url = "rediss-sentinel://localhost:" + sentinel.port()
-                    + "?sentinelMasterId=mymaster"
+                    + "?sentinelMasterId=mymaster&master-hosts=127.0.0.1"
                     + "&user=orders&provider=file&path=" + slash(redisSecretFile)
                     + "&sentinelUser=guard&sentinel-provider=file&sentinel-path="
                     + slash(sentinelSecretFile)
