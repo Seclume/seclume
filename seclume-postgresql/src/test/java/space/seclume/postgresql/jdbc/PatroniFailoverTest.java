@@ -25,9 +25,11 @@ import org.junit.jupiter.api.Test;
 import space.seclume.tck.TestHosts;
 
 /**
- * {@code patroni=}: the URL names only a server that is gone, and the cluster
- * - a stand-in answering {@code /cluster} as Patroni documents it - says where
- * its leader is now. The connection gets there; without the option it does not.
+ * {@code patroni=}: the cluster - a stand-in answering {@code /cluster} as
+ * Patroni documents it - says which of the URL's servers leads now, and the
+ * connection gets there. It may reorder the URL's servers, not add one: an
+ * answer naming a server the URL does not, over plain HTTP or from an endpoint
+ * taken over, would send the login anywhere.
  */
 class PatroniFailoverTest {
 
@@ -53,12 +55,17 @@ class PatroniFailoverTest {
                 + "\"host\": \"127.0.0.1\", \"port\": 1},"
                 + "{\"name\": \"new\", \"role\": \"leader\", \"state\": \"running\", "
                 + "\"host\": \"" + host + "\", \"port\": " + port + "}]}";
-        String base = "jdbc:seclume:postgresql://127.0.0.1:1/seclume_test?user=seclume_test"
+        String query = "/seclume_test?user=seclume_test"
                 + "&tls=off&connectTimeout=1000&targetServerType=primary&provider=file&path="
                 + password.toString().replace('\\', '/');
+        String both = "jdbc:seclume:postgresql://127.0.0.1:1," + host + ":" + port + query;
+        String goneOnly = "jdbc:seclume:postgresql://127.0.0.1:1" + query;
         try (ServerSocket patroni = serve(cluster)) {
-            try (Connection c = DriverManager.getConnection(base + "&patroni=http://127.0.0.1:"
-                    + patroni.getLocalPort());
+            String asked = "&patroni=http://127.0.0.1:" + patroni.getLocalPort();
+            // The leader is not on the URL: the answer cannot add it.
+            assertThrows(SQLException.class,
+                    () -> DriverManager.getConnection(goneOnly + asked).close());
+            try (Connection c = DriverManager.getConnection(both + asked);
                  Statement s = c.createStatement();
                  ResultSet rows = s.executeQuery("select pg_is_in_recovery()")) {
                 rows.next();
@@ -66,7 +73,7 @@ class PatroniFailoverTest {
             }
         }
         // The control: the URL alone knows only the server that is gone.
-        assertThrows(SQLException.class, () -> DriverManager.getConnection(base).close());
+        assertThrows(SQLException.class, () -> DriverManager.getConnection(goneOnly).close());
     }
 
     /** One resource, answered to every request. */
