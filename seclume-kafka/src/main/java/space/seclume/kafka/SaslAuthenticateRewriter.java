@@ -43,12 +43,16 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
         this.where = where;
     }
 
+    /** The start of a request that arrived in pieces: its size and API key, six bytes. */
+    private final byte[] head = new byte[6];
+    private int held;
+
     @Override
     public Step next(ByteBuffer plain) throws IOException {
+        if (remaining == 0 && (held > 0 || plain.remaining() < 6)) {
+            return pieced(plain);
+        }
         if (remaining == 0) {
-            if (plain.remaining() < 6) {
-                throw new IOException("a Kafka request whose size and API key arrived apart");
-            }
             int at = plain.position();
             int size = plain.getInt(at);
             if (size < 2) {
@@ -68,6 +72,38 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
                 SeclumeSslEngine.MAX_PLAINTEXT);
         remaining -= n;
         return Step.unchanged(n);
+    }
+
+    /**
+     * A request whose size and API key came in pieces - a write that ended
+     * after the size, say: they were an IOException, and the connection gone.
+     * Held until all six bytes are there, then passed on unchanged with the
+     * rest of the request. A SaslAuthenticate cut there is still refused: its
+     * placeholder is replaced in one piece or not at all.
+     */
+    private Step pieced(ByteBuffer plain) throws IOException {
+        int take = Math.min(head.length - held, plain.remaining());
+        plain.get(plain.position(), head, held, take);
+        held += take;
+        if (held < head.length) {
+            return Step.replace(take, space.seclume.secret.SecretScope.allocate(1));
+        }
+        ByteBuffer whole = ByteBuffer.wrap(head);
+        int size = whole.getInt(0);
+        if (size < 2) {
+            throw new IOException("a Kafka request of " + size + " bytes");
+        }
+        if (whole.getShort(4) == SASL_AUTHENTICATE) {
+            throw new IOException("a SaslAuthenticate request whose size and API key arrived "
+                    + "apart - its placeholder is replaced in one piece or not at all");
+        }
+        held = 0;
+        remaining = size + 4L - head.length;
+        space.seclume.secret.SecretScope out = space.seclume.secret.SecretScope.allocate(head.length);
+        MemorySegment.copy(head, 0, out.segment(), java.lang.foreign.ValueLayout.JAVA_BYTE, 0,
+                head.length);
+        out.length(head.length);
+        return Step.replace(take, out);
     }
 
     /** The request rebuilt with the secret, or null when it carries no placeholder. */
