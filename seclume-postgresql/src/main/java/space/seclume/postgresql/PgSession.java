@@ -184,6 +184,8 @@ public final class PgSession implements AutoCloseable {
     private String database = "";
     private final PgChannel channel;
     private final Map<String, String> parameters = new HashMap<>();
+    /** PostgreSQL reports a couple of dozen; a server reporting thousands is not one. */
+    static final int MAX_PARAMETERS = 256;
     private List<Field> fields = List.of();
 
     /**
@@ -2642,6 +2644,20 @@ public final class PgSession implements AutoCloseable {
             case PgProtocol.PARAMETER_STATUS -> {
                 String name = in.readCString();
                 String value = in.readCString();
+                if (!parameters.containsKey(name) && parameters.size() >= MAX_PARAMETERS) {
+                    // A server naming parameters without end filled the heap.
+                    throw WireBuffer.malformed("more than " + MAX_PARAMETERS
+                            + " server parameters");
+                }
+                if ("client_encoding".equals(name) && !"UTF8".equalsIgnoreCase(value)) {
+                    // Every string is read and written as UTF-8. Another
+                    // encoding - an application's SET, a function's SET
+                    // client_encoding - garbles data, and with SJIS or GBK
+                    // reopens the multibyte quoting hole. pgJDBC closes the
+                    // connection too.
+                    throw WireBuffer.malformed("the server switched client_encoding to "
+                            + value + "; this driver speaks UTF8 only");
+                }
                 parameters.put(name, value);
             }
             case PgProtocol.BACKEND_KEY_DATA -> {
