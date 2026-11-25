@@ -68,6 +68,8 @@ public final class SpiffeWorkloadApi {
     private static final int PADDED = 0x8;
     /** An answer larger than this is not an SVID - a chain, a key, a bundle are a few KiB. */
     private static final int MAX_ANSWER = 256 * 1024;
+    /** The largest frame other than DATA that is read: HTTP/2's default SETTINGS_MAX_FRAME_SIZE. */
+    static final int MAX_CONTROL_FRAME = 16_384;
     private static final int WINDOW = 1 << 20;
 
     private final Path socket;
@@ -622,6 +624,10 @@ public final class SpiffeWorkloadApi {
                     int padding = 0;
                     int body = length;
                     if ((flags & PADDED) != 0) {
+                        if (length == 0) {
+                            throw new IOException("the Workload API sent a padded frame with "
+                                    + "no room for its padding length");
+                        }
                         byte[] pad = new byte[1];
                         readFully(channel, ByteBuffer.wrap(pad));
                         padding = pad[0] & 0xff;
@@ -642,6 +648,12 @@ public final class SpiffeWorkloadApi {
                                 : "the Workload API ended the stream");
                     }
                     continue;
+                }
+                if (length > MAX_CONTROL_FRAME) {
+                    // HTTP/2's default frame size: a SETTINGS, PING or HEADERS
+                    // frame announcing 16 MiB had that much allocated for it.
+                    throw new IOException("the Workload API sent a frame of " + length
+                            + " bytes where at most " + MAX_CONTROL_FRAME + " belong");
                 }
                 byte[] payload = new byte[length];
                 readFully(channel, ByteBuffer.wrap(payload));
