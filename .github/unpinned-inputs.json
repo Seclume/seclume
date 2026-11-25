@@ -158,10 +158,6 @@
       "input": "semgrep/semgrep:1.177.0"
     },
     {
-      "file": ".mvn/wrapper/maven-wrapper.properties",
-      "input": "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.10.0/apache-maven-3.10.0-bin.zip  (no distributionSha256Sum)"
-    },
-    {
       "file": "examples/getting-started/compose.yaml",
       "input": "docker.io/hashicorp/vault:2.0.0"
     },
