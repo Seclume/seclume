@@ -290,12 +290,33 @@ public final class SecretFetch {
         return sendLinkLocal(host, port, timeoutMillis, method, path, headers, List.of(), body);
     }
 
+    /**
+     * EKS Pod Identity on an IPv6 cluster (fd00:ec2::23) and IMDS over IPv6
+     * (fd00:ec2::254) are unique-local addresses, not link-local ones, and
+     * were refused. Exactly these two are taken; no other unique-local one.
+     */
+    static boolean awsIpv6MetadataAddress(java.net.InetAddress address) {
+        if (!(address instanceof java.net.Inet6Address)) {
+            return false;
+        }
+        byte[] bytes = address.getAddress();
+        byte[] prefix = {(byte) 0xfd, 0, 0x0e, (byte) 0xc2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        for (int i = 0; i < prefix.length; i++) {
+            if (bytes[i] != prefix[i]) {
+                return false;
+            }
+        }
+        int last = (bytes[14] & 0xff) << 8 | (bytes[15] & 0xff);
+        return last == 0x0023 || last == 0x0254;
+    }
+
     /** The same, with headers whose values must not become a {@code String}. */
     public static Response sendLinkLocal(String host, int port, int timeoutMillis,
             String method, String path, Map<String, String> headers,
             List<SecretHeader> secretHeaders, MemorySegment body) throws IOException {
         java.net.InetAddress address = java.net.InetAddress.getByName(host);
-        if (!address.isLinkLocalAddress() && !address.isLoopbackAddress()) {
+        if (!address.isLinkLocalAddress() && !address.isLoopbackAddress()
+                && !awsIpv6MetadataAddress(address)) {
             throw new IOException("refusing plain HTTP to " + host + " (" + address.getHostAddress()
                     + "): only a link-local metadata service may be asked without TLS");
         }
