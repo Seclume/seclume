@@ -425,9 +425,10 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                 target.setSessionContext(one.getKey(), one.getValue());
             }
             return true;
-        } catch (SQLException | RuntimeException e) {
+        } catch (Throwable e) {
             // Retired, not parked: part of the context may be set, and a
-            // connection that never reached a borrower is never reset.
+            // connection that never reached a borrower is never reset. An
+            // Error out of the driver too - it left the entry IN_USE for good.
             release(entry, true);
             throw e;
         }
