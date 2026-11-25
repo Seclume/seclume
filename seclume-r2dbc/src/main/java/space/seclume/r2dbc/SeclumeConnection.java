@@ -159,7 +159,7 @@ final class SeclumeConnection implements Connection, Wrapped<java.sql.Connection
 
     @Override
     public Statement createStatement(String sql) {
-        return new SeclumeStatement(jdbc, lane, sql, dialect);
+        return new SeclumeStatement(jdbc, lane, sql, dialect, queryTimeoutSeconds);
     }
 
     @Override
@@ -196,13 +196,39 @@ final class SeclumeConnection implements Connection, Wrapped<java.sql.Connection
     @Override
     public Mono<Void> setLockWaitTimeout(Duration timeout) {
         // No portable JDBC call; each database has its own statement for it.
-        return Mono.empty();
+        // An empty Mono used to answer success and set nothing.
+        long millis = Math.max(0, timeout.toMillis());
+        String set = switch (dialect) {
+            case POSTGRESQL -> "set lock_timeout = " + millis;
+            case MYSQL -> "set innodb_lock_wait_timeout = " + Math.max(1, (millis + 999) / 1000);
+            case SQLSERVER -> "set lock_timeout " + (millis == 0 ? -1 : millis);
+            case ORACLE -> null;
+        };
+        if (set == null) {
+            return Mono.error(new io.r2dbc.spi.R2dbcNonTransientResourceException(
+                    "Oracle has no session setting for a lock wait timeout - use "
+                            + "select ... for update wait n in the statement", "0A000"));
+        }
+        return lane.run(() -> {
+            try (java.sql.Statement statement = jdbc.createStatement()) {
+                statement.execute(set);
+            }
+        });
     }
 
     @Override
     public Mono<Void> setStatementTimeout(Duration timeout) {
+        // Kept and set on every JDBC statement as its query timeout - whole
+        // seconds, at least one. An empty Mono used to answer success and
+        // leave every statement without a bound.
+        long millis = Math.max(0, timeout.toMillis());
+        queryTimeoutSeconds = millis == 0 ? 0
+                : (int) Math.min(Integer.MAX_VALUE, Math.max(1, (millis + 999) / 1000));
         return Mono.empty();
     }
+
+    /** The query timeout statements created from now on run under, 0 for none. */
+    private volatile int queryTimeoutSeconds;
 
     @Override
     public Mono<Boolean> validate(ValidationDepth depth) {

@@ -75,6 +75,10 @@ All notable changes to seclume are recorded here. Versions follow
   decoded by the binary reader.
 - **DPAPI never shows a prompt** (`CRYPTPROTECT_UI_FORBIDDEN`), and **the macOS keychain's copy of a
   secret is zeroed before it is freed**.
+- **R2DBC: a borrow cancelled while it waits gives its connection back**; maximumPoolSize such
+  cancels emptied the pool. **`setStatementTimeout` and `setLockWaitTimeout` take effect** (the query
+  timeout on every statement; `lock_timeout`, `innodb_lock_wait_timeout`, `LOCK_TIMEOUT`); they
+  answered success and set nothing. Oracle has no session lock timeout and says so.
 - **SQL Server: the driver's own `sp_describe_undeclared_parameters` question no longer reaches a
   `StatementListener`**, nor its failure as a failed statement the application never ran.
 

@@ -440,6 +440,8 @@ protocol text or dribble bytes.
 | 59 | Oracle native encryption | FEATURES.md did not say that its Diffie-Hellman exchange authenticates nobody: a party in the middle reads the session. It does now. | doc | #PR |
 | 60 | Keychain | The CFData the keychain returned was freed with the password in it. Zeroed before CFRelease. | low | #PR |
 | 61 | DPAPI | CryptUnprotectData ran without CRYPTPROTECT_UI_FORBIDDEN: a blob protected with a prompt waited on a server for nobody. | low | #PR |
+| 62 | R2DBC | A borrow cancelled while it waited for a connection got it later and dropped it unclosed: maximumPoolSize cancels - clients hanging up under load - emptied the pool. | medium | #PR |
+| 63 | R2DBC | setStatementTimeout and setLockWaitTimeout answered success and set nothing. They take effect now; Oracle's lock timeout is refused. | low | #PR |
 
 ### Mutation testing of the security paths
 

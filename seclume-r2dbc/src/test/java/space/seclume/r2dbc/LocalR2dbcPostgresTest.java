@@ -220,6 +220,31 @@ class LocalR2dbcPostgresTest {
     }
 
     /**
+     * setStatementTimeout and setLockWaitTimeout answered success and set
+     * nothing: the application believed it had a bound. A statement over its
+     * timeout is cancelled now, and the lock timeout is the session's.
+     */
+    @Test
+    void theTimeoutsAreSetAndHold() {
+        Connection connection = Mono.from(factory.create()).block(WAIT);
+        try {
+            Mono.from(connection.setLockWaitTimeout(Duration.ofMillis(1500))).block(WAIT);
+            String lockTimeout = Flux.from(connection.createStatement("show lock_timeout").execute())
+                    .concatMap(r -> r.map((row, meta) -> row.get(0, String.class))).blockFirst(WAIT);
+            assertEquals("1500ms", lockTimeout);
+            Mono.from(connection.setStatementTimeout(Duration.ofSeconds(1))).block(WAIT);
+            long started = System.nanoTime();
+            assertThrows(Exception.class, () -> Flux.from(connection
+                    .createStatement("select pg_sleep(5)").execute())
+                    .concatMap(r -> r.getRowsUpdated()).blockLast(WAIT));
+            long took = (System.nanoTime() - started) / 1_000_000;
+            assertTrue(took < 4500, "the statement ran " + took + " ms past a one-second timeout");
+        } finally {
+            Mono.from(connection.close()).block(WAIT);
+        }
+    }
+
+    /**
      * A borrow cancelled while it waited for a connection - a client that hung
      * up - got the connection once one was free, and Reactor discarded it
      * unclosed: IN_USE for good. maximumPoolSize such cancels emptied the

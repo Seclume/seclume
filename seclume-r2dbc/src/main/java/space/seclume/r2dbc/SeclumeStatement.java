@@ -38,8 +38,17 @@ final class SeclumeStatement implements Statement {
     /** An add() with nothing bound after it - an error at execute(), as R2DBC asks. */
     private boolean trailingAdd;
 
+    /** setStatementTimeout's bound, in seconds; 0 for none. */
+    private final int queryTimeout;
+
     SeclumeStatement(Connection connection, Lane lane, String sql,
                      Placeholders.Dialect dialect) {
+        this(connection, lane, sql, dialect, 0);
+    }
+
+    SeclumeStatement(Connection connection, Lane lane, String sql,
+                     Placeholders.Dialect dialect, int queryTimeout) {
+        this.queryTimeout = queryTimeout;
         if (sql == null) {
             throw new IllegalArgumentException("createStatement needs the statement's SQL text, and null was given");
         }
@@ -207,6 +216,9 @@ final class SeclumeStatement implements Statement {
         try {
             if (fetchSize > 0) {
                 statement.setFetchSize(fetchSize);
+            }
+            if (queryTimeout > 0) {
+                statement.setQueryTimeout(queryTimeout);
             }
             for (Map.Entry<String, int[]> parameter : parsed.positions().entrySet()) {
                 Object value = set.get(parameter.getKey());
