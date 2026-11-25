@@ -251,7 +251,7 @@ public final class SeclumeHttp implements AutoCloseable {
             boolean http10 = statusLine.startsWith("HTTP/1.0");
             TreeMap<String, List<String>> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
             int count = 0;
-            for (String line; !(line = wire.readLine(MAX_LINE)).isEmpty(); ) {
+            for (String line; !(line = wire.readHeaderLine(MAX_LINE)).isEmpty(); ) {
                 if (++count > MAX_HEADERS) {
                     throw new IOException(settings.host + " sent more than " + MAX_HEADERS
                             + " headers");

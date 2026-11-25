@@ -280,7 +280,7 @@ final class OAuthToken implements BearerSource {
         }
         long contentLength = -1;
         boolean chunked = false;
-        for (String line; !(line = wire.readLine(MAX_LINE)).isEmpty(); ) {
+        for (String line; !(line = wire.readHeaderLine(MAX_LINE)).isEmpty(); ) {
             int colon = line.indexOf(':');
             if (colon <= 0) {
                 continue;

@@ -38,6 +38,8 @@ final class FakeTokenServer implements AutoCloseable {
     boolean chunked;
     /** When set, the whole chunked body as written - for answers that lie about their sizes. */
     String rawChunkedBody;
+    /** When set, only this much of a response head is written, and the connection closed. */
+    String rawHead;
     String tokenType = "Bearer";
 
     /** For private_key_jwt: the key that checks the client assertion, and the audience. */
@@ -176,6 +178,11 @@ final class FakeTokenServer implements AutoCloseable {
     }
 
     private void answer(OutputStream out, int status, String json) throws IOException {
+        if (rawHead != null) {
+            out.write(rawHead.getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            throw new IOException("the head is cut off here, as asked");
+        }
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         String head = "HTTP/1.1 " + status + (status == 200 ? " OK" : " Unauthorized")
                 + "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n";

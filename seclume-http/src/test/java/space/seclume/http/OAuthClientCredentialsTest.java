@@ -284,4 +284,28 @@ class OAuthClientCredentialsTest {
                     chain.toString());
         }
     }
+
+    /**
+     * A token endpoint that closed the connection between two header lines:
+     * readLine said null for the end, and the header loop called isEmpty() on
+     * it - a NullPointerException where an IOException belonged.
+     */
+    @Test
+    void aTokenEndpointClosingInItsHeadersIsAnIoError() throws Exception {
+        try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
+             FakeHttpsServer api = api(tokens);
+             SeclumeHttp http = SeclumeHttp.of(url(api, tokens, ""))) {
+            tokens.rawHead = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n";
+            Exception refused = org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                    () -> http.send("GET", "/", Map.of(), null));
+            StringBuilder chain = new StringBuilder();
+            for (Throwable t = refused; t != null; t = t.getCause()) {
+                org.junit.jupiter.api.Assertions.assertFalse(t instanceof NullPointerException,
+                        "a NullPointerException in the chain");
+                chain.append(t.getMessage()).append(" / ");
+            }
+            org.junit.jupiter.api.Assertions.assertTrue(chain.toString().contains("closed"),
+                    chain.toString());
+        }
+    }
 }
