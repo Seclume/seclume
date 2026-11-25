@@ -75,6 +75,11 @@ class SecretMaskerTest {
             assertEquals("x [redacted:db]", masker.mask("x first-password"));
             assertEquals("x second-password", masker.mask("x second-password"));
             masker.refresh();
+            // The old one is still looked for until the next refresh: it may
+            // still be good (RETAIN CURRENT PASSWORD, a rollout in progress).
+            assertEquals("x [redacted:db]", masker.mask("x first-password"));
+            assertEquals("x [redacted:db]", masker.mask("x second-password"));
+            masker.refresh();
             assertEquals("x first-password", masker.mask("x first-password"));
             assertEquals("x [redacted:db]", masker.mask("x second-password"));
             SecretMasker.install(masker);

@@ -129,6 +129,21 @@ public final class SecretMasker implements AutoCloseable {
     private volatile boolean forgotten;
     /** The forms by label, kept for a refresh whose provider fails. */
     private Map<String, List<Form>> byLabel = new LinkedHashMap<>();
+    /** The forms a label had before its last rotation - looked for until the next refresh. */
+    private final Map<String, List<Form>> retiring = new LinkedHashMap<>();
+
+    private static boolean sameForms(List<Form> a, List<Form> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i).fingerprint() != b.get(i).fingerprint()
+                    || !java.util.Arrays.equals(a.get(i).tag(), b.get(i).tag())) {
+                return false;
+            }
+        }
+        return true;
+    }
     /** A secret could not be read and nothing earlier is kept for it - retry soon. */
     private volatile boolean incomplete;
 
@@ -178,6 +193,7 @@ public final class SecretMasker implements AutoCloseable {
         }
         index = Index.EMPTY;
         byLabel = new LinkedHashMap<>();
+        retiring.clear();
         key.close();
         forgotten = true;
     }
@@ -238,7 +254,21 @@ public final class SecretMasker implements AutoCloseable {
             }
             kept.put(entry.getKey(), mine);
             next.addAll(mine);
+            // A rotated secret: the old one is looked for one cycle longer.
+            // MySQL's RETAIN CURRENT PASSWORD, a rollout in progress - the old
+            // password is still good, and still turns up in lines, for a while.
+            List<Form> before = byLabel.get(entry.getKey());
+            if (before != null && !before.isEmpty() && !sameForms(before, mine)) {
+                retiring.put(entry.getKey(), before);
+            } else {
+                retiring.remove(entry.getKey());
+            }
+            List<Form> old = retiring.get(entry.getKey());
+            if (old != null) {
+                next.addAll(old);
+            }
         }
+        retiring.keySet().retainAll(kept.keySet());
         byLabel = kept;
         incomplete = missing;
         // Longest first: where two overlap, the longer one wins.
