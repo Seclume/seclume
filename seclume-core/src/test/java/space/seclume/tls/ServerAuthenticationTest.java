@@ -147,6 +147,25 @@ class ServerAuthenticationTest {
         }
     }
 
+    /**
+     * A checkpoint has to know the TLS connections still open: their traffic
+     * keys are in native memory no SecretScope counts. A connection of the own
+     * stack is counted from its handshake until it is closed.
+     */
+    @org.junit.jupiter.api.Test
+    void anOpenConnectionIsCountedUntilItIsClosed() throws Exception {
+        try (SSLServerSocket listener = listen("TLSv1.3")) {
+            int before = space.seclume.internal.LiveTls.count();
+            TlsLayer open = handshake(listener, TlsStack.SECLUME,
+                    TrustChoice.of(Map.of(TrustChoice.ROOT_CERT, caFile.toString())), true);
+            assertEquals(before + 1, space.seclume.internal.LiveTls.count());
+            assertTrue(!space.seclume.internal.LiveTls.origins().isEmpty(),
+                    "an open connection names who opened it");
+            open.close();
+            assertEquals(before, space.seclume.internal.LiveTls.count());
+        }
+    }
+
     private static TlsLayer handshake(SSLServerSocket listener, TlsStack stack,
             TrustChoice.Choice choice, boolean verify) throws Exception {
         int port = listener.getLocalPort();

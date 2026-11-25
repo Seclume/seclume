@@ -84,6 +84,8 @@ All notable changes to seclume are recorded here. Versions follow
   using seclume for TLS alone got none of it, and every clone of its image drew the same random TLS
   key shares. They are a process resource of their own, registered when `seclume-crac` loads
   (`SeclumeCrac.registerProcess()` says so in code).
+  A checkpoint is also refused while a TLS connection of seclume's own stack is open - a MongoDB
+  pool, HTTP keep-alive, a Redis or Kafka client - and the message names who opened it.
 - **SQL Server: the driver's own `sp_describe_undeclared_parameters` question no longer reaches a
   `StatementListener`**, nor its failure as a failed statement the application never ran.
 

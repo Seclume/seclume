@@ -153,6 +153,13 @@ public final class SeclumeCrac {
         }
     }
 
+    /** Who opened the TLS connections still open, distinct: class names only. */
+    private static String openedBy() {
+        java.util.List<String> by = space.seclume.internal.LiveTls.origins().stream().distinct()
+                .sorted().toList();
+        return by.isEmpty() ? "" : " (opened by " + String.join(", ", by) + ")";
+    }
+
     /** Who made the keys still held, distinct: class names, nothing of the keys. */
     private static String heldBy() {
         java.util.List<String> by = PrivateSigningKey.heldBy().stream().distinct().sorted().toList();
@@ -207,12 +214,14 @@ public final class SeclumeCrac {
             Checkpoint.wipeAll();
             long secrets = SecretScope.open();
             int keys = PrivateSigningKey.held();
-            if (secrets == 0 && keys == 0) {
+            int tls = space.seclume.internal.LiveTls.count();
+            if (secrets == 0 && keys == 0 && tls == 0) {
                 if (!HOLD_SECRETS) {
                     return;
                 }
                 Checkpoint.hold();
-                if (SecretScope.open() == 0 && PrivateSigningKey.held() == 0) {
+                if (SecretScope.open() == 0 && PrivateSigningKey.held() == 0
+                        && space.seclume.internal.LiveTls.count() == 0) {
                     return;
                 }
                 Checkpoint.release();
@@ -220,9 +229,11 @@ public final class SeclumeCrac {
             }
             if (System.nanoTime() - deadline >= 0) {
                 throw new IllegalStateException("seclume refuses the checkpoint: after " + millis
-                        + " ms " + secrets + " secret(s) are still open and " + keys
-                        + " private key(s) held" + heldBy() + "; an image taken now would "
-                        + "contain them (seclume.crac.quiesceMillis sets the wait)");
+                        + " ms " + secrets + " secret(s) are still open, " + keys
+                        + " private key(s) held" + heldBy() + " and " + tls + " TLS connection(s) "
+                        + "open" + openedBy() + "; an image taken now would contain their keys - "
+                        + "close the clients before the checkpoint "
+                        + "(seclume.crac.quiesceMillis sets the wait)");
             }
             Thread.sleep(20);
         }

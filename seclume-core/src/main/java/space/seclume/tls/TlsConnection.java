@@ -115,6 +115,7 @@ public final class TlsConnection implements Transport {
         // A post-handshake message is small; a peer announcing a huge one is
         // not doing anything this connection needs to buffer.
         this.postHandshake = new HandshakeReassembler(1 << 16);
+        space.seclume.internal.LiveTls.opened(this);
     }
 
     /** Set by the handshake when it sent a client certificate. */
@@ -770,6 +771,7 @@ public final class TlsConnection implements Transport {
             return;
         }
         released = true;
+        space.seclume.internal.LiveTls.released(this);
         postHandshake.close();
         records.close();
         arena.close();
