@@ -2563,8 +2563,17 @@ public final class PgSession implements AutoCloseable {
         List<Field> list = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             String name = in.readCString();
-            list.add(new Field(name, in.getInt(), in.getShort(), in.getInt(),
-                    in.getShort(), in.getInt(), in.getShort()));
+            Field field = new Field(name, in.getInt(), in.getShort(), in.getInt(),
+                    in.getShort(), in.getInt(), in.getShort());
+            // Binary only where this driver asks for it - the types it decodes
+            // binary. A server that claimed binary for a column asked as text
+            // had its bytes read as whatever binaryAt makes of them.
+            if (field.format() != 0 && (field.format() != 1
+                    || !space.seclume.postgresql.jdbc.PgOids.readsBinary(field.typeOid()))) {
+                throw WireBuffer.malformed("a column in format " + field.format()
+                        + " of type " + field.typeOid() + ", which this driver never asks for");
+            }
+            list.add(field);
         }
         fields = List.copyOf(list);
         channel.endMessage();
