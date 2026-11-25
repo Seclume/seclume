@@ -201,13 +201,13 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
 
     @Override
     public Socket createSocket(InetAddress host, int port) throws IOException {
-        return createSocket(host.getHostName(), port);
+        return createSocket(new java.net.InetSocketAddress(host, port).getHostString(), port);
     }
 
     @Override
     public Socket createSocket(InetAddress address, int port, InetAddress localAddress,
                                int localPort) throws IOException {
-        return createSocket(address.getHostName(), port);
+        return createSocket(new java.net.InetSocketAddress(address, port).getHostString(), port);
     }
 
     @Override
