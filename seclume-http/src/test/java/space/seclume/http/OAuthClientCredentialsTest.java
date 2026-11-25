@@ -116,9 +116,18 @@ class OAuthClientCredentialsTest {
             assertEquals(2, tokens.issued.get());
 
             api.accepts = value -> false;                           // nothing will do
-            SeclumeHttp.Response refused = http.send("GET", "/c", Map.of(), null);
-            assertEquals(401, refused.status(), "one renewal, then the answer as it is");
-            refused.close();
+            // Within a second of the last renewal for a 401 there is none: an
+            // API refusing everything does not get a token fetch per request.
+            for (int i = 0; i < 5; i++) {
+                SeclumeHttp.Response refused = http.send("GET", "/c", Map.of(), null);
+                assertEquals(401, refused.status(), "the answer as it is");
+                refused.close();
+            }
+            assertEquals(2, tokens.issued.get(), "a token fetch per refused request");
+            Thread.sleep(1100);
+            SeclumeHttp.Response later = http.send("GET", "/c", Map.of(), null);
+            assertEquals(401, later.status(), "one renewal, then the answer as it is");
+            later.close();
             assertEquals(3, tokens.issued.get());
         }
     }

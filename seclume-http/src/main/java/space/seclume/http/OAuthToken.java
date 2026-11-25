@@ -55,6 +55,7 @@ final class OAuthToken implements BearerSource {
     private final SecretProvider clientSecret;
     private final space.seclume.jwt.SeclumeJwt assertions;   // private_key_jwt only
     private SecretScope token;             // guarded by this
+    private long renewedFor401 = Long.MIN_VALUE; // System.nanoTime(), guarded by this
     private long refreshAt;                // System.nanoTime() after which it is renewed
     private boolean closed;
 
@@ -129,6 +130,23 @@ final class OAuthToken implements BearerSource {
             token.close();
             token = null;
         }
+    }
+
+    /**
+     * At most one new token a second for a 401: within a second of the last
+     * such renewal the token is kept and the 401 goes to the application. A
+     * token revoked once is replaced at once; an API that refuses everything
+     * does not get a token fetch per request.
+     */
+    @Override
+    public synchronized boolean refusedByApi() {
+        long now = System.nanoTime();
+        if (renewedFor401 != Long.MIN_VALUE && now - renewedFor401 < 1_000_000_000L) {
+            return false;
+        }
+        renewedFor401 = now;
+        invalidate();
+        return true;
     }
 
     @Override

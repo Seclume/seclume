@@ -134,12 +134,12 @@ public final class SeclumeHttp implements AutoCloseable {
                     throw new IOException(settings.host + " closed the connection without an "
                             + "answer to " + verb);
                 }
-                if (response.status() == 401 && token != null && !renewed) {
+                if (response.status() == 401 && token != null && !renewed
+                        && token.refusedByApi()) {
                     // revoked, or expired early: once more with a fresh token. A 401 is
                     // an answer, so the request was not carried out - also for a POST.
                     renewed = true;
                     response.close();
-                    token.invalidate();
                     continue;
                 }
                 return response;
