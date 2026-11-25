@@ -54,6 +54,9 @@ final class CredentialPlaceholders {
         }
     }
 
+    /** Every this many registrations the growth is said. */
+    static final int WARN_EVERY = 10_000;
+
     private CredentialPlaceholders() {
     }
 
@@ -79,6 +82,16 @@ final class CredentialPlaceholders {
         } while (PROVIDERS.containsKey(placeholder));
         PROVIDERS.put(placeholder, new Registration(provider, Set.copyOf(normal),
                 new AtomicReference<>()));
+        int registered = PROVIDERS.size();
+        if (registered % WARN_EVERY == 0) {
+            // A placeholder is never taken back - it may still be in a
+            // client's hands as bytes. One made per call (a credentials
+            // object per request, a header per call) grows this for ever.
+            System.getLogger(CredentialPlaceholders.class.getName()).log(
+                    System.Logger.Level.WARNING, "seclume: " + registered + " credential "
+                    + "placeholders registered - is one made per request? Make it once and "
+                    + "keep it.");
+        }
         return placeholder;
     }
 
