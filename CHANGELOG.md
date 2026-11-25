@@ -7,6 +7,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **MongoDB: an announced member outside the seeds' domains gets no connection.** Any host in a
+  hello's member lists got one, and the SCRAM proof, AWS signature or OIDC token with it. Members
+  may be the seeds' hosts, hosts in a seed's parent domain (`a.db.example` admits `b.db.example`),
+  or hosts under `-Dseclume.mongodb.allowedHosts=<suffix>,...`; others are warned about and left out.
 - **A column rotation goes past a value that does not open.** One tampered or damaged value,
   or one under a key no longer in the ring, stopped the whole rotation with a
   `FieldEncryptionException`. It is left as it is and counted: `Progress` has `unreadable()` and

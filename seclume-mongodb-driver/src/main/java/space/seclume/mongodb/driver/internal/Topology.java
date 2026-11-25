@@ -119,6 +119,10 @@ public final class Topology implements AutoCloseable {
     private Kind kind;
     private String setName;
     private String srv;
+    /** The hosts of the seeds, lower case: who may announce whom. */
+    private final List<String> seedHosts;
+    /** Members announced but outside the seeds' domains, said once each. */
+    private final Set<String> refusedMembers = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private Srv.Resolver resolver;
     private long nextScan;
     private Integer maxSetVersion;
@@ -170,6 +174,11 @@ public final class Topology implements AutoCloseable {
                         && options.isDirectConnection() == null);
         this.kind = Boolean.TRUE.equals(options.isLoadBalanced()) ? Kind.LOAD_BALANCED
                 : direct ? Kind.SINGLE : setName != null ? Kind.REPLICA_SET : Kind.UNKNOWN;
+        List<String> seeds = new ArrayList<>();
+        for (String host : options.getHosts()) {
+            seeds.add(new ServerAddress(host).getHost().toLowerCase(java.util.Locale.ROOT));
+        }
+        this.seedHosts = List.copyOf(seeds);
         for (String host : options.getHosts()) {
             ServerAddress address = new ServerAddress(host);
             Server server = new Server(pool(address));
@@ -535,18 +544,71 @@ public final class Topology implements AutoCloseable {
         return false;
     }
 
-    private static Set<ServerAddress> members(ServerDescription description) {
+    private Set<ServerAddress> members(ServerDescription description) {
         Set<ServerAddress> members = new HashSet<>();
-        for (String host : description.getHosts()) {
-            members.add(new ServerAddress(host));
-        }
-        for (String host : description.getPassives()) {
-            members.add(new ServerAddress(host));
-        }
-        for (String host : description.getArbiters()) {
-            members.add(new ServerAddress(host));
+        List<String> all = new ArrayList<>(description.getHosts());
+        all.addAll(description.getPassives());
+        all.addAll(description.getArbiters());
+        for (String host : all) {
+            ServerAddress address = new ServerAddress(host);
+            if (mayJoin(address.getHost(), seedHosts, EXTRA_ALLOWED)) {
+                members.add(address);
+            } else if (refusedMembers.add(host)) {
+                LOG.log(System.Logger.Level.WARNING, "seclume: a member announced " + host
+                        + ", outside the domains of the seeds " + seedHosts + " - no connection "
+                        + "and no credential goes there. -Dseclume.mongodb.allowedHosts=<suffix> "
+                        + "where it belongs.");
+            }
         }
         return members;
+    }
+
+    /** Further host suffixes members may have: -Dseclume.mongodb.allowedHosts=a.example,b.example */
+    static final List<String> EXTRA_ALLOWED = suffixes(
+            System.getProperty("seclume.mongodb.allowedHosts", ""));
+
+    private static final System.Logger LOG = System.getLogger(Topology.class.getName());
+
+    private static List<String> suffixes(String list) {
+        List<String> out = new ArrayList<>();
+        for (String one : list.split(",")) {
+            String suffix = one.strip().toLowerCase(java.util.Locale.ROOT);
+            if (!suffix.isEmpty()) {
+                out.add(suffix.startsWith(".") ? suffix.substring(1) : suffix);
+            }
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * Whether an announced member gets a connection - and the SCRAM proof, the
+     * AWS signature or the OIDC token with it. Any host in a hello's member
+     * lists was taken; one compromised member or an rs.reconfig could bring
+     * in a host of its choosing, with a valid public certificate. Discovery
+     * may name the seeds' hosts on other ports, hosts in a seed's parent
+     * domain (a.db.example lets in b.db.example), and hosts under a
+     * configured suffix - not anything else.
+     */
+    static boolean mayJoin(String host, List<String> seeds, List<String> extra) {
+        String name = host.toLowerCase(java.util.Locale.ROOT);
+        for (String seed : seeds) {
+            if (name.equals(seed)) {
+                return true;
+            }
+            int dot = seed.indexOf('.');
+            boolean literal = seed.chars().allMatch(ch -> ch == '.' || ch == ':'
+                    || Character.digit(ch, 16) >= 0) || seed.startsWith("[");
+            if (!literal && dot > 0 && seed.indexOf('.', dot + 1) > 0
+                    && name.endsWith(seed.substring(dot))) {
+                return true;
+            }
+        }
+        for (String suffix : extra) {
+            if (name.equals(suffix) || name.endsWith("." + suffix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void remove(Server server) {
