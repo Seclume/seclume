@@ -38,7 +38,11 @@ providers each have a page of their own: [TLS.md](TLS.md),
   server called it, and the connection is still usable afterwards. **MySQL does not fail a
   cancelled statement**: a killed `SLEEP()` returns 1 and the call succeeds. Code written
   against PostgreSQL's behaviour would accept a partial answer there. `setQueryTimeout`
-  handles this; a hand-written `cancel()` has to handle it itself.
+  handles this; a hand-written `cancel()` has to handle it itself. **MySQL's `KILL QUERY` goes
+  over a new connection to the configured host** and names the session by its id: behind a
+  router or load balancer with several backends, that connection can land on another server,
+  where the same id may be someone else's session of the same user. Point the URL at one
+  server, or turn query timeouts off, behind such a balancer.
 
 ## Oracle only
 
