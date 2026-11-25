@@ -1018,8 +1018,28 @@ public final class OracleSession implements AutoCloseable {
      * framed the way the reference client's is, and the next person to pick
      * the question up will want it within reach rather than rewritten.
      */
-    private static final boolean TRACE_LOB =
-            Boolean.getBoolean("seclume.oracle.traceLob");
+    private static final boolean TRACE_LOB = traceLob();
+
+    /**
+     * The trace writes whole LOB packets - the application's data - as hex to
+     * System.err, past logging and its masking. One switch was too easy to
+     * leave on: it takes seclume.debug.unsafe=true as well, and says so.
+     */
+    private static boolean traceLob() {
+        if (!Boolean.getBoolean("seclume.oracle.traceLob")) {
+            return false;
+        }
+        if (!Boolean.getBoolean("seclume.debug.unsafe")) {
+            System.getLogger(OracleSession.class.getName()).log(System.Logger.Level.WARNING,
+                    "seclume: seclume.oracle.traceLob is ignored - it writes LOB contents to "
+                    + "System.err, and needs seclume.debug.unsafe=true as well");
+            return false;
+        }
+        System.getLogger(OracleSession.class.getName()).log(System.Logger.Level.WARNING,
+                "seclume: seclume.oracle.traceLob is on - LOB contents go to System.err "
+                + "unmasked. Never in production.");
+        return true;
+    }
 
     /**
      * The packet the server sends when it will not send the LOB itself.
