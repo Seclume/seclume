@@ -358,6 +358,15 @@ final class PooledConnection implements Connection {
                 throw new SQLException("the session cannot be fully reset - "
                         + "the connection is closed rather than lent again");
             }
+        } else if (is(USED) && pool.settings().getResetSql() != null) {
+            // A driver without a reset of its own: the configured SQL, or the
+            // last borrower's role and settings go to the next one.
+            try (java.sql.Statement reset = delegate.createStatement()) {
+                reset.execute(pool.settings().getResetSql());
+            }
+            if (!delegate.getAutoCommit()) {
+                delegate.commit();
+            }
         }
     }
 

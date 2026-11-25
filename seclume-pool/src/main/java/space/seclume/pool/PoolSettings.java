@@ -77,6 +77,7 @@ public final class PoolSettings {
     private Duration keepaliveTime = Duration.ZERO;
     private Duration shutdownTimeout = Duration.ofSeconds(10);
     private Supplier<java.util.Map<String, String>> sessionContext;
+    private String resetSql;
     private Duration validationTimeout = Duration.ofSeconds(5);
     private Duration validationBypassWindow = Duration.ofMillis(500);
     private Duration leakDetectionThreshold = Duration.ZERO;
@@ -196,6 +197,23 @@ public final class PoolSettings {
 
     public void setShutdownTimeout(Duration shutdownTimeout) {
         this.shutdownTimeout = requireNonNegative(shutdownTimeout, "shutdownTimeout");
+    }
+
+    /**
+     * SQL run on every used connection's return when its driver has no
+     * session reset of its own ({@code space.seclume.SessionReset}) - a pool
+     * over another vendor's driver. Without it, a {@code SET ROLE}, a
+     * {@code set_config} or a temporary table of one borrower stays for the
+     * next, as in any pool. {@code DISCARD ALL} for PostgreSQL,
+     * {@code RESET CONNECTION} where the driver offers no reset; null, the
+     * default, for none. A reset that fails closes the connection.
+     */
+    public String getResetSql() {
+        return resetSql;
+    }
+
+    public void setResetSql(String resetSql) {
+        this.resetSql = resetSql == null || resetSql.isBlank() ? null : resetSql;
     }
 
     /**

@@ -404,6 +404,11 @@ message names the oldest holders. Beyond that, what matters is what a connection
   thread is an event loop or a thread of the pool's, so the tenant comes from the Reactor
   context instead: `SeclumeConnectionFactory.withSessionContext(...)`, or a
   `ReactiveSessionContext` bean in Spring.
+- **Another vendor's driver gets a reset of the configuration's choosing.** seclume's drivers
+  reset a used session on return; a foreign driver has no such reset, and one borrower's
+  `SET ROLE`, settings and temporary tables went to the next. `PoolSettings.setResetSql(...)`
+  (`DISCARD ALL`, say) runs on every used connection's return instead; a reset that fails
+  closes the connection.
 - **Statements left open are closed on return.** Each one is a server cursor on Oracle
   (`ORA-01000` after enough of them) and result memory on the others. They are logged with
   their fingerprint; with `leak-detection-threshold` set, the log also shows where each
