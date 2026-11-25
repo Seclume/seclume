@@ -126,6 +126,42 @@ class JGitTest {
                 || refused.getMessage().contains("401"), refused.getMessage());
     }
 
+    /**
+     * Credentials named for the remote: its host and port get the secret,
+     * and only they. Bound to another server - as a submodule's host or a
+     * redirect would be - the same clone goes out with the placeholder and
+     * is refused.
+     */
+    @Test
+    @SuppressWarnings("try") // the clone is held for its working tree, read below
+    void credentialsNamedForTheRemoteGoThereAndNowhereElse() throws Exception {
+        String spec = "provider=file&path=" + directory.resolve("password");
+        try (Git bound = Git.cloneRepository().setURI(url)
+                .setDirectory(directory.resolve("bound").toFile())
+                .setCredentialsProvider(SeclumeGit.credentials("deploy", spec, url)).call()) {
+            assertEquals("hello from the server\n", Files.readString(
+                    directory.resolve("bound").resolve("README")).replace("\r\n", "\n"));
+        }
+        String elsewhere = url.replaceFirst("localhost:\\d+", "git.attacker.example:443");
+        TransportException refused = assertThrows(TransportException.class,
+                () -> Git.cloneRepository().setURI(url)
+                        .setDirectory(directory.resolve("elsewhere").toFile())
+                        .setCredentialsProvider(SeclumeGit.credentials("deploy", spec, elsewhere))
+                        .call().close());
+        assertTrue(refused.getMessage().toLowerCase().contains("auth")
+                || refused.getMessage().contains("401"), refused.getMessage());
+    }
+
+    @Test
+    void aRemoteIsNamedByItsHostAndPort() {
+        assertEquals("git.example.com:443", SeclumeGit.server("https://Git.Example.com/team/app.git"));
+        assertEquals("git.example.com:8443", SeclumeGit.server("https://git.example.com:8443/a.git"));
+        assertEquals("[::1]:443", SeclumeGit.server("https://[::1]/a.git"));
+        assertThrows(IllegalArgumentException.class,
+                () -> SeclumeGit.server("http://git.example.com/a.git"));
+        assertThrows(IllegalArgumentException.class, () -> SeclumeGit.server("not a url"));
+    }
+
     @Test
     void thePasswordIsNotOnTheHeap() throws Exception {
         try (Git git = cloneInto("heap", "password")) {

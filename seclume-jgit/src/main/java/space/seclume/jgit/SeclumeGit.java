@@ -76,10 +76,52 @@ public final class SeclumeGit {
         };
     }
 
-    /** A credentials provider with {@code user} and a placeholder for the secret. */
+    /**
+     * A credentials provider with {@code user} and a placeholder for the
+     * secret, bound to the first server it is written for.
+     *
+     * <p>JGit gives the same login to whichever server asks: a submodule's
+     * host from a {@code .gitmodules} someone else wrote, a URL the user
+     * chose. If such a server asks first, the secret is bound to it. Prefer
+     * {@link #credentials(String, String, String)}, which names the remote.
+     */
     public static CredentialsProvider credentials(String user, String secretSpec) {
         return new UsernamePasswordCredentialsProvider(user,
                 SeclumeSslSocketFactory.placeholder(secretSpec));
+    }
+
+    /**
+     * A credentials provider whose secret goes to {@code remoteUrl}'s host and
+     * port only - {@code https://git.example.com/team/app.git}, port 443 when
+     * the URL names none. Any other server - a submodule's host, a redirect's
+     * - gets the placeholder, and refuses it. A remote on another host needs
+     * a credentials provider of its own.
+     */
+    public static CredentialsProvider credentials(String user, String secretSpec,
+                                                  String remoteUrl) {
+        return new UsernamePasswordCredentialsProvider(user,
+                SeclumeSslSocketFactory.placeholder(secretSpec, List.of(server(remoteUrl))));
+    }
+
+    /** {@code host:port} of an https URL, as the placeholders compare servers. */
+    static String server(String remoteUrl) {
+        java.net.URI uri;
+        try {
+            uri = new java.net.URI(remoteUrl);
+        } catch (java.net.URISyntaxException e) {
+            throw new IllegalArgumentException("not a URL: " + e.getMessage());
+        }
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null) {
+            throw new IllegalArgumentException("the remote is an https:// URL with a host, not "
+                    + uri.getScheme() + "://");
+        }
+        String host = uri.getHost();
+        if (host.startsWith("[") && host.endsWith("]")) {
+            host = host.substring(1, host.length() - 1);
+        }
+        int port = uri.getPort() < 0 ? 443 : uri.getPort();
+        String name = host.indexOf(':') >= 0 ? "[" + host + "]" : host;
+        return name.toLowerCase(java.util.Locale.ROOT) + ":" + port;
     }
 
     /** JGit's view of an {@code HttpsURLConnection} whose sockets are seclume's. */

@@ -1754,14 +1754,15 @@ TLS 1.3 with a key held off the heap (see
 ```java
 HttpTransport.setConnectionFactory(SeclumeGit.connections("tlsRootCert=/etc/git-ca.pem"));
 Git.cloneRepository().setURI("https://git.example.com/app.git")
-        .setCredentialsProvider(SeclumeGit.credentials("deploy", "provider=file&path=/run/secrets/git-token"))
+        .setCredentialsProvider(SeclumeGit.credentials("deploy",
+                "provider=file&path=/run/secrets/git-token", "https://git.example.com/app.git"))
         .call();
 ```
 
 The password or access token goes into JGit's Basic login as a placeholder. It is written in
-native memory when the request leaves - for the host of the first request only: JGit gives the
-same login to a submodule's host and after a redirect, and there the placeholder goes, not the
-token.
+native memory when the request leaves - for the remote's host and port only: JGit gives the same
+login to a submodule's host and after a redirect, and there the placeholder goes, not the token.
+Without the remote URL, the secret is bound to the first server that asks for it.
 
 ### gRPC: `seclume-grpc`
 
