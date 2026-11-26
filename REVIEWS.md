@@ -465,6 +465,7 @@ protocol text or dribble bytes.
 | 83 | Kafka field encryption | A value was bound to its topic, not to its record's key: whoever could write to the broker moved account-17's value under account-99 and the consumer read it there. The key's (de)serializer, wrapped in `KeyBinding`, hands the digest of the key actually sent or received to the value's, which binds the value to it; a header claiming a digest is not read. Unbound writing and the migration read are explicit settings. | medium | #PR |
 | 84 | Log masker | Reading character references searched up to 32 characters from every `&`, so lines of many `&` cost far more than others. A length cap was considered and rejected: a line past it would go out unmasked. The search is one pass now (`MarkupReadingTest` holds it to the old reading). | low | #PR |
 | 85 | JGit credentials | `SeclumeGit.credentials(user, spec)` named no remote, and its secret went to whichever server asked first - a submodule's host among them. It is refused, pointing to the variant that names the remote. | medium | #PR |
+| 86 | LDAP Kerberos | The bind response passed on to JNDI wrote the server's result code into one byte: a result of 256 reached the application as 0, success. It is BER-encoded at its length now (`BindResultCodeTest`). | medium | #PR |
 
 ### Mutation testing of the security paths
 

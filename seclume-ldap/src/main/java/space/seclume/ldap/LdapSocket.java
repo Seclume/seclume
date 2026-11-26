@@ -688,8 +688,12 @@ final class LdapSocket extends Socket {
         return new ParsedResult(resultCode, matchedDn, diagBytes, diagnostic, serverSaslCreds);
     }
 
-    private static byte[] encodeBindResponse(byte[] msgIdBytes, ParsedResult res) {
-        int rcLen = 3;
+    static byte[] encodeBindResponse(byte[] msgIdBytes, ParsedResult res) {
+        // The result code as BER writes an integer: as few bytes as hold it,
+        // two's complement. One byte held 0 to 127 - a 256 went on as 0,
+        // which the application read as a successful bind.
+        byte[] code = java.math.BigInteger.valueOf(res.resultCode).toByteArray();
+        int rcLen = 2 + code.length;
         int mdnLen = 1 + lengthSize(res.matchedDn.length) + res.matchedDn.length;
         int diagLen = 1 + lengthSize(res.diagBytes.length) + res.diagBytes.length;
         int bindContent = rcLen + mdnLen + diagLen;
@@ -705,8 +709,9 @@ final class LdapSocket extends Socket {
         out[p++] = (byte) BIND_RESPONSE;
         p = putLengthArray(out, p, bindContent);
         out[p++] = (byte) ENUMERATED;
-        out[p++] = 0x01;
-        out[p++] = (byte) res.resultCode;
+        out[p++] = (byte) code.length;
+        System.arraycopy(code, 0, out, p, code.length);
+        p += code.length;
         out[p++] = (byte) OCTET_STRING;
         p = putLengthArray(out, p, res.matchedDn.length);
         System.arraycopy(res.matchedDn, 0, out, p, res.matchedDn.length);

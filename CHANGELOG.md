@@ -123,6 +123,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **LDAP Kerberos: a refused bind is not passed on as a success.** The bind response handed to
+  JNDI carried the server's result code in one byte: 256 arrived as 0, a successful bind. It is
+  encoded as BER encodes an integer now.
 - **Log masking: XML and HTML references read in one pass.** Each `&` looked up to 32
   characters on for its `;`, so a line of many `&` cost 32 reads a character; the next `;` is
   found once now. A line of 200,000 `&` is masked in about 3.6 ms instead of 8. Long lines stay
