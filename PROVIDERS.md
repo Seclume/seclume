@@ -20,6 +20,23 @@ prevent. Settings say *where* a secret lives, never what it is. That is also why
 secret a provider needs — a Vault token, a bearer token, an AWS session token — is itself a
 nested provider rather than a value.
 
+## Providers that read this machine: named at start-up
+
+Whoever writes a URL also picks the host the secret goes to. A provider that reads something
+of this machine - `file`, `env-file`, `unix-socket`, `process`, `dpapi`, `credential-manager`,
+`libsecret`, `keychain`, `shamir`, `spiffe-jwt` - would have it read any file or local store it
+can and send that to the host as the password. So these are chosen from a URL or Properties
+only where the JVM names them:
+
+```
+-Dseclume.secret.providers=file,env-file
+```
+
+Nested providers are checked the same way (an `encrypted` provider whose key is a `file`).
+Providers that only reach a remote service - Vault, the cloud secret stores and KMSs, RDS IAM -
+are not affected, nor is a provider the application builds in code. `process` keeps its own
+switch as well, `-Dseclume.secret.process.allowed=true`.
+
 ## The providers
 
 | Provider | Reads from | Expires | Needs a provider underneath | Per connect |

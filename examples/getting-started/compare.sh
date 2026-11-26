@@ -26,7 +26,7 @@ start() { # start <profile> -> the JVM's pid, once it is connected
     SPRING_DATASOURCE_PASSWORD="$(cat secrets/db-password)" \
       java -jar "$jar" --spring.profiles.active=plain > "$logs/$profile.log" 2>&1 &
   else
-    java --enable-native-access=ALL-UNNAMED -Djavax.net.ssl.trustStore=secrets/vault-ca.p12 \
+    java --enable-native-access=ALL-UNNAMED -Dseclume.secret.providers=file -Djavax.net.ssl.trustStore=secrets/vault-ca.p12 \
       -Djavax.net.ssl.trustStorePassword=changeit -jar "$jar" \
       --spring.profiles.active=seclume > "$logs/$profile.log" 2>&1 &
   fi

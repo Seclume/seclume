@@ -7,6 +7,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A provider that reads this machine is named at start-up.** `file`, `env-file`,
+  `unix-socket`, `process`, `dpapi`, `credential-manager`, `libsecret`, `keychain`, `shamir` and
+  `spiffe-jwt` are chosen from a URL or Properties only where the JVM is started with
+  `-Dseclume.secret.providers=<names>` (comma-separated; `process` also with its old switch).
+  Whoever writes a URL also picks the host the secret goes to, and could have the machine read
+  any file it can as the password. A URL with `provider=file` now fails with a message naming
+  the property; set it once where the application starts. Providers built in code, and the
+  remote ones (Vault, the cloud stores and KMSs, RDS IAM), are unchanged.
 - **md5 and `mysql_native_password` only to a server that proved who it is.** Under
   `tls=prefer` or `require` - and without TLS - a server in the middle could ask for either and
   take a fast hash of the password, for a salt it chose, to guess against. They are answered only

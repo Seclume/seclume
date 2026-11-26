@@ -162,6 +162,10 @@ try (Connection c = DriverManager.getConnection(url)) {
 }
 ```
 
+A URL may name a file, or anything else of this machine, only where the JVM is started to
+allow it - `-Dseclume.secret.providers=file` here: whoever writes a URL also picks the host the
+secret goes to ([PROVIDERS.md](PROVIDERS.md)).
+
 The URL prefix is `jdbc:seclume:`. There is one artifact per database: `seclume-postgresql`,
 `seclume-mysql`, `seclume-sqlserver` and `seclume-oracle`. There are also `seclume-pool` and
 `seclume-spring-boot-starter`, and the starter pulls in what it needs. The groupId and the

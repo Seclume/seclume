@@ -461,6 +461,7 @@ protocol text or dribble bytes.
 | 79 | CRaC | `SeclumeCrac.register` took a pool only; the MongoDB, HTTP and Redis clients on seclume's TLS could not be told of a checkpoint. `register(Suspendable)` and `closeBeforeCheckpoint(client)` take any client; one left open still refuses the checkpoint, naming who opened it. | low | #PR |
 | 80 | Checkpoint coverage | Nothing caught a class that kept a secret in a field and did not register a wipe for a checkpoint (#58). A source scan now holds every class with a `SecretScope` field to `Checkpoint.register`, or to a list naming why it needs none (per connection, per handshake, covered by `FieldKeys`); a stale entry on the list fails too. | process | #PR |
 | 81 | md5, mysql_native_password | Under `tls=prefer` or `require` a server in the middle could ask for `md5` or `mysql_native_password` and take a fast hash of the password for a salt it chose, to guess against offline. Both are answered only to a server that proved who it is (`verify-full`, `tlsPin`); a MySQL login offers `caching_sha2_password` first. Opt-out: `allowLegacyHashOverUnverifiedTls=true`. | medium | #PR |
+| 82 | Secret providers | Any provider could be chosen from a URL or Properties - `provider=file&path=...` had the machine read a file of the URL writer's choosing and send it, as the password, to the host the same URL named. Providers that read this machine are chosen from settings only where `-Dseclume.secret.providers` names them. | medium | #PR |
 
 ### Mutation testing of the security paths
 

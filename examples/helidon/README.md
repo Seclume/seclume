@@ -64,7 +64,7 @@ reads the same keys from `application.yaml` and hands out `seclume.dataSource("d
 
 ```sh
 mvn -q package -DskipTests
-java --enable-native-access=ALL-UNNAMED -Djavax.net.ssl.trustStore=../getting-started/secrets/vault-ca.p12 \
+java --enable-native-access=ALL-UNNAMED -Dseclume.secret.providers=file -Djavax.net.ssl.trustStore=../getting-started/secrets/vault-ca.p12 \
   -Djavax.net.ssl.trustStorePassword=changeit -cp "target/classes:target/lib/*" example.Main
 ```
 

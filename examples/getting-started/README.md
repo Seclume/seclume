@@ -58,7 +58,7 @@ because it runs on this machine. In production, use
 
 ```sh
 mvn -q package -DskipTests
-java --enable-native-access=ALL-UNNAMED -Djavax.net.ssl.trustStore=secrets/vault-ca.p12 \
+java --enable-native-access=ALL-UNNAMED -Dseclume.secret.providers=file -Djavax.net.ssl.trustStore=secrets/vault-ca.p12 \
   -Djavax.net.ssl.trustStorePassword=changeit -jar target/seclume-getting-started-1.0.jar
 ```
 
@@ -67,7 +67,10 @@ connected as app on PostgreSQL 17...
 running as pid 4711
 ```
 
-`--enable-native-access` lets seclume use native memory without a warning. The trust store
+`--enable-native-access` lets seclume use native memory without a warning.
+`-Dseclume.secret.providers=file` lets the configuration name a file - here the Vault token's:
+a provider that reads this machine is chosen from configuration only where the JVM allows it
+(see [PROVIDERS.md](../../PROVIDERS.md)). The trust store
 holds Vault's dev CA, which is public; `changeit` is its customary password, not a secret.
 
 ## 4. The proof
