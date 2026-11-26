@@ -1,0 +1,10 @@
+# What the CI security gate is made of, and what builds what is released.
+# A change here can switch a check off, so it needs the maintainer's review -
+# with "Require review from Code Owners" set in the branch protection rule.
+
+/.github/                @thomas-haas
+/mvnw                    @thomas-haas
+/mvnw.cmd                @thomas-haas
+/.mvn/                   @thomas-haas
+/pom.xml                 @thomas-haas
+/SECURITY.md             @thomas-haas
