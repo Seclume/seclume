@@ -129,6 +129,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **R2DBC: the driver's threads inherit no thread locals.** A lane's thread, started for one
+  subscriber's task, serves the ones after it - and took the first one's
+  `InheritableThreadLocal`s, a tenant or a principal, along to theirs. They start with none now.
 - **Log masking: two overlapping secrets are both masked whole.** Where two secrets overlapped
   in a line, neither inside the other, the one found second was dropped, and what of it reached
   beyond the first went out in the clear. The mask covers their union now.

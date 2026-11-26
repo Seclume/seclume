@@ -142,7 +142,8 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
             java.util.concurrent.atomic.AtomicBoolean gone =
                     new java.util.concurrent.atomic.AtomicBoolean();
             sink.onCancel(() -> gone.set(true));
-            Thread.ofVirtual().name("seclume-r2dbc-borrow").start(() -> {
+            Thread.ofVirtual().name("seclume-r2dbc-borrow").inheritInheritableThreadLocals(false)
+                    .start(() -> {
                 java.sql.Connection jdbc;
                 try {
                     jdbc = named(context, source::getConnection);

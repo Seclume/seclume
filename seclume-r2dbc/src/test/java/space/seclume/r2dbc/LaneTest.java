@@ -36,6 +36,26 @@ class LaneTest {
         }
     }
 
+    private static final InheritableThreadLocal<String> TENANT = new InheritableThreadLocal<>();
+
+    /**
+     * A thread the driver starts for one subscriber's task serves the ones
+     * after it: an InheritableThreadLocal of the first - a tenant, a
+     * principal - became theirs. The driver's threads inherit none.
+     */
+    @Test
+    void aLanesThreadsInheritNothingOfTheCaller() {
+        TENANT.set("tenant-a");
+        try (Lane lane = new Lane()) {
+            org.junit.jupiter.api.Assertions.assertNull(lane.call(TENANT::get).block(WAIT),
+                    "the lane's work saw the caller's thread local");
+            org.junit.jupiter.api.Assertions.assertNull(lane.callWaiting(TENANT::get).block(WAIT),
+                    "the borrow saw the caller's thread local");
+        } finally {
+            TENANT.remove();
+        }
+    }
+
     @Test
     void theBorrowWaitsOnAVirtualThread() {
         try (Lane lane = new Lane()) {

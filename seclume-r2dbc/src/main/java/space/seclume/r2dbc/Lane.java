@@ -76,14 +76,20 @@ final class Lane implements AutoCloseable {
         java.util.concurrent.ThreadPoolExecutor threads = new java.util.concurrent.ThreadPoolExecutor(
                 0, PLATFORM_THREADS, 60, java.util.concurrent.TimeUnit.SECONDS,
                 new java.util.concurrent.SynchronousQueue<>(),
-                Thread.ofPlatform().name("seclume-r2dbc-", 0).daemon(true).factory(),
-                (task, full) -> Thread.ofVirtual().name("seclume-r2dbc").start(task));
+                // A lane thread serves every subscriber after the one whose task
+                // started it: an InheritableThreadLocal of that one - a tenant, a
+                // principal, a transaction - would be every later one's.
+                Thread.ofPlatform().name("seclume-r2dbc-", 0).daemon(true)
+                        .inheritInheritableThreadLocals(false).factory(),
+                (task, full) -> Thread.ofVirtual().name("seclume-r2dbc")
+                        .inheritInheritableThreadLocals(false).start(task));
         return threads;
     }
 
     /** Where blocking work with no lane of its own waits: a borrow from a full pool. */
     static final Scheduler WAITING = Schedulers.fromExecutor(
-            task -> Thread.ofVirtual().name("seclume-r2dbc-borrow").start(task));
+            task -> Thread.ofVirtual().name("seclume-r2dbc-borrow")
+                    .inheritInheritableThreadLocals(false).start(task));
     private final AtomicBoolean draining = new AtomicBoolean();
     final Scheduler scheduler = Schedulers.fromExecutor(this::enqueue);
 
@@ -126,7 +132,8 @@ final class Lane implements AutoCloseable {
             if (PLATFORM != null) {
                 PLATFORM.execute(this::drain);
             } else {
-                Thread.ofVirtual().name("seclume-r2dbc").start(this::drain);
+                Thread.ofVirtual().name("seclume-r2dbc").inheritInheritableThreadLocals(false)
+                        .start(this::drain);
             }
         }
     }
