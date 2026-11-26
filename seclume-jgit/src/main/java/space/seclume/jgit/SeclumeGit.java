@@ -31,7 +31,8 @@ import space.seclume.http.SeclumeSslSocketFactory;
  * HttpTransport.setConnectionFactory(SeclumeGit.connections(""));   // org.eclipse.jgit.transport, once
  * Git.cloneRepository().setURI("https://git.example.com/team/app.git")
  *         .setCredentialsProvider(SeclumeGit.credentials("deploy",
- *                 "provider=file&amp;path=/run/secrets/git-token"))
+ *                 "provider=file&amp;path=/run/secrets/git-token",
+ *                 "https://git.example.com/team/app.git"))
  *         .setDirectory(dir).call();
  * </pre>
  *
@@ -77,17 +78,23 @@ public final class SeclumeGit {
     }
 
     /**
-     * A credentials provider with {@code user} and a placeholder for the
-     * secret, bound to the first server it is written for.
+     * Refused: a credentials provider that names no remote.
      *
      * <p>JGit gives the same login to whichever server asks: a submodule's
      * host from a {@code .gitmodules} someone else wrote, a URL the user
-     * chose. If such a server asks first, the secret is bound to it. Prefer
+     * chose. Bound to the first server it was written for, the secret went to
+     * such a server when it asked first. Use
      * {@link #credentials(String, String, String)}, which names the remote.
+     *
+     * @throws IllegalArgumentException always
+     * @deprecated names no remote; use {@link #credentials(String, String, String)}
      */
+    @Deprecated(since = "0.15.0", forRemoval = true)
     public static CredentialsProvider credentials(String user, String secretSpec) {
-        return new UsernamePasswordCredentialsProvider(user,
-                SeclumeSslSocketFactory.placeholder(secretSpec));
+        throw new IllegalArgumentException("SeclumeGit.credentials(user, spec) names no remote, "
+                + "and JGit gives a login to whichever server asks - a submodule's host among "
+                + "them: use credentials(user, spec, \"https://your.git.host/repo.git\"), which "
+                + "sends the secret to that host only");
     }
 
     /**

@@ -86,7 +86,7 @@ class JGitTest {
     private static Git cloneInto(String name, String secretFile) throws Exception {
         return Git.cloneRepository().setURI(url).setDirectory(directory.resolve(name).toFile())
                 .setCredentialsProvider(SeclumeGit.credentials("deploy",
-                        "provider=file&path=" + directory.resolve(secretFile)))
+                        "provider=file&path=" + directory.resolve(secretFile), url))
                 .call();
     }
 
@@ -103,7 +103,7 @@ class JGitTest {
                     .setCommitter("dev", "dev@example.com").setSign(false).call();
             Iterable<PushResult> results = git.push().setCredentialsProvider(
                     SeclumeGit.credentials("deploy", "provider=file&path="
-                            + directory.resolve("password"))).call();
+                            + directory.resolve("password"), url)).call();
             for (PushResult result : results) {
                 for (RemoteRefUpdate update : result.getRemoteUpdates()) {
                     assertEquals(RemoteRefUpdate.Status.OK, update.getStatus());
@@ -162,11 +162,20 @@ class JGitTest {
         assertThrows(IllegalArgumentException.class, () -> SeclumeGit.server("not a url"));
     }
 
+    /** A credentials provider naming no remote went to whichever server asked first: refused. */
+    @Test
+    @SuppressWarnings("removal")
+    void credentialsThatNameNoRemoteAreRefused() {
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> SeclumeGit.credentials("deploy", "provider=file&path=/x"));
+        assertTrue(refused.getMessage().contains("names no remote"), refused.getMessage());
+    }
+
     @Test
     void thePasswordIsNotOnTheHeap() throws Exception {
         try (Git git = cloneInto("heap", "password")) {
             git.fetch().setCredentialsProvider(SeclumeGit.credentials("deploy",
-                    "provider=file&path=" + directory.resolve("password"))).call();
+                    "provider=file&path=" + directory.resolve("password"), url)).call();
         }
         NoSecretInHeap.assertAbsent(directory.resolve("password"));
         String leaked = Files.readString(directory.resolve("password")); // the control

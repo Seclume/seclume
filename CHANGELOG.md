@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **JGit: credentials name their remote.** `SeclumeGit.credentials(user, spec)` named none, and
+  JGit gives a login to whichever server asks - a submodule's host from a `.gitmodules` someone
+  else wrote among them; the secret was bound to whichever asked first. It is refused now, with a
+  message pointing to `credentials(user, spec, remoteUrl)`, which sends the secret to that host
+  only.
 - **Kafka: a value is bound to its record's key.** Kafka does not show a value's serializer the
   key, so whoever could write to the broker could move account-17's value under account-99, and it
   was read there. `EncryptingSerializer` binds a value to its key now, which needs the key's
