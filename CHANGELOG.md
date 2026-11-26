@@ -129,6 +129,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Terminal output escapes what a server or a dump chose.** `seclume-verify`'s text report,
+  `--print-pin`'s certificate names and heapcheck's holders (class and field names from the
+  dump) went to the terminal as they were: an ESC there drove it, a CR overwrote the line before.
+  Control characters are written as `\xNN` now; the JSON reports were escaped already.
 - **A login that finished is not closed by its budget.** The budget's task was only cancelled
   when a login finished; one already running closed the connection the driver had just been
   handed. Whoever takes the budget off first decides now.

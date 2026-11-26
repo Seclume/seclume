@@ -471,6 +471,7 @@ protocol text or dribble bytes.
 | 89 | Kafka brokers | The PLAIN password or bearer token went to every broker the cluster's metadata named. It goes only to brokers in the domains of `bootstrap.servers` or under `seclume.kafka.allowed-brokers` now - the rule MongoDB's members follow, one rule in core (`SeedDomains`). | medium | #PR |
 | 90 | Login budget | `loggedIn()` only cancelled the budget's task; one already running closed the connection just handed to the driver. Login and task now race for one entry, and the loser does nothing (`LoginBudgetRaceTest`). | low | #PR |
 | 91 | CI secrets | Test passwords were written into the scripts as `"${{ secrets.X }}"`: the runner put the value into the script's text before the shell read it, where a quote in it would have been shell syntax. They come in through the step's `env` now and are read as variables. | process | #PR |
+| 92 | Terminal output | The Doctor's text report, `--print-pin`'s subject and issuer, and heapcheck's holder names were printed raw; a server's or a dump's control characters drove the terminal. They go through `ServerText.printable` now. | low | #PR |
 
 ### Mutation testing of the security paths
 
