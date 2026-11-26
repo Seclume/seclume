@@ -128,18 +128,44 @@ final class Differential {
         return findings;
     }
 
-    /** Runs every combination over every row and collects what differs. */
+    /**
+     * Which row a value belongs to - the last column of the table, after the
+     * ones under test, so their positions are the same in every result.
+     */
+    private static final String ROW = "d_row";
+
+    /**
+     * Runs every combination over every row and collects what differs.
+     *
+     * <p>Each driver writes every row, one {@code executeUpdate} per row as
+     * before; then both read the whole table back, ordered by row. Reading
+     * the rows one table at a time cost a delete, an insert and four queries
+     * per row and writer - thousands of round trips per table for the same
+     * values, read by the same code.
+     */
     void run(List<Column> columns) throws SQLException {
         create(columns);
         int rows = columns.stream().mapToInt(c -> c.values().size()).max().orElse(0);
 
-        for (int row = 0; row < rows; row++) {
-            for (Connection writer : List.of(seclume, vendor)) {
-                String wrote = nameOf(writer);
-                truncate();
-                insert(writer, columns, row);
-                compare(columns, wrote, row);
+        for (Connection writer : List.of(seclume, vendor)) {
+            String wrote = nameOf(writer);
+            truncate();
+            // One commit for all rows rather than one each: the values travel
+            // the same way, and the server writes its log once.
+            boolean autoCommit = writer.getAutoCommit();
+            writer.setAutoCommit(false);
+            try {
+                for (int row = 0; row < rows; row++) {
+                    insert(writer, columns, row);
+                }
+                writer.commit();
+            } catch (SQLException | RuntimeException e) {
+                writer.rollback();
+                throw e;
+            } finally {
+                writer.setAutoCommit(autoCommit);
             }
+            compare(columns, wrote, rows);
         }
         compareCatalog(columns);
         drop();
@@ -155,14 +181,14 @@ final class Differential {
      * would leave half of every codec unexercised, and the half that is
      * usually wrong is the one the author used less.
      */
-    private void compare(List<Column> columns, String wrote, int row) throws SQLException {
+    private void compare(List<Column> columns, String wrote, int rows) throws SQLException {
         String sql = "select " + String.join(", ", columns.stream().map(Column::name).toList())
-                + " from " + table;
-        compareThrough(columns, wrote, row, sql, false);
-        compareThrough(columns, wrote, row, sql, true);
+                + ", " + ROW + " from " + table + " order by " + ROW;
+        compareThrough(columns, wrote, rows, sql, false);
+        compareThrough(columns, wrote, rows, sql, true);
     }
 
-    private void compareThrough(List<Column> columns, String wrote, int row, String sql,
+    private void compareThrough(List<Column> columns, String wrote, int rows, String sql,
             boolean prepared) throws SQLException {
         try (Statement a = prepared ? seclume.prepareStatement(sql) : seclume.createStatement();
              Statement b = prepared ? vendor.prepareStatement(sql) : vendor.createStatement();
@@ -171,23 +197,40 @@ final class Differential {
              ResultSet theirs = prepared ? ((PreparedStatement) b).executeQuery()
                      : b.executeQuery(sql)) {
 
-            boolean hasMine = mine.next();
-            boolean hasTheirs = theirs.next();
-            if (hasMine != hasTheirs) {
-                findings.add(new Finding("<row>", "exists", wrote, "both",
-                        String.valueOf(hasMine), String.valueOf(hasTheirs)));
-                return;
-            }
-            if (!hasMine) {
-                return;
-            }
-
-            for (int i = 1; i <= columns.size(); i++) {
-                Column column = columns.get(i - 1);
-                String how = prepared ? "prepared" : "text";
-                compareValue(column, i, mine, theirs, wrote + "/" + how, row);
-                compareMetaData(column, i, mine.getMetaData(), theirs.getMetaData(),
-                        wrote + "/" + how);
+            String how = prepared ? "prepared" : "text";
+            for (int row = 0; row <= rows; row++) {
+                boolean hasMine = mine.next();
+                boolean hasTheirs = theirs.next();
+                if (hasMine != hasTheirs) {
+                    findings.add(new Finding("<row " + row + ">", "exists", wrote, "both",
+                            String.valueOf(hasMine), String.valueOf(hasTheirs)));
+                    return;
+                }
+                if (row == rows) {
+                    if (hasMine) {
+                        findings.add(new Finding("<row " + row + ">", "exists", wrote, "both",
+                                "a row more than was written", "a row more than was written"));
+                    }
+                    return;
+                }
+                if (!hasMine) {
+                    findings.add(new Finding("<row " + row + ">", "exists", wrote, "both",
+                            "missing", "missing"));
+                    return;
+                }
+                int place = columns.size() + 1;
+                if (mine.getInt(place) != row || theirs.getInt(place) != row) {
+                    findings.add(new Finding("<row " + row + ">", ROW, wrote + "/" + how, "both",
+                            String.valueOf(mine.getInt(place)),
+                            String.valueOf(theirs.getInt(place))));
+                    return;
+                }
+                for (int i = 1; i <= columns.size(); i++) {
+                    Column column = columns.get(i - 1);
+                    compareValue(column, i, mine, theirs, wrote + "/" + how, row);
+                    compareMetaData(column, i, mine.getMetaData(), theirs.getMetaData(),
+                            wrote + "/" + how);
+                }
             }
         }
     }
@@ -415,7 +458,7 @@ final class Differential {
             }
             ddl.append(columns.get(i).name()).append(' ').append(columns.get(i).ddl());
         }
-        ddl.append(')');
+        ddl.append(", ").append(ROW).append(" int not null)");
         try (Statement statement = seclume.createStatement()) {
             statement.execute(ddl.toString());
         }
@@ -426,7 +469,9 @@ final class Differential {
         String names = String.join(", ", columns.stream().map(Column::name).toList());
         String marks = String.join(", ", columns.stream().map(c -> "?").toList());
         try (PreparedStatement insert = connection.prepareStatement(
-                "insert into " + table + " (" + names + ") values (" + marks + ")")) {
+                "insert into " + table + " (" + names + ", " + ROW + ") values (" + marks
+                        + ", ?)")) {
+            insert.setInt(columns.size() + 1, row);
             for (int i = 0; i < columns.size(); i++) {
                 List<Object> values = columns.get(i).values();
                 Object value = row < values.size() ? values.get(row) : null;
