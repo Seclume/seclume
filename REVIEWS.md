@@ -467,6 +467,7 @@ protocol text or dribble bytes.
 | 85 | JGit credentials | `SeclumeGit.credentials(user, spec)` named no remote, and its secret went to whichever server asked first - a submodule's host among them. It is refused, pointing to the variant that names the remote. | medium | #PR |
 | 86 | LDAP Kerberos | The bind response passed on to JNDI wrote the server's result code into one byte: a result of 256 reached the application as 0, success. It is BER-encoded at its length now (`BindResultCodeTest`). | medium | #PR |
 | 87 | Heap dump links | The sidecar took a link named `*.hprof` for a dump and read, redacted and deleted what it pointed to; heapcheck reading a container's dump through `/proc/<pid>/root` followed the container's absolute links into the host's file system. The sidecar skips links; heapcheck resolves each link inside the process's root, as `openat2(RESOLVE_IN_ROOT)` does, and refuses a dump that is no regular file. | medium | #PR |
+| 88 | Secret guard | `${DB_PASSWORD:SuperSecret}` - a plain default inside a placeholder - was not reported, nor names ending in `secret-key`, `api-key`, `pwd` or `credentials`. Both are now. | low | #PR |
 
 ### Mutation testing of the security paths
 

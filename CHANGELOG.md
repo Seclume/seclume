@@ -123,6 +123,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Spring Boot: the secret guard sees more.** A placeholder's plain default -
+  `${DB_PASSWORD:SuperSecret}`, the secret used whenever the variable is unset - was taken for a
+  reference and not reported; and names ending in `secret-key`, `access-key`, `api-key`, `pwd` or
+  `credentials` were not looked at. seclume's own `seclume.datasources.*.secret.*` settings,
+  which say where a secret lives, are still left alone.
 - **Heap dumps: links are not followed.** The sidecar took a link named like a dump for one and
   read, redacted and deleted the file it pointed to. `seclume-heapcheck --in-target` read a
   container's paths through `/proc/<pid>/root`, where the container's absolute links lead into

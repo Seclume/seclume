@@ -98,7 +98,9 @@ public class SeclumeEnvironmentPostProcessor implements EnvironmentPostProcessor
      * a guard that cries wolf is read once and ignored afterwards.
      */
     private static final List<String> SUSPECT = List.of(
-            "password", "passwd", "secret", "private-key", "privatekey", "client-secret");
+            "password", "passwd", "pwd", "secret", "private-key", "privatekey", "client-secret",
+            "secret-key", "secretkey", "access-key", "accesskey", "api-key", "apikey",
+            "credentials");
 
     private final Log log;
 
@@ -260,6 +262,11 @@ public class SeclumeEnvironmentPostProcessor implements EnvironmentPostProcessor
      */
     static boolean isSuspect(String property) {
         String lower = property.toLowerCase(Locale.ROOT);
+        // seclume's own settings say where a secret lives, never what it is -
+        // seclume.datasources.main.secret.key is the name of a variable.
+        if (lower.matches("seclume[._-]datasources[._-].+[._-]secret[._-].+")) {
+            return false;
+        }
         for (String ending : SUSPECT) {
             if (lower.equals(ending) || lower.equals(ending.replace('-', '_'))) {
                 return true;
@@ -281,11 +288,53 @@ public class SeclumeEnvironmentPostProcessor implements EnvironmentPostProcessor
      * somewhere else, and reporting it would train people to ignore the
      * warning.
      */
-    private static boolean looksLikeAValue(Object value) {
+    static boolean looksLikeAValue(Object value) {
         if (!(value instanceof String text)) {
             return value != null;
         }
-        String trimmed = text.trim();
-        return !trimmed.isEmpty() && !(trimmed.startsWith("${") && trimmed.endsWith("}"));
+        return plainTextIn(text.trim());
+    }
+
+    /**
+     * Whether {@code text} holds anything but references: text outside a
+     * placeholder, or a placeholder's default that is no placeholder itself -
+     * {@code ${DB_PASSWORD:SuperSecret}} is the secret in plain text, used
+     * whenever the variable is not set.
+     */
+    private static boolean plainTextIn(String text) {
+        int i = 0;
+        while (i < text.length()) {
+            if (!text.startsWith("${", i)) {
+                if (!Character.isWhitespace(text.charAt(i))) {
+                    return true;
+                }
+                i++;
+                continue;
+            }
+            int depth = 0;
+            int colon = -1;
+            int end = -1;
+            for (int k = i; k < text.length(); k++) {
+                if (text.startsWith("${", k)) {
+                    depth++;
+                    k++;
+                } else if (text.charAt(k) == '}') {
+                    if (--depth == 0) {
+                        end = k;
+                        break;
+                    }
+                } else if (text.charAt(k) == ':' && depth == 1 && colon < 0) {
+                    colon = k;
+                }
+            }
+            if (end < 0) {
+                return true;                     // no placeholder at all: a value
+            }
+            if (colon > 0 && plainTextIn(text.substring(colon + 1, end).trim())) {
+                return true;
+            }
+            i = end + 1;
+        }
+        return false;
     }
 }
