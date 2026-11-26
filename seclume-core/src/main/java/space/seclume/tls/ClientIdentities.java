@@ -301,14 +301,70 @@ public final class ClientIdentities {
         return certificate + "\0" + new TreeMap<>(key);
     }
 
+    private static final java.util.concurrent.locks.ReentrantLock HANDSHAKES =
+            new java.util.concurrent.locks.ReentrantLock();
+    private static final java.util.concurrent.locks.Condition NONE_RUNNING =
+            HANDSHAKES.newCondition();
+    /** Handshakes signing with a client identity right now; under {@link #HANDSHAKES}. */
+    private static int running;
+
+    /**
+     * A handshake with a client identity begins - see {@link #closeAll()}.
+     * For seclume's TLS layers, which pair it with {@link #handshakeEnded()}.
+     */
+    public static void handshakeStarted() {
+        HANDSHAKES.lock();
+        try {
+            running++;
+        } finally {
+            HANDSHAKES.unlock();
+        }
+    }
+
+    /** That handshake is over, however it ended. */
+    public static void handshakeEnded() {
+        HANDSHAKES.lock();
+        try {
+            if (--running == 0) {
+                NONE_RUNNING.signalAll();
+            }
+        } finally {
+            HANDSHAKES.unlock();
+        }
+    }
+
     /**
      * Closes every identity and empties the cache.
      *
      * <p>For tests and for an application shutting down deliberately. After
-     * this the next {@link #of} builds afresh, which is why it is safe to call
-     * at any point where no handshake is running.
+     * this the next {@link #of} builds afresh. A handshake signing with an
+     * identity while it is closed would fail half way, so this waits for the
+     * running ones - ten seconds at most, then it warns and closes anyway.
      */
     public static void closeAll() {
+        closeAll(java.time.Duration.ofSeconds(10));
+    }
+
+    static void closeAll(java.time.Duration wait) {
+        HANDSHAKES.lock();
+        try {
+            long left = wait.toNanos();
+            while (running > 0) {
+                if (left <= 0) {
+                    System.getLogger(ClientIdentities.class.getName()).log(
+                            System.Logger.Level.WARNING, running + " TLS handshake(s) with a "
+                                    + "client certificate still running after " + wait.toMillis()
+                                    + " ms - the identities are closed anyway, and those "
+                                    + "handshakes fail");
+                    break;
+                }
+                left = NONE_RUNNING.awaitNanos(left);
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } finally {
+            HANDSHAKES.unlock();
+        }
         for (ClientIdentity identity : IDENTITIES.values()) {
             identity.close();
         }

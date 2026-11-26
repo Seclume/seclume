@@ -177,7 +177,25 @@ public final class ClientHandshake {
         return handshake(transport, host, trust, identity, alpn, defaultOffer());
     }
 
+    /**
+     * Counted while an identity may sign: {@link ClientIdentities#closeAll()}
+     * waits for it rather than closing a key under a running handshake.
+     */
     private static TlsConnection handshake(Transport transport, String host,
+            CertificateTrust trust, ClientIdentity identity, String alpn,
+            ClientHello.Offer offer) throws IOException {
+        if (identity == null) {
+            return handshakeNow(transport, host, trust, null, alpn, offer);
+        }
+        ClientIdentities.handshakeStarted();
+        try {
+            return handshakeNow(transport, host, trust, identity, alpn, offer);
+        } finally {
+            ClientIdentities.handshakeEnded();
+        }
+    }
+
+    private static TlsConnection handshakeNow(Transport transport, String host,
             CertificateTrust trust, ClientIdentity identity, String alpn,
             ClientHello.Offer offer) throws IOException {
         boolean offers13 = offer != ClientHello.Offer.TLS12;

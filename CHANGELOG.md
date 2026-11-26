@@ -83,6 +83,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **`ClientIdentities.closeAll()` waits for running handshakes.** It was safe only "where no
+  handshake is running", and nothing held it to that: a handshake signing with a client
+  certificate at that moment failed half way. It waits for them now, ten seconds at most, and
+  then warns and closes anyway.
 - **MySQL: a cancellation kills nothing on another server.** `KILL QUERY` goes over a second
   connection, and behind a load balancer that can reach another backend, where the same
   connection id is somebody else's session. The session now knows which server it is on
