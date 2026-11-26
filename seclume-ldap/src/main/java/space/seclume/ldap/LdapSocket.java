@@ -688,11 +688,29 @@ final class LdapSocket extends Socket {
         return new ParsedResult(resultCode, matchedDn, diagBytes, diagnostic, serverSaslCreds);
     }
 
+    /** {@code value} in as few bytes as hold it, big-endian two's complement - BER's integer. */
+    static byte[] berInteger(int value) {
+        int length = 4;
+        // A leading byte can go while the bit below it says the same as it.
+        while (length > 1) {
+            int top = value >> ((length - 1) * 8 - 1);
+            if (top != 0 && top != -1) {
+                break;
+            }
+            length--;
+        }
+        byte[] out = new byte[length];
+        for (int i = 0; i < length; i++) {
+            out[i] = (byte) (value >>> ((length - 1 - i) * 8));
+        }
+        return out;
+    }
+
     static byte[] encodeBindResponse(byte[] msgIdBytes, ParsedResult res) {
         // The result code as BER writes an integer: as few bytes as hold it,
         // two's complement. One byte held 0 to 127 - a 256 went on as 0,
         // which the application read as a successful bind.
-        byte[] code = java.math.BigInteger.valueOf(res.resultCode).toByteArray();
+        byte[] code = berInteger(res.resultCode);
         int rcLen = 2 + code.length;
         int mdnLen = 1 + lengthSize(res.matchedDn.length) + res.matchedDn.length;
         int diagLen = 1 + lengthSize(res.diagBytes.length) + res.diagBytes.length;

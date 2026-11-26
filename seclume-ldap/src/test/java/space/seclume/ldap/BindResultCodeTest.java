@@ -24,4 +24,15 @@ class BindResultCodeTest {
                     .resultCode(), "result code " + code);
         }
     }
+
+    @Test
+    void anIntegerTakesAsFewBytesAsHoldIt() {
+        for (int value : new int[] {0, 1, 127, 128, 255, 256, 32_767, 32_768, 65_536, -1, -128,
+                -129, Integer.MAX_VALUE, Integer.MIN_VALUE}) {
+            assertEquals(java.util.HexFormat.of().formatHex(
+                            java.math.BigInteger.valueOf(value).toByteArray()),
+                    java.util.HexFormat.of().formatHex(LdapSocket.berInteger(value)),
+                    "the encoding of " + value);
+        }
+    }
 }
