@@ -550,6 +550,11 @@ public abstract class ReadOnlyResultSet implements ResultSet {
      */
     private static SQLException notANumber(int columnIndex, String what,
             NumberFormatException cause) {
+        if (cause instanceof NumberOutOfRange) {
+            return new java.sql.SQLDataException("column " + columnIndex + " holds a number too "
+                    + "large to be read as " + what + " - read it with getBigDecimal", "22003",
+                    cause);
+        }
         return new java.sql.SQLDataException("column " + columnIndex + " cannot be read as "
                 + what, "22018", cause);
     }

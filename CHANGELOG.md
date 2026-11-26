@@ -81,6 +81,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **A number too large for `getLong` is SQLState 22003**, not 22018. A BIGINT UNSIGNED above
+  `Long.MAX_VALUE` (MySQL, text and binary protocol) or a PostgreSQL numeric of twenty digits was
+  refused as text that is no number; it is a number out of range, and `getBigDecimal` reads it.
 - **SQL Server: `getBoolean`** on a value its converter does not take refuses with an
   `SQLDataException` (22018) instead of letting a `NumberFormatException` out.
 - **Pool: `rotateSecret(closeIdleNow, grace)`** closes connections still lent out under the old

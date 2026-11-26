@@ -75,14 +75,14 @@ public final class TextNumber {
             return value;
         }
         if (value == Long.MIN_VALUE) {
-            throw new NumberFormatException("out of range for a long");
+            throw new NumberOutOfRange("out of range for a long");
         }
         return -value;
     }
 
     private static long accumulate(long negativeSoFar, int digit) {
         if (negativeSoFar < (Long.MIN_VALUE + digit) / 10) {
-            throw new NumberFormatException("out of range for a long");
+            throw new NumberOutOfRange("out of range for a long");
         }
         return negativeSoFar * 10 - digit;
     }

@@ -227,6 +227,9 @@ public final class PgResultSet extends ReadOnlyResultSet implements space.seclum
         }
         try {
             return block.decimalAt(block.offset(row, column), block.length(row, column));
+        } catch (space.seclume.internal.jdbc.NumberOutOfRange e) {
+            throw new java.sql.SQLDataException("column " + (column + 1) + " holds a number too "
+                    + "large for a long - read it with getBigDecimal", "22003", e);
         } catch (NumberFormatException e) {
             throw new SQLException("column " + (column + 1) + " is not an integer: "
                     + stringAt(column), "22018");

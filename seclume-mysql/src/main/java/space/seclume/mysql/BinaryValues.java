@@ -44,7 +44,8 @@ public final class BinaryValues {
                 if (unsigned && value < 0) {
                     // A BIGINT UNSIGNED above Long.MAX_VALUE is no long: refused,
                     // not handed out negative.
-                    throw new NumberFormatException("a BIGINT UNSIGNED out of range for a long");
+                    throw new space.seclume.internal.jdbc.NumberOutOfRange(
+                            "a BIGINT UNSIGNED out of range for a long");
                 }
                 yield value;
             }
