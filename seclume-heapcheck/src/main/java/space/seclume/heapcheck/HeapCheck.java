@@ -97,14 +97,17 @@ public final class HeapCheck {
                     null, false);
         }
 
-        /** Where a path of the process's file system is from here. */
+        /**
+         * Where a path of the process's file system is from here: under
+         * {@code /proc/<pid>/root}, with every link on the way resolved inside
+         * that root - see {@link #inRoot}.
+         */
         Path local(Path path) {
             if (!inTarget) {
                 return path;
             }
             Path absolute = path.isAbsolute() ? path : Path.of("/").resolve(path);
-            return Path.of("/proc", pid, "root").resolve(
-                    absolute.getRoot().relativize(absolute).toString());
+            return inRoot(Path.of("/proc", pid, "root"), absolute.getRoot().relativize(absolute));
         }
 
         Options(String pid, Path dumpFile, List<Path> secretFiles, List<Path> reports,
@@ -371,6 +374,81 @@ public final class HeapCheck {
         return run(new Options(pid, null, List.of(secretFile), List.of(), keep));
     }
 
+    /** Links followed at most, as the kernel does before it gives up (ELOOP). */
+    private static final int MAX_LINKS = 40;
+
+    /**
+     * {@code inside} under {@code root}, resolved as the process sees it.
+     *
+     * <p>Through {@code /proc/<pid>/root} the kernel goes on from a link's
+     * target in this file system, not in the process's: an absolute link the
+     * process placed - a dump at {@code /tmp/d.hprof -> /etc/shadow} - would
+     * have this check read, and delete, a file of the host. So each link on
+     * the way is read here and resolved inside {@code root}: an absolute
+     * target from {@code root}, and {@code ..} never above it - what
+     * {@code openat2(RESOLVE_IN_ROOT)} does. A component that does not exist
+     * yet (the dump before the JVM writes it) ends the resolution; the rest
+     * is taken as it stands.
+     */
+    static Path inRoot(Path root, Path inside) {
+        java.util.ArrayDeque<String> todo = new java.util.ArrayDeque<>();
+        for (Path name : inside) {
+            todo.addLast(name.toString());
+        }
+        List<String> done = new ArrayList<>();
+        int links = 0;
+        while (!todo.isEmpty()) {
+            String name = todo.pollFirst();
+            if (name.isEmpty() || name.equals(".")) {
+                continue;
+            }
+            if (name.equals("..")) {
+                if (!done.isEmpty()) {
+                    done.remove(done.size() - 1);
+                }
+                continue;
+            }
+            Path candidate = join(root, done).resolve(name);
+            if (!Files.isSymbolicLink(candidate)) {
+                done.add(name);
+                if (!Files.exists(candidate, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    done.addAll(todo);
+                    break;
+                }
+                continue;
+            }
+            if (++links > MAX_LINKS) {
+                throw new IllegalArgumentException("more than " + MAX_LINKS + " links on the "
+                        + "way to " + inside + " in the process's file system");
+            }
+            Path target;
+            try {
+                target = Files.readSymbolicLink(candidate);
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            if (target.isAbsolute() || target.toString().startsWith("/")) {
+                done.clear();
+            }
+            List<String> parts = new ArrayList<>();
+            for (Path part : target) {
+                parts.add(part.toString());
+            }
+            for (int i = parts.size() - 1; i >= 0; i--) {
+                todo.addFirst(parts.get(i));
+            }
+        }
+        return join(root, done);
+    }
+
+    private static Path join(Path root, List<String> names) {
+        Path joined = root;
+        for (String name : names) {
+            joined = joined.resolve(name);
+        }
+        return joined;
+    }
+
     static int run(Options options) {
         List<Secret> secrets = new ArrayList<>();
         for (Path file : options.secretFiles()) {
@@ -432,7 +510,15 @@ public final class HeapCheck {
                 }
                 target = new AuditReport.Target(null, null, dump.toString());
             }
-            long size = Files.size(dump);
+            // The process could put a link where its dump was written; read
+            // through /proc/<pid>/root it would lead into this file system.
+            if (!Files.isRegularFile(dump, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                System.err.println("the heap dump at " + dump + " is not a regular file - a link "
+                        + "or something else was put in its place; nothing was read");
+                return 2;
+            }
+            long size = Files.readAttributes(dump, java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS).size();
             // A recording holds the environment, the system properties and the
             // command line: what is named secret there is looked for as well.
             boolean recording = !takesDump && Recordings.isRecording(dump);

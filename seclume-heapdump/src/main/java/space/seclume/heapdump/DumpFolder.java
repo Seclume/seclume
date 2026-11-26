@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
@@ -131,7 +132,7 @@ public final class DumpFolder {
         if (recording(file)) {
             return Recordings.complete(file);
         }
-        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
             long size = channel.size();
             if (size < HEADER.length + 9) {
                 return false;
@@ -162,7 +163,9 @@ public final class DumpFolder {
     /** The dumps and recordings in {@code folder} that wait for redaction - finished or not. */
     public static List<Path> candidates(Path folder) throws IOException {
         try (Stream<Path> files = Files.list(folder)) {
-            return files.filter(Files::isRegularFile)
+            // A link is no dump: followed, it read - and deleted - a file
+            // anywhere the process could reach.
+            return files.filter(file -> Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
                     .filter(file -> {
                         String name = file.getFileName().toString();
                         return (name.endsWith(".hprof") || name.endsWith(".jfr"))
@@ -183,7 +186,7 @@ public final class DumpFolder {
         boolean recording = recording(dump);
         String base = name.substring(0, name.length() - (recording ? ".jfr" : ".hprof").length());
         String suffix = recording ? REDACTED_RECORDING : REDACTED;
-        String stamp = STAMP.format(Files.getLastModifiedTime(dump).toInstant());
+        String stamp = STAMP.format(Files.getLastModifiedTime(dump, LinkOption.NOFOLLOW_LINKS).toInstant());
         Path target = dump.resolveSibling(base + "-" + stamp + suffix);
         for (int i = 2; Files.exists(target); i++) {
             target = dump.resolveSibling(base + "-" + stamp + "-" + i + suffix);
@@ -244,7 +247,7 @@ public final class DumpFolder {
                 return name.startsWith(".seclume-redact-")
                         && (name.endsWith(".hprof.part") || name.endsWith(".jfr.part"));
             }).toList()) {
-                if (Files.getLastModifiedTime(part).toInstant().isBefore(before)) {
+                if (Files.getLastModifiedTime(part, LinkOption.NOFOLLOW_LINKS).toInstant().isBefore(before)) {
                     Files.deleteIfExists(part);
                 }
             }
@@ -311,8 +314,10 @@ public final class DumpFolder {
                 List<Path> candidates = candidates(folder);
                 failed.keySet().retainAll(candidates);
                 for (Path dump : candidates) {
-                    long size = Files.size(dump);
-                    Instant written = Files.getLastModifiedTime(dump).toInstant();
+                    long size = Files.readAttributes(dump,
+                            java.nio.file.attribute.BasicFileAttributes.class,
+                            LinkOption.NOFOLLOW_LINKS).size();
+                    Instant written = Files.getLastModifiedTime(dump, LinkOption.NOFOLLOW_LINKS).toInstant();
                     if (written.equals(failed.get(dump))) {
                         continue;                 // said once; not again every few seconds
                     }

@@ -123,6 +123,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Heap dumps: links are not followed.** The sidecar took a link named like a dump for one and
+  read, redacted and deleted the file it pointed to. `seclume-heapcheck --in-target` read a
+  container's paths through `/proc/<pid>/root`, where the container's absolute links lead into
+  the host's file system; it resolves every link inside the container's root now and refuses a
+  dump that is not a regular file.
 - **MySQL under `NO_BACKSLASH_ESCAPES`.** The catalog queries doubled every backslash, and LIKE
   there has no escape character unless one is named: a column called `a` was not found by
   `getColumns`. The JDBC escape translation took a literal ending in a backslash for one that
