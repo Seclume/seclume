@@ -81,6 +81,56 @@ public final class SeclumeCrac {
     }
 
     /**
+     * A client that can let go of its connections before a checkpoint and
+     * open new ones after the restore - a MongoDB, HTTP or Redis client
+     * behind seclume's TLS, wrapped by the application, which knows how its
+     * client is rebuilt.
+     */
+    public interface Suspendable {
+
+        /** Before the checkpoint: every connection closed. An exception refuses the checkpoint. */
+        void suspend() throws Exception;
+
+        /** After the restore - or a refused checkpoint: connections again. */
+        void resume() throws Exception;
+    }
+
+    /**
+     * Makes {@code client} suspend before a checkpoint and resume after, as a
+     * pool does. Asked before the process's own part, which then still checks
+     * that no seclume TLS connection is left open and names who opened any
+     * that are - a client nobody registered refuses the checkpoint there.
+     */
+    public static void register(Suspendable client) {
+        Resource resource = new ClientResource(client);
+        REGISTERED.add(resource);
+        Core.getGlobalContext().register(resource);
+    }
+
+    /**
+     * Closes {@code client} before a checkpoint, for one that cannot be
+     * suspended: after the restore the application makes a new one.
+     */
+    public static void closeBeforeCheckpoint(AutoCloseable client) {
+        register(new Suspendable() {
+            @Override
+            public void suspend() throws Exception {
+                client.close();
+            }
+
+            @Override
+            public void resume() {
+                // closed for good; the application builds a new one
+            }
+        });
+    }
+
+    /** The resources registered, in order - for a test. */
+    static List<Resource> registered() {
+        return List.copyOf(REGISTERED);
+    }
+
+    /**
      * How long a checkpoint waits for borrowed connections to come back and
      * running logins to finish, in milliseconds; {@code seclume.crac.quiesceMillis}.
      */
@@ -270,6 +320,20 @@ public final class SeclumeCrac {
         @Override
         public void afterRestore(Context<? extends Resource> context) {
             pool.resume();
+        }
+    }
+
+    private record ClientResource(Suspendable client) implements Resource {
+
+        /** An exception here aborts the checkpoint. */
+        @Override
+        public void beforeCheckpoint(Context<? extends Resource> context) throws Exception {
+            client.suspend();
+        }
+
+        @Override
+        public void afterRestore(Context<? extends Resource> context) throws Exception {
+            client.resume();
         }
     }
 

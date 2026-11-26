@@ -81,6 +81,12 @@ All notable changes to seclume are recorded here. Versions follow
 - **The pool's grade warns for an encrypted connection whose server was not checked**
   (`tls=prefer`, `require`); `Secured.serverAuthenticated()` says which it is.
 
+### Added
+
+- **CRaC: any client can be registered.** `SeclumeCrac.register` took a `SeclumePool` only;
+  `register(SeclumeCrac.Suspendable)` suspends and resumes any client - MongoDB, HTTP, Redis on
+  seclume's TLS - and `closeBeforeCheckpoint(client)` closes one that cannot be suspended.
+
 ### Fixed
 
 - **CRaC: a pool's refused checkpoint says where the open secrets came from.** The

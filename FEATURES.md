@@ -451,7 +451,10 @@ message names the oldest holders. Beyond that, what matters is what a connection
 
 **Checkpoint and restore (CRaC, Lambda SnapStart).** `seclume-crac` registers a pool so that it
 gives up every connection before a checkpoint and logs in afresh after the restore. Without it
-CRaC refuses the checkpoint over the pool's open sockets. Before the checkpoint it also:
+CRaC refuses the checkpoint over the pool's open sockets. Any other client on seclume's TLS -
+MongoDB, HTTP, Redis - is registered the same way with `SeclumeCrac.register(Suspendable)`
+(suspended before, resumed after) or `SeclumeCrac.closeBeforeCheckpoint(client)`; one left
+open refuses the checkpoint, naming who opened it. Before the checkpoint it also:
 
 - **waits** until no connection is borrowed and no secret is open, and refuses the checkpoint
   if that does not happen within `seclume.crac.quiesceMillis` (10 s);

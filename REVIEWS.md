@@ -457,6 +457,7 @@ protocol text or dribble bytes.
 | 76 | Heap check report | The Markdown report escaped only `\|` and line breaks; class and field names from the dump, and what the examined JVM said about itself, could form links, images or HTML. All Markdown characters are escaped; a backtick cannot end a code span. | low | #PR |
 | 77 | HTTP placeholders | A placeholder this process did not hand out points at an attack and was only refused and logged, sparsely. It is a `space.seclume.PlaceholderRefused` JFR event now, each time, with the count so far. | low | #PR |
 | 78 | CRaC | A checkpoint refused for open secrets named no one in the pool's message - the case #58 had nobody to point at. It names where they were opened (`-Dseclume.debug.scopes=true`) or how to find out, as the process's does. | low | #PR |
+| 79 | CRaC | `SeclumeCrac.register` took a pool only; the MongoDB, HTTP and Redis clients on seclume's TLS could not be told of a checkpoint. `register(Suspendable)` and `closeBeforeCheckpoint(client)` take any client; one left open still refuses the checkpoint, naming who opened it. | low | #PR |
 
 ### Mutation testing of the security paths
 
