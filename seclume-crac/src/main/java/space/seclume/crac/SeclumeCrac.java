@@ -142,7 +142,8 @@ public final class SeclumeCrac {
                 pool.resume();
                 throw new IllegalStateException("seclume refuses the checkpoint: after "
                         + millis + " ms " + borrowed + " connection(s) are still "
-                        + "borrowed, " + secrets + " secret(s) still open and " + keys
+                        + "borrowed, " + secrets + " secret(s) still open" + secretsOpenedAt()
+                        + " and " + keys
                         + " private key(s) held" + heldBy() + "; an image taken now would "
                         + "contain them (seclume.crac.quiesceMillis sets the wait). A key read "
                         + "from its source - a keySpec, a key file - is dropped and read again "

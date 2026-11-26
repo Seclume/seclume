@@ -168,6 +168,10 @@ class QuiesceTest {
             IllegalStateException refused = assertThrows(IllegalStateException.class,
                     () -> SeclumeCrac.quiesce(pool, 300));
             assertTrue(refused.getMessage().contains("secret"), refused.getMessage());
+            // The count alone names nobody: where the secret came from, or how to find out -
+            // as the process's own refusal says it.
+            assertTrue(refused.getMessage().contains("seclume.debug.scopes")
+                    || refused.getMessage().contains("opened at"), refused.getMessage());
         }
     }
 

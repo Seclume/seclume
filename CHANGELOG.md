@@ -83,6 +83,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **CRaC: a pool's refused checkpoint says where the open secrets came from.** The
+  process's refusal named the places with `-Dseclume.debug.scopes=true`, or said how to find
+  them; the pool's gave the count alone.
 - **An unknown credential placeholder is a JFR event.** A request with a placeholder this
   process never handed out was refused and logged at 1, 2, 4, 8 ...; every one is now also a
   `space.seclume.PlaceholderRefused` event with kind, target and the count so far - never the
