@@ -129,6 +129,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **A login that finished is not closed by its budget.** The budget's task was only cancelled
+  when a login finished; one already running closed the connection the driver had just been
+  handed. Whoever takes the budget off first decides now.
 - **Spring Boot: the secret guard sees more.** A placeholder's plain default -
   `${DB_PASSWORD:SuperSecret}`, the secret used whenever the variable is unset - was taken for a
   reference and not reported; and names ending in `secret-key`, `access-key`, `api-key`, `pwd` or

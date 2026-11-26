@@ -128,14 +128,46 @@ public final class Transports {
             // closed every login at once.
             long budget = connectTimeoutMillis
                     * (long) Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
-            LOGINS.put(opened, Budget.SERVICE.schedule(opened::close, budget,
-                    java.util.concurrent.TimeUnit.MILLISECONDS));
+            watch(opened, budget);
         }
         return opened;
     }
 
+    /**
+     * A login's budget: whoever takes it out of {@link #LOGINS} first decides
+     * - {@link #loggedIn}, and the connection stays; the task, and it closes
+     * it. Cancelled only, the task could already be running when the login
+     * finished, and closed the connection the driver had just been given.
+     */
+    private static final class Watch {
+        volatile java.util.concurrent.ScheduledFuture<?> task;
+    }
+
+    /** Closes {@code transport} after {@code millis} unless {@link #loggedIn} comes first. */
+    static void watch(Transport transport, long millis) {
+        Watch watch = new Watch();
+        LOGINS.put(transport, watch);
+        watch.task = Budget.SERVICE.schedule(() -> {
+            if (LOGINS.remove(transport, watch)) {
+                transport.close();
+            }
+        }, millis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /** Takes the budget off {@code transport}; whether it was still on - then nothing closes it. */
+    static boolean lift(Transport transport) {
+        Watch watch = LOGINS.remove(transport);
+        if (watch == null) {
+            return false;
+        }
+        if (watch.task != null) {
+            watch.task.cancel(false);
+        }
+        return true;
+    }
+
     /** Logins under way, and what closes each when its budget is spent. */
-    private static final java.util.Map<Transport, java.util.concurrent.ScheduledFuture<?>> LOGINS =
+    private static final java.util.Map<Transport, Watch> LOGINS =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     private static final class Budget {
@@ -154,10 +186,7 @@ public final class Transports {
 
     /** The login is done: lifts the watch {@link #open} set on it. */
     public static void loggedIn(Transport transport) {
-        java.util.concurrent.ScheduledFuture<?> budget = LOGINS.remove(transport);
-        if (budget != null) {
-            budget.cancel(false);
-        }
+        lift(transport);
         try {
             transport.networkTimeout(0);
         } catch (IOException notOffered) {
