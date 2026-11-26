@@ -51,14 +51,16 @@ class FieldEncryptionPropertyTest {
 
     @Test
     void whateverIsEncryptedDecryptsToItselfAndToNothingElse() {
-        Random random = new Random(SEED);
-        for (int round = 0; round < ROUNDS; round++) {
+        // Rounds side by side, each with a random of its own - derived from
+        // the seed and the round, so a failing round is the same round
+        // however they are scheduled.
+        java.util.stream.IntStream.range(0, ROUNDS).parallel().forEach(round -> {
             try {
-                oneRound(random);
+                oneRound(new Random(SEED ^ (round * 0x9E3779B97F4A7C15L)));
             } catch (AssertionError | RuntimeException e) {
                 throw new AssertionError("round " + round + " of seed " + SEED + ": " + e, e);
             }
-        }
+        });
     }
 
     private static void oneRound(Random random) {
