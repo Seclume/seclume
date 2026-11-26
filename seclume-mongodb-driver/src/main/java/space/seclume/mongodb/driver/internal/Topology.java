@@ -563,52 +563,19 @@ public final class Topology implements AutoCloseable {
         return members;
     }
 
-    /** Further host suffixes members may have: -Dseclume.mongodb.allowedHosts=a.example,b.example */
-    static final List<String> EXTRA_ALLOWED = suffixes(
-            System.getProperty("seclume.mongodb.allowedHosts", ""));
+    /** Further host suffixes members may have - see MemberHosts. */
+    static final List<String> EXTRA_ALLOWED =
+            space.seclume.mongodb.internal.MemberHosts.EXTRA_ALLOWED;
 
     private static final System.Logger LOG = System.getLogger(Topology.class.getName());
 
-    private static List<String> suffixes(String list) {
-        List<String> out = new ArrayList<>();
-        for (String one : list.split(",")) {
-            String suffix = one.strip().toLowerCase(java.util.Locale.ROOT);
-            if (!suffix.isEmpty()) {
-                out.add(suffix.startsWith(".") ? suffix.substring(1) : suffix);
-            }
-        }
-        return List.copyOf(out);
-    }
-
     /**
-     * Whether an announced member gets a connection - and the SCRAM proof, the
-     * AWS signature or the OIDC token with it. Any host in a hello's member
-     * lists was taken; one compromised member or an rs.reconfig could bring
-     * in a host of its choosing, with a valid public certificate. Discovery
-     * may name the seeds' hosts on other ports, hosts in a seed's parent
-     * domain (a.db.example lets in b.db.example), and hosts under a
-     * configured suffix - not anything else.
+     * Whether an announced member gets a connection, and a credential with
+     * it - the rule seclume-mongodb applies to every socket as well; see
+     * {@link space.seclume.mongodb.internal.MemberHosts}.
      */
     static boolean mayJoin(String host, List<String> seeds, List<String> extra) {
-        String name = host.toLowerCase(java.util.Locale.ROOT);
-        for (String seed : seeds) {
-            if (name.equals(seed)) {
-                return true;
-            }
-            int dot = seed.indexOf('.');
-            boolean literal = seed.chars().allMatch(ch -> ch == '.' || ch == ':'
-                    || Character.digit(ch, 16) >= 0) || seed.startsWith("[");
-            if (!literal && dot > 0 && seed.indexOf('.', dot + 1) > 0
-                    && name.endsWith(seed.substring(dot))) {
-                return true;
-            }
-        }
-        for (String suffix : extra) {
-            if (name.equals(suffix) || name.endsWith("." + suffix)) {
-                return true;
-            }
-        }
-        return false;
+        return space.seclume.mongodb.internal.MemberHosts.mayJoin(host, seeds, extra);
     }
 
     private void remove(Server server) {

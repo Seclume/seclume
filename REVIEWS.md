@@ -452,6 +452,7 @@ protocol text or dribble bytes.
 | 71 | SCRAM | The server's nonce had to be at least as long as the client's and start with it: one that sent the client's nonce back unchanged, with nothing of its own, passed (PostgreSQL, Kafka, MongoDB). It has to extend it now (RFC 5802). Found by the mutation test. | low | #PR |
 | 72 | SQL Server | `getBoolean` on a column whose type byte was not what it read as let a `NumberFormatException` out past `catch (SQLException e)`. Found by a new fuzz test that runs every getter over every column of a hostile answer (PostgreSQL and SQL Server). | low | #PR |
 | 73 | MySQL cancel | `KILL QUERY <id>` runs on a second connection to the configured host. Behind a load balancer or a router it could reach another backend, where the same id may be another session of the same user, and stop their statement. The session now learns which server it is on (`@@hostname`, `@@port`, `@@server_id`, asked after the login without a round trip of its own) and kills nothing where the second connection says otherwise. | medium | #PR |
+| 74 | MongoDB discovery | Every member a hello named got a connection, and with it the SCRAM proof, the AWS signature or the OIDC token; one compromised member or an `rs.reconfig` could bring in a host with a valid public certificate. Members are now held to the seeds' domains and configured suffixes, in seclume's own driver and in the socket the official driver uses. | medium | #PR |
 
 ### Mutation testing of the security paths
 
