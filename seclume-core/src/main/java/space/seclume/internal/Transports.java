@@ -123,8 +123,11 @@ public final class Transports {
             // And a bound on the login as a whole: the watch above counts
             // silence only, and a server that sends a byte now and then kept
             // a login - and the pool's thread and permit - for as long as it
-            // liked. seclume.loginBudgetFactor times the connect timeout.
-            long budget = connectTimeoutMillis * Long.getLong("seclume.loginBudgetFactor", 3);
+            // liked. seclume.loginBudgetFactor times the connect timeout - at
+            // least once it, as everywhere the factor is read: a factor of 0
+            // closed every login at once.
+            long budget = connectTimeoutMillis
+                    * (long) Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
             LOGINS.put(opened, Budget.SERVICE.schedule(opened::close, budget,
                     java.util.concurrent.TimeUnit.MILLISECONDS));
         }

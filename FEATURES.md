@@ -276,7 +276,7 @@ set by a system property:
 | Property | Default | Bounds |
 |---|---|---|
 | `connectTimeout` (URL option) | per driver | the TCP connect, and each read during the login |
-| `seclume.loginBudgetFactor` | `3` | the whole login - TLS handshake, authentication, a secret fetched for it - at its base timeout times this factor, however steadily the server dribbles |
+| `seclume.loginBudgetFactor` | `3` | the whole login - TLS handshake, authentication, a secret fetched for it - at its base timeout times this factor (at least once it), however steadily the server dribbles. One factor for every base: a database login's connect timeout, a TLS handshake's network timeout, a mail or LDAP login's read timeout, a secret fetch's own timeout - each counts silence, the factor bounds the whole |
 | `seclume.queryTimeoutGraceSeconds` | the query timeout itself, 2 to 30 s | how long after a query timeout's cancellation the statement may still run before the connection is closed - for a server that ignores the cancellation |
 | `seclume.pool.probeSeconds` | `5` | the pool's own questions on a new connection (how many sessions the server allows, its idle limit); a connection whose question ran out of time is closed and not lent |
 | `seclume.vault.kvMaxAgeSeconds` | `60` | how old a Vault KV secret, which has no lease, may get before it is read again; a leased secret follows its lease |
