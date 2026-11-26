@@ -81,6 +81,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **MySQL: a cancellation kills nothing on another server.** `KILL QUERY` goes over a second
+  connection, and behind a load balancer that can reach another backend, where the same
+  connection id is somebody else's session. The session now knows which server it is on
+  (`@@hostname`, `@@port`, `@@server_id`, asked right after the login and read with the first
+  statement, so no extra round trip), and a cancellation whose second connection lands elsewhere
+  is refused with SQLState 0A000 instead.
 - **HTTP: a refused credential placeholder is refused at once.** The connection with the
   half-written request stayed open, and OkHttp, reading for an early answer, waited out its read
   timeout (ten seconds by default) before the refusal reached the application. It is closed now.

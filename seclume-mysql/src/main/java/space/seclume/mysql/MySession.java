@@ -570,6 +570,7 @@ public final class MySession implements AutoCloseable {
             // to reach the same instance, and on a host list the one that
             // answered is not necessarily the first.
             opened.settings = settings;
+            opened.askServerIdentity();
             return opened;
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "mysql",
@@ -2077,8 +2078,14 @@ public final class MySession implements AutoCloseable {
      * connection would turn a slow query into a lost connection, and in a pool
      * under load that is the worse of the two.
      *
+     * <p>The second connection goes to the same host name, and behind a load
+     * balancer that need not be the same server: there the same id may be
+     * another session of the same user. So before the {@code KILL} it says
+     * which server it reached, and where that is not this session's server
+     * nothing is killed and the cancellation is refused.
+     *
      * <p>Safe from another thread - it touches nothing this session owns
-     * except two values written once during the login.
+     * except values written once during the login.
      *
      * @throws SQLException if this session cannot be cancelled, or the second
      *                      connection could not be made
@@ -2095,7 +2102,26 @@ public final class MySession implements AutoCloseable {
             // MyChannel#isAwaitingAnswer.
             return;
         }
+        String here = serverIdentity;
+        if (here == null) {
+            // Running, and not one of ours: the only command that can be in
+            // flight before the identity is known is the question for it.
+            if (identityOwed) {
+                return;
+            }
+            throw new SQLException("not cancelled: this server did not say which server it is "
+                    + "(@@hostname, @@port, @@server_id), so a second connection could not "
+                    + "confirm it reached the same one before a KILL QUERY", "0A000");
+        }
         try (MySession aside = openOne(where)) {
+            aside.settleReset();
+            String there = aside.serverIdentity();
+            if (!here.equals(there)) {
+                // Behind a load balancer: the same id there is another session.
+                throw new SQLException("not cancelled: the connection for the KILL QUERY "
+                        + "reached another server than the one this session is on - the "
+                        + "same connection id there belongs to somebody else", "0A000");
+            }
             aside.execute("kill query " + connectionId);
         }
     }
@@ -2157,11 +2183,68 @@ public final class MySession implements AutoCloseable {
     }
 
     /**
+     * Which server this session is on, as {@code host:port:server_id} - what
+     * a cancellation compares before it kills anything. Null until the
+     * answer is read, and null for good where the server refused to say.
+     */
+    private volatile String serverIdentity;
+    /** The question behind {@link #serverIdentity} is sent and not yet answered. */
+    private volatile boolean identityOwed;
+
+    /**
+     * Asks which server this is, without waiting for the answer: it is read
+     * before the next command, so the login costs no extra round trip.
+     *
+     * <p>{@code KILL QUERY <id>} runs on a second connection to the same
+     * host name, and behind a load balancer or a router that connection can
+     * reach another backend - where the same id may be somebody else's
+     * session of the same user, and their statement would be stopped. Both
+     * MySQL and MariaDB know these three variables.
+     */
+    private void askServerIdentity() throws SQLException {
+        try {
+            channel.beginCommand(COM_QUERY).putText("select @@hostname, @@port, @@server_id");
+            channel.end();
+            channel.flush();
+            identityOwed = true;
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw brokenConnection(e);
+        }
+    }
+
+    private void settleIdentity() throws SQLException {
+        if (!identityOwed) {
+            return;
+        }
+        identityOwed = false;
+        String[] seen = new String[1];
+        try {
+            readResult(row -> seen[0] = row.getString(0) + ":" + row.getString(1) + ":"
+                    + row.getString(2), false);
+            serverIdentity = seen[0];
+        } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
+            throw brokenConnection(e);
+        } catch (SQLException refused) {
+            if (!channel.isOpen()) {
+                throw refused;
+            }
+            // A server, or something in front of it, that will not say: then
+            // nothing can confirm a cancellation's target - see cancel().
+        }
+    }
+
+    /** {@code host:port:server_id} of the server, once known - see {@link #askServerIdentity}. */
+    String serverIdentity() {
+        return serverIdentity;
+    }
+
+    /**
      * Reads the answer to a reset sent at the last return. A refused reset
      * ends the session: whatever the last borrower left in it is still there,
      * and the next one must not get it.
      */
     public void settleReset() throws SQLException {
+        settleIdentity();                        // sent before anything else, read first
         if (!resetOwed) {
             return;
         }
