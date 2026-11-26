@@ -68,7 +68,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
+      - run: printf '%s' "$S_PG_TEST_PASSWORD" > .local-pg-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
       # Only seclume-diff's tests: -am builds the modules it needs, and the
       # filter keeps their own tests - ci.yml's business - from running again.
       - name: seclume against pgjdbc
@@ -110,7 +112,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
+      - run: printf '%s' "$S_MY_TEST_PASSWORD" > .local-mysql-password
+        env:
+          S_MY_TEST_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
       - name: Server settings for the procedure tests
         env:
           MYSQL_PWD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -156,7 +160,7 @@ jobs:
         run: |
           id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
           if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server container found"; exit 1; fi
-          pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          pw="$S_MSSQL_TEST_PASSWORD"
           for i in $(seq 1 40); do
             if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" \
                 -Q "if db_id('seclume_test') is null create database seclume_test"; then
@@ -166,7 +170,11 @@ jobs:
           done
           echo "::error title=sqlserver::SQL Server never accepted a login"
           exit 1
-      - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
+      - run: printf '%s' "$S_MSSQL_TEST_PASSWORD" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
       - name: seclume against mssql-jdbc
         run: >-
           .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test

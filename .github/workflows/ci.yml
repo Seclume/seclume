@@ -1579,7 +1579,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pg-password
+      - run: printf '%s' "$S_PG_TEST_PASSWORD" > .local-pg-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
       - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.version == '18' && '-Pcoverage' || '' }} -pl seclume-postgresql,seclume-pool,seclume-r2dbc,seclume-spring-boot-starter,seclume-jasperreports-proof -am test
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
@@ -1729,7 +1731,7 @@ jobs:
       - name: Start PgBouncer in transaction mode
         run: |
           mkdir bouncer
-          pw="${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}"
+          pw="$S_PG_TEST_PASSWORD"
           printf '"seclume_test" "%s"\n' "$pw" > bouncer/userlist.txt
           cat > bouncer/pgbouncer.ini <<'EOF'
           [databases]
@@ -1747,7 +1749,11 @@ jobs:
           chmod 777 bouncer && chmod 666 bouncer/*
           docker run -d --name bouncer --network host -v "$PWD/bouncer:/etc/pgbouncer" edoburu/pgbouncer@sha256:9c78945868a6a142c7fc40ccd843bbe5a606df163c7ffce4de70e0d628d696a2   # PgBouncer 1.26.0
           for i in $(seq 1 20); do (echo > /dev/tcp/127.0.0.1/6432) 2>/dev/null && break; sleep 1; done
-      - run: printf '%s' "${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-pgtls-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
+      - run: printf '%s' "$S_PG_TEST_PASSWORD" > .local-pgtls-password
+        env:
+          S_PG_TEST_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
       - run: >-
           .github/scripts/mvnw-retry.sh -B -pl seclume-diff -am test -Dtest=PgBouncerTest
           -Dsurefire.failIfNoSpecifiedTests=false
@@ -1900,7 +1906,9 @@ jobs:
         with:
           path: ~/.m2/wrapper
           key: maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
-      - run: printf '%s' "${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-mysql-password
+      - run: printf '%s' "$S_MY_TEST_PASSWORD" > .local-mysql-password
+        env:
+          S_MY_TEST_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
       # What the driver's tests need of the server, set as a DBA would: functions
       # created with binary logging on (MySQL), and the right to list prepared XA
       # transactions (MySQL 8's XA_RECOVER_ADMIN). MariaDB needs neither.
@@ -2021,7 +2029,7 @@ jobs:
           if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server ${{ matrix.version }} container found"; exit 1; fi
           # seclume_spring: the Spring application's, whose Flyway wants it empty.
           sql="if db_id('seclume_test') is null create database seclume_test; if db_id('seclume_spring') is null create database seclume_spring"
-          pw="${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          pw="$S_MSSQL_TEST_PASSWORD"
           for i in $(seq 1 40); do
             if docker exec "$id" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -P "$pw" -Q "$sql"; then
               exit 0
@@ -2030,7 +2038,11 @@ jobs:
           done
           echo "::error title=sqlserver::SQL Server ${{ matrix.version }} never accepted a login: $(docker logs "$id" 2>&1 | tail -15 | tr '\n' ' ' | cut -c1-2500)"
           exit 1
-      - run: printf '%s' "${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
+      - run: printf '%s' "$S_MSSQL_TEST_PASSWORD" > .local-mssql-password
+        env:
+          S_MSSQL_TEST_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
       - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.version == '2022' && '-Pcoverage' || '' }} -pl seclume-sqlserver -am test
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
@@ -2243,13 +2255,17 @@ jobs:
           docker run --rm -v crdb-certs:/certs "$image" cert create-node localhost 127.0.0.1 0.0.0.0 $certs
           docker run --rm -v crdb-certs:/certs "$image" cert create-client root $certs
           docker run -d --name crdb -v crdb-certs:/certs -p 26257:26257 --entrypoint /cockroach/cockroach "$image" start-single-node --certs-dir=/certs --listen-addr=0.0.0.0:26257 --advertise-addr=127.0.0.1:26257 --store=/tmp/crdb
-          pw="${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}"
+          pw="$S_CRDB_TEST_PASSWORD"
           for i in $(seq 1 30); do
             if docker exec crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257 -e "select 1" >/dev/null 2>&1; then break; fi
             sleep 3
           done
           docker exec crdb /cockroach/cockroach sql --certs-dir=/certs --host=localhost:26257 -e "create user seclume_test with password '$pw'; create database seclume_test; grant all on database seclume_test to seclume_test;"
-      - run: printf '%s' "${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}" > .local-crdb-password
+        env:
+          S_CRDB_TEST_PASSWORD: ${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}
+      - run: printf '%s' "$S_CRDB_TEST_PASSWORD" > .local-crdb-password
+        env:
+          S_CRDB_TEST_PASSWORD: ${{ secrets.CRDB_TEST_PASSWORD || 'seclume-CI-password-1' }}
       - run: .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Cockroach' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.crdb.host=127.0.0.1
       - if: always()
         run: rm -f .local-crdb-password; docker rm -f crdb || true
@@ -2279,7 +2295,7 @@ jobs:
         run: |
           set -e
           docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2026.1.3.0-b100 bin/yugabyted start --daemon=false --ysql_enable_auth=true
-          pw="${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}"
+          pw="$S_YB_TEST_PASSWORD"
           for i in $(seq 1 60); do
             ip=$(docker exec yb hostname -i | tr -d '\r' | awk '{print $1}')
             if [ -n "$ip" ] && docker exec -e PGPASSWORD=yugabyte yb bin/ysqlsh -h "$ip" -U yugabyte -d yugabyte -c "select 1" >/dev/null 2>&1; then
@@ -2290,7 +2306,11 @@ jobs:
           done
           echo "YugabyteDB never accepted a login" >&2
           exit 1
-      - run: printf '%s' "${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}" > .local-yb-password
+        env:
+          S_YB_TEST_PASSWORD: ${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}
+      - run: printf '%s' "$S_YB_TEST_PASSWORD" > .local-yb-password
+        env:
+          S_YB_TEST_PASSWORD: ${{ secrets.YB_TEST_PASSWORD || 'seclume-ci-password' }}
       - run: .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dtest='LocalPostgresFamilyTest$Yugabyte' -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.yb.host=127.0.0.1
       # Why, on the pull request: the server's last words and the failed tests.
       - if: failure()
