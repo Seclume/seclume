@@ -51,7 +51,7 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
 
     /** The longest user name followed; a longer one matches no binding. */
     private static final int MAX_USER = 256;
-    private static final byte[] DEFAULT_USER = "default".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] DEFAULT_USER = "default".getBytes(StandardCharsets.US_ASCII); // seclume-allow: a user name, not a credential
     private static final System.Logger LOG =
             System.getLogger(RespPasswordRewriter.class.getName());
 
@@ -95,7 +95,7 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
     }
 
     private static byte[] userBytes(String user) {
-        return user == null ? null : user.getBytes(StandardCharsets.UTF_8);
+        return user == null ? null : user.getBytes(StandardCharsets.UTF_8); // seclume-allow: a user name, not a credential
     }
 
     /** The guard of this connection's answers - see {@link RespReplyGuard}. */
