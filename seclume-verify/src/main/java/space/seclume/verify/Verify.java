@@ -197,8 +197,11 @@ public final class Verify {
                 return 1;
             }
             System.out.println("tlsPin=" + space.seclume.internal.TrustChoice.pinOf(presented));
-            System.out.println("  subject  " + presented.getSubjectX500Principal().getName());
-            System.out.println("  issuer   " + presented.getIssuerX500Principal().getName());
+            // Names the server chose: an unchecked one, here, may write anything into them.
+            System.out.println("  subject  " + space.seclume.internal.ServerText.printable(
+                    presented.getSubjectX500Principal().getName()));
+            System.out.println("  issuer   " + space.seclume.internal.ServerText.printable(
+                    presented.getIssuerX500Principal().getName()));
             System.out.println("  expires  " + presented.getNotAfter().toInstant());
             System.out.println("Unchecked: compare the pin with the server's owner before "
                     + "putting it into the URL.");

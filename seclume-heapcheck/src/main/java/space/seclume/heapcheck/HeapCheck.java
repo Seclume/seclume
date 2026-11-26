@@ -673,7 +673,9 @@ public final class HeapCheck {
             for (var finding : secret.findings()) {
                 String holder = "raw file".equals(finding.source())
                         ? report.holderAt(finding.position()) : null;
-                System.out.println("  " + finding + (holder == null ? "" : " - held by " + holder));
+                // A holder is a class and a field name from the dump - whoever wrote it chose them.
+                System.out.println("  " + finding + (holder == null ? ""
+                        : " - held by " + space.seclume.internal.ServerText.printable(holder)));
             }
         }
         if (report.discovery() != null) {
@@ -688,7 +690,8 @@ public final class HeapCheck {
                         + where + ", " + found.count() + " time(s):");
                 for (Discovery.Occurrence at : found.occurrences()) {
                     String holder = report.holderAt(at.position());
-                    System.out.println("  " + at + (holder == null ? "" : " - held by " + holder));
+                    System.out.println("  " + at + (holder == null ? ""
+                            : " - held by " + space.seclume.internal.ServerText.printable(holder)));
                 }
             }
         }
