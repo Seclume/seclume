@@ -28,11 +28,21 @@ rather than staying silent.
 after a server restart, or after `FLUSH PRIVILEGES` - `sha256_password` and
 `mysql_clear_password` (RDS IAM tokens). Under `prefer` or `require` the certificate is not
 checked, so a server in the middle that terminates TLS itself and asks for the password gets
-it; such a login is refused with SQLSTATE 28000 before a byte of the password leaves. SCRAM,
-MD5 and `mysql_native_password` send a proof, not the password, and are not affected (an
+it; such a login is refused with SQLSTATE 28000 before a byte of the password leaves (an
 OAuth token was refused the same way already). MySQL has an opt-out for whoever cannot check
 the certificate yet: `allowCleartextOverUnverifiedTls=true` in the URL, or
 `-Dseclume.mysql.allowCleartextOverUnverifiedTls=true` for the whole process.
+
+**MD5 and `mysql_native_password` too.** They send a proof, not the password - but a proof
+the server in the middle can guess against: `md5(md5(password || user) || salt)` and SHA-1
+for a salt or scramble it chose, one fast hash per guess. They are answered only to a server
+that has proved who it is as well. A MySQL login whose server proposes
+`mysql_native_password` offers `caching_sha2_password` instead, so an account with a SHA-2
+hash logs in as before; one that only has a native hash switches back and is refused. The
+opt-out is `allowLegacyHashOverUnverifiedTls=true` in the URL (PostgreSQL and MySQL), or
+`-Dseclume.postgresql.allowLegacyHashOverUnverifiedTls=true` /
+`-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true` for the process. SCRAM is not
+affected.
 
 **Revocation is not checked.** As with the JDK's default, a server certificate is checked
 against its CA and its name, not against OCSP or a CRL: a revoked certificate whose key leaked

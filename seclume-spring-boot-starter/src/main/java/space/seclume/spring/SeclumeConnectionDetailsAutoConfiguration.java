@@ -80,9 +80,11 @@ public class SeclumeConnectionDetailsAutoConfiguration {
             // A container's self-signed certificate cannot be checked, and
             // its password came as a String already: the password itself
             // may go over its unchecked TLS, as trustServerCertificate does
-            // for SQL Server below.
+            // for SQL Server below. MariaDB's containers log in with
+            // mysql_native_password, which goes over it for the same reason.
             return "jdbc:seclume:mysql:" + withoutQuery(rest)
-                    + "?allowPublicKeyRetrieval=true&allowCleartextOverUnverifiedTls=true";
+                    + "?allowPublicKeyRetrieval=true&allowCleartextOverUnverifiedTls=true"
+                    + "&allowLegacyHashOverUnverifiedTls=true";
         }
         if (lower.startsWith("jdbc:sqlserver:")) {
             String[] parts = url.substring("jdbc:sqlserver:".length()).split(";");

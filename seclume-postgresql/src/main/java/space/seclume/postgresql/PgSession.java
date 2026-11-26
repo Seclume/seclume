@@ -48,10 +48,44 @@ public final class PgSession implements AutoCloseable {
                            TlsMode tls,
                            space.seclume.internal.jdbc.TlsStack tlsStack,
                            space.seclume.tls.ClientIdentity identity,
-                           boolean directTls, RequireAuth requireAuth) {
+                           boolean directTls, RequireAuth requireAuth,
+                           boolean allowLegacyHashOverUnverifiedTls) {
 
         public Settings {
             requireAuth = requireAuth == null ? RequireAuth.ANY : requireAuth;
+        }
+
+        /**
+         * The process-wide default of {@code allowLegacyHashOverUnverifiedTls}:
+         * {@code -Dseclume.postgresql.allowLegacyHashOverUnverifiedTls=true}. Off.
+         */
+        public static final String LEGACY_HASH_PROPERTY =
+                "seclume.postgresql.allowLegacyHashOverUnverifiedTls";
+
+        public static boolean legacyHashByDefault() {
+            return Boolean.getBoolean(LEGACY_HASH_PROPERTY);
+        }
+
+        /** md5 as the process default says - what a URL without the option means. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit,
+                        TlsMode tls, space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity, boolean directTls,
+                        RequireAuth requireAuth) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    hosts, resultLimit, tls, tlsStack, identity, directTls, requireAuth,
+                    legacyHashByDefault());
+        }
+
+        /**
+         * The same settings, with md5 answered to a server that has not proved
+         * who it is - the explicit opt-out from the refusal in the login.
+         */
+        public Settings allowingLegacyHash() {
+            return new Settings(host, port, database, user, secret, applicationName,
+                    connectTimeoutMillis, hosts, resultLimit, tls, tlsStack, identity,
+                    directTls, requireAuth, true);
         }
 
         /** Whatever login method the server asks for - what a URL without requireAuth means. */
@@ -140,7 +174,7 @@ public final class PgSession implements AutoCloseable {
         Settings at(HostList.Host server) {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, hosts, resultLimit, tls, tlsStack,
-                    identity, directTls, requireAuth);
+                    identity, directTls, requireAuth, allowLegacyHashOverUnverifiedTls);
         }
 
     }
@@ -718,6 +752,14 @@ public final class PgSession implements AutoCloseable {
                     }
                     case PgProtocol.AUTH_MD5 -> {
                         settings.requireAuth().check("md5");
+                        // md5(md5(password || user) || salt), for a salt the
+                        // server chose: a server in the middle of unverified
+                        // TLS takes it and guesses against a fast hash.
+                        if (!settings.allowLegacyHashOverUnverifiedTls()) {
+                            refuseUnlessAuthenticated(settings, "md5, whose answer a server in "
+                                    + "the middle can take and guess the password against "
+                                    + "(allowLegacyHashOverUnverifiedTls=true allows it anyway)");
+                        }
                         asked = true;
                         authenticationMethod = "md5";
                         MemorySegment salt = in.slice(in.position(), 4);

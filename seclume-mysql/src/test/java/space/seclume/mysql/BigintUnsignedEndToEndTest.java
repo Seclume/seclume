@@ -42,7 +42,7 @@ class BigintUnsignedEndToEndTest {
                         target.set(ValueLayout.JAVA_BYTE, i, bytes[i]);
                     }
                     return bytes.length;
-                })));
+                })).allowingLegacyHash());   // the stand-in: native, no TLS
         return MyConnection.resume(session, space.seclume.internal.jdbc.ConnectionFacts.fresh(
                 Connection.TRANSACTION_REPEATABLE_READ));
     }

@@ -87,10 +87,31 @@ class RequireAuthTest {
         try (ServerSocket listener = listener()) {
             CompletableFuture<Integer> answer = serve(listener, MD5);
             SQLException failed = assertThrows(SQLException.class,
-                    () -> PgSession.open(settings(listener.getLocalPort(), "!password")));
+                    // md5 over a line without TLS: allowed here, the question is requireAuth.
+                    () -> PgSession.open(settings(listener.getLocalPort(), "!password")
+                            .allowingLegacyHash()));
             assertTrue(failed.getMessage().contains("password authentication failed"),
                     failed.getMessage());
             assertEquals('p', answer.get(10, TimeUnit.SECONDS), "the md5 answer was not sent");
+        }
+    }
+
+    /**
+     * md5 is md5(md5(password || user) || salt) for a salt the server chose:
+     * a server in the middle of unverified TLS - here, of no TLS - takes the
+     * answer and guesses against a fast hash. Refused unless
+     * allowLegacyHashOverUnverifiedTls says otherwise, and nothing is sent.
+     */
+    @Test
+    void md5OverAnUnverifiedLineIsRefused() throws Exception {
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Integer> answer = serve(listener, MD5);
+            SQLException refused = assertThrows(SQLException.class,
+                    () -> PgSession.open(settings(listener.getLocalPort(), null)));
+            assertEquals("28000", refused.getSQLState(), refused.getMessage());
+            assertTrue(refused.getMessage().contains("allowLegacyHashOverUnverifiedTls"),
+                    refused.getMessage());
+            assertEquals(-1, answer.get(10, TimeUnit.SECONDS), "an md5 answer went out");
         }
     }
 

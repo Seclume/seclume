@@ -54,7 +54,9 @@ class ProtocolTest {
     }
 
     private static MySession.Settings settings(FakeMySqlServer server) {
-        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret());
+        // The stand-in logs in with mysql_native_password, without TLS.
+        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret())
+                .allowingLegacyHash();
     }
 
     @Test
@@ -293,6 +295,7 @@ class ProtocolTest {
                     new space.seclume.mysql.jdbc.MyDataSource();
             dataSource.setHost("127.0.0.1");
             dataSource.setPort(server.port());
+            dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
             dataSource.setDatabase("testdb");
             dataSource.setUser(USER);
             dataSource.setSecretProvider(secret());
@@ -330,6 +333,7 @@ class ProtocolTest {
                     new space.seclume.mysql.jdbc.MyDataSource();
             dataSource.setHost("127.0.0.1");
             dataSource.setPort(server.port());
+            dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
             dataSource.setDatabase("testdb");
             dataSource.setUser(USER);
             dataSource.setSecretProvider(secret());

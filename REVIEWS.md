@@ -284,7 +284,8 @@ where they failed. The database tests added are for CI.
 
 ### Open
 
-- **MD5 and `mysql_native_password` over an unauthenticated connection.** TLS.md says these
+- **MD5 and `mysql_native_password` over an unauthenticated connection** (decided and fixed
+  in #PR: refused unless `allowLegacyHashOverUnverifiedTls=true`, row 81). TLS.md said these
   send "a proof, not the password, and are not affected". But under the default `tls=prefer`
   (or `require`), a server in the middle can answer a SCRAM-configured login by asking for
   `md5`. It then gets `md5(md5(password || user) || salt)` for a salt it chose: one fast hash
@@ -459,6 +460,7 @@ protocol text or dribble bytes.
 | 78 | CRaC | A checkpoint refused for open secrets named no one in the pool's message - the case #58 had nobody to point at. It names where they were opened (`-Dseclume.debug.scopes=true`) or how to find out, as the process's does. | low | #PR |
 | 79 | CRaC | `SeclumeCrac.register` took a pool only; the MongoDB, HTTP and Redis clients on seclume's TLS could not be told of a checkpoint. `register(Suspendable)` and `closeBeforeCheckpoint(client)` take any client; one left open still refuses the checkpoint, naming who opened it. | low | #PR |
 | 80 | Checkpoint coverage | Nothing caught a class that kept a secret in a field and did not register a wipe for a checkpoint (#58). A source scan now holds every class with a `SecretScope` field to `Checkpoint.register`, or to a list naming why it needs none (per connection, per handshake, covered by `FieldKeys`); a stale entry on the list fails too. | process | #PR |
+| 81 | md5, mysql_native_password | Under `tls=prefer` or `require` a server in the middle could ask for `md5` or `mysql_native_password` and take a fast hash of the password for a salt it chose, to guess against offline. Both are answered only to a server that proved who it is (`verify-full`, `tlsPin`); a MySQL login offers `caching_sha2_password` first. Opt-out: `allowLegacyHashOverUnverifiedTls=true`. | medium | #PR |
 
 ### Mutation testing of the security paths
 
@@ -494,8 +496,8 @@ Five new test classes (FinishedLengthTest, RecordLimitsTest, HelloRetryGapsTest,
 
 ### Open
 
-- MD5 and `mysql_native_password` over an unauthenticated connection (round 4, "Open") are
-  still a decision with compatibility cost.
+- None left from round 4: MD5 and `mysql_native_password` over an unauthenticated connection
+  are refused now (row 81).
 
 ### Looked at and found sound
 

@@ -44,7 +44,9 @@ class LoginFailureWipeTest {
     }
 
     private static MySession.Settings settings(FakeMySqlServer server) {
-        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret());
+        // The stand-in logs in with mysql_native_password, without TLS.
+        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret())
+                .allowingLegacyHash();
     }
 
     @Test

@@ -85,7 +85,8 @@ public final class MySession implements AutoCloseable {
                            space.seclume.tls.ClientIdentity identity,
                            boolean tinyInt1isBit,
                            java.util.Set<String> disabledAuthenticationPlugins,
-                           boolean allowCleartextOverUnverifiedTls) {
+                           boolean allowCleartextOverUnverifiedTls,
+                           boolean allowLegacyHashOverUnverifiedTls) {
 
         /**
          * The process-wide default of {@code allowCleartextOverUnverifiedTls}:
@@ -119,6 +120,44 @@ public final class MySession implements AutoCloseable {
         /** {@link #CLEARTEXT_PROPERTY}, read when a connection is configured. */
         public static boolean cleartextByDefault() {
             return Boolean.getBoolean(CLEARTEXT_PROPERTY);
+        }
+
+        /**
+         * The process-wide default of {@code allowLegacyHashOverUnverifiedTls}:
+         * {@code -Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true}. Off.
+         */
+        public static final String LEGACY_HASH_PROPERTY =
+                "seclume.mysql.allowLegacyHashOverUnverifiedTls";
+
+        public static boolean legacyHashByDefault() {
+            return Boolean.getBoolean(LEGACY_HASH_PROPERTY);
+        }
+
+        /** Everything as it is, and the same with allowCleartextOverUnverifiedTls given. */
+        public Settings(String host, int port, String database, String user,
+                        SecretProvider secret, String applicationName,
+                        int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
+                        HostList hosts, ResultLimit resultLimit, TlsMode tls,
+                        space.seclume.internal.jdbc.TlsStack tlsStack,
+                        space.seclume.tls.ClientIdentity identity, boolean tinyInt1isBit,
+                        java.util.Set<String> disabledAuthenticationPlugins,
+                        boolean allowCleartextOverUnverifiedTls) {
+            this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
+                    allowPublicKeyRetrieval, hosts, resultLimit, tls, tlsStack, identity,
+                    tinyInt1isBit, disabledAuthenticationPlugins,
+                    allowCleartextOverUnverifiedTls, legacyHashByDefault());
+        }
+
+        /**
+         * The same settings, with {@code mysql_native_password} allowed over a
+         * connection whose server is not authenticated - the explicit opt-out
+         * from {@link MySession#refuseLegacyHash}.
+         */
+        public Settings allowingLegacyHash() {
+            return new Settings(host, port, database, user, secret, applicationName,
+                    connectTimeoutMillis, allowPublicKeyRetrieval, hosts, resultLimit, tls,
+                    tlsStack, identity, tinyInt1isBit, disabledAuthenticationPlugins,
+                    allowCleartextOverUnverifiedTls, true);
         }
 
         /** Every plugin the driver speaks allowed - what a URL without the option means. */
@@ -220,7 +259,8 @@ public final class MySession implements AutoCloseable {
             return new Settings(server.host(), server.port(), database, user, secret,
                     applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts,
                     resultLimit, tls, tlsStack, identity, tinyInt1isBit,
-                    disabledAuthenticationPlugins, allowCleartextOverUnverifiedTls);
+                    disabledAuthenticationPlugins, allowCleartextOverUnverifiedTls,
+                    allowLegacyHashOverUnverifiedTls);
         }
 
     }
@@ -626,7 +666,8 @@ public final class MySession implements AutoCloseable {
             // that answer, so anything later would be too late.
             clientCapabilities = negotiateTls(channel, settings, clientCapabilities, greeting);
 
-            String plugin = firstPlugin(settings, greeting.plugin());
+            String plugin = firstPlugin(settings, greeting.plugin(),
+                    authenticatedServer(channel, settings));
             // From here on it is the login and nothing else - the greeting is
             // read and TLS is up. Timed apart because the three phases of an
             // open are slow for three different reasons; see
@@ -1012,6 +1053,9 @@ public final class MySession implements AutoCloseable {
                         in.skip(1);
                         currentPlugin = in.readCString();
                         refuseDisabled(settings, currentPlugin);
+                        if ("mysql_native_password".equals(currentPlugin)) {
+                            refuseLegacyHash(settings, authenticatedServer(settings));
+                        }
                         if (KERBEROS_PLUGIN.equals(currentPlugin)) {
                             String principal = in.readCString();
                             channel.endPacket();
@@ -1301,6 +1345,51 @@ public final class MySession implements AutoCloseable {
     public static final java.util.Set<String> PLUGINS = java.util.Set.of("mysql_native_password",
             "caching_sha2_password", "sha256_password", "mysql_clear_password",
             "auth_gssapi_client", "client_ed25519", "parsec");
+
+    /**
+     * The plugin of the first answer, given whether the server has proved who
+     * it is. {@code mysql_native_password} is not computed for one that has
+     * not: its answer is a fast hash of the password over the server's
+     * scramble, and a server in the middle of unverified TLS collects it to
+     * guess against. {@code caching_sha2_password} is offered instead - an
+     * account that only has a native hash switches back, and is refused there
+     * ({@link #refuseLegacyHash}).
+     */
+    static String firstPlugin(Settings settings, String proposed, boolean authenticated)
+            throws SQLException {
+        if ("mysql_native_password".equals(proposed) && legacyRefused(settings, authenticated)) {
+            if (settings.disabledAuthenticationPlugins().contains("caching_sha2_password")) {
+                refuseLegacyHash(settings, authenticated);
+            }
+            return "caching_sha2_password";
+        }
+        return firstPlugin(settings, proposed);
+    }
+
+    private static boolean legacyRefused(Settings settings, boolean authenticated) {
+        return !authenticated && !settings.allowLegacyHashOverUnverifiedTls();
+    }
+
+    /**
+     * {@code mysql_native_password} only to a server that has proved who it
+     * is: tls=verify-full or tlsPin. {@code allowLegacyHashOverUnverifiedTls}
+     * (or {@code -Dseclume.mysql.allowLegacyHashOverUnverifiedTls}) allows it
+     * anyway - for an account that cannot move to caching_sha2_password yet.
+     */
+    static void refuseLegacyHash(Settings settings, boolean authenticated)
+            throws java.sql.SQLInvalidAuthorizationSpecException {
+        if (!legacyRefused(settings, authenticated)) {
+            return;
+        }
+        throw new java.sql.SQLInvalidAuthorizationSpecException("the server asks for "
+                + "mysql_native_password, whose answer a server in the middle can take and guess "
+                + "the password against - it goes only to a server whose certificate was checked, "
+                + "and this connection does not check it (tls=" + settings.tls().name()
+                        .toLowerCase(java.util.Locale.ROOT).replace('_', '-') + "). Use "
+                + "tls=verify-full or tlsPin, or move the account to caching_sha2_password; "
+                + "allowLegacyHashOverUnverifiedTls=true allows it anyway. Nothing was sent",
+                "28000");
+    }
 
     /**
      * The plugin the first answer is computed with. The server proposes one;

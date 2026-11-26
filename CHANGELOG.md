@@ -7,6 +7,19 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **md5 and `mysql_native_password` only to a server that proved who it is.** Under
+  `tls=prefer` or `require` - and without TLS - a server in the middle could ask for either and
+  take a fast hash of the password, for a salt it chose, to guess against. They are answered only
+  under `tls=verify-full` or `tlsPin` now, as the cleartext methods are. A MySQL login whose
+  server proposes `mysql_native_password` offers `caching_sha2_password` instead, so an account
+  with a SHA-2 hash logs in as before; an account that only has a native hash (MariaDB's
+  default), and every PostgreSQL role whose server asks for md5 (YugabyteDB 2024 and older,
+  `password_encryption = md5`), is refused with SQLState 28000 and a message naming the way out:
+  check the certificate, move the account to SCRAM or `caching_sha2_password`, or set
+  `allowLegacyHashOverUnverifiedTls=true` (URL, DataSource, or
+  `-Dseclume.postgresql.allowLegacyHashOverUnverifiedTls=true` /
+  `-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true`). The Spring Boot connection details
+  for MySQL and MariaDB containers set it, as they set `allowCleartextOverUnverifiedTls`.
 - **Pool: a driver connection that is back in the pool refuses.** What
   `unwrap(PgConnection.class)` (or `MyConnection`, `TdsConnection`, `OraConnection`) returned
   during a borrow and was kept past `close()` ran in the next borrower's session. Between two

@@ -82,7 +82,11 @@ final class SeclumeUrl {
                     // requireAuth (libpq's require_auth): the login methods the
                     // server may ask for - md5 or the password itself refused.
                     space.seclume.postgresql.RequireAuth.of(parsed.option("requireAuth",
-                            parsed.option("require_auth", null))));
+                            parsed.option("require_auth", null))),
+                    // md5 only to a server that proved who it is, unless this
+                    // says otherwise.
+                    parsed.flag("allowLegacyHashOverUnverifiedTls",
+                            PgSession.Settings.legacyHashByDefault()));
         } catch (IllegalArgumentException e) {
             throw new SQLException(e.getMessage(), "08001", e);
         }

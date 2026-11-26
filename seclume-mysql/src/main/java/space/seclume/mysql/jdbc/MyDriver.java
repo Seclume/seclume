@@ -88,6 +88,10 @@ public final class MyDriver implements Driver {
                     + "sha256_password, mysql_clear_password) over TLS that did not check the "
                     + "server's certificate - off by default: it goes only to a server that "
                     + "proved who it is, tls=verify-full or tlsPin", false),
+            info("allowLegacyHashOverUnverifiedTls",
+                    "answer mysql_native_password over a connection that did not check the "
+                    + "server's certificate - off by default: its answer is a fast hash a server "
+                    + "in the middle can guess the password against", false),
         };
     }
 

@@ -104,7 +104,7 @@ class CancelReachesTheSameServerTest {
         a.holdQueriesUntil(release);
         try (LoadBalancer balancer = new LoadBalancer(a.port(), b.port());
              MySession session = MySession.open(new MySession.Settings("127.0.0.1",
-                     balancer.port(), "testdb", USER, secret()))) {
+                     balancer.port(), "testdb", USER, secret()).allowingLegacyHash())) {
             Thread running = Thread.ofVirtual().start(() -> {
                 try {
                     session.execute("select sleep(60)");
