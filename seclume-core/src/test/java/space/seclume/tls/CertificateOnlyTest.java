@@ -101,6 +101,9 @@ class CertificateOnlyTest {
                     int read;
                     while ((read = in.read(buffer)) > 0) {
                         received.addAndGet(read);
+                        synchronized (received) {
+                            received.notifyAll();
+                        }
                     }
                 } catch (IOException ended) {
                     // the client went away - which is what it should do
@@ -110,6 +113,25 @@ class CertificateOnlyTest {
 
         int port() {
             return socket.getLocalPort();
+        }
+
+        /**
+         * Until {@code bytes} have arrived. A client that closes with the
+         * server's session ticket still unread resets the connection on
+         * Windows, and the reset throws away what the server has not read
+         * yet - a driver reads the answer first, and so does this.
+         */
+        void awaitReceived(int bytes) throws InterruptedException {
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
+            synchronized (received) {
+                while (received.get() < bytes && thread.isAlive()) {
+                    long left = deadline - System.nanoTime();
+                    if (left <= 0) {
+                        return;
+                    }
+                    received.wait(Math.max(1, left / 1_000_000));
+                }
+            }
         }
 
         /** What arrived, once the connection is over. */
@@ -124,8 +146,24 @@ class CertificateOnlyTest {
         }
     }
 
+    /**
+     * A logged-in connection, closed the way a driver closes one: the layer,
+     * then the transport. An {@code SSLEngine} never owns the socket, so
+     * closing only the JSSE layer leaves it open - and the server waiting.
+     */
+    private record Login(TlsLayer layer, Transport transport) implements AutoCloseable {
+        @Override
+        public void close() {
+            try {
+                layer.close();
+            } finally {
+                transport.close();
+            }
+        }
+    }
+
     /** What a driver does: the handshake, then the login - here, the password itself. */
-    private static TlsLayer handshakeThenLogin(TlsStack stack, int port, AtomicBoolean loggedIn)
+    private static Login handshakeThenLogin(TlsStack stack, int port, AtomicBoolean loggedIn)
             throws SQLException {
         try {
             Transport transport = SocketTransport.connect(
@@ -139,7 +177,7 @@ class CertificateOnlyTest {
             }
             loggedIn.set(true);
             layer.write(ByteBuffer.wrap("PASSWORD=hunter2".getBytes(StandardCharsets.US_ASCII)));
-            return layer;
+            return new Login(layer, transport);
         } catch (IOException e) {
             throw new java.sql.SQLNonTransientConnectionException("TLS failed: " + e.getMessage(),
                     "08001", e);
@@ -169,8 +207,12 @@ class CertificateOnlyTest {
         }
         AtomicBoolean loggedIn = new AtomicBoolean();
         try (CountingServer server = new CountingServer()) {
-            TlsLayer layer = handshakeThenLogin(stack, server.port(), loggedIn);
-            layer.close();
+            Login login = handshakeThenLogin(stack, server.port(), loggedIn);
+            try {
+                server.awaitReceived("PASSWORD=hunter2".length());
+            } finally {
+                login.close();
+            }
             assertTrue(loggedIn.get());
             assertEquals("PASSWORD=hunter2".length(), server.receivedWhenDone());
         }
