@@ -20,4 +20,19 @@ public interface Fronted {
 
     /** The handle statements made from now on name; {@code null} for the connection itself. */
     void front(Connection handle);
+
+    /**
+     * Whether a pool has this connection lent out. A pool says {@code false}
+     * when the connection is back in it and {@code true} before it lends it
+     * again; a connection no pool ever told is lent.
+     *
+     * <p>What {@code unwrap} returns is the driver's own connection, and it
+     * outlived the borrow: kept by the application, its statements ran in the
+     * session of whoever borrowed the connection next - another tenant's,
+     * with that tenant's context and rights. Not lent, the connection refuses
+     * every call that reaches the server. The pool's own checks between two
+     * borrows ({@code isValid}, the owed reset's answer) are not such calls.
+     */
+    default void lent(boolean lent) {
+    }
 }

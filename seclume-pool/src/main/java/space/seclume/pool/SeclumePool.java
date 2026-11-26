@@ -366,6 +366,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
     /** Hands out a connection taken for this borrow - the tail of every borrow. */
     private Connection lend(PoolEntry entry, long now) throws SQLException {
         entry.setQuietly(PoolEntry.State.IN_USE);
+        lent(entry, true);
         java.util.Map<String, String> named = space.seclume.BorrowContext.named();
         boolean withContext = (named != null || settings.getSessionContext() != null)
                 && applySessionContext(entry, named);
@@ -1234,10 +1235,21 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                 || entry.credentialExpired(now)) {
             retire(entry);
         } else {
+            // What unwrap() returned during the borrow refuses from here on:
+            // kept, it ran in the next borrower's session.
+            lent(entry, false);
             park(entry);
         }
         // Somebody may be waiting for exactly this one: park and retire
         // wake one waiter each (signal).
+    }
+
+    /** Tells the driver connection whether it is lent - see {@link space.seclume.internal.jdbc.Fronted#lent}. */
+    private static void lent(PoolEntry entry, boolean lent) {
+        space.seclume.internal.jdbc.Fronted fronted = entry.fronted();
+        if (fronted != null) {
+            fronted.lent(lent);
+        }
     }
 
     private boolean isPastLifetime(PoolEntry entry, long now) {

@@ -467,7 +467,7 @@ class ReturnRestoresTheSessionTest {
                     new Class<?>[] {Connection.class, Fronted.class}, (self, method, given) -> {
                         Object[] args = given == null ? new Object[0] : given;
                         String name = method.getName();
-                        if (!name.equals("front") && !name.equals("isWrapperFor") && !name.equals("unwrap")
+                        if (!name.equals("front") && !name.equals("lent") && !name.equals("isWrapperFor") && !name.equals("unwrap")
                                 && !name.startsWith("get") && !name.startsWith("is")
                                 && !name.equals("hashCode") && !name.equals("equals") && !name.equals("toString")) {
                             one.calls.add(name + java.util.Arrays.toString(args));
@@ -477,6 +477,8 @@ class ReturnRestoresTheSessionTest {
                         switch (name) {
                             case "front":
                                 one.fronts.add((Connection) args[0]);
+                                return null;
+                            case "lent":
                                 return null;
                             case "isWrapperFor":
                                 if (args[0] == OpenStatements.class) {

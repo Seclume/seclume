@@ -7,6 +7,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **Pool: a driver connection that is back in the pool refuses.** What
+  `unwrap(PgConnection.class)` (or `MyConnection`, `TdsConnection`, `OraConnection`) returned
+  during a borrow and was kept past `close()` ran in the next borrower's session. Between two
+  borrows it now throws `08003`; keep such a reference no longer than the borrow.
+- **Redis: the password goes only into an AUTH for its own user.** A placeholder after another
+  user's name - or in a password-only `AUTH`, which is the `default` user's, where the URL names
+  a user - is sent as it is and the login fails. With Sentinel, a connection to a Sentinel of
+  the URL rewrites the Sentinel's placeholder only and any other connection the data nodes'
+  only: either written into the other's AUTH sent that password to the wrong server.
 - **MongoDB: an announced member outside the seeds' domains gets no connection.** Any host in a
   hello's member lists got one, and the SCRAM proof, AWS signature or OIDC token with it. Members
   may be the seeds' hosts, hosts in a seed's parent domain (`a.db.example` admits `b.db.example`),

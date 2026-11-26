@@ -583,7 +583,7 @@ public final class PgConnection
 
     @Override
     public boolean getAutoCommit() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return autoCommit;
     }
 
@@ -678,7 +678,7 @@ public final class PgConnection
 
     @Override
     public int getTransactionIsolation() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return isolation;
     }
 
@@ -754,7 +754,7 @@ public final class PgConnection
 
     @Override
     public boolean isReadOnly() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return readOnly;
     }
 
@@ -844,7 +844,7 @@ public final class PgConnection
 
     @Override
     public String getCatalog() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return session.database();
     }
 
@@ -950,9 +950,32 @@ public final class PgConnection
         return closed || !session.isOpen();
     }
 
-    void checkOpen() throws SQLException {
+    /**
+     * Back in its pool - see {@link space.seclume.internal.jdbc.Fronted#lent}:
+     * what unwrap() returned during a borrow is refused after it.
+     */
+    private volatile boolean parked;
+
+    @Override
+    public void lent(boolean lent) {
+        parked = !lent;
+    }
+
+    /**
+     * Closed or not, and nothing else: for what reads this object's own state
+     * and sends nothing - allowed on a connection back in its pool.
+     */
+    void checkNotClosed() throws SQLException {
         if (isClosed()) {
             throw new SQLException("this connection is closed", "08003");
+        }
+    }
+
+    void checkOpen() throws SQLException {
+        checkNotClosed();
+        if (parked) {
+            throw new SQLException("this connection is back in its pool: what unwrap() returned "
+                    + "belongs to the borrow and is not to be used after it", "08003");
         }
     }
 
@@ -1036,7 +1059,7 @@ public final class PgConnection
 
     @Override
     public int getNetworkTimeout() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return networkTimeout;
     }
 

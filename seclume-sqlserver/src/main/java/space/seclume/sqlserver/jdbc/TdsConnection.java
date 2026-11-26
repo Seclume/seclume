@@ -475,7 +475,7 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
 
     @Override
     public boolean getAutoCommit() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return autoCommit;
     }
 
@@ -554,7 +554,7 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
 
     @Override
     public int getTransactionIsolation() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return isolation;
     }
 
@@ -578,7 +578,7 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
 
     @Override
     public boolean isReadOnly() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return readOnly;
     }
 
@@ -666,7 +666,7 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
     /** SQL Server calls the database the catalog, and it has schemas below it. */
     @Override
     public String getCatalog() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return session.database();
     }
 
@@ -773,9 +773,32 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
         return closed || !session.isOpen();
     }
 
-    void checkOpen() throws SQLException {
+    /**
+     * Back in its pool - see {@link space.seclume.internal.jdbc.Fronted#lent}:
+     * what unwrap() returned during a borrow is refused after it.
+     */
+    private volatile boolean parked;
+
+    @Override
+    public void lent(boolean lent) {
+        parked = !lent;
+    }
+
+    /**
+     * Closed or not, and nothing else: for what reads this object's own state
+     * and sends nothing - allowed on a connection back in its pool.
+     */
+    void checkNotClosed() throws SQLException {
         if (isClosed()) {
             throw new SQLException("this connection is closed", "08003");
+        }
+    }
+
+    void checkOpen() throws SQLException {
+        checkNotClosed();
+        if (parked) {
+            throw new SQLException("this connection is back in its pool: what unwrap() returned "
+                    + "belongs to the borrow and is not to be used after it", "08003");
         }
     }
 
@@ -859,7 +882,7 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
 
     @Override
     public int getNetworkTimeout() throws SQLException {
-        checkOpen();
+        checkNotClosed();
         return networkTimeout;
     }
 

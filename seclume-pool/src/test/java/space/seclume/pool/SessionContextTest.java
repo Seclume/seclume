@@ -166,7 +166,7 @@ class SessionContextTest {
         }
     }
 
-    private static PoolSettings settings() {
+    static PoolSettings settings() {
         PoolSettings settings = new PoolSettings();
         settings.setName("context");
         settings.setMaximumPoolSize(1);
@@ -174,7 +174,7 @@ class SessionContextTest {
         return settings;
     }
 
-    private static String url(Db db) {
+    static String url(Db db) {
         Path password = null;
         for (Path candidate : List.of(Path.of(db.passwordFile()), Path.of("..",
                 db.passwordFile()))) {
@@ -197,7 +197,7 @@ class SessionContextTest {
     }
 
     /** A pool wants a {@code DataSource}; a driver wants a URL. */
-    private record UrlSource(String url) implements DataSource {
+    record UrlSource(String url) implements DataSource {
 
         @Override
         public Connection getConnection() throws SQLException {

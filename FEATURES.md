@@ -420,6 +420,11 @@ message names the oldest holders. Beyond that, what matters is what a connection
   (`ORA-01000` after enough of them) and result memory on the others. They are logged with
   their fingerprint; with `leak-detection-threshold` set, the log also shows where each
   statement was made.
+- **What `unwrap` returns belongs to the borrow.** `connection.unwrap(PgConnection.class)` is
+  the driver's own connection, not the pool's handle; kept past `close()`, it would run in the
+  session of whoever borrows that connection next. Back in the pool, a seclume driver
+  connection refuses every call that reaches the server (`08003`). Do not keep it longer than
+  the borrow: once the connection is lent again, the driver cannot tell the two apart.
 - **Shutting down in order.** On close, as on SIGTERM, nothing new is lent and idle
   connections go at once. Borrowed ones get up to `shutdown-timeout` (10 s) to come back, so
   a running transaction is finished rather than cut. Only stragglers after that are cut, and
