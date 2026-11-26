@@ -69,6 +69,7 @@ jobs:
       - name: Record what it was
         run: >
           java
+          -Dseclume.secret.providers=file
           -Dbench.url="jdbc:seclume:mysql://127.0.0.1:3306/seclume_test?user=seclume_test&provider=file&path=.local-mysql-password&allowCleartextOverUnverifiedTls=true"
           -cp seclume-bench/target/seclume-bench.jar
           space.seclume.bench.BenchRecord
