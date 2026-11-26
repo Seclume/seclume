@@ -81,6 +81,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **HTTP: a refused credential placeholder is refused at once.** The connection with the
+  half-written request stayed open, and OkHttp, reading for an early answer, waited out its read
+  timeout (ten seconds by default) before the refusal reached the application. It is closed now.
 - **A number too large for `getLong` is SQLState 22003**, not 22018. A BIGINT UNSIGNED above
   `Long.MAX_VALUE` (MySQL, text and binary protocol) or a PostgreSQL numeric of twenty digits was
   refused as text that is no number; it is a number out of range, and `getBigDecimal` reads it.

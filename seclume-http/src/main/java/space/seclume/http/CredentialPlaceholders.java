@@ -104,6 +104,16 @@ final class CredentialPlaceholders {
         return placeholder;
     }
 
+    /** A placeholder nobody here handed out: the request it was in goes no further. */
+    static final class PlaceholderRefused extends IOException {
+
+        private static final long serialVersionUID = 1L;
+
+        PlaceholderRefused(String message) {
+            super(message);
+        }
+    }
+
     /**
      * The provider of {@code placeholder} on a connection to {@code server},
      * or null where its secret does not go: the placeholder is written as it
@@ -124,7 +134,7 @@ final class CredentialPlaceholders {
                         + " carried a credential placeholder this process did not hand out ("
                         + seen + " so far) - refused");
             }
-            throw new IOException("a credential placeholder this process did not hand out");
+            throw new PlaceholderRefused("a credential placeholder this process did not hand out");
         }
         return registration.goesTo(normalize(server)) ? registration.provider() : null;
     }

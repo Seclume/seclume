@@ -149,12 +149,21 @@ class SocketFactoryTest {
         }
     }
 
+    /**
+     * Refused, and at once: the half-written request's connection is closed,
+     * so a client that reads for an early answer - OkHttp does - does not wait
+     * out its read timeout first (it did, ten seconds, before the refusal came).
+     */
     @Test
     void anUnknownPlaceholderIsNotSent() {
         OkHttpClient client = okHttp();
         String forged = CredentialPlaceholders.PREFIX + "0000000000000000000000000-1";
-        assertThrows(java.io.IOException.class, () -> call(client, "/bearer", "Authorization",
-                "Bearer " + forged, null));
+        long started = System.nanoTime();
+        java.io.IOException refused = assertThrows(java.io.IOException.class,
+                () -> call(client, "/bearer", "Authorization", "Bearer " + forged, null));
+        long millis = (System.nanoTime() - started) / 1_000_000;
+        assertTrue(refused.getMessage().contains("did not hand out"), refused.toString());
+        assertTrue(millis < 5_000, "the refusal took " + millis + " ms");
     }
 
     @Test
