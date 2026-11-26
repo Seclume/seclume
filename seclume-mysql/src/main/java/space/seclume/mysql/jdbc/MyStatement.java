@@ -637,9 +637,10 @@ class MyStatement implements Statement, MySession.RowHandler {
     }
 
     /** The text as the server has to see it. */
-    final String escaped(String sql) {
+    final String escaped(String sql) throws SQLException {
         return escapeProcessing ? space.seclume.internal.jdbc.JdbcEscapes.translate(sql,
-                space.seclume.internal.jdbc.JdbcEscapes.Dialect.MYSQL) : sql;
+                space.seclume.internal.jdbc.JdbcEscapes.Dialect.MYSQL,
+                !connection.session().noBackslashEscapes()) : sql;
     }
 
     @Override

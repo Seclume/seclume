@@ -123,6 +123,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **MySQL under `NO_BACKSLASH_ESCAPES`.** The catalog queries doubled every backslash, and LIKE
+  there has no escape character unless one is named: a column called `a` was not found by
+  `getColumns`. The JDBC escape translation took a literal ending in a backslash for one that
+  went on, and left the escape clause after it untranslated. Both follow the session's
+  `sql_mode` now.
 - **LDAP Kerberos: a refused bind is not passed on as a success.** The bind response handed to
   JNDI carried the server's result code in one byte: 256 arrived as 0, a successful bind. It is
   encoded as BER encodes an integer now.

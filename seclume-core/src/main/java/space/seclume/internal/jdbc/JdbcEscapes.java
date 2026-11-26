@@ -39,21 +39,32 @@ public final class JdbcEscapes {
 
     /** The text, with every escape this server cannot read translated. */
     public static String translate(String sql, Dialect dialect) {
+        return translate(sql, dialect, true);
+    }
+
+    /**
+     * The same, saying whether a backslash escapes the next character in a
+     * MySQL literal - it does not where the session's {@code sql_mode} has
+     * {@code NO_BACKSLASH_ESCAPES}, and a literal ends at the quote after one.
+     */
+    public static String translate(String sql, Dialect dialect, boolean backslashEscapes) {
         if (sql == null || sql.indexOf('{') < 0 || dialect == Dialect.SQLSERVER) {
             return sql;
         }
-        return new Translation(sql, dialect).run();
+        return new Translation(sql, dialect, backslashEscapes).run();
     }
 
     private static final class Translation {
 
         private final String sql;
         private final Dialect dialect;
+        private final boolean backslashEscapes;
         private int at;
 
-        Translation(String sql, Dialect dialect) {
+        Translation(String sql, Dialect dialect, boolean backslashEscapes) {
             this.sql = sql;
             this.dialect = dialect;
+            this.backslashEscapes = backslashEscapes;
         }
 
         String run() {
@@ -109,7 +120,8 @@ public final class JdbcEscapes {
             int i = at + 1;
             while (i < sql.length()) {
                 char c = sql.charAt(i);
-                if (c == '\\' && quote == '\'' && dialect == Dialect.MYSQL && i + 1 < sql.length()) {
+                if (c == '\\' && quote == '\'' && dialect == Dialect.MYSQL && backslashEscapes
+                        && i + 1 < sql.length()) {
                     i += 2;
                     continue;
                 }
