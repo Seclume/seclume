@@ -432,9 +432,12 @@ The ring, the format and the rotation are the same; only what carries the cipher
 
 ```java
 // Kafka - seclume-kafka: the broker, its log segments and a mirror see ciphertext.
-new KafkaProducer<>(properties, new EncryptingSerializer<>(new StringSerializer(), keys, Mode.DETERMINISTIC),
+// KeyBinding hands the key's digest to the value's (de)serializer: a value is bound to its key.
+new KafkaProducer<>(properties,
+        KeyBinding.serializer(new EncryptingSerializer<>(new StringSerializer(), keys, Mode.DETERMINISTIC)),
         new EncryptingSerializer<>(new OrderSerializer(), keys, Mode.RANDOMIZED));
-new KafkaConsumer<>(properties, new DecryptingDeserializer<>(new StringDeserializer(), keys),
+new KafkaConsumer<>(properties,
+        KeyBinding.deserializer(new DecryptingDeserializer<>(new StringDeserializer(), keys)),
         new DecryptingDeserializer<>(new OrderDeserializer(), keys));
 
 // Redis through Lettuce - seclume-redis: the server, RDB, AOF and MONITOR see ciphertext.
@@ -453,7 +456,7 @@ es.index(i -> i.index("patients").document(patients.encrypt(document)));
 | JDBC, R2DBC | the column's name | the column; the row only with a [context](#context-a-value-bound-to-its-row) (`Context.ROW_ID`, a tenant's id) | a deterministic column without a context, by equality |
 | JPA converter | the attribute's column | the column - never the row: a converter is not told its entity | a deterministic attribute, by equality |
 | MongoDB | the field's column | the column; the document only with a context passed to `encrypt` / `readInto` | `EncryptedFields.eq`, under every key of the ring |
-| Kafka | `kafka.<topic>.value` / `.key` | the topic - a record copied to another topic does not open; not the record's key | a deterministic key keeps its partition |
+| Kafka | `kafka.<topic>.value` / `.key` | the topic and the record's key - a value copied to another topic, or under another key, does not open | a deterministic key keeps its partition; the key's (de)serializer wrapped in `KeyBinding` |
 | Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name; the key only through `encodeValueFor` / `decodeValueFor` | an encrypted key is found by `GET` again, not by a pattern |
 | Elasticsearch | `search.<index>.<field>` (`search:<length>:<index>.<field>` for an index with a dot) | index and field | a deterministic field by an exact `terms` query, through a rotation |
 
@@ -469,14 +472,20 @@ every codec with that name. With several tenants in one Redis, give each its own
 `EncryptedFields.eq` compute the terms without a context; a deterministic column whose values
 carry one (a tenant's id) is searched within that context by the application, not by them.
 
-**Within a topic, within a name, values can be swapped.** Kafka does not show a value's serializer
-the record's key, and Lettuce does not hand the key to the value codec: whoever can write to the
-broker or to Redis can put account-17's `credit 5000` under account-99, and it is read there as
-account-99's own - as a JPA converter's value can be copied into another row. For Redis values
-where the key matters, `EncryptedCodec.encodeValueFor(key, value)` and `decodeValueFor(key, stored)`
-bind the value to its key, and it is refused under any other (`KeyBindingTest`); for Kafka, keep
-such values in a topic of their own, or put the key into the value (`RecordKeyBindingTest` pins
-that the serializers do not bind it).
+**Kafka values are bound to their key.** Kafka does not show a value's serializer the record's
+key, so the key's serializer and deserializer are wrapped in `KeyBinding`: they hand the digest of
+the key's bytes - on the consumer, of the key actually received, whatever a header claims - to the
+value's, which binds the value to it. account-17's `credit 5000` put under account-99 by whoever
+can write to the broker is refused there (`RecordKeyBindingTest`). Without the wrapper a value is
+refused rather than written unbound; `seclume.kafka.bind-to-key=false` writes and reads values
+unbound, as before 0.15, and `seclume.kafka.read-unbound=true` accepts unbound values beside bound
+ones while a topic is migrated - it accepts what a broker moved, so only for the migration.
+
+**Within a name, Redis and JPA values can be swapped.** Lettuce does not hand the key to the value
+codec: whoever can write to Redis can put one key's value under another, as a JPA converter's value
+can be copied into another row. For Redis values where the key matters,
+`EncryptedCodec.encodeValueFor(key, value)` and `decodeValueFor(key, stored)` bind the value to its
+key, and it is refused under any other (`KeyBindingTest`).
 
 Tested on their own (`EncryptedRecordsTest`, `EncryptedCodecTest`, `EncryptedDocumentTest`: back as
 they went, never in the clear, other topic, name, index, field or ring refused, a rotation read

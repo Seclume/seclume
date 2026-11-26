@@ -7,6 +7,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **Kafka: a value is bound to its record's key.** Kafka does not show a value's serializer the
+  key, so whoever could write to the broker could move account-17's value under account-99, and it
+  was read there. `EncryptingSerializer` binds a value to its key now, which needs the key's
+  serializer wrapped in `KeyBinding.serializer(...)` (and the consumer's key deserializer in
+  `KeyBinding.deserializer(...)`); without it a value is refused rather than written unbound. A
+  topic written before: read it with `seclume.kafka.read-unbound=true` while it holds both, or keep
+  writing and reading it unbound with `seclume.kafka.bind-to-key=false` (or the constructor's
+  `bindToKey`) on both sides.
 - **A provider that reads this machine is named at start-up.** `file`, `env-file`,
   `unix-socket`, `process`, `dpapi`, `credential-manager`, `libsecret`, `keychain`, `shamir` and
   `spiffe-jwt` are chosen from a URL or Properties only where the JVM is started with
