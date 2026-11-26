@@ -40,41 +40,13 @@ public final class MemberHosts {
         return List.copyOf(seeds);
     }
 
-    /** Whether {@code host} may be connected to, given the seeds and the extra suffixes. */
+    /** Whether {@code host} may be connected to - see {@link space.seclume.internal.SeedDomains}. */
     public static boolean mayJoin(String host, List<String> seeds, List<String> extra) {
-        String name = host.toLowerCase(Locale.ROOT);
-        for (String seed : seeds) {
-            if (name.equals(seed)) {
-                return true;
-            }
-            int dot = seed.indexOf('.');
-            boolean literal = seed.chars().allMatch(ch -> ch == '.' || ch == ':'
-                    || Character.digit(ch, 16) >= 0) || seed.startsWith("[");
-            if (!literal && dot > 0 && seed.indexOf('.', dot + 1) > 0
-                    && name.endsWith(seed.substring(dot))) {
-                return true;
-            }
-        }
-        for (String suffix : extra) {
-            if (name.equals(suffix) || name.endsWith("." + suffix)) {
-                return true;
-            }
-        }
-        return false;
+        return space.seclume.internal.SeedDomains.admits(host, seeds, extra);
     }
 
     /** {@code a.example,*.b.example,.c.example} as suffixes, lower case, without the wildcard. */
     public static List<String> suffixes(String list) {
-        List<String> out = new ArrayList<>();
-        for (String one : list.split(",")) {
-            String suffix = one.strip().toLowerCase(Locale.ROOT);
-            if (suffix.startsWith("*")) {
-                suffix = suffix.substring(1);       // *.b.example, as one would write it
-            }
-            if (!suffix.isEmpty() && !suffix.equals(".")) {
-                out.add(suffix.startsWith(".") ? suffix.substring(1) : suffix);
-            }
-        }
-        return List.copyOf(out);
+        return space.seclume.internal.SeedDomains.suffixes(list);
     }
 }

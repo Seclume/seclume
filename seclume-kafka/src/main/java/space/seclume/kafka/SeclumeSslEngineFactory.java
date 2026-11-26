@@ -10,6 +10,7 @@ import java.security.cert.Certificate;
 import java.sql.SQLException;
 import java.util.Base64; // seclume-allow: encoding CA certificates - public
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
@@ -62,6 +63,15 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
 
     private TrustChoice.Choice trust;
 
+    /**
+     * Brokers outside the domains of {@code bootstrap.servers} that may get
+     * the credential as well - suffixes: {@code seclume.kafka.allowed-brokers=kafka.example}.
+     */
+    public static final String ALLOWED_BROKERS = "seclume.kafka.allowed-brokers";
+    /** The hosts of bootstrap.servers - the seeds, see SeedDomains. */
+    private List<String> seeds = List.of();
+    private List<String> allowedBrokers = List.of();
+
     /** For Kafka, which makes one per client from its class name. */
     public SeclumeSslEngineFactory() {
     }
@@ -111,14 +121,47 @@ public final class SeclumeSslEngineFactory implements SslEngineFactory {
                 throw new IllegalArgumentException(e.getMessage(), e);
             }
         }
+        seeds = space.seclume.internal.SeedDomains.hostsOf(bootstrapServers(configs));
+        allowedBrokers = space.seclume.internal.SeedDomains.suffixes(string(configs, ALLOWED_BROKERS));
         CONFIGURED.set(true);
+    }
+
+    /** bootstrap.servers as Kafka passes it: a list, or a comma-separated string. */
+    private static List<String> bootstrapServers(Map<String, ?> configs) {
+        Object value = configs.get("bootstrap.servers");
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return List.of(text.split(","));
+        }
+        return List.of();
+    }
+
+    /**
+     * Why this broker gets no credential, or null when it may: one the
+     * cluster's metadata announced beyond bootstrap.servers' domains - a
+     * compromised broker, a changed advertised.listeners - would collect the
+     * PLAIN password or the bearer token.
+     */
+    String refusalFor(String peerHost) {
+        if (seeds.isEmpty() && allowedBrokers.isEmpty()) {
+            return "the credential goes only to brokers in the domains of bootstrap.servers, "
+                    + "and they were not seen - set " + ALLOWED_BROKERS + "=<suffix>";
+        }
+        if (space.seclume.internal.SeedDomains.admits(peerHost, seeds, allowedBrokers)) {
+            return null;
+        }
+        return "not sending the credential to broker " + peerHost + ": it is outside the "
+                + "domains of bootstrap.servers " + seeds + " - the cluster announced it. "
+                + ALLOWED_BROKERS + "=<suffix> admits a domain where it belongs";
     }
 
     @Override
     public SSLEngine createClientSslEngine(String peerHost, int peerPort,
                                            String endpointIdentification) {
         return new SeclumeSslEngine(peerHost, peerPort, trust, new SaslAuthenticateRewriter(
-                peerHost + ":" + peerPort));
+                peerHost + ":" + peerPort, refusalFor(peerHost)));
     }
 
     @Override

@@ -35,12 +35,20 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
     /** The broker, for the event that says a secret was written in. */
     private final String where;
 
+    /** Why this broker gets no credential, or null - see SeclumeSslEngineFactory. */
+    private final String refusal;
+
     SaslAuthenticateRewriter() {
-        this("");
+        this("", null);
     }
 
     SaslAuthenticateRewriter(String where) {
+        this(where, null);
+    }
+
+    SaslAuthenticateRewriter(String where, String refusal) {
         this.where = where;
+        this.refusal = refusal;
     }
 
     /** The start of a request that arrived in pieces: its size and API key, six bytes. */
@@ -107,7 +115,7 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
     }
 
     /** The request rebuilt with the secret, or null when it carries no placeholder. */
-    static Step replace(ByteBuffer plain, int at, int total) throws IOException {
+    Step replace(ByteBuffer plain, int at, int total) throws IOException {
         int end = at + total;
         int placeholder = indexOf(plain, at, end, SaslPlaceholders.PREFIX);
         if (placeholder < 0) {
@@ -144,6 +152,9 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
                 || placeholderEnd > authEnd) {
             throw new IOException("a placeholder outside the auth bytes of a SaslAuthenticate "
                     + "request - not sent");
+        }
+        if (refusal != null) {
+            throw new IOException(refusal);
         }
         SecretScope secret = SaslPlaceholders.take(new String(name, StandardCharsets.US_ASCII)); // seclume-allow: the placeholder's name, not the secret
         if (secret == null) {

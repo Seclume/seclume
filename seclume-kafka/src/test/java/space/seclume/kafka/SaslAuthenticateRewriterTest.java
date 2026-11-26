@@ -75,6 +75,40 @@ class SaslAuthenticateRewriterTest {
         client.dispose();
     }
 
+    /**
+     * A broker the cluster announced beyond bootstrap.servers' domains - a
+     * compromised one, a changed advertised.listeners - would collect the
+     * PLAIN password: the placeholder is not replaced for it, and nothing goes.
+     */
+    @Test
+    void aBrokerOutsideTheBootstrapDomainsGetsNoPassword() throws Exception {
+        SaslClient client = new PlainClient("orders", file("never-to-evil"));
+        ByteBuffer request = frame(client.evaluateChallenge(new byte[0]), (short) 2, "p");
+        java.io.IOException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                java.io.IOException.class, () -> new SaslAuthenticateRewriter("evil.example:9093",
+                        "not sending the credential to broker evil.example").next(request));
+        assertTrue(refused.getMessage().contains("evil.example"), refused.getMessage());
+        client.dispose();
+    }
+
+    @Test
+    void theBrokersThatMayGetTheCredential() {
+        SeclumeSslEngineFactory factory = new SeclumeSslEngineFactory();
+        factory.configure(Map.of("bootstrap.servers", java.util.List.of("b1.kafka.corp.example:9093",
+                "10.0.0.5:9093"), SeclumeSslEngineFactory.ALLOWED_BROKERS, "*.partner.example"));
+        assertNull(factory.refusalFor("b1.kafka.corp.example"));
+        assertNull(factory.refusalFor("b7.kafka.corp.example"), "a broker in the seed's domain");
+        assertNull(factory.refusalFor("10.0.0.5"));
+        assertNull(factory.refusalFor("k.partner.example"), "an allowed suffix");
+        assertTrue(factory.refusalFor("evil.example") != null);
+        assertTrue(factory.refusalFor("10.0.0.6") != null, "an address admits itself only");
+
+        SeclumeSslEngineFactory unseen = new SeclumeSslEngineFactory();
+        unseen.configure(Map.of());
+        assertTrue(unseen.refusalFor("b1.kafka.corp.example").contains(
+                SeclumeSslEngineFactory.ALLOWED_BROKERS), "no seeds seen: nothing is sent");
+    }
+
     @Test
     void aRequestWithoutPlaceholderGoesAsItIs() throws Exception {
         ByteBuffer request = frame("n,,\u0001auth=Bearer abc\u0001\u0001"

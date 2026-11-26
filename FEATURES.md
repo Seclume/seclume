@@ -951,7 +951,10 @@ has to reach the wire. With Kafka's own modules it passes through Kafka's reques
 then the JDK's TLS engine on the way, heap buffers that are never wiped. `seclume-kafka` puts
 Kafka's TLS on seclume's own TLS 1.3 stack and gives Kafka a placeholder instead of the secret.
 As the SaslAuthenticate request is encrypted, the engine writes the secret in the placeholder's
-place from native memory, along with the two lengths that follow from it:
+place from native memory, along with the two lengths that follow from it. It does so only for a
+broker in the domains of `bootstrap.servers`, or under a suffix in
+`seclume.kafka.allowed-brokers`: the cluster's metadata names every broker the client then logs
+in to, and one announced elsewhere gets no password or token.
 
 ```properties
 security.protocol=SASL_SSL

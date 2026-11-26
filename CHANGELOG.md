@@ -7,6 +7,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **Kafka: the credential goes only to brokers in the domains of `bootstrap.servers`.** The
+  cluster's metadata names every broker a client logs in to, and one announced elsewhere - a
+  compromised broker, a changed `advertised.listeners` - got the PLAIN password or the bearer
+  token. Brokers outside the bootstrap hosts' domains get no credential now; name theirs in
+  `seclume.kafka.allowed-brokers=<suffix>,...`. The same rule as for MongoDB's members, now one
+  rule in `space.seclume.internal.SeedDomains`.
 - **JGit: credentials name their remote.** `SeclumeGit.credentials(user, spec)` named none, and
   JGit gives a login to whichever server asks - a submodule's host from a `.gitmodules` someone
   else wrote among them; the secret was bound to whichever asked first. It is refused now, with a
