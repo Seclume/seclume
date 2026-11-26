@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import space.seclume.postgresql.PgSession;
+import space.seclume.tck.fuzz.GetterSweep;
 import space.seclume.tck.fuzz.HostileTransport;
 import space.seclume.tck.fuzz.SessionContract;
 
@@ -126,41 +126,6 @@ class PgGetterFuzzTest {
                 "integer_datetimes", "on", "TimeZone", "UTC", "server_version", "18.0");
     }
 
-    /** Every getter on every column of every row; only SQLException may come out of one. */
-    static void readEverything(Connection connection) throws SQLException {
-        try (Statement statement = connection.createStatement();
-             ResultSet rows = statement.executeQuery("select v from t")) {
-            int columns = rows.getMetaData().getColumnCount();
-            while (rows.next()) {
-                for (int column = 1; column <= columns; column++) {
-                    for (Getter getter : GETTERS) {
-                        try {
-                            getter.read(rows, column);
-                        } catch (SQLException refused) {
-                            // A value this getter does not take: allowed.
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @FunctionalInterface
-    interface Getter {
-        Object read(ResultSet rows, int column) throws SQLException;
-    }
-
-    static final List<Getter> GETTERS = List.of(
-            ResultSet::getString, ResultSet::getBoolean, ResultSet::getByte,
-            ResultSet::getShort, ResultSet::getInt, ResultSet::getLong, ResultSet::getFloat,
-            ResultSet::getDouble, ResultSet::getBigDecimal, ResultSet::getBytes,
-            ResultSet::getDate, ResultSet::getTime, ResultSet::getTimestamp,
-            ResultSet::getObject, ResultSet::getArray,
-            (rows, column) -> rows.getObject(column, java.time.LocalDate.class),
-            (rows, column) -> rows.getObject(column, java.time.LocalDateTime.class),
-            (rows, column) -> rows.getObject(column, java.time.OffsetDateTime.class),
-            (rows, column) -> rows.getObject(column, java.util.UUID.class));
-
     /**
      * The seeds themselves are read to the end: a sweep in which every case is
      * refused before the first getter proves nothing about the getters.
@@ -189,7 +154,7 @@ class PgGetterFuzzTest {
             Connection connection = PgConnection.resume(session,
                     space.seclume.internal.jdbc.ConnectionFacts.fresh(
                     Connection.TRANSACTION_READ_COMMITTED));
-            return new SessionContract.Driven(() -> readEverything(connection),
+            return new SessionContract.Driven(() -> GetterSweep.readEverything(connection, "select v from t"),
                     session::isOpen, connection);
         });
     }

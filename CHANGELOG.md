@@ -72,6 +72,8 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **SQL Server: `getBoolean`** on a value its converter does not take refuses with an
+  `SQLDataException` (22018) instead of letting a `NumberFormatException` out.
 - **Pool: `rotateSecret(closeIdleNow, grace)`** closes connections still lent out under the old
   login once the grace is over. A connection held for good - a batch, a leak - kept the old login
   until `maxLifetime`, which is what a rotation after a leaked password is meant to end.

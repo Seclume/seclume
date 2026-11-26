@@ -90,6 +90,13 @@ public final class TdsResultSet extends ReadOnlyResultSet implements space.seclu
         } catch (space.seclume.internal.WireBuffer.Truncated cut) {
             throw new SQLException("the value of column " + (column + 1) + " ends before its "
                     + "length says - the server sent less than it announced", "08S01", cut);
+        } catch (IllegalArgumentException | ArithmeticException
+                 | java.time.DateTimeException unreadable) {
+            // A value the converter does not take - a type byte that is not
+            // the column's, text where a number was asked for. Only the
+            // getters' own paths caught this; getBoolean's did not.
+            throw new java.sql.SQLDataException("column " + (column + 1)
+                    + " cannot be read as asked", "22018", unreadable);
         }
     }
 

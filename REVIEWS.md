@@ -450,6 +450,7 @@ protocol text or dribble bytes.
 | 69 | PostgreSQL | A DataRow before any RowDescription was read against the columns of nothing, or of the statement before. It is a protocol violation now, and a malformed answer is reported as `08P01` rather than as a broken line. | low | #PR |
 | 70 | SPIFFE | A CA certificate with a SPIFFE URI, issued by the trust domain's CA, passed as a peer's leaf: the trust manager is seclume's own and checked no key usage. The leaf has to be no CA and, where it says, for digital signatures only (X509-SVID). | medium | #PR |
 | 71 | SCRAM | The server's nonce had to be at least as long as the client's and start with it: one that sent the client's nonce back unchanged, with nothing of its own, passed (PostgreSQL, Kafka, MongoDB). It has to extend it now (RFC 5802). Found by the mutation test. | low | #PR |
+| 72 | SQL Server | `getBoolean` on a column whose type byte was not what it read as let a `NumberFormatException` out past `catch (SQLException e)`. Found by a new fuzz test that runs every getter over every column of a hostile answer (PostgreSQL and SQL Server). | low | #PR |
 
 ### Mutation testing of the security paths
 
