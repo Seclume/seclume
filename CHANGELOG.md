@@ -83,6 +83,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Heap check: names from the dump stay text in the Markdown report.** Only `|` and line
+  breaks were escaped, so a class or field name - chosen by whoever wrote the dump - could put
+  a link, an image, emphasis or HTML into the report. Every Markdown character is escaped now,
+  and inside code spans a backtick can no longer end the span.
 - **`ClientIdentities.closeAll()` waits for running handshakes.** It was safe only "where no
   handshake is running", and nothing held it to that: a handshake signing with a client
   certificate at that moment failed half way. It waits for them now, ten seconds at most, and

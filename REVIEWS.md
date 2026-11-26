@@ -454,6 +454,7 @@ protocol text or dribble bytes.
 | 73 | MySQL cancel | `KILL QUERY <id>` runs on a second connection to the configured host. Behind a load balancer or a router it could reach another backend, where the same id may be another session of the same user, and stop their statement. The session now learns which server it is on (`@@hostname`, `@@port`, `@@server_id`, asked after the login without a round trip of its own) and kills nothing where the second connection says otherwise. | medium | #PR |
 | 74 | MongoDB discovery | Every member a hello named got a connection, and with it the SCRAM proof, the AWS signature or the OIDC token; one compromised member or an `rs.reconfig` could bring in a host with a valid public certificate. Members are now held to the seeds' domains and configured suffixes, in seclume's own driver and in the socket the official driver uses. | medium | #PR |
 | 75 | Client identities | `ClientIdentities.closeAll()` was documented as safe only while no handshake runs, and did not check: a handshake signing at that moment lost its key half way. Handshakes with an identity are counted, and `closeAll()` waits for them (ten seconds, then a warning). | low | #PR |
+| 76 | Heap check report | The Markdown report escaped only `\|` and line breaks; class and field names from the dump, and what the examined JVM said about itself, could form links, images or HTML. All Markdown characters are escaped; a backtick cannot end a code span. | low | #PR |
 
 ### Mutation testing of the security paths
 
