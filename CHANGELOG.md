@@ -83,6 +83,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **An unknown credential placeholder is a JFR event.** A request with a placeholder this
+  process never handed out was refused and logged at 1, 2, 4, 8 ...; every one is now also a
+  `space.seclume.PlaceholderRefused` event with kind, target and the count so far - never the
+  placeholder.
 - **Heap check: names from the dump stay text in the Markdown report.** Only `|` and line
   breaks were escaped, so a class or field name - chosen by whoever wrote the dump - could put
   a link, an image, emphasis or HTML into the report. Every Markdown character is escaped now,

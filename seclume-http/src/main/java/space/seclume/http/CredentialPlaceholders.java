@@ -121,7 +121,8 @@ final class CredentialPlaceholders {
      *
      * @throws IOException for a placeholder this process did not hand out
      */
-    static SecretProvider provider(String placeholder, String server) throws IOException {
+    static SecretProvider provider(String placeholder, String server, String kind)
+            throws IOException {
         Registration registration = PROVIDERS.get(placeholder);
         if (registration == null) {
             // Not a typo: a placeholder nobody here made is someone guessing
@@ -134,6 +135,7 @@ final class CredentialPlaceholders {
                         + " carried a credential placeholder this process did not hand out ("
                         + seen + " so far) - refused");
             }
+            space.seclume.jfr.Observed.placeholderRefused(kind, server, seen);
             throw new PlaceholderRefused("a credential placeholder this process did not hand out");
         }
         return registration.goesTo(normalize(server)) ? registration.provider() : null;

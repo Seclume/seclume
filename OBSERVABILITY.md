@@ -26,6 +26,7 @@ java -XX:StartFlightRecording=filename=app.jfr,settings=profile ...
 | `space.seclume.CredentialRotation` | that a secret was fetched, how long it took, and when it expires |
 | `space.seclume.StatementCache` | whether server-side plans are actually being reused |
 | `space.seclume.SecretUse` | which credential seclume wrote into which request: HTTP (bearer, basic, API key, OAuth2, JWT), any client on `SeclumeSslSocketFactory` - Kubernetes, JGit, gRPC over HTTP/2 - AWS (SigV4, presign, session token), Azure Storage (Shared Key), LDAP bind, RabbitMQ login, Redis `AUTH` through Lettuce, Kafka's SASL PLAIN and OAUTHBEARER, the Elasticsearch and OpenSearch clients |
+| `space.seclume.PlaceholderRefused` | a request carrying a credential placeholder this process never handed out - somebody guessing at or replaying what seclume substitutes: where it was going and how many so far, never the placeholder |
 | `space.seclume.Signature` | a signature made or checked with a key held off the heap: TLS server keys, SSH, Google service accounts, JWTs, webhook HMACs — and whether a check matched |
 | `space.seclume.SecretRotation` | a secret that changed at its source and was taken up without a restart, or refused |
 | `space.seclume.CertificateRenewal` | a certificate from Vault's PKI for a key made off the heap - issued, renewed, or a renewal that failed, and until when the one in use holds |

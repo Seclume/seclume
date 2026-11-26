@@ -423,7 +423,7 @@ final class Http2Requests {
             throws IOException {
         // seclume-allow: the placeholder - no secret
         String placeholder = new String(bytes, from, to - from, StandardCharsets.US_ASCII);
-        return CredentialPlaceholders.provider(placeholder, server);
+        return CredentialPlaceholders.provider(placeholder, server, "h2");
     }
 
     private static int indexOf(byte[] data, byte[] pattern, int from) {

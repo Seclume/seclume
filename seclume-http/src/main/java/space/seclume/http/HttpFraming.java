@@ -449,7 +449,7 @@ final class HttpFraming {
             throws IOException {
         // seclume-allow: the placeholder - no secret
         String placeholder = new String(bytes, from, to - from, StandardCharsets.US_ASCII);
-        return CredentialPlaceholders.provider(placeholder, server);
+        return CredentialPlaceholders.provider(placeholder, server, "http");
     }
 
     /** A length the client wrote - not one, and the framing cannot be followed. */

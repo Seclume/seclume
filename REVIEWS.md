@@ -455,6 +455,7 @@ protocol text or dribble bytes.
 | 74 | MongoDB discovery | Every member a hello named got a connection, and with it the SCRAM proof, the AWS signature or the OIDC token; one compromised member or an `rs.reconfig` could bring in a host with a valid public certificate. Members are now held to the seeds' domains and configured suffixes, in seclume's own driver and in the socket the official driver uses. | medium | #PR |
 | 75 | Client identities | `ClientIdentities.closeAll()` was documented as safe only while no handshake runs, and did not check: a handshake signing at that moment lost its key half way. Handshakes with an identity are counted, and `closeAll()` waits for them (ten seconds, then a warning). | low | #PR |
 | 76 | Heap check report | The Markdown report escaped only `\|` and line breaks; class and field names from the dump, and what the examined JVM said about itself, could form links, images or HTML. All Markdown characters are escaped; a backtick cannot end a code span. | low | #PR |
+| 77 | HTTP placeholders | A placeholder this process did not hand out points at an attack and was only refused and logged, sparsely. It is a `space.seclume.PlaceholderRefused` JFR event now, each time, with the count so far. | low | #PR |
 
 ### Mutation testing of the security paths
 

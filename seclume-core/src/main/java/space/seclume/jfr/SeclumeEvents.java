@@ -329,6 +329,36 @@ public final class SeclumeEvents {
     }
 
     /**
+     * A request that carried a credential placeholder this process never
+     * handed out - refused. Not a typo: somebody guessing at, or replaying,
+     * what seclume substitutes. Recorded every time, where the log only says
+     * it at 1, 2, 4, 8 ...; the placeholder itself is not in it.
+     */
+    @Name("space.seclume.PlaceholderRefused")
+    @Label("Placeholder Refused")
+    @Category({CATEGORY, "Secret"})
+    @Description("A request with a credential placeholder this process did not hand out")
+    @StackTrace(false)
+    public static final class PlaceholderRefused extends Event {
+
+        /** Public and explicit because the Flight Recorder instantiates it. */
+        public PlaceholderRefused() {
+        }
+
+        @Label("Kind")
+        @Description("Where: http, h2 ...")
+        public String kind;
+
+        @Label("Target")
+        @Description("Host and port the request was meant for")
+        public String target;
+
+        @Label("Refused So Far")
+        @Description("How many such requests this process has refused")
+        public long refused;
+    }
+
+    /**
      * A signature made - or checked - with a key seclume holds: an opaque
      * OpenSSL key for TLS, SSH or a Google service account, an HMAC key for a
      * JWT or a webhook.
