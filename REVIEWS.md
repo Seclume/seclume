@@ -470,6 +470,19 @@ bounds; `JsonOff` truncated object, raw NUL in strings, zero length; `HostnameMa
 inputs, `"1.2.3."`, `"[]"`; `SessionState` pre-filter negatives; SCRAM iteration-count digit
 boundary. CI: pitest-maven on the security packages with `mutationThreshold=85`.
 
+#### Part 2: TLS handshake and pool
+
+Guard-focused mutants (checks followed by throw / return false / close / BROKEN); pool exhaustively, TLS as a fixed random sample of 25 per file. Tests: 37 TLS test classes of seclume-core, 36 of seclume-pool (+ seclume-tck), Jazzer fuzz tests excluded. Pool: 49 of 53 killed (92 %). TLS sample: 53 of 78 killed (68 %)
+
+- ClientHandshake 76 %, RecordProtection 68 %, Tls12Handshake 64 %, Finished 33 %. Most important gap: Finished.verify's length check - a mutant that accepts a Finished of the wrong length survives every test, i.e. nothing pins the one check that proves the handshake was not altered. Gaps to close: Finished of wrong length; unoffered TLS 1.3 suite; unoffered ALPN; HRR session-id echo and version; handshake bytes in a non-handshake record; non-empty renegotiation_info (RFC 5746); missing CCS; compressed/short ECDHE po ints; client-certificate scheme not requested; record_overflow after decryption; tag-only record; all-zero TLS 1.3 inner plaintext; null trust; isClosed() failing during renew; schema set where none was.
+
+#### Part 3: closing TLS gaps
+
+Five new test classes (FinishedLengthTest, RecordLimitsTest, HelloRetryGapsTest, ServerHelloGapsTest, ServerKeyExchangePointTest; all green on the unchanged code) close the gaps they were written for. TLS sample score: 53/78 (68 %) -> 68/78 (87 % ). Finished 100 %, RecordProtection 96 % (remaining mutant equivalent), ClientHandshake 88 %, Tls12Handshake 76 %. Still open then: an unoffered ALPN, record types in the flight and a missing CCS, the client-certificate scheme, and the core gaps listed above.
+
+- repeat the check in open() as defence in depth. Method note: a mutant run is only counted after a baseline run of the same tests on the original code; a test class that fails to load is an error, not a kill.
+
+
 ### Open
 
 - MD5 and `mysql_native_password` over an unauthenticated connection (round 4, "Open") are
@@ -489,6 +502,249 @@ boundary. CI: pitest-maven on the security packages with `mutationThreshold=85`.
   base64url, the MAC compared in constant time.
 - **Field encryption**, MongoDB's EncryptedFields included: header and context in the AAD, one
   key per column, the commitment checked before GCM-SIV.
+
+The reports the audit grew out of, as they were written; the numbers in them (#37, #53...)
+are those reports' finding numbers, not the rows of the table above, and every finding they
+name as fixed is fixed in #PR.
+
+### Initial audit: login and value decoding
+
+Scope: the TLS client (1.3 and the 1.2 profile), record layer, certificate and host-name checks, AES-GCM / AES-GCM-SIV / HKDF / Shamir against known answers and the JDK, FFM bounds; the login state machines of PostgreSQL, MySQL, SQL Server, Oracle, MongoDB, Kafka and LDAP; JWT; field encryption.
+
+#### Findings
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | PostgreSQL | A `ReadyForQuery` during the login ended it as a success: no `AuthenticationOk`, so neither `requireAuth`, nor SCRAM's server signature, nor Kerberos' mutual authentication was checked. Under `tls=prefer`/`require` anybody in the middle was taken for the database with `requireAuth=scram-sha-256` set. Review round 4 listed the SCRAM check as sound; it held for `AuthenticationOk` only. | medium | #PR |
+
+#### Looked at and found sound
+- **Native secret stores** (read, not run on the platform): DPAPI and Credential Manager zero the OS buffer before freeing it; CNG's authenticated-cipher struct matches the x64 layout and a failed tag zeroes the output; PKCS#11 function indices 0-4 3 match the standard, Windows is refused for its 32-bit CK_ULONG; Keychain and libsecret check the length against the target.
+- **SecretFetch and the cloud sources** (not run against live endpoints): no line break reaches a request line; chunks and lengths are bounded; plain HTTP only to a resolved link-local or loopback address; Azure Arc reads a challenge only from the agent's token directory, `.key`, 4 KiB at most; Vault refuses http, KMS takes https only.
+- **Redis, SSH, HTTP credentials, the heap-dump endpoint, the pool, the admission webhook**: credentials are bound to the host:port the (verified) socket reached; SSH signs with SHA-2 only; an unredacted dump is always deleted; the pool marks unwrap and getMetaData as used; the webhook builds its patch as structured JSON with escaped point ers.
+
+#### The parsers, attacked
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | PostgreSQL, MySQL, Oracle | `getLong`/`getInt` wrapped numbers beyond a long modulo 2^64 (`TextNumber.decimal`, `OracleNumber.toLong`'s first loop, MySQL `BIGINT UNSIGNED` in binary): 18446744073709551621 read as 5. Whoever can write a value chose what the application read. | medium | #PR |
+| 2 | Pool | A `java.lang.Error` while opening kept the permit, and killed housekeeping: after `maximumPoolSize` of them the pool never opened a connection again. | medium | #PR |
+| 3 | Patroni, PostgreSQL arrays, SQL Server `sql_variant` | Recursion as deep as the answer said: a StackOverflowError out of `connect()` (Patroni over plain HTTP), `getArray()`, `getString()`. | medium/low | #PR |
+| 4 | JDBC getters | `IllegalStateException`, `Truncated`, `NumberFormatException` out of `getString`/`getBytes`/`getObject`; Oracle rowid/date cells trusted their inner lengths. | low | #PR |
+| 5 | PostgreSQL | The buffer swap in `finally` read a closed buffer after a broken connection and replaced the real `SQLException`; a `DataRow` with no `RowDescription` was an NPE. | low | #PR |
+
+#### The parsers, attacked again
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Oracle | Native encryption took the server's Diffie-Hellman group at any size up to 65535 bytes, with a private exponent as long as the prime: 2048 bits cost 2.5 s, 4096 bits 21 s, the maximum years of CPU in connect - before any login, and no timeout stops a computation. Now at most 4096 bits and a 256-bit exponent. | medium | #PR |
+| 2 | MySQL | `MyRow.parseDigits`, a copy of the `TextNumber` loop above, wrapped modulo 2^64 as well (18446744073709551621 read as 5); it now uses `TextNumber.decimal`. | medium | #PR |
+| 3 | TLS | The curve an ECDSA scheme names was not checked against the key's (noted in the code). | low | #PR |
+
+#### Looked at and found sound
+
+- BSON reader of the MongoDB login (2 million mutated documents), the heap-dump redactor on mutated HPROF files (never served one with the secret left), TDS PLP chunks (measured before moved), LDAP BER and Redis RESP lengths, every digit loop outside `TextNumber.decimal`/`OracleNumber.toLong`/`MyRow.parseDigits`.
+
+### Code review: quoting, placeholders, field encryption, JWT, pool
+
+#### quoting, placeholders, field encryption, JWT
+- **MY-QUOTE-MB (Medium, conditional, CWE-89/838)** – `MyQuoting.literal` and `MyDatabaseMetaData.literal` escaped for UTF-8 only. With a GBK/Big5/SJIS/CP932/ GB18030 `character_set_client` (SET NAMES, init_connect, skip-character-set-client-handshake) the lead byte of a multibyte character swallowed the escaping backslash: `中\' OR 1=1 -- ` ran as SQL. Values with non-ASCII characters are now written as `_utf8mb4 X'..'`; `enquoteNCharLiteral` no longer prefixes those with `N`. Regression: lexer simulation per client charset.
+- **JWT-FAILOPEN (Low, conditional, CWE-636/613)** – `SeclumeJwt.verify` applied exp/nbf/crit only when `JsonOff.has` found them, and `has` answered false for documents it could not read (nesting > 512, non-object payload, missing comma, control ch aracter). A correctly MAC'd token with such a payload never expired. `JsonOff.present` now tells an absent field (`JsonOff.Absent`) from an unreadable document; the verifier refuses the latter.
+- Checked without finding: identifier/XID/context quoting (PG, MySQL, TDS, Oracle), IMAP/POP3/SMTP user handling, Redis RESP and HTTP placeholder rewriters, OAuth token reader, EncryptedColumn/BlindIndex/Kafka decryption, AccessLogVerifier (head-truncation and checkpoint-less logs are documented via `first()` / `signedUpTo()`), AMQP Start-Ok rewriting.
+
+- **URL-CFG-EXEC (High, conditional, CWE-78/15)** – every JDBC URL / Properties option reached `SecretProviders.of`, so `provider=process&command=...` in a URL ran a program at login. Applications that accept connection URLs from their users (BI, data-integration, admin tools) were exposed, as with pgjdbc's socketFactory (CVE-2022-21724). `process` now needs `-Dseclume.secret.process.allowed=true`; the check sits in the provider switch, so nested providers are covered too. Follow-up: an allowlist of providers for URL/Properties-sourced settings.
+- **DRV-RTE (Low, CWE-248)** – a secret provider's `SecretUnavailableException` left `Driver.connect` unwrapped; it should be a `SQLException` (08001).
+- Checked without finding: SPIFFE HTTP/2 and protobuf reader, own Ed25519 (RFC 8032 vector, 3000-case differential test against the JDK), NATS CONNECT rewriting and NKey decoding, admission webhook, SecretMasker, sink search (XXE, deserialization, JNDI, class loading).
+
+- **AUDIT-EXIT (Medium, CWE-347/354)** – `--audit-verify <log> <key>` exited 0 ("the access log holds") for a log rewritten without the signing key: all checkpoints dropped, an entry changed, the SHA-256 chain recomputed. With a key, a log with entries but no checkpoint that holds now exits 1; entries after the last held checkpoint exit 3 instead of 0 (behaviour change, see README).
+- Checked without finding: hostname matching and PKIX trust, tlsPin bound to CertificateVerify / ServerKeyExchange in both stacks, no session resumption, MySQL parameter binding and deferred SET, R2DBC placeholders, AWS session-token socket framing , MongoDB OP_COMPRESSED limits, the seclume actuator endpoint (hardening: no exception text, no connection per call).
+
+- **ORA-OSON (Medium, conditional, CWE-674/409/400)** – `OracleJson` followed OSON child offsets recursively with neither a depth limit nor a visit count: a 17-byte value whose array names itself as its child was a StackOverflowError, and 206 bytes of arrays sharing their next level an OutOfMemoryError. Node visits are now limited to the value's length in bytes (a tree visits each node once) and nesting to 256; both raise SQLException 22000. Regression: cycle, doubling DAG, valid tree, scalar.
+- Checked without finding: VECTOR decoding, Oracle verifier selection (10g refused, 11g opt-in) and PBKDF2 count limits, seclume-keys rotation (key use and destroy under one lock, chain and key chosen together). Functional, not security: `SeclumeKeyManager.fits` expects "EdDSA" while `NativeKey` reports "Ed25519", so Ed25519 keys are never chosen.
+
+- **POOL-RENEW (Medium, conditional, CWE-269/863)** – after a connection failure (08xxx) the pool silently renewed the connection and repeated the call when SessionState judged the session unchanged. That judgement reads SQL text only: `select app.enter_tenant(42)` or a DO block that sets a role or tenant was not seen, and the borrower's next statement ran as the login role. A borrow that has had any statement handed out is no longer renewed; renewal stays for borrows that have run nothing (a connection dead before first use). Regression: RenewPoc (function-set role, SET ROLE, dead-on-borrow).
+- Checked without finding: SeclumeHmac (constant-time compare, Stripe timestamp bound to the MAC), SCRAM channel binding and the 'y' downgrade guard, OAUTHBEARER only to verified servers, reset on every used return (DISCARD ALL / COM_RESET_CONNECTION).
+
+- **POOL-STMT-CACHE (Low, conditional, CWE-226)** – StatementCache.give kept the statement's open result: with a driver that has no SessionReset (the cache then lives across borrows) the next borrower's prepareStatement of the same SQL returned that statement, and getResultSet() before its own execute handed it the previous borrower's unread rows. give() now closes the result and calls getMoreResults(CLOSE_ALL_RESULTS) first, and does not cache a statement for which that fails.
+- Checked without finding: no renewal after work since the transaction boundary, savepoints or a previous renewal; seclume drivers' cache emptied on every used return; ReadWriteSplit routes on setReadOnly, binds GTID/LSN.
+
+- **R2DBC-URL-INJ (Medium, conditional, CWE-88/74)** – jdbcUrl() encoded user and every passed-on option but appended HOST, PORT and DATABASE as they were. JdbcUrl splits at the first '?' and the last duplicate wins, so a database option of "tenant_a?user=postgres&x" turned "?user=app" into the key "x?user" and logged in as postgres with the application's secret; any option the application did not set could be added the same way. Host (incl. IPv6 and lists), port and database are now validated before the URL is built. Regression test: JdbcUrlInjectionTest.
+- Checked without finding: MongoDB SDAM (members only from this set's primary, stale primaries by electionId/setVersion, topologyVersion), R2DBC refuses a password option.
+
+### Code review: protocol injection, trust and credentials
+
+#### #37 PG-STARTUP-NUL — Medium (CWE-158/CWE-93)
+
+`PgSession.startup()` wrote `user`, `database` and `application_name` with `WireBuffer.putCString()`, which does not refuse an embedded zero byte. JdbcUrl decodes `%00`, so `applicationName=x%00database%00tenant_b` added a second `database` parameter. The server takes the last one, while `getCatalog()` still reported the URL's database. `options` (any `-c` GUC such as `search_path`) and `replication` could be added the same way. Fix: `startupValue()` refuses a zero byte with SQLState 08001. Verified with a local stand-in that only reads the StartupMessage: the injected pairs no longer arrive; normal values are unchanged. Follow-ups: (refuse NUL in `putCString` itself, which also covers the MySQL handshake) (control characters refused in Settings before a socket opens). Checked without finding: heapcheck sidecar write path (O_EXCL temp file, link-based publish refuses a planted name, deletes remove the link only); setClientInfo (refused in every driver); TDS Login7 strings (length-prefixed). Open: the sidecar follows symlinks when reading.
+
+#### #38 MY-HANDSHAKE-NUL — Medium (CWE-158/CWE-93)
+
+`MySession.writeHandshakeResponse()` wrote `user` and `database` with `putCString()`. A decoded `%00` in `user` ended the field early, so the server read attacker-chosen bytes as auth length, database and plugin: `user=app%00%00tenant_b%00x%00` gave `database=tenant_b`, `plugin=x`; the unknown plugin triggered an AuthSwitchRequest that the driver answered with the real login. With `user=app%00` the scramble landed in the database field, which servers echo into errors and logs. Fix: `handshakeValue()` refuses a zero byte (08001) before the packet is written. Verified against a protocol-faithful local stand-in (no auth bytes printed, decoy secret); not run against a real mysqld.
+
+#### #39 ORA-DESC-INJ — Low (CWE-74)
+
+`OracleSession.Settings.connectString()` placed `host` and `service` into the TNS descriptor verbatim; `a)(SERVICE_NAME=b` or `x)(INSTANCE_NAME=…)` added entries. Listener behaviour on such entries was not verifiable here. Fix: compact constructor of `Settings` whitelists service (`[A-Za-z0-9_.$#-]+`) and host; `OraDataSource.getConnection` maps the refusal to SQLException 08001.
+
+#### #40 SPIFFE-FED-DEFAULT — Low–Medium (CWE-1188/863)
+
+SpiffeTrustManager took the trust domain from the peer's URI SAN and accepted any SPIFFE ID whose chain led to that domain's bundle — federated domains included — when no peer-ids were configured (the default). The public doc of spiffeSslContext reads as "the bundle the agent gave". A federation set up for one partner service thus admitted every workload of the partner as mTLS client or server. Shown with two local test CAs (a.org own, b.org federated): both leaves accepted. Fix: without peer-ids only the workload's own trust domain; federated domains only where peer-ids (or trust-domains=) name them. Verified.
+
+#### #41 REDIS-AAD-NOKEY — Medium (CWE-345/639)
+
+EncryptedCodec used one associated-data value ("redis:" + name) for every value, so a ciphertext stored under one key opened under any other: whoever can write to Redis — the party client-side encryption is meant to defend against — copied role:alice's "admin" over role:mallory's "viewer" without a key (local PoC, a map standing in for the server). Lettuce's RedisCodec never passes the key to encodeValue, so the fix is an API beside it: encodeValueFor/decodeValueFor bind the key's bytes into the associated data; a copied value then fails with FieldEncryptionException. Verified. The same column-not-row binding exists by construction in the Kafka serializer (topic) and the JPA converters (column) — documented as C, hardening H56/. Checked without finding: RespPasswordRewriter (replaces only the AUTH/HELLO password slot, fails closed on anything it cannot follow), RespReplyGuard, the Jedis socket factory.
+
+#### #42 KAFKA-AAD-NOKEY — Medium (CWE-345/639)
+
+EncryptingSerializer bound a value only to its topic ("kafka-topic:" + topic, column kafka.<topic>.value). Anyone who can write to the broker assembled a record from one record's key ciphertext and another's value ciphertext; the consumer decrypted both (local PoC: account-99 -> "credit 5000", taken from account-17). Kafka's value Serializer never sees the key, so the fix is an interceptor pair: the producer adds the SHA-256 of the serialized key as a header bound into the value's associated data; on the consumer the key deserializer records the digest of the key bytes actually received, and the value deserializer uses that, never the header as sent. 
+
+#### #43 SHRED-RACE — Medium (CWE-362/459)
+
+SubjectKeys.ring() read the wrapped key from the store and unwrapped it outside the lock, then cached the ring without asking whether the subject had been shredded meanwhile; shred() removed only the ring cached at that moment. A read in flight across shred() put the deleted key back: shred() returned true, the store held no key, and the subject's values still decrypted through the cache (local PoC with a store whose load() is held once). Fix: a per-subject shred counter, raised before deletion, compared before caching; a ring opened across a shred is closed and refused. Verified. Open: other instances keep their cached ring until it is evicted. Also: the field format itself checked without finding (GCM-SIV , header in AAD, key commitment before decryption, HKDF separation per mode and for blind indexes); #41/#42 come from integrations passing a constant context — lets a column require one.
+
+#### #44 HTTP-HEADER-ANY — Medium (CWE-201/532)
+
+HttpFraming kept the request line out of the rewrite — the placeholder is no secret, and the target holds what users type — but replaced the placeholder with the secret in every header line; Http2Requests in every non-pseudo header. An application that copies user input into a header (Elasticsearch's X-Opaque-Id, tracing ids, Referer, cookies) sent the real API key there when the input was the placeholder, which is designed to be safe to log. Shown locally with a decoy token: Authorization carried it, as wanted, and so did X-Opaque-Id. Fix: only credential header lines (authorization, proxy-authorization, x-api-key, api-key, x-auth-token, plus a configurable list such as x-vault-token); verified for HTTP/1.1, HTTP/2 to follow. Checked without finding: request line and bodies untouched, digit-only lengths, per-server placeholder binding (sniffed nodes fail closed), SearchUrl.
+
+#### #45 PLACEHOLDER-TOFU — Medium (CWE-522/346)
+
+SeclumeGit.credentials() and SeclumeGrpc.header() registered their placeholder without a server list, so CredentialPlaceholders bound the secret to the first server it was written for. An application that also fetches user-chosen URLs with the same provider sent the real token to whichever host answered 401 first after a start (local check of the binding: the first server gets the secret, the intended one only the placeholder). seclume-kubernetes already binds to its API server; JGit and gRPC get a servers argument, the unbound variants are deprecated.
+
+#### #46 RESULT-LIMIT-SPOOF — Low (CWE-1284/400)
+
+SeclumeDataSources.withResultLimit() skipped the default result limit when the URL text contained "maxResultBytes=" or "maxResultRows=" anywhere — in a database name or an applicationName too (verbatim copy of the method). Fix: look at parsed option keys. Hypotheses checked without finding: #36 does not reach provider=process (the application's provider comes later and wins); TDS Login7 and Oracle AUTH are length-prefixed; RespReplyGuard's 64 KiB bound is moot against Redis's 128-character echo. EncryptedFields: binding exists, the documented example omits it. Note for #44: bind the placeholder to the header it was registered for instead of a fixed allowlist.
+
+#### #47 LDAP-SVC-LOGIN — Medium (CWE-287/1390)
+
+LdapSocket replaced the placeholder in any simple bind whose DN equals the registration's user() on its server (madeFor). On the wire a bind by the context source and an end user's bind with the same DN look alike: with Spring Security's BindAuthenticator on seclume's socket factory (as the Javadoc recommends) and an AD UPN pattern, typing the service account's name and the placeholder — known to whoever read a heap dump, the case the class names — signed in as the service account (with auth entication=kerberos: as the OS ticket's identity). Fix: refuse typed credentials starting with the placeholder prefix (guard registered by the starter) and honour the placeholder only for binds the context source makes for user().
+
+#### #36 addendum
+
+The injected database name sets every option the application does not set itself — TLS options and secret provider options alike (an injected sts-endpoint reaches the web-identity credential source; checked by parsing only, nothing sent). H75: security options parsed once, from trusted parts only; duplicates refused. Also (container credential URI host rules as in the AWS SDKs). seclume-mail checked without finding (own login against the configured host, STARTTLS mandatory).
+
+#### #48 CRAC-TLS-UNCOUNTED — Low–Medium (CWE-226/316)
+
+SeclumeCrac.quiesce() calls the process quiet when registered pools have no borrowed connection, SecretScope.open() is 0 and no unreloadable private key is held. TLS traffic keys and AES-GCM contexts live in plain shared arenas (RecordProtection, RecordStream, TlsConnection, OpenSslAesGcm), not in SecretScopes, and no Checkpoint registration covers live connections — so the MongoDB driver's own pool, SeclumeHttp keep-alives, Lettuce, Kafka, JNDI and R2DBC pools keep their session keys through a checkpoint. On SnapStart, which does not refuse open sockets, the image then holds them. Fix: count live TLS connections (as LiveKeys counts keys), refuse the checkpoint while any is open, and hold new handshakes with new secrets; moves tra ffic keys into SecretScopes. Checked without finding: kernel entropy for nonces, OpenSSL reseed before release, the recount under hold(). catalogue of security-relevant secret provider options added (endpoints, audiences, paths, command, trust).
+
+#### #49 SENSITIVE-ERROR-ECHO — Low–Medium (CWE-209/226)
+
+SensitiveParameters promises a value written "without it becoming a String". On the error path it becomes one: PgSession.readError() decodes every ErrorResponse field with readCString() — message into getMessage(), DETAIL into PgException.detail — and MySQL's error text goes into MyException as it is. PostgreSQL echoes bound values in DETAIL ("Key (k)=(...) already exists", "Failing row contains (...)" — every column of the row) and in type errors; MySQL in ER_DUP_ENTRY's message. A secret bound from native memory then sits on the heap and in every log of the exception. Fix: before decoding, overwrite the bytes of each bound sensitive segment in the native receive buffer; skip, don't decode, fields that are discarded. Cross-check of error messages otherwise without finding: no connection secret reaches an exception (MySQL scramble masked, Redis readLine masked, mail and HTTP name host/user only); server text is quoted unfiltered for control characters, DETAIL carries row data into logs.
+
+#### #50 AUDIT-HOLDS-NOCHECKPOINT — Medium (CWE-354/345)
+
+#32 made the AuditVerify command refuse a signed log without checkpoints; the library underneath did not change: AccessLogVerifier.verify(file, key).holds() is true for a log someone rewrote, stripped of every checkpoint line, renumbered and re-hashed — although its log.opened line announces signing and the caller passes the key (local reproduction: holds=true, checkpoints=0, no problems). Fix: with signing announced or a key given, every entry must be covered by a valid checkpoint (an uncovered tail is not "holds", or a separate vouched() callers must check), the opened line's fingerprint must match the key, and an "unsigned" opened line under a key is a downgrade.
+
+#### G2, continued
+
+AccessLogTest's "re-hashed entry is found" holds while a later checkpoint is still in the file; FieldEncryptionTest's "copied" means copied to another column or context. HeapDumpTest's negative control is the model the text-scanning tests lack.
+
+#### #51 PATRONI-REDIRECT — High with http Patroni and public-CA trust, else Medium (CWE-941/319/346)
+
+PatroniTopology took the members of GET /cluster as they came, and HostList.current() used them instead of the URL's hosts; the request goes over plain HTTP whenever the option says http:// — as the Javadoc's example does. Whoever can shape that answer (on the path to port 8008, a compromised member, write access to the DCS) names their own host as leader; verify-full then checks the certificate against that name, which a certificate for the attacker's own domain passes, and refuseUnlessAuth enticated releases a cleartext password to it; with SCRAM the attacker picks salt and iterations; either way the application writes to their database. Local reproduction with a stand-in Patroni: [db.attacker.example:5432, db2:5432]. Fix: an answer may reorder the URL's servers, never add one (members outside the URL's hosts or a patroni-hosts allowlist are ignored; TLS names come from the URL), warn on or refuse plain-HTTP Patroni. Verified: [db2:5432]. H100: the same rule for every ClusterTopology. Root-cause sweep of earlier fixes otherwise clean (#28 quoting, #37/#38 C-strings, #33 depth limits); (JdbcEscapes and NO_BACKSLASH_ESCAPES) (CbomReader limits).
+
+#### #52 REDIS-DISCOVERY-PASSWORD — High for plain or Sentinel discovery, Medium with TLS (CWE-522/941)
+
+SeclumeLettuce builds a RespPasswordRewriter for whatever host each new channel connects to; its Javadoc says so: every node found on topology refresh or redirect, and the master or replica a Sentinel names, "receives the password from native memory". Only that node's own certificate is checked. A MOVED/ASK injected on a redis:// path, a forged Sentinel answer, or a compromised node naming a host with a valid certificate for its own domain, receives the real password. Elasticsearch (placeholder bound to the configured nodes) and Kubernetes (bound to the API server) already do it the safe way. Fix: discovered targets outside the URL's hosts or an explicit cluster-hosts/master-hosts allowlist get the placeholder only, and plain discovery needs an explicit opt-in.
+
+#### Runtime-discovered connection targets — sweep
+
+Aurora (instance id restricted, fixed AWS domain suffix), SecretFetch and SeclumeHttp (no redirects followed), Elasticsearch sniffing (placeholder bound) checked without finding. Same class as #51/#52, kept as hardening: MongoDB hello.hosts, Kafka advertised listeners; one shared "discovery may reorder, never extend" rule with a contract test.
+
+### Process: gates and tests
+
+#### G1 — process: a pull request is judged by its own gates
+
+security_gate.py and coverage_gate.py are careful (DTD/entities refused, "did not run" is a failure, a skipped security test never passes, renamed modules are noticed) — but both read their manifest and floors from the pull request's own checkout, and the surefire reports its own build wrote; ci.yml even takes the -Dtest list from it. A PR can drop an entry, lower a floor, or cut a security test to one empty case, and stay green: locally, one empty case for each of the 40 core entries gave " 40 of 40 through". "The floors only ever move up" is a comment, not a check. Fix: load gate files and scripts from the base branch, a ratchet job against main (entries, floors, min_cases per entry), mutation testing of changed security-test co de as a gate, a visible "touches gates" label, CODEOWNERS.
+
+#### G2 — two gate tests prove less than the manifest says
+
+ForbiddenApiTest ("no production code puts a secret on the heap without a marked reason") matches source text line by line: run through its own check(), a plain `new String(s)` is found, eight equivalents are not (`new String(`, `new java.lang.String(`, a constructor split over two lines, Charset.decode(...).toString(), ByteBuffer.wrap(byte[]), Scanner, an allow marker inside a string literal, a marker on the line above covering any next line). productionSources() only walks <root>/*/src/main/java, so seclume-quarkus/runtime and /deployment are never scanned (clean today). ErrorMessageTest ("no exception message carries a secret") flags only identifiers named password/secret/passphrase/credential/token placed directly in a throw: 1 of 5 samples caught; runtime echoes (#49)
+
+are out of its reach. Fix: bytecode-level forbidden-call scan with an annotation for exceptions, module list from the reactor, a decoy-secret runtime test over error paths, and manifest wording that matches wh at each test shows until then.
+
+### Cross-cutting reviews
+
+#### Start-up and shutdown failure paths — two findings fixed (#53, #54)
+
+#53 SecretMasker.refresh() rebuilt its index from the secrets readable at that moment: a provider that failed for one refresh (Vault restarting, a network blip) dropped that secret's fingerprints, and log lines carried it in the clear until the next successful refresh — five minutes by default. Fingerprints are now kept per label and reused when a read fails; a secret never read yet (cold start, after a restore) is repo rted by complete() so the refresher retries early. #54 RedactionSecrets.open() skipped a secret it could not read, so a heap dump was redacted without it, reported as redacted, and the original deleted — a dump taken under memory pressure, when a provider call is most likely to fail, could ship with the password in it. An unreadable secret now refuses the redaction and the existing failure path applies. Checked without finding: no silent fallback when a provider is missing or Windows-only; field keys abort start-up on a provider error and are wiped under the write lock before their providers close; JPA without a ring refuses; Checkpoint.wipeAll co ntinues past a failing holder.
+
+#### Secret rotation and concurrency — two findings fixed (#55, #56)
+
+#55 SeclumePool.rotateSecret() marked the entries in a snapshot of the pool; a login under way at that moment — the secret read at its start, the entry added at its end — was not in it, so a connection opened with the old password was lent again until maxLifetime. newEntry() now notes the rotation count before the login and retires the entry on return if it changed by the time the entry is added (the same added-then-checked order close() uses); the count is an AtomicLong. #56 VaultSecretProvider treated a KV secret — no lease — as never stale and served it from its cache until a restart. A password rotated in Vault was not taken up, and a SecretWatch on the same provider, the starter's wiring, never saw the change it is documented to report. A KV secret is now read again after a maximum age (60 s by default). Checked without finding: the AWS, Azure and GCP providers do not cache; the file provider reopens on every read and refuses an empty file; OAuthToken copies the token under its lock; renew() keeps the rotation mark.
+
+#### Tenant separation — isolation holds; one borrow-path finding fixed (#57)
+
+#57 SeclumePool.lend() marked the entry in use and then asked the session context supplier outside the try that hands a failed borrow back: a supplier that threw — a tena nt header that does not parse, an anonymous request — left the connection in use for good, with no borrow counted and no trace, so leak detection saw nothing. As many such requests as the pool has connections, unauthenticated, emptied it until a re start. The supplier is now asked inside its own try; on failure the untouched connection is returned, not retired. Checked without finding: a used session is reset unconditionally; a context not yet sent is dropped before the reset; the deferred DI SCARD ALL is answered before the next borrower's first message and a refusal closes the connection; a failing restore retires; unwrap and adopt count as use; Statement/DatabaseMetaData.getConnection name the pool's handle; the statement cache is cleared with the reset; values are dollar-quoted, hex or N'' and names allow-listed; PostgreSQL refuses a session value behind a transaction pooler.
+
+#### Time and clocks — two checkpoint findings (#58 fixed, #59 designed)
+
+#58 seclume-aws's TemporaryCredentials kept up to three generations of secret key and session token in SecretScopes without registering with Checkpoint. With a pool registered , quiesce() saw them open and refused every checkpoint — SnapStart with seclume-aws could not be used; without one they went into the image. The class now registers and forgets every generation before a checkpoint; a request signed with one fails rather than sends it. #59 seclume-crac's only CRaC resource is the pool's: wiping the registered caches, the open-secret check, the hold and the reseed of OpenSSL's DRBG all run only when a pool is registered. An application using seclume's TLS with out a pool — seclume-keys, -http, -kafka, -jwt — got none of them, and every instance restored from one image drew the same ephemeral key shares. A process-wide resource, registered whenever seclume-crac is present, is to take these over; pools keep suspend and resume. Checked without finding: no TLS resumption; credential deadlines are relative to one local clock and on the nanoTime scale; OAuthToken is invalidated at checkpoints; SeclumeJwt checks exp/nbf with leeway, canonical encoding and crit, and escapes claims correctly.
+
+#### Side channels — timing closed; one placeholder finding fixed (#60)
+
+#60 Credential placeholders were seclume-cred-<nonce>-<n>: one random nonce per process and a counter. Placeholders are public by design and end up in client configuration and debug logs; one seen there named every other one. With a placeholder bound to the first server it is written for (#45) and rewritten in any header (#44), a derived placeholder not yet used could be bound to a server of an attacker's choosing. Each placeholder is now 128 bits of its own randomness, with no shared part; the same for the Kafka SASL and AWS session-token placeholders. Checked without finding: SCRAM compares nonce and server signature in constant time and refuses fewer than 4096 iterations (Kafka included); SeclumeJwt compares MACs in constant time and checks claims only after the signature; HTTP/2 writes secrets never-indexed and refuses Huffman input; bodies are never rewritten; MySQL public-key retrieval is opt-in; the length and equality field encryption reveals are documented.
+
+#### Configuration as attack surface — one finding fixed (#61)
+
+an inventory of quiet switches #61 The assessment behind /actuator/seclume and the crypto policy graded a connection by "in the clear" and "TLS 1.2" only: Secured reported the TLS version and suite, not whether the server was authenticated, so the default tls=prefer — and require — looked exactly like verify-full. A session a man in the middle could read, and under prefer with TLS stripped relay the login of, showed no finding. Secured is to report serverAuthenticated(); the assessment now warns when it is false, and a policy rule tls.require-authenticated (default warn) lets on-start=fail refuse it. Checked without finding: the password itself and OAuth tokens go only to a verified or pinned server; SCRAM over unverified TLS signals channel-binding support, so a relay to a server offering -PLUS fails; the Java AES-GCM fallback is constant time and announces itself; secret fetches use no proxy; tnsnames.ora contributes addresses only and TCPS forces verify-full.
+
+#### Supply chain, build and native libraries — checked, no finding
+
+Native libraries cannot be swapped without rights that would allow anything anyway: libcrypto is looked up by soname through the dynamic loader on Linux and by fixed absolute paths on macOS (Apple's /usr/lib stub refused, the override absolute only) and must report OpenSSL 3 or later; every Windows DLL seclume loads is a System32 one. The repository holds no binaries; the wrapper jar is checked against its SHA-256 in mvnw and in the CI retry script, cache included; workflows are read-only, actions pinned by SHA, no pull_request_target; the OpenSSL tarball for the hybrid test is pinned by SHA-256; builds set outputTimestamp.
+
+#### A hostile server on the receiving side — parsers hold; one timeout finding fixed (#62)
+
+#62 Every bound on waiting counted silence only: the network timeout's watch is armed per read call, a query timeout sent a cancellation and nothing more, and a login was watched like a network timeout. A server that ignored the cancellation and se nt a byte now and then — hung, hostile, or a proxy in between — held a statement past its query timeout (2 s set, 60 s taken) and a login past its connect timeout (3 s set, 37 s taken, no upper bound), and with it a pool's thread and permit. A query timeout now closes the connection when the cancellation has not ended the statement within a grace; a login has a budget of its own, lifted by loggedIn(). Checked without finding: the PostgreSQL buffer grows with the bytes that arrive, not with an announced length; notifications are bounded; an unrequested CopyInResponse is answered with CopyFail; MySQL packets are bounded and split payloads refused; TDS PLP chunks must be there before they are used; quoting does not depend on server parameters.
+
+#### R2DBC — three findings at the seam between Reactor and blocking JDBC (#63–#65)
+
+R2DBC borrows from SeclumePool, so the reset on return, credential expiry, rotation and the fixes for #55, #57 and #62 hold there as well. #63 A borrow that had to wait ran as fromCallable on a virtual thread; a subscriber that cancelled — a client that hung up while the pool was busy — left the thread waiting, and the connection it then got was discarded by Reactor and never closed: one connection lost per such cancellation. The borrow now closes a discarded connection. #64 The session context supplier is asked on the borrowing thread: under R2DBC that is the subscriber's for a free connection and a new virtual thread when the pool has to wait, and Reactor's Context — where a reactive application keeps its tenant — cannot be read at all. A tenant was set under light load and not under load. A reactive context source, resolved on the subscriber and passed to the pool explicitly, is to replace it there. #65 setStatementTimeout and setLockWaitTimeout reported success and set nothing; they are to map to the JDBC query timeout and each database's lock timeout, and to fail where there is none. Checked without finding: closing returns and resets the pooled connection; lanes serialise a connection's calls and refuse work once closed; borrows never run on the shared platform threads; a cancelled login still wipes its secrets; placeholder re writing copies literals, comments and dollar-quoted bodies and never inlines a value.
+
+#### Admin and diagnostic tools — one finding fixed (#66)
+
+#66 seclume-verify --migrate decoded the values of the URL it translates and wrote them into the seclume URL and the properties lines as they were: an application name of billing%26tls%3Doff became a second option tls=off — the one JdbcUrl reads, since a repeated option takes the last value — and %0A started a properties line of its own; SQL Server's {...} values the same. The output ran without TLS while the tool reported nothing unsafe (exit 0). Option names and values are now percent-encoded, the database name too, and host list and user name refused when they hold control or delimiter characters. Checked without finding: no form of a password in a source URL — query, user info, Oracle's user/password@, SQL Server's PWD and braces, sslpassword, password1/2, pwd, the wallet password, percent-encoded — appears in the output; heapcheck starts jcmd by absolute path with an argument array, the dump is written 0600 under a random name, reports name findings by number only; --print-pin does not log in; no Java deserialization in the tools.
+
+#### Cross-check of the fixes #53–#66 — one new finding (#67)
+
+one fix corrected All twelve fixed files compile together and every proof of concept shows the fixed behaviour on the combined tree. A query killed by the deadline's new kill stage reports TransactionResolutionUnknownException (08007) for a write and the pool retires the connection; a login over its budget gives the pool's permit back. #67 The pool's capacity and idle-limit probe ran on the first connection after login, with no query timeout: a server that did not answer it held that connection, its borrower — often the warm-up at start-up — and a permit for good. The probe now has a timeout of its own (seclume.pool.probeSeconds, 5 s), and a connection the probe cost is refused, not lent. #62, corrected: the first version of the kill stage was cancelled with cancel(false), which does not stop a kill already running, and could close a connection after its statement had returned (19 of 40 timed races); kill and close() now exclude each other.
+
+- Checked without finding: mongodb+srv resolution (targets below the host's domain, strict host/port, TXT limited to authSource/replicaSet/loadBalanced), OP_COMPRESSED via aircompressor-v3 (exact announced size), reactive demand handling, Encrypted SecretProvider (AES-GCM verifies before decrypting), Shamir combine (x in 1..255, duplicates and foreign splits refused, embedded SHA-256 check), heapcheck jcmd invocation and JSON/SARIF output.
+
+- Checked without finding: SeclumeJschIdentity (no SHA-1 signatures, ECDSA DER-to-SSH conversion incl. P-521), SearchUrl (https only, no password in the URL, placeholder bound to the listed nodes), EncryptedDocument decryption, SeclumeGit transport (https only, trust not overridable by JGit), Quarkus/ Micronaut/Helidon guards (report names, never values).
+
+- Checked without finding: socket timeouts and truncated messages close the session (no desynchronised stream reaches a pool); PG/MySQL cancel only while an answer is awaited; Oracle break; TDS attention counted before it is written and drained bef ore the next request; MySQL cleartext paths (clear_password, sha256_password, caching_sha2 full auth) only to verified servers, public-key retrieval off by default; Flight records names and lengths only. - Open (needs a real server): TDS cancel while rows are streaming - drainAttention reads one more message per ATTENTION even when the response already carried DONE_ATTN; add a LocalCancelTest case that cancels a large result mid-read.
+
+- Checked without finding: TLS downgrade sentinel (RFC 8446 4.1.3), HRR rules, no renegotiation or resumption, ECDHE+AES-GCM only, EMS and renegotiation_info offered, no IP in SNI, handshake size limits; X25519MLKEM768 share and secret lengths, OpenSSL failures turned into a handshake abort. - New fuzzing: MySQL result-set parser via a fake server, 300,000 mutations over three seeds (LONGLONG unsigned, utf8mb4 strings, DECIMAL, DATETIME(6), JSON, BLOB, BIT through all getters) - only SQLException; mutated handshake/auth-switch/more-data/ERR/OK packets - only SQLException. - Login against a silent server: all four drivers honour connectTimeout during the handshake (2.0-2.2 s for 2 s).
+
+#### Native resources closed while in use — checked, no finding
+
+seclume holds no raw descriptors (NIO SocketChannel throughout), and TLS frees its cipher contexts only under both the read and the write lock. The native crypto primitives themselves (OpenSslSigningKey, OpenSslAesGcm, CNG counterparts) do not guard close() against a concurrent use; every production caller found does (EcdsaSigner synchronized, RenewingClientIdentity and ReloadableSigningKey read/write locks, the JWT SigningKey monitor). Measured what misuse would cost: a sign/close race on the raw key, 3000 rounds × 3, gave glibc "free(): corrupted unsorted chunks" once and two hangs; with a read/write lock in the primitive, 5 of 5 runs clean at the same speed. H51: guard the primitives themselves. H52: enforce closeAll()'s "no handsh ake running" instead of documenting it.
+
+#### ColumnRotation, BlindIndex — checked, no finding
+
+ColumnRotation validates every identifier before building SQL, binds all values, writes back only where the value is unchanged (conflicts counted), one transaction per batch, resumable and idempotent; Context.ROW_ID gives JDBC the per-row binding the Redis/Kafka integrations lacked (#41/#42)
+
+BlindIndex derives one key per transform, width and name, so indexes of one column do not correlate; terms are truncated HMAC-SHA-256, matches() compares in constant time and wipes.
+
+#### OAuth/JWT bearer sources, MongoDB driver — checked, no finding
+
+OAuthToken: https-only token URL from java.net.URI (no header injection), client secret assembled and encoded in native memory, bounded answers, Bearer only, access tokens with spaces or control characters refused, expires_in bounded with a renewal margin; RFC 7523 assertions with aud, jti, 5 min. MongoDB driver: SCRAM-SHA-256/X.509/AWS/OIDC only, refused before anything is sent; BSON depth and bounds checked; decompressed size checked before inflating; SRV targets within the URL's domain, TXT limited to three options.
+
+#### Time and clocks — checked, no finding
+
+Security-relevant timing uses monotonic time or epochs: OAuthToken renewal (nanoTime, invalidated before a checkpoint), the TLS client offers no PSK, resumes nothing and drops NewSessionTickets, so there is no ticket to expire, snapshot or replay; caches with nanoTime deadlines are all registered for wiping before a checkpoint.
+
+#### Concurrency on shared state — checked, no new finding
+
+H88/ FieldKeys guards every use with a read lock and wipe/reload/close with the write lock, re-checking "forgotten" after locking; a half-failed reload wipes again. SecretWatch is synchronized throughout. The pool sends each reset on return and reads its answer before lending; a refused reset closes the connection. Resets: PostgreSQL DISCARD ALL after rollback, Oracle a fresh login (application contexts cannot survive), My SQL COM_RESET_CONNECTION plus the current database, SQL Server RESETCONNECTION on the next request. Open against real servers: whether EXECUTE AS / sp_setapprole survive sp_reset_connection (P8) and whether SET ROLE / user variables survive COM_RESET_CONNECTION (P9) — a Testcontainers reset matrix that gates releases. Placeholder first-binding is race-free (the issue is the design, #45).
+
+#### Build, CI, release — checked, no finding
+
+No pull_request_target, workflow_run or comment triggers; fork PRs get no secrets; tokens are read-only (id-token only for the OpenSSF upload, no PR trigger); every third-party action is pinned to a commit SHA; the only event data in scripts are a base SHA and a PR number; composite actions pass inputs through env. Releases are OpenPGP-signed, the key published three ways; outputTimestamp set.
+
+### Reviewed, nothing found: seclume as a server
+
+#### seclume as a server — checked, no finding
+
+The admission webhook serves POST /mutate and GET /healthz only, bounds the request body, sets request/response time limits and parses with a depth limit (earlier round); an anonymous /mutate computes a patch and returns it, nothing else. The patch never replaces or repeats a pod value and is idempotent; the SPIFFE hostPath option is judged by Pod Security admission on the mutated pod, so it grants nothing a namespace's policy would not. The Spring endpoints are read-only and exposed only by configuration.
 
 ## Rounds 6 to 16 - November 2026
 
