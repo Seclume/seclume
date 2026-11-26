@@ -740,8 +740,19 @@ public final class SecretMasker implements AutoCloseable {
         int at = 0;
         boolean changed = false;
         int i = 0;
+        // The next ';' at or after a position, found once and looked for again
+        // only once it is behind: a line of nothing but '&' read each of them
+        // up to 32 characters on.
+        int nextSemicolon = -1;
         while (i < text.length()) {
-            int end = text.charAt(i) == '&' ? semicolon(text, i) : -1;
+            int end = -1;
+            if (text.charAt(i) == '&') {
+                if (nextSemicolon != Integer.MAX_VALUE && nextSemicolon < i + 2) {
+                    int found = text.indexOf(';', i + 2);
+                    nextSemicolon = found < 0 ? Integer.MAX_VALUE : found;
+                }
+                end = nextSemicolon <= i + 32 ? nextSemicolon : -1;
+            }
             int point = end > 0 ? entity(text, i + 1, end) : -1;
             if (point < 0) {
                 out.set(ValueLayout.JAVA_CHAR_UNALIGNED, 2L * at, text.charAt(i));
@@ -763,23 +774,8 @@ public final class SecretMasker implements AutoCloseable {
         return changed ? at : -1;
     }
 
-    /**
-     * The {@code ;} that ends a reference begun at {@code amp}, or -1: at most 32
-     * characters on - room for leading zeros - so that an {@code &} starting none
-     * costs no scan to the end of the line.
-     */
-    private static int semicolon(String text, int amp) {
-        int last = Math.min(text.length() - 1, amp + 32);
-        for (int k = amp + 2; k <= last; k++) {
-            if (text.charAt(k) == ';') {
-                return k;
-            }
-        }
-        return -1;
-    }
-
     /** The character the reference between {@code start} and {@code end} names, or -1. */
-    private static int entity(String text, int start, int end) {
+    static int entity(String text, int start, int end) {
         String name = text.substring(start, end);
         switch (name) {
             case "amp": return '&';

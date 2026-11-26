@@ -123,6 +123,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Log masking: XML and HTML references read in one pass.** Each `&` looked up to 32
+  characters on for its `;`, so a line of many `&` cost 32 reads a character; the next `;` is
+  found once now. A line of 200,000 `&` is masked in about 3.6 ms instead of 8. Long lines stay
+  fully masked: there is no length past which a line goes out unread.
 - **CRaC: a pool's refused checkpoint says where the open secrets came from.** The
   process's refusal named the places with `-Dseclume.debug.scopes=true`, or said how to find
   them; the pool's gave the count alone.

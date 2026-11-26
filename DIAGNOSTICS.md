@@ -478,8 +478,10 @@ its tag.
   shorter than six characters are not looked for: they would mask ordinary words.
 - **What it costs:** a line is scanned once as it stands, and once more decoded for each
   encoding it shows a sign of - a `%` or `+`, a backslash, an `&`. Each reading is linear in
-  the line, and none is free: a line of 200,000 `&` takes about 86 ms instead of 5. A
-  logger that writes such lines - a whole document per message - pays for it on every line.
+  the line, and none is free: warmed up, a line of 200,000 `&` takes about 3.6 ms where one of
+  200,000 letters takes 2.4. No line is too long to be masked - a length past which a line went
+  out unread would let a secret through just there - so a logger that writes a whole document
+  per message pays for it on every line.
 - **Which secrets:** every data source's password and `seclume.heapdump.secrets.<label>.*` -
   the same the heap dump redaction looks for. Read again once every bean is made, and then every
   `seclume.logging.refresh-interval`.
