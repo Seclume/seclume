@@ -472,6 +472,7 @@ protocol text or dribble bytes.
 | 90 | Login budget | `loggedIn()` only cancelled the budget's task; one already running closed the connection just handed to the driver. Login and task now race for one entry, and the loser does nothing (`LoginBudgetRaceTest`). | low | #PR |
 | 91 | CI secrets | Test passwords were written into the scripts as `"${{ secrets.X }}"`: the runner put the value into the script's text before the shell read it, where a quote in it would have been shell syntax. They come in through the step's `env` now and are read as variables. | process | #PR |
 | 92 | Terminal output | The Doctor's text report, `--print-pin`'s subject and issuer, and heapcheck's holder names were printed raw; a server's or a dump's control characters drove the terminal. They go through `ServerText.printable` now. | low | #PR |
+| 93 | Log masker | A match overlapping one found before was dropped, so the part of a second secret beyond the first stayed in the line. Only matches wholly inside a found one are skipped now; the mask takes the union. | low | #PR |
 
 ### Mutation testing of the security paths
 

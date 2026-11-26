@@ -29,6 +29,24 @@ import space.seclume.tck.StaticSecretProvider;
 @org.junit.jupiter.api.parallel.Isolated
 class SecretMaskerTest {
 
+    /**
+     * Two secrets that overlap in a line, neither inside the other: the one
+     * found second was dropped, and what of it reached beyond the first went
+     * out in the clear. The mask covers both now.
+     */
+    @Test
+    void twoSecretsThatOverlapAreBothMaskedWhole() {
+        try (SecretMasker masker = new SecretMasker(Map.of(
+                "first", new StaticSecretProvider("alpha-bravo-42"),
+                "second", new StaticSecretProvider("bravo-42-zulu-99")))) {
+            String masked = masker.mask("value alpha-bravo-42-zulu-99 end");
+            assertTrue(masked.startsWith("value [redacted:") && masked.endsWith("] end"), masked);
+            for (String piece : new String[] {"alpha", "bravo", "42", "zulu", "99"}) {
+                assertTrue(!masked.contains(piece), piece + " in " + masked);
+            }
+        }
+    }
+
     @Test
     void aSecretInALogLineIsMaskedUnderItsLabel() {
         try (SecretMasker masker = new SecretMasker(Map.of("db", new StaticSecretProvider(

@@ -129,6 +129,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Log masking: two overlapping secrets are both masked whole.** Where two secrets overlapped
+  in a line, neither inside the other, the one found second was dropped, and what of it reached
+  beyond the first went out in the clear. The mask covers their union now.
 - **Terminal output escapes what a server or a dump chose.** `seclume-verify`'s text report,
   `--print-pin`'s certificate names and heapcheck's holders (class and field names from the
   dump) went to the terminal as they were: an ESC there drove it, a CR overwrote the line before.

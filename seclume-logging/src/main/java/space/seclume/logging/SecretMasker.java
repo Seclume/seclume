@@ -821,9 +821,15 @@ public final class SecretMasker implements AutoCloseable {
         return true;
     }
 
+    /**
+     * Whether a match lies wholly inside one found already. Only then is it
+     * nothing new: one that overlaps a found one only in part reaches beyond
+     * it, and dropped, that part of the shorter secret went out unmasked. The
+     * masking takes the union of what overlaps.
+     */
     private static boolean covered(List<int[]> hits, int start, int end) {
         for (int[] hit : hits) {
-            if (start < hit[1] && end > hit[0]) {
+            if (start >= hit[0] && end <= hit[1]) {
                 return true;
             }
         }
