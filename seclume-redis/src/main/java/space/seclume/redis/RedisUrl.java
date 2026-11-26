@@ -27,6 +27,16 @@ record RedisUrl(List<Node> nodes, String user, String sentinelMasterId, String s
                 SecretProvider sentinelSecret, boolean tls, TrustChoice.Choice trust,
                 int connectTimeout, int timeout, SecretProvider secret, List<String> discovered) {
 
+    /** Whether {@code host:port} is one of the URL's own nodes - the Sentinels, with a master id. */
+    boolean isListedNode(String host, int port) {
+        for (Node node : nodes) {
+            if (node.host().equalsIgnoreCase(host) && node.port() == port) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Whether a node that discovery named - a cluster redirect, a topology
      * refresh, the master a Sentinel names - may be given the password: a host

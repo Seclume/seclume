@@ -32,7 +32,7 @@ class RespPasswordRewriterTest {
     @Test
     void authWithAUser() throws Exception {
         String placeholder = RespPasswordRewriter.newPlaceholder();
-        String sent = rewrite(placeholder, "s3cret-pw", "*3\r\n$4\r\nAUTH\r\n$6\r\norders\r\n$"
+        String sent = rewrite(placeholder, "s3cret-pw", "orders", "*3\r\n$4\r\nAUTH\r\n$6\r\norders\r\n$"
                 + placeholder.length() + "\r\n" + placeholder + "\r\n");
         assertEquals("*3\r\n$4\r\nAUTH\r\n$6\r\norders\r\n$9\r\ns3cret-pw\r\n", sent);
     }
@@ -41,7 +41,7 @@ class RespPasswordRewriterTest {
     void helloWithAuthAndMoreCommandsAround() throws Exception {
         String placeholder = RespPasswordRewriter.newPlaceholder();
         String password = "p".repeat(123);                       // three digits
-        String sent = rewrite(placeholder, password, "*1\r\n$4\r\nPING\r\n"
+        String sent = rewrite(placeholder, password, "orders", "*1\r\n$4\r\nPING\r\n"
                 + "*5\r\n$5\r\nHELLO\r\n$1\r\n3\r\n$4\r\nAUTH\r\n$6\r\norders\r\n$"
                 + placeholder.length() + "\r\n" + placeholder + "\r\n*2\r\n$3\r\nGET\r\n$1\r\nk\r\n");
         assertEquals("*1\r\n$4\r\nPING\r\n*5\r\n$5\r\nHELLO\r\n$1\r\n3\r\n$4\r\nAUTH\r\n$6\r\n"
@@ -72,8 +72,8 @@ class RespPasswordRewriterTest {
         String masterPlaceholder = RespPasswordRewriter.newPlaceholder();
         String sentinelPlaceholder = RespPasswordRewriter.newPlaceholder();
         RespPasswordRewriter rewriter = new RespPasswordRewriter(
-                masterPlaceholder, file("master-secret"),
-                sentinelPlaceholder, file("sentinel-secret"),
+                masterPlaceholder, file("master-secret"), "orders",
+                sentinelPlaceholder, file("sentinel-secret"), "sentinel",
                 "localhost:26379");
         String sentinelAuth = "*3\r\n$4\r\nAUTH\r\n$8\r\nsentinel\r\n$"
                 + sentinelPlaceholder.length() + "\r\n" + sentinelPlaceholder + "\r\n";
@@ -127,8 +127,63 @@ class RespPasswordRewriterTest {
                         "rediss://n1:6379,n2:6379?provider=file&path=" + redisPw));
     }
 
+    private static String auth(String... arguments) {
+        StringBuilder out = new StringBuilder("*" + (arguments.length + 1) + "\r\n$4\r\nAUTH\r\n");
+        for (String argument : arguments) {
+            out.append('$').append(argument.length()).append("\r\n").append(argument)
+                    .append("\r\n");
+        }
+        return out.toString();
+    }
+
+    /**
+     * Every connection knew both placeholders: the Sentinel's written into a
+     * data node's AUTH sent the Sentinel password to the data node, and the
+     * other way round. A connection to a Sentinel of the URL knows the
+     * Sentinel's placeholder only, any other the data node's only.
+     */
+    @Test
+    void aSentinelConnectionAndADataConnectionEachKnowOnlyTheirOwnPlaceholder() throws Exception {
+        Path data = Files.writeString(dir.resolve("data.pw"), "data-secret");
+        Path guard = Files.writeString(dir.resolve("sentinel.pw"), "sentinel-secret");
+        RedisUrl url = RedisUrl.parse("redis-sentinel://s1:26379,s2:26380"
+                + "?sentinelMasterId=mymaster&master-hosts=m1"
+                + "&provider=file&path=" + data.toString().replace('\\', '/')
+                + "&sentinelUser=guard&sentinel-provider=file&sentinel-path="
+                + guard.toString().replace('\\', '/'));
+        String dataPlaceholder = RespPasswordRewriter.newPlaceholder();
+        String sentinelPlaceholder = RespPasswordRewriter.newPlaceholder();
+
+        RespPasswordRewriter toSentinel = SeclumeLettuce.rewriterFor(url, dataPlaceholder,
+                sentinelPlaceholder, "s2", 26380, true);
+        assertEquals(auth("guard", "sentinel-secret"),
+                rewriteWith(toSentinel, auth("guard", sentinelPlaceholder)));
+        toSentinel = SeclumeLettuce.rewriterFor(url, dataPlaceholder, sentinelPlaceholder,
+                "s2", 26380, true);
+        assertEquals(auth(dataPlaceholder), rewriteWith(toSentinel, auth(dataPlaceholder)));
+
+        RespPasswordRewriter toData = SeclumeLettuce.rewriterFor(url, dataPlaceholder,
+                sentinelPlaceholder, "m1", 6379, true);
+        assertEquals(auth("data-secret"), rewriteWith(toData, auth(dataPlaceholder)));
+        toData = SeclumeLettuce.rewriterFor(url, dataPlaceholder, sentinelPlaceholder,
+                "m1", 6379, true);
+        assertEquals(auth("guard", sentinelPlaceholder),
+                rewriteWith(toData, auth("guard", sentinelPlaceholder)));
+        // A data node on a Sentinel's host, at another port, is a data node.
+        toData = SeclumeLettuce.rewriterFor(url, dataPlaceholder, sentinelPlaceholder,
+                "s1", 6379, true);
+        assertEquals(auth("guard", sentinelPlaceholder),
+                rewriteWith(toData, auth("guard", sentinelPlaceholder)));
+    }
+
     private String rewrite(String placeholder, String password, String command) throws Exception {
         return rewriteWith(new RespPasswordRewriter(placeholder, file(password)), command);
+    }
+
+    private String rewrite(String placeholder, String password, String user, String command)
+            throws Exception {
+        return rewriteWith(new RespPasswordRewriter(placeholder, file(password), user, ""),
+                command);
     }
 
     private String rewriteWith(RespPasswordRewriter rewriter, String command) throws Exception {

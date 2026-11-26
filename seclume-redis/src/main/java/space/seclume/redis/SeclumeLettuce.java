@@ -208,6 +208,23 @@ public final class SeclumeLettuce {
                 : uri.withAuthentication(url.user(), placeholder.toCharArray())).build();
     }
 
+    /**
+     * What a connection to {@code host:port} rewrites. One to a Sentinel
+     * knows the Sentinel's placeholder only, one to a data node the data
+     * node's only: either placeholder written into the other's AUTH slot -
+     * the application led to it - sent that password to the wrong server.
+     */
+    static RespPasswordRewriter rewriterFor(RedisUrl url, String placeholder,
+                                            String sentinelPlaceholder, String host, int port,
+                                            boolean allowed) {
+        boolean toSentinel = url.sentinelMasterId() != null && url.isListedNode(host, port);
+        return new RespPasswordRewriter(
+                allowed && !toSentinel ? placeholder : NOT_HERE, url.secret(), url.user(),
+                allowed && toSentinel ? sentinelPlaceholder : null,
+                allowed && toSentinel ? url.sentinelSecret() : null,
+                url.sentinelUser(), host + ":" + port);
+    }
+
     private static final System.Logger LOG = System.getLogger(SeclumeLettuce.class.getName());
 
     /** Matches no placeholder: a node not allowed has nothing rewritten. */
@@ -234,11 +251,8 @@ public final class SeclumeLettuce {
                                     + "among the URL's hosts or cluster-hosts/master-hosts - it "
                                     + "gets no password");
                         }
-                        RespPasswordRewriter rewriter = new RespPasswordRewriter(
-                                allowed ? placeholder : NOT_HERE, url.secret(),
-                                allowed ? sentinelPlaceholder : null,
-                                allowed ? url.sentinelSecret() : null,
-                                host + ":" + port);
+                        RespPasswordRewriter rewriter = rewriterFor(url, placeholder,
+                                sentinelPlaceholder, host, port, allowed);
                         if (url.tls()) {
                             SslHandler tls = new SslHandler(new SeclumeSslEngine(
                                     host, port, url.trust(), rewriter));

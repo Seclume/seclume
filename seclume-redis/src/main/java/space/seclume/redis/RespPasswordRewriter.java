@@ -41,8 +41,19 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
 
     private static final int MAX_DIGITS = 10;
 
-    private record Binding(byte[] placeholder, SecretProvider secret) {
+    /**
+     * A placeholder, its secret, and the user it is the password of - null
+     * for the {@code default} user, the one an AUTH without a user name logs
+     * in as.
+     */
+    private record Binding(byte[] placeholder, SecretProvider secret, byte[] user) {
     }
+
+    /** The longest user name followed; a longer one matches no binding. */
+    private static final int MAX_USER = 256;
+    private static final byte[] DEFAULT_USER = "default".getBytes(StandardCharsets.US_ASCII);
+    private static final System.Logger LOG =
+            System.getLogger(RespPasswordRewriter.class.getName());
 
     private final Binding[] bindings;
     /** The server, for the event that says the password was written in. */
@@ -51,21 +62,29 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
     private final RespReplyGuard replies;
 
     RespPasswordRewriter(String placeholder, SecretProvider secret) {
-        this(placeholder, secret, null, null, "");
+        this(placeholder, secret, null, null, null, null, "");
     }
 
-    RespPasswordRewriter(String placeholder, SecretProvider secret, String where) {
-        this(placeholder, secret, null, null, where);
+    RespPasswordRewriter(String placeholder, SecretProvider secret, String user, String where) {
+        this(placeholder, secret, user, null, null, null, where);
     }
 
-    RespPasswordRewriter(String placeholder, SecretProvider secret, String sentinelPlaceholder,
-                         SecretProvider sentinelSecret, String where) {
+    /**
+     * @param user         the user {@code secret} is the password of, null for
+     *                     {@code default}: an AUTH naming another user gets
+     *                     the placeholder as it is
+     * @param sentinelUser the same for the Sentinel's secret
+     */
+    RespPasswordRewriter(String placeholder, SecretProvider secret, String user,
+                         String sentinelPlaceholder, SecretProvider sentinelSecret,
+                         String sentinelUser, String where) {
         // seclume-allow: the placeholder, not the password
-        Binding main = new Binding(placeholder.getBytes(StandardCharsets.US_ASCII), secret);
+        Binding main = new Binding(placeholder.getBytes(StandardCharsets.US_ASCII), secret,
+                userBytes(user));
         if (sentinelPlaceholder != null && sentinelSecret != null) {
             // seclume-allow: the placeholder, not the password
             Binding sentinel = new Binding(sentinelPlaceholder.getBytes(StandardCharsets.US_ASCII),
-                    sentinelSecret);
+                    sentinelSecret, userBytes(sentinelUser));
             this.bindings = new Binding[] {main, sentinel};
             this.replies = new RespReplyGuard(secret, sentinelSecret);
         } else {
@@ -73,6 +92,10 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
             this.replies = new RespReplyGuard(secret);
         }
         this.where = where;
+    }
+
+    private static byte[] userBytes(String user) {
+        return user == null ? null : user.getBytes(StandardCharsets.UTF_8);
     }
 
     /** The guard of this connection's answers - see {@link RespReplyGuard}. */
@@ -117,6 +140,9 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
     private int nameLength;
     private final byte[] third = new byte[5];
     private int thirdLength;
+    /** The user name of the current AUTH or HELLO ... AUTH as written; -1 if longer than kept. */
+    private final byte[] user = new byte[MAX_USER];
+    private int userLength;
 
     /** Follows bytes that are written as they are - a write without the placeholder. */
     void observe(ByteBuffer plain) {
@@ -142,7 +168,8 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
     private int pass(int available) {
         if (state != State.DATA
                 || (index == 0 && nameLength < name.length)
-                || (index == 2 && thirdLength < third.length)) {
+                || (index == 2 && thirdLength < third.length)
+                || (userSlot() && userLength >= 0)) {
             return 0;
         }
         int n = (int) Math.min(left, available);
@@ -187,6 +214,39 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
                 && is(third, thirdLength, "AUTH");
     }
 
+    /** The user name argument is being read: AUTH user password, HELLO v AUTH user password. */
+    private boolean userSlot() {
+        if (is(name, nameLength, "AUTH")) {
+            return elements == 3 && index == 1;
+        }
+        return is(name, nameLength, "HELLO") && elements >= 5 && index == 3
+                && is(third, thirdLength, "AUTH");
+    }
+
+    /**
+     * Whether the command names the user {@code binding}'s secret is the
+     * password of; an AUTH with a password alone logs in as {@code default}.
+     * Without this, a placeholder written after another user's name - the
+     * application led to it - logged that user in with this one's password,
+     * or told whether the two were the same.
+     */
+    private boolean forUser(Binding binding) {
+        boolean named = !(is(name, nameLength, "AUTH") && elements == 2);
+        if (!named) {
+            return binding.user == null;
+        }
+        byte[] expected = binding.user == null ? DEFAULT_USER : binding.user;
+        if (userLength != expected.length) {
+            return false;
+        }
+        for (int i = 0; i < userLength; i++) {
+            if (user[i] != expected[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * The placeholder as the bulk string at {@code at}, whole in this buffer,
      * replaced - or null, and the bytes are followed as any others.
@@ -200,6 +260,12 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
             if (plain.limit() - at < total || !matches(plain, at, header)
                     || !matches(plain, at + header.length, placeholder)) {
                 continue;
+            }
+            if (!forUser(binding)) {
+                LOG.log(System.Logger.Level.WARNING, "seclume: an AUTH to " + where + " named "
+                        + "another user than the one its password belongs to - the placeholder "
+                        + "goes as it is, and the login fails");
+                return null;
             }
             space.seclume.jfr.Observed.secretUse("redis", where, "AUTH");
             Step step = Step.replace(total, bulk(binding.secret));
@@ -234,6 +300,7 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
                 index = 0;
                 nameLength = 0;
                 thirdLength = 0;
+                userLength = 0;
                 state = elements == 0 ? State.COMMAND : State.BULK;
             }
             case BULK -> {
@@ -293,6 +360,12 @@ final class RespPasswordRewriter implements SeclumeSslEngine.Outgoing {
             name[nameLength++] = upper;
         } else if (index == 2 && thirdLength < third.length) {
             third[thirdLength++] = upper;
+        } else if (userSlot() && userLength >= 0) {
+            if (userLength < user.length) {
+                user[userLength++] = b;
+            } else {
+                userLength = -1;                   // longer than any name kept: matches none
+            }
         }
     }
 

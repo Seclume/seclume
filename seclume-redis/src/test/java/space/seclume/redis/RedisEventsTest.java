@@ -32,7 +32,7 @@ class RedisEventsTest {
         String placeholder = RespPasswordRewriter.newPlaceholder();
         RespPasswordRewriter rewriter = new RespPasswordRewriter(placeholder,
                 SecretProviders.of(Map.of("provider", "file", "path", password.toString())),
-                "cache:6379");
+                null, "cache:6379");
         ByteBuffer plain = ByteBuffer.wrap(("*2\r\n$4\r\nAUTH\r\n$" + placeholder.length()
                 + "\r\n" + placeholder + "\r\n").getBytes(StandardCharsets.US_ASCII));
         Path file = dir.resolve("redis.jfr");

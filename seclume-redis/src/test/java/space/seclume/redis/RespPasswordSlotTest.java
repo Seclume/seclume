@@ -38,6 +38,8 @@ class RespPasswordSlotTest {
 
     private String placeholder;
     private RespPasswordRewriter rewriter;
+    /** The user the password belongs to; null for {@code default}. */
+    private String user;
 
     @BeforeEach
     void aClient() throws Exception {
@@ -50,7 +52,13 @@ class RespPasswordSlotTest {
         Path file = Files.createTempFile(dir, "redis", ".pw");
         Files.writeString(file, PASSWORD);
         rewriter = new RespPasswordRewriter(placeholder,
-                SecretProviders.of(Map.of("provider", "file", "path", file.toString())));
+                SecretProviders.of(Map.of("provider", "file", "path", file.toString())), user, "");
+    }
+
+    /** A connection whose password is {@code name}'s. */
+    private void asUser(String name) throws Exception {
+        user = name;
+        aConnection();
     }
 
     private static String bulk(String value) {
@@ -74,20 +82,24 @@ class RespPasswordSlotTest {
 
     @Test
     void authWithAUserAndInLowerCase() throws Exception {
+        asUser("orders");
         assertEquals(command("auth", "orders", PASSWORD),
                 sent(command("auth", "orders", placeholder)));
     }
 
     @Test
     void helloWithAuthAndASetnameAfterIt() throws Exception {
+        asUser("orders");
         assertEquals(command("HELLO", "3", "AUTH", "orders", PASSWORD, "SETNAME", "app"),
                 sent(command("HELLO", "3", "AUTH", "orders", placeholder, "SETNAME", "app")));
+        asUser(null);
         assertEquals(command("hello", "3", "auth", "default", PASSWORD),
                 sent(command("hello", "3", "auth", "default", placeholder)));
     }
 
     @Test
     void anAuthLaterOnTheConnectionAfterWritesWithoutThePlaceholder() throws Exception {
+        asUser("orders");
         // The handler hands writes without the placeholder to observe(), the
         // engine hands everything to next(); both have to keep the place.
         String before = command("SET", "k", "v") + command("GET", "AUTH") + command("PING");
@@ -98,6 +110,7 @@ class RespPasswordSlotTest {
 
     @Test
     void theCommandsSplitAtEveryByteBeforeThePasswordStillFindIt() throws Exception {
+        asUser("orders");
         String stream = command("CLIENT", "SETNAME", "app") + command("AUTH", "orders",
                 placeholder) + command("SELECT", "2");
         String expected = command("CLIENT", "SETNAME", "app") + command("AUTH", "orders",
@@ -117,10 +130,40 @@ class RespPasswordSlotTest {
                         + command("AUTH", placeholder)));
     }
 
+    /**
+     * The placeholder after another user's name logged that user in with
+     * this one's password - or told whether the two were the same. It goes
+     * as it is now, and the login fails; the same for a password-only AUTH,
+     * which is the default user's, where the password belongs to a named one.
+     */
+    @Test
+    void anotherUsersNameGetsThePlaceholderAsItIs() throws Exception {
+        asUser("orders");
+        for (String stream : List.of(command("AUTH", "admin", placeholder),
+                command("AUTH", "order", placeholder),
+                command("AUTH", "ordersX", placeholder),
+                command("AUTH", "ORDERS", placeholder),
+                command("AUTH", placeholder),
+                command("HELLO", "3", "AUTH", "default", placeholder),
+                command("HELLO", "3", "AUTH", "x".repeat(300), placeholder))) {
+            aConnection();
+            assertEquals(stream, sent(stream), stream);
+        }
+        asUser(null);
+        for (String stream : List.of(command("AUTH", "orders", placeholder),
+                command("HELLO", "3", "AUTH", "admin", placeholder))) {
+            aConnection();
+            assertEquals(stream, sent(stream), stream);
+        }
+        assertEquals(command("AUTH", "default", PASSWORD),
+                sent(command("AUTH", "default", placeholder)));
+    }
+
     // ---- where it does not --------------------------------------------------
 
     @Test
     void thePlaceholderStoredAsAValueStaysThePlaceholder() throws Exception {
+        asUser("orders");
         for (String stream : List.of(
                 command("SET", "session:42", placeholder),
                 command("SET", "AUTH", placeholder),
@@ -185,6 +228,7 @@ class RespPasswordSlotTest {
      */
     @Test
     void anAuthAfterLongValuesIsFoundWhereverTheWritesFall() throws Exception {
+        asUser("orders");
         String looksLikeMore = "\r\n*2\r\n$4\r\nAUTH\r\n$" + placeholder.length() + "\r\n"
                 + placeholder + "\r\n";
         String stream = command("SET", "k".repeat(300), "v".repeat(40_000))
@@ -211,6 +255,7 @@ class RespPasswordSlotTest {
 
     @Test
     void aNameThatOnlyBeginsLikeAuthIsNotAuth() throws Exception {
+        asUser("orders");
         for (String stream : List.of(
                 command("AUTHENTICATE", placeholder),
                 command("AUTHXX", "orders", placeholder),
@@ -271,6 +316,7 @@ class RespPasswordSlotTest {
             int header = before.length() + auth.indexOf("$" + placeholder.length() + "\r\n"
                     + placeholder);
 
+            user = login.length == 2 ? null : "orders";
             aConnection();
             java.util.List<String> writes = new java.util.ArrayList<>();
             int at = 0;
