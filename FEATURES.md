@@ -1462,7 +1462,7 @@ seclume.ssl.bundles.mesh.spiffe=socket=unix:///run/spire/agent.sock&peer-ids=spi
 - **Settings:** `socket` (else `SPIFFE_ENDPOINT_SOCKET`; `unix://` only - a TCP Workload API
   is refused), `timeout-millis` (10 s), `peer-ids` - the SPIFFE IDs a peer may have, comma
   separated; without it any workload of the workload's own trust domain, and a federated
-  domain's only where `peer-ids` names it - `name`, what it
+  domain's only where `peer-ids` names it (a warning at start says so) - `name`, what it
   is listed as (else its SPIFFE ID; a Spring bundle's name), and `stream` (`true`).
 - **Served by Tomcat** as well: `seclume.server.ssl.bundle=mesh` with
   `seclume.server.ssl.client-auth=need` is mutual TLS between workloads on the embedded

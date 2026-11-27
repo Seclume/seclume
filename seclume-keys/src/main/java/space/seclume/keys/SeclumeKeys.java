@@ -258,6 +258,14 @@ public final class SeclumeKeys {
                 }
             }
         }
+        if (peers.isEmpty()) {
+            // Not refused: a whole trust domain is how SPIFFE authorizes by
+            // default. But it is a wide door, and it is said once, at start.
+            System.getLogger(SeclumeKeys.class.getName()).log(System.Logger.Level.WARNING,
+                    "SPIFFE without peer-ids: any workload of this workload's own trust domain "
+                            + "is accepted as a peer. Name the ones meant with "
+                            + "peer-ids=spiffe://...");
+        }
         return new Spiffe(new Factory(keys),
                 new TrustFactory(new SpiffeTrustManager(keys::bundleFor, keys::allBundles,
                         peers, keys::trustDomain)));

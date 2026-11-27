@@ -381,6 +381,44 @@ class SpiffeTest {
     }
 
     /**
+     * Without peer-ids every workload of the own trust domain is a peer - as
+     * SPIFFE means it, but a wide door: it is said once, as a warning.
+     */
+    @Test
+    void withoutPeerIdsTheWideTrustIsWarnedOf() throws Exception {
+        java.util.logging.Logger jul = java.util.logging.Logger.getLogger(
+                SeclumeKeys.class.getName());
+        List<String> warned = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel() == java.util.logging.Level.WARNING) {
+                    warned.add(record.getMessage());
+                }
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        jul.addHandler(handler);
+        try (FakeWorkloadApi agent = new FakeWorkloadApi(socket("wide"),
+                () -> payments.answer(PAYMENTS))) {
+            SeclumeKeys.spiffe("socket=unix://" + agent.socket() + "&peer-ids=" + PAYMENTS);
+            assertTrue(warned.isEmpty(), warned.toString());
+            SeclumeKeys.spiffe("socket=unix://" + agent.socket());
+            assertTrue(warned.stream().anyMatch(m -> m.contains("without peer-ids")),
+                    warned.toString());
+        } finally {
+            jul.removeHandler(handler);
+        }
+    }
+
+    /**
      * {@link SeclumeKeys#spiffe}: the key and the trust manager as factories -
      * as a Spring SSL bundle takes them - from one answer of the agent, listed
      * under the name they were given.

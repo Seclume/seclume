@@ -129,6 +129,8 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **SPIFFE: a warning when no `peer-ids` are set.** Every workload of the own trust domain is
+  then a peer, as SPIFFE means it; the trust is not narrowed, but the start now says so once.
 - **Azure SharedKey: names sorted as the service sorts them.** `x-ms-*` headers and query
   parameters were sorted by code point; the service and the Azure SDK use a collation in which
   a hyphen counts for little and an underscore sorts before a digit. Metadata such as
