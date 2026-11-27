@@ -483,8 +483,8 @@ final class LdapSocket extends Socket {
         TlsLayer channel = open();
         ParsedResult lastResult;
         int budget = budgetSeconds(timeout > 0 ? timeout : registered.timeout);
-        try (Deadline bound = Deadline.of(budget, this::close);
-             Gssapi.Context gss = registered.gssSupplier.get()) {
+        Deadline bound = Deadline.of(budget, this::close);
+        try (bound; Gssapi.Context gss = registered.gssSupplier.get()) {
             byte[] clientStep = gss.step(null, 0, 0);
             writeSaslBindRequest(channel, msgIdBytes, clientStep);
             lastResult = readBindResponse(channel, registered);
@@ -538,9 +538,13 @@ final class LdapSocket extends Socket {
             byte[] wrappedReply = gss.wrap(securityReply);
             writeSaslBindRequest(channel, msgIdBytes, wrappedReply);
             lastResult = readBindResponse(channel, registered);
+        } catch (IOException e) {
+            // The budget closed the socket under the bind: say that, not the
+            // read that the close broke.
+            throw late(bound, budget, registered, e);
         } catch (RuntimeException e) {
-            throw new IOException("Kerberos SASL bind on " + registered.authority()
-                    + " failed: " + e.getMessage(), e);
+            throw late(bound, budget, registered, new IOException("Kerberos SASL bind on "
+                    + registered.authority() + " failed: " + e.getMessage(), e));
         }
         byte[] finalResponse = encodeBindResponse(msgIdBytes, lastResult);
         synchronized (handshakeLock) {

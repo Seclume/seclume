@@ -133,6 +133,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **LDAP: a Kerberos bind past its budget says so.** The budget closed the socket under the
+  bind, and the error was the write that the close broke. It is now a `SocketTimeoutException`
+  saying the server did not finish within the budget's seconds, as StartTLS already said.
 - **NATS: Options not built by `SeclumeNats.build` are refused.** `SeclumeNats.configure()`
   names seclume's data port, and only `build()` registers the trust and the credentials. Options
   finished with the builder's own `build()` connected with neither the pin nor the root CA and

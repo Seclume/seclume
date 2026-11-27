@@ -479,6 +479,7 @@ protocol text or dribble bytes.
 | 97 | SPIFFE peers | Without `peer-ids` any workload of the own trust domain was accepted without a word. The trust stays domain-wide, as SPIFFE authorizes by default, and a warning at start names it | `SpiffeTest.withoutPeerIdsTheWideTrustIsWarnedOf` | #PR |
 | 98 | Field context | Every column accepted `encrypt` and `decrypt` without a context, and a value written that way opened in any row. `Context.REQUIRED` columns refuse it; Kafka and Redis use them, and Elasticsearch documents can be bound to their id | `RequiredContextTest`, `EncryptedDocumentTest.aFieldWrittenWithItsIdOpensInNoOtherDocument` | #PR |
 | 99 | NATS options | `configure()` followed by the builder's own `build()` named seclume's data port without registering it, and the port then connected without pin, root CA or filled login. An unregistered port is refused | `UnregisteredOptionsTest` | #PR |
+| 100 | Kerberos budget | A bind that outlived its budget reported the broken write, not the budget. Mapped to "did not finish within N s" as StartTLS is | `LdapBindTest.aKerberosBindPastItsBudgetSaysSo` | #PR |
 
 ### Mutation testing of the security paths
 

@@ -313,6 +313,36 @@ class LdapBindTest {
         }
     }
 
+    /**
+     * A Kerberos bind that outlives its budget: the budget closes the socket,
+     * and what was reported was the write the close broke. It says now that
+     * the bind did not finish in time.
+     */
+    @Test
+    void aKerberosBindPastItsBudgetSaysSo() throws Exception {
+        try (InMemoryDirectoryServer ds = startGssapiServer((byte) 0x07, true, new AtomicReference<>())) {
+            int ldapsPort = ds.getListenPort("LDAPS");
+            SeclumeLdap ldaps = SeclumeLdap.of("ldaps://localhost:" + ldapsPort + "/"
+                    + LdapServer.BASE + "?authentication=kerberos&timeout=1000&tlsRootCert="
+                    + server.certificate.toString().replace('\\', '/'), () -> new MockGssContext() {
+                        @Override
+                        public byte[] step(MemorySegment serverToken, long offset, int length) {
+                            if (serverToken != null) {
+                                try {
+                                    Thread.sleep(4500); // past 3 x 1 s
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                }
+                            }
+                            return super.step(serverToken, offset, length);
+                        }
+                    });
+            NamingException ex = assertThrows(NamingException.class,
+                    () -> new InitialDirContext(ldaps.environment()).close());
+            assertTrue(fullMessage(ex).contains("did not finish within 3 s"), fullMessage(ex));
+        }
+    }
+
     @Test
     void kerberosRefusesMissingMutualAuthChallenge() throws Exception {
         try (InMemoryDirectoryServer ds = startGssapiServer((byte) 0x07, false, new AtomicReference<>())) {
@@ -501,7 +531,7 @@ class LdapBindTest {
         return ds;
     }
 
-    private static final class MockGssContext implements Gssapi.Context {
+    private static class MockGssContext implements Gssapi.Context {
         private boolean complete;
 
         @Override
