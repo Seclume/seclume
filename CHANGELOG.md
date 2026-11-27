@@ -123,6 +123,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **Downloaded artifacts are checked against a checked-in SHA-256 lock.** `--strict-checksums`
+  only compared a download with the repository's own checksum, which a compromised repository
+  or cache serves along with the file. `.mvn/checksums` now holds the SHA-256 of every
+  artifact and plugin of the test and release builds (2,514), and every workflow checks
+  downloads against it with Maven Resolver's trusted checksums. A pinned version served with
+  other bytes fails the build. New artifacts are not refused yet; they are recorded with
+  `.github/scripts/record-checksums.sh`, and `.mvn/` is a code-owned gate path.
 - **Every release is rebuilt from its tag and compared with Maven Central.** `reproducible.yml`
   runs when a GitHub release is published (or by hand for an earlier tag). It builds the tag as
   the release is built and compares every jar, sources and javadoc included, byte for byte with
