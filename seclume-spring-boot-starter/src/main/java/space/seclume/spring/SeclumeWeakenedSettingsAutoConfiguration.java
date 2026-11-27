@@ -74,6 +74,7 @@ public class SeclumeWeakenedSettingsAutoConfiguration {
         flag(found, setting, "seclume.crypto-policy.enabled", "false");
         flag(found, setting, "seclume.crypto-policy.on-start", "off");
         flag(found, systemProperty, "seclume.crac.holdSecrets", "false");
+        flag(found, systemProperty, "seclume.crac.holdExpiry", "release");
         flag(found, systemProperty, "seclume.allowUnverifiedSecretSources", "true");
         flag(found, systemProperty, "seclume.secret.process.allowed", "true");
         flag(found, systemProperty, "seclume.shamir.allowUnprotected", "true");

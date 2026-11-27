@@ -20,7 +20,7 @@ class WeakenedSettingsTest {
         Map<String, String> settings = Map.of("seclume.secret-guard", "off",
                 "seclume.crypto-policy.enabled", "false");
         Map<String, String> properties = Map.of("seclume.scram.minIterations", "1000",
-                "seclume.allowUnverifiedSecretSources", "true");
+                "seclume.allowUnverifiedSecretSources", "true", "seclume.crac.holdExpiry", "release");
         List<String> weakened = SeclumeWeakenedSettingsAutoConfiguration.weakened(
                 settings::get, properties::get, new java.util.TreeMap<>(Map.of(
                         "orders", "jdbc:seclume:postgresql://db/orders?tls=prefer",
@@ -29,6 +29,7 @@ class WeakenedSettingsTest {
         assertEquals(List.of("datasource orders: tls not verify-full (prefer)",
                 "datasource reports: tls not verify-full (the driver's default)",
                 "seclume.secret-guard=off", "seclume.crypto-policy.enabled=false",
+                "seclume.crac.holdExpiry=release",
                 "seclume.allowUnverifiedSecretSources=true", "seclume.scram.minIterations=1000"),
                 weakened);
     }
