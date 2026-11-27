@@ -185,6 +185,11 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **HTTP/2: the secret goes only into a credential header, as over HTTP/1.1.** Over HTTP/2,
+  every header with a placeholder got the secret, including `X-Opaque-Id`, which Elasticsearch
+  writes into its logs and answers. Only `Authorization`, `Proxy-Authorization`, `X-Api-Key`,
+  `Api-Key` and `X-Auth-Token` get it now, plus the headers named in
+  `-Dseclume.http.credential-headers` (e.g. `x-vault-token`), on both protocols.
 - **TLS: no `connect` takes a null trust as "do not check the server".** The overloads with
   ALPN and with the versions to offer accepted a null trust and then encrypted without
   authenticating, unlike the others, which refuse it so that an unauthenticated connection is

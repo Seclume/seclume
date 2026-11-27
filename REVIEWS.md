@@ -499,6 +499,7 @@ protocol text or dribble bytes.
 | 117 | NUL in C strings | `WireBuffer.putCString` wrote a NUL inside its text, which ended the field early and made the rest the next field (a PostgreSQL statement, a BSON key). Refused there, and PostgreSQL's eight SQL entry points refuse with 22023 before the message is begun, so the session is untouched | `WireBufferTextTest.aZeroInsideACStringIsRefusedAndNothingWritten`, `LocalJdbcTest.aNulInAStatementIsRefusedAndTheConnectionGoesOn` (live) | #PR |
 | 118 | Null trust | `ClientHandshake.connect(..., alpn)` and `(..., alpn, offer)` took a null trust as "no authentication" in silence, while the shorter overloads refuse it. All refuse now, `connectWithoutAuthenticating` has the matching variants, and the drivers' `verify=false` path uses them by name | `NoTrustIsRefusedTest` | #PR |
 | 119 | Edge tests | Oracle service through the DataSource is an SQLException 08001; JSON escapes at U+007F, U+07FF and U+0800, a field named by DEL; empty pattern or host matches nothing | `DescriptorValueTest`, `JsonOffRegressionTest`, `HostnameMatchEdgeTest` | #PR |
+| 120 | HTTP/2 headers | HTTP/1.1 rewrote only credential headers, HTTP/2 every non-pseudo header, so a placeholder in `x-opaque-id` got the secret. Both use one list now, extended by name with `seclume.http.credential-headers` | `PlaceholderServerTest.overHttp2OnlyACredentialHeaderGetsTheSecret` | #PR |
 
 ### Mutation testing of the security paths
 

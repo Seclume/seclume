@@ -1615,7 +1615,11 @@ OpenSearchClient os = SeclumeOpenSearch.client(
   ports, and on no other - a placeholder sent elsewhere goes as the placeholder.
 - **Bodies are not touched:** a document that contains a placeholder is stored with the
   placeholder; nor is the request line (or HTTP/2's `:path`), where applications put what their
-  users typed. Only the header lines of request heads are rewritten - which is why the engine follows the HTTP/1.1
+  users typed. Only the credential header lines of request heads are rewritten - `Authorization`,
+  `Proxy-Authorization`, `X-Api-Key`, `Api-Key`, `X-Auth-Token`, and any header named in
+  `-Dseclume.http.credential-headers=x-vault-token,...`. Every other header goes with its
+  placeholder, over HTTP/1.1 and HTTP/2 alike, so input an application copies into `X-Opaque-Id`
+  or a tracing id never carries the secret. The engine follows the HTTP/1.1
   framing (`Content-Length`, chunks) and offers no ALPN, so the clients stay on HTTP/1.1.
 - **The URL:** `auth=apikey` (the encoded key, `base64(id:key)`, as Elasticsearch hands it
   out), `auth=bearer`, or `auth=basic` with the user before the `@`; any secret provider;

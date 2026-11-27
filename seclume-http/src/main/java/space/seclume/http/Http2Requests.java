@@ -259,7 +259,12 @@ final class Http2Requests {
                 // Not in a pseudo-header: :path and :authority are the
                 // request target, the application's data - see HttpFraming.
                 boolean pseudo = field.name().length > 0 && field.name()[0] == ':';
-                int found = pseudo ? -1 : indexOf(field.value(), PREFIX, 0);
+                // And only in a credential header, as over HTTP/1: every
+                // header with a placeholder got the secret, x-opaque-id too -
+                // which Elasticsearch writes into its logs and answers.
+                boolean credential = !pseudo && HttpFraming.isCredentialHeader(
+                        new String(field.name(), java.nio.charset.StandardCharsets.ISO_8859_1)); // seclume-allow: a header's name
+                int found = credential ? indexOf(field.value(), PREFIX, 0) : -1;
                 int valueLength = field.value().length;
                 int end = found < 0 ? -1 : placeholderEnd(field.value(), found);
                 // Null where the placeholder's secret does not go to this server:
