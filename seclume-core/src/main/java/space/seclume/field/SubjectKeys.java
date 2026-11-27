@@ -156,15 +156,25 @@ public final class SubjectKeys implements AutoCloseable {
      */
     public boolean shred(String subject) {
         check(subject);
-        synchronized (this) {
-            shreds.merge(subject, 1L, Long::sum);    // a ring being opened meanwhile is not cached
-            FieldKeys open = rings.remove(subject);
-            readAt.remove(subject);
-            if (open != null) {
-                open.close();
-            }
+        forget(subject);
+        boolean had = store.delete(subject);
+        // Once more after the delete: a reader that came between the first
+        // forget and the delete found no cached ring, loaded the key that was
+        // still stored, and - the count already raised - cached it, so that
+        // every read after the shred opened again. Raised again here, its ring
+        // is refused if it is not cached yet, and dropped if it is.
+        forget(subject);
+        return had;
+    }
+
+    /** Wipes the subject's cached ring, and makes a ring being opened meanwhile not cached. */
+    private synchronized void forget(String subject) {
+        shreds.merge(subject, 1L, Long::sum);
+        FieldKeys open = rings.remove(subject);
+        readAt.remove(subject);
+        if (open != null) {
+            open.close();
         }
-        return store.delete(subject);
     }
 
     private FieldKeys ring(String subject, boolean create) {

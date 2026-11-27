@@ -441,6 +441,61 @@ class SubjectKeysTest {
     }
 
     /**
+     * The race the load test below found in CI, made certain: a reader comes
+     * between shred()'s forgetting the cached ring and the store's delete,
+     * loads the key that is still stored, and caches its ring. Every read
+     * after the shred then opened the subject's values again. The store here
+     * holds the delete until that reader has cached its ring.
+     */
+    @Test
+    void aRingReadFromTheStoreDuringTheShredIsNotKept() throws Exception {
+        SubjectKeyStore memory = SubjectKeyStore.inMemory();
+        java.util.concurrent.CountDownLatch deleting = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch readerDone = new java.util.concurrent.CountDownLatch(1);
+        SubjectKeyStore holding = new SubjectKeyStore() {
+            @Override
+            public byte[] load(String subject) {
+                return memory.load(subject);
+            }
+
+            @Override
+            public boolean insert(String subject, byte[] wrapped) {
+                return memory.insert(subject, wrapped);
+            }
+
+            @Override
+            public boolean delete(String subject) {
+                deleting.countDown();
+                try {
+                    readerDone.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return memory.delete(subject);
+            }
+        };
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys subjects = SubjectKeys.of(master, holding)) {
+            byte[] value = subjects.column("alice", "order.address", Mode.RANDOMIZED)
+                    .encrypt(text("street 1"));
+            Thread shredder = Thread.ofPlatform().start(() -> subjects.shred("alice"));
+            assertTrue(deleting.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            // Between the forgetting and the delete: the key is still stored.
+            try {
+                read(subjects.existingColumn("alice", "order.address", Mode.RANDOMIZED), value);
+            } catch (RuntimeException refused) {
+                // refused already - as good
+            } finally {
+                readerDone.countDown();
+            }
+            shredder.join(10_000);
+            assertThrows(RuntimeException.class, () -> read(subjects.existingColumn("alice",
+                    "order.address", Mode.RANDOMIZED), value),
+                    "a ring read from the store during the shred outlived it");
+        }
+    }
+
+    /**
      * Under load: eight readers keep opening values written before the shred
      * while it happens. A read that began after shred() returned and still
      * opened a value is the failure - a key kept by a ring in a reader's hands

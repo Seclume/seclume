@@ -309,6 +309,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **A shredded subject stays shredded.** A read that came while `SubjectKeys.shred` was deleting
+  the key - after the cached ring was dropped, before the store's delete - loaded the key that was
+  still stored and cached its ring, and every read after the shred opened the subject's values
+  again. The cache is forgotten once more after the delete; a ring read in between is refused or
+  dropped.
 - **A password a server repeats in its refusal no longer reaches the heap.** Where the
   password itself goes to the server - PostgreSQL's `password` (and `ldap`, `pam`, `radius`),
   MySQL's `mysql_clear_password` and the SHA-2 plugins over TLS, an LDAP simple bind - a server
