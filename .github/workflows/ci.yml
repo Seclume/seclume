@@ -1982,6 +1982,9 @@ jobs:
           # The Spring application's Flyway wants an empty schema, not the one
           # the driver tests have filled.
           mysql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS seclume_spring; GRANT ALL ON seclume_spring.* TO 'seclume_test'@'%'"
+          # A role for SessionResetTest to activate: the reset must not hand it
+          # to the next borrower (COM_RESET_CONNECTION keeps active roles).
+          mysql -h 127.0.0.1 -P 3306 -u root -e "CREATE ROLE IF NOT EXISTS seclume_reset_role; GRANT SELECT ON seclume_test.* TO seclume_reset_role; GRANT seclume_reset_role TO 'seclume_test'@'%'"
       # The module's Local* tests default to port 3307, a developer's second
       # server; this job's is on 3306. Without saying so they skipped here -
       # eighteen of them - and require_servers.py now fails a job where that

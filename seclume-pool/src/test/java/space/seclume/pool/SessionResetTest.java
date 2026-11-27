@@ -266,11 +266,12 @@ class SessionResetTest {
                 } catch (SQLException noPrivilege) {
                     // the test user may not make roles: one it has already, or none
                 }
-                roleSet = !ask(c, "select count(*) from information_schema.applicable_roles")
-                        .equals("0");
+                roleSet = !ask(c, "select count(*) from information_schema.applicable_roles "
+                        + "where role_name = 'seclume_reset_role'").equals("0");
                 if (roleSet) {
-                    execute(c, "set role all");
-                    assertTrue(!role.equals(ask(c, "select current_role()")),
+                    // By name: MariaDB knows no SET ROLE ALL.
+                    execute(c, "set role seclume_reset_role");
+                    assertTrue(!java.util.Objects.equals(role, ask(c, "select current_role()")),
                             "set role all changed nothing - the role check would prove nothing");
                 }
                 System.out.println("MYSQL ROLE PATH " + roleSet);
