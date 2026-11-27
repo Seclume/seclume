@@ -60,6 +60,13 @@ them as you would code: each one is a file the project now trusts. An existing
 entry that no longer matches fails the build; it is never replaced by the
 script.
 
+`.mvn/maven.config` sets `aether.checksums.algorithms=SHA-1,MD5` so that a
+release bundle stays under Maven Central's file limit. The same setting picks
+the repository checksum a download is compared with. That comparison guards
+against a broken transfer, not against the repository: whoever controls it
+serves the checksum too, in any algorithm. What guards against the repository is
+the SHA-256 lock above, which does not depend on this setting.
+
 For cryptographic changes, identify the protocol or algorithm specification,
 the interoperability requirements, and the test vectors used. Preserve peer
 authentication and fail-closed behavior. Check [TLS.md](TLS.md) and
