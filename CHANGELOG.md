@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A pull request is held to the coverage floors of the base branch.** The floors and their
+  gate script were read from the change itself, which could lower a floor in the commit that
+  drops the tests it guarded. As with the security gate, a pull request is now checked with the
+  base branch's floors and script (`trusted_coverage_floors.sh`); a change to them applies once
+  merged.
 - **gRPC call credentials name their server.** `SeclumeGrpc.bearer(spec, "host:port")` and
   `header(name, spec, "host:port")` send the secret to that server only; the forms without one
   are deprecated, as `SeclumeGit.credentials(user, spec)` was - they bound the secret to

@@ -2447,9 +2447,16 @@ jobs:
       # or package it is about. Only a complete measurement is held to them -
       # with a test job failed or cancelled its share of the data is missing,
       # and that job's own failure is the one to read.
+      # On a pull request, the floors and their gate as the base branch has
+      # them - a change cannot lower a floor and drop its tests in one go.
+      - name: Coverage floors as the base branch has them
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .github/scripts/trusted_coverage_floors.sh
       - name: Coverage floors
         if: >-
           needs.core.result == 'success' && needs.postgresql.result == 'success'
           && needs.mysql.result == 'success' && needs.sqlserver.result == 'success'
           && needs.oracle.result == 'success'
-        run: python3 .github/scripts/coverage_gate.py coverage-merged.json .github/coverage-floors.json
+        run: python3 "$COVERAGE_GATE" coverage-merged.json "$COVERAGE_FLOORS"
