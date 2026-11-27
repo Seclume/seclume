@@ -14,11 +14,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * A server that selects an application protocol the client never offered -
+ * What a server may not send in its flight. One that selects an application
+ * protocol the client never offered -
  * h2 where the client said postgresql - is not talked to in a language it did
  * not agree to: the handshake is refused, before the client's Finished.
  */
-class AlpnSelectionTest {
+class ServerFlightStrictnessTest {
 
     private static final String HOSTNAME = "db.example.com";
 
@@ -51,6 +52,23 @@ class AlpnSelectionTest {
                 || String.valueOf(refused.getMessage()).contains("postgresql"),
                 refused.getMessage());
         assertTrue(!server.clientFinishedSeen(), "the client finished a handshake with h2");
+    }
+
+    /**
+     * (T15) Application data sealed under the handshake key, before the
+     * server's Finished: nothing proven yet, and the client takes none of it -
+     * the handshake is refused with unexpected_message, before its Finished.
+     */
+    @Test
+    void applicationDataBeforeTheServersFinishedIsRefused() {
+        ScriptedTlsServer server = new ScriptedTlsServer(ScriptedTlsServer.COMPLETE, leaf, key)
+                .applicationDataBeforeFinished("too early".getBytes(
+                        java.nio.charset.StandardCharsets.US_ASCII));
+        IOException refused = assertThrows(IOException.class,
+                () -> ClientHandshake.connect(server, HOSTNAME, trust).close());
+        org.junit.jupiter.api.Assertions.assertEquals(TlsAlertException.UNEXPECTED_MESSAGE,
+                server.alertReceived(), refused.getMessage());
+        assertTrue(!server.clientFinishedSeen(), "the client finished with data before Finished");
     }
 
     @Test

@@ -74,6 +74,7 @@ final class ScriptedTlsServer implements Transport {
         0, 8,                                 // extensions
         0, 13, 0, 4, 0, 2, 4, 3};             // signature_algorithms: ecdsa_secp256r1_sha256
 
+    private byte[] dataBeforeFinished;
     private byte[] encryptedExtensions = {Handshake.ENCRYPTED_EXTENSIONS, 0, 0, 2, 0, 0};
     private final Arena arena = Arena.ofShared();
     private final ByteArrayOutputStream fromClient = new ByteArrayOutputStream();
@@ -151,6 +152,16 @@ final class ScriptedTlsServer implements Transport {
      */
     ScriptedTlsServer certificateRequest(byte[] message) {
         this.certificateRequest = message.clone();
+        return this;
+    }
+
+    /**
+     * Application data - inner type 23 - sealed under the handshake key in a
+     * record of its own, just before the Finished: data the client must not
+     * take while the handshake is not done.
+     */
+    ScriptedTlsServer applicationDataBeforeFinished(byte[] data) {
+        this.dataBeforeFinished = data.clone();
         return this;
     }
 
@@ -383,6 +394,10 @@ final class ScriptedTlsServer implements Transport {
                     schedule.serverHandshakeTrafficSecret(), KEY_LENGTH)) {
                 if (tamper != null) {
                     sealed(wire, writer, 22, tamper.apply(concatenate(flight)));
+                } else if (dataBeforeFinished != null) {
+                    sealed(wire, writer, 22, concatenate(flight.subList(0, flight.size() - 1)));
+                    sealed(wire, writer, 23, dataBeforeFinished);
+                    sealed(wire, writer, 22, flight.get(flight.size() - 1));
                 } else if (recordPerMessage) {
                     for (byte[] message : flight) {
                         sealed(wire, writer, 22, message);
