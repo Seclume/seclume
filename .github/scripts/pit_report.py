@@ -109,11 +109,50 @@ def annotations(grouped, source_root):
     return result
 
 
+EQUIVALENT = "mutation-equivalent:"
+
+
+def on_changed_lines(grouped, source_root, changed):
+    """The survivors on a line the change added or altered, and not marked equivalent.
+
+    A score is a floor for a package; a new line of security code with a
+    survivor on it is a fault the change brings in and no test of the change
+    notices - the score can stay above its floor while that happens. Some
+    mutants cannot be told apart from the code by any test; the line then
+    says so, with a reason: "// mutation-equivalent: <why>".
+    """
+    found = []
+    for mutations in grouped.values():
+        for m in mutations:
+            path = source_path(source_root, m)
+            if m["line"] not in changed.get(path, ()):
+                continue
+            try:
+                with open(path, encoding="utf-8") as f:
+                    text = f.read().splitlines()
+                said = EQUIVALENT in text[m["line"] - 1]
+            except (OSError, IndexError):
+                said = False
+            if not said:
+                found.append(m)
+    return found
+
+
+def read_changed(path):
+    changed = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            name, _, number = line.strip().rpartition(":")
+            if name and number.isdigit():
+                changed.setdefault(name, set()).add(int(number))
+    return changed
+
+
 def escape(text):
     return text.replace("%", "%25").replace("\r", "").replace("\n", " ")
 
 
-def main(report, source_root, package, floor=None):
+def main(report, source_root, package, floor=None, changed_path=None):
     mutations = []
     for one in report.split(","):
         if not Path(one).exists():
@@ -151,6 +190,16 @@ def main(report, source_root, package, floor=None):
             print(f"timeout {source_path(source_root, m)}:{m['line']} {m['method']} "
                   f"{m['mutator']}: {m['description']} - in {test_name(m['killing_test']) or 'no test named'}")
         print("::endgroup::")
+    if changed_path:
+        fresh = on_changed_lines(grouped, source_root, read_changed(changed_path))
+        for m in fresh:
+            print(f"::error file={source_path(source_root, m)},line={m['line']},"
+                  f"title=mutation ({package}) on a changed line::{escape(m['method'])}: "
+                  f"{escape(m['mutator'])} - {escape(m['description'])} survived; a test "
+                  "has to notice it, or the line says why none can "
+                  f"(// {EQUIVALENT} <why>)")
+        if fresh:
+            return 1
     if floor is not None and percent < floor:
         print(f"::error title=mutation ({package})::the score of the mutants with a test is "
               f"{percent:.1f}%, below the floor of {floor:g}% - a test stopped noticing a fault "
@@ -161,4 +210,5 @@ def main(report, source_root, package, floor=None):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1], sys.argv[2], sys.argv[3],
-                  float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None))
+                  float(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None,
+                  sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] else None))

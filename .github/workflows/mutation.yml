@@ -192,8 +192,19 @@ jobs:
           pattern: pit-${{ matrix.package }}-*
           path: pit
           merge-multiple: true
+      # On a pull request, a survivor on a line the change added or altered is
+      # an error of its own: the score can stay above its floor while new
+      # security code comes without a test that notices a fault in it.
       - name: The score, and the survivors
         if: steps.inputs.outputs.state == 'changed'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           reports=$(for i in $(seq 1 ${{ matrix.shards }}); do printf '%s' "${sep:-}pit/pit-${{ matrix.package }}-$i/mutations.xml"; sep=,; done)
-          python3 .github/scripts/pit_report.py "$reports" ${{ matrix.module }}/src/main/java '${{ matrix.package }}' '${{ matrix.floor }}'
+          changed=
+          if [ -n "${BASE_SHA:-}" ]; then
+            git fetch --no-tags --no-recurse-submodules --depth=1 origin "$BASE_SHA"
+            python3 .github/scripts/changed_lines.py "$BASE_SHA" ${{ matrix.module }}/src/main/java > "$RUNNER_TEMP/changed-lines.txt"
+            changed="$RUNNER_TEMP/changed-lines.txt"
+          fi
+          python3 .github/scripts/pit_report.py "$reports" ${{ matrix.module }}/src/main/java '${{ matrix.package }}' '${{ matrix.floor }}' "$changed"
