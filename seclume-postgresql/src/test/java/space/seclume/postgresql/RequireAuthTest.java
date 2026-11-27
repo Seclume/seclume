@@ -152,6 +152,54 @@ class RequireAuthTest {
     }
 
     /**
+     * SCRAM begun and skipped: the server asks for SCRAM-SHA-256, takes the
+     * client's first message and answers ReadyForQuery, twice - never the
+     * server's proof. Refused with 28000, and the password's memory is given
+     * back: no secret scope is left open after the refusal.
+     */
+    @Test
+    void scramBegunAndSkippedIsRefusedAndTheSecretWiped() throws Exception {
+        long before = space.seclume.secret.SecretScope.open();
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Boolean> served = CompletableFuture.supplyAsync(() -> {
+                try (Socket socket = listener.accept();
+                     DataInputStream in = new DataInputStream(socket.getInputStream())) {
+                    OutputStream out = socket.getOutputStream();
+                    in.readNBytes(in.readInt() - 4);                 // the startup message
+                    byte[] mechanisms = "SCRAM-SHA-256\0\0".getBytes(StandardCharsets.US_ASCII);
+                    out.write('R');
+                    writeInt(out, 8 + mechanisms.length);
+                    writeInt(out, 10);                               // AuthenticationSASL
+                    out.write(mechanisms);
+                    out.flush();
+                    if (in.read() != 'p') {
+                        return false;
+                    }
+                    in.readNBytes(in.readInt() - 4);                 // the client-first message
+                    for (int i = 0; i < 2; i++) {
+                        out.write('Z');
+                        writeInt(out, 5);
+                        out.write('I');
+                    }
+                    out.flush();
+                    in.read();
+                    return true;
+                } catch (IOException gone) {
+                    return true;
+                }
+            });
+            SQLException refused = assertThrows(SQLException.class,
+                    () -> PgSession.open(settings(listener.getLocalPort(), null)).close());
+            assertTrue(served.get(10, TimeUnit.SECONDS), "the client sent no SCRAM message");
+            assertEquals("28000", refused.getSQLState(), refused.getMessage());
+            assertTrue(refused.getMessage().contains("before AuthenticationOk"),
+                    refused.getMessage());
+        }
+        assertEquals(before, space.seclume.secret.SecretScope.open(),
+                "a secret scope was left open after the refused login");
+    }
+
+    /**
      * Kerberos begun and skipped: the server asks for GSSAPI, takes the first
      * token and then answers ReadyForQuery - or AuthenticationOk - without the
      * reply that proves it is the service the ticket was for. Needs a GSSAPI
