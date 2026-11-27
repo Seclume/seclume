@@ -35,6 +35,8 @@ class CheckpointCoverageGateTest {
     static final Map<String, String> NEEDS_NONE = Map.of(
             "KeySchedule.java", "per TLS connection; its keys go with the connection, and an "
                     + "open connection refuses the checkpoint (LiveTls)",
+            "RecordProtection.java", "per direction of a TLS connection; closed with it, and an "
+                    + "open connection refuses the checkpoint (LiveTls)",
             "DiffieHellman.java", "per handshake; closed when the handshake ends",
             "HttpFraming.java", "per request being rewritten; freed when the request is written",
             "MailWire.java", "per mail connection; closed with it",

@@ -728,6 +728,12 @@ public final class TdsChannel implements AutoCloseable {
             // its own successor.
             return;
         }
+        if (tls != null) {
+            // The TLS layer first: it wipes the traffic keys. Closing only the
+            // socket under it left them in memory nobody freed, for every SQL
+            // Server connection ever closed.
+            tls.close();
+        }
         // The transport swallows its own close error - see Transport#close.
         channel.close();
         out.close();

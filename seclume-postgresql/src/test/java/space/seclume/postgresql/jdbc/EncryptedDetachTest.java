@@ -118,6 +118,9 @@ class EncryptedDetachTest {
         assertTrue(detached.stream().isOpen(),
                 "the hand-over closed the socket, which is the one thing it must not do");
         System.err.println("[detach] " + description + " -> layer handed over, socket still open");
+        // Whoever takes the layer owns its keys: closing the socket alone left
+        // them open - SecretScope.open() counted them in the next test.
+        carried.close();
         detached.stream().close();
     }
 

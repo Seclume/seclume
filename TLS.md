@@ -137,7 +137,9 @@ classical, as everywhere in TLS today. In return
 it gains two things JSSE cannot offer at any price: **the traffic secrets never become Java
 objects**, and the encryption state can be frozen and taken up elsewhere, which is what a
 connection that survives moving host needs. Since the external audit of 30.09.2026 (SEC-04)
-that is why it is tried first.
+that is why it is tried first. The traffic secrets, IVs and nonces are held in `SecretScope`s
+like every other key: locked in RAM, kept out of core dumps, counted by `SecretScope.open()`
+and wiped when the connection closes or a KeyUpdate replaces them.
 
 **All four drivers are proven on it against real servers**, with TLS 1.3 and with servers held
 to TLS 1.2: PostgreSQL and MySQL, Oracle over a TCPS listener, and SQL Server on both `tds=7.4`
