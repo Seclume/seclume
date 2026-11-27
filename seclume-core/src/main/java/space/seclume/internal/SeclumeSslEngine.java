@@ -507,7 +507,7 @@ public final class SeclumeSslEngine extends SSLEngine {
     /** What callers read after the handshake: protocol, suite, the server's certificate, sizes. */
     private final class Session implements SSLSession {
 
-        private final long created = System.currentTimeMillis();
+        private final long created = System.currentTimeMillis(); // seclume-allow: SSLSession.getCreationTime is wall-clock time by contract
 
         @Override
         public byte[] getId() {

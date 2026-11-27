@@ -268,7 +268,7 @@ public final class Topology implements AutoCloseable {
      * replica set is followed by its own member lists instead.
      */
     private void rescan() {
-        if (srv == null || System.nanoTime() < nextScan
+        if (srv == null || nextScan - System.nanoTime() > 0
                 || (kind != Kind.SHARDED && kind != Kind.UNKNOWN)) {
             return;
         }

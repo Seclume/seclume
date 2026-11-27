@@ -415,7 +415,7 @@ final class CredentialSocket extends SSLSocket {
 
     /** What little a caller may ask about the session - the certificate was checked by seclume. */
     private final SSLSession session = new SSLSession() {
-        private final long created = System.currentTimeMillis();
+        private final long created = System.currentTimeMillis(); // seclume-allow: SSLSession.getCreationTime is wall-clock time by contract
 
         @Override
         public byte[] getId() {

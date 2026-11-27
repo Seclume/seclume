@@ -52,7 +52,12 @@ class ForbiddenApiTest {
             Map.entry("java.util.Base64", "the JDK decoder works on Strings and heap arrays"),
             Map.entry("Base64.get", "the JDK decoder works on Strings and heap arrays"),
             Map.entry("ByteBuffer.allocate(", "a heap buffer defeats the direct read path"),
-            Map.entry("char[]", "a char array is heap and shows up in a heap dump"));
+            Map.entry("char[]", "a char array is heap and shows up in a heap dump"),
+            // Not a heap path - a clock one: deadlines and timeouts run on
+            // System.nanoTime (space.seclume.internal.Deadlines). The wall
+            // clock jumps with NTP and with a restored checkpoint.
+            Map.entry("System.currentTimeMillis()", "the wall clock jumps - measure time with "
+                    + "System.nanoTime, deadlines with space.seclume.internal.Deadlines"));
 
     /**
      * Every module, not only this one.
@@ -119,7 +124,13 @@ class ForbiddenApiTest {
             java.util.regex.Pattern.compile("new (?:java\\.util\\.)?Scanner\\("),
             "a Scanner reads into Strings",
             java.util.regex.Pattern.compile("\\.wrap\\([^;]*?\\.clone\\(\\)\\)"),
-            "a cloned array is one more heap copy, out of reach of the wipe");
+            "a cloned array is one more heap copy, out of reach of the wipe",
+            // nanoTime as a whole operand of < or >; "deadline - System.nanoTime() > 0"
+            // is the right form and is left alone.
+            java.util.regex.Pattern.compile("(?<![-+] ?)System\\.nanoTime\\(\\) ?[<>]"
+                    + "|[<>]=? ?System\\.nanoTime\\(\\)(?! ?[-+])"),
+            "nanoTime readings are compared by their difference (deadline - now > 0): the "
+                    + "clock's origin is arbitrary and a sum past the range wraps - see Deadlines");
 
     static void check(Path file, List<String> findings) throws IOException {
         check(file.toString(), Files.readString(file, StandardCharsets.UTF_8), findings);

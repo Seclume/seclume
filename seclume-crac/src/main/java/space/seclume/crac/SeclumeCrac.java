@@ -163,7 +163,7 @@ public final class SeclumeCrac {
      */
     static void quiesce(SeclumePool pool, long millis) throws InterruptedException {
         pool.suspend();
-        long deadline = System.nanoTime() + millis * 1_000_000L;
+        long deadline = space.seclume.internal.Deadlines.afterMillis(millis);
         while (true) {
             // Again on every round: a login that ran meanwhile may have
             // filled a cache the previous round had wiped.
@@ -251,7 +251,7 @@ public final class SeclumeCrac {
      */
     static void quiescePool(SeclumePool pool, long millis) throws InterruptedException {
         pool.suspend();
-        long deadline = System.nanoTime() + millis * 1_000_000L;
+        long deadline = space.seclume.internal.Deadlines.afterMillis(millis);
         while (pool.activeCount() > 0) {
             if (System.nanoTime() - deadline >= 0) {
                 pool.resume();
@@ -269,7 +269,7 @@ public final class SeclumeCrac {
      * is refused - and then no new secret until the restore.
      */
     static void quiesceProcess(long millis) throws InterruptedException {
-        long deadline = System.nanoTime() + millis * 1_000_000L;
+        long deadline = space.seclume.internal.Deadlines.afterMillis(millis);
         while (true) {
             Checkpoint.wipeAll();
             long secrets = SecretScope.open();

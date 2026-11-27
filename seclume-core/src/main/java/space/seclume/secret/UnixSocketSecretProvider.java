@@ -83,7 +83,7 @@ public final class UnixSocketSecretProvider implements SecretProvider {
      * timeout of its own.
      */
     private int readUntilClosed(SocketChannel channel, MemorySegment target) throws IOException {
-        long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
+        long deadline = space.seclume.internal.Deadlines.afterMillis(timeoutMillis);
         channel.configureBlocking(false);
         java.nio.ByteBuffer buffer = target.asByteBuffer();
         java.nio.ByteBuffer probe = java.nio.ByteBuffer.allocateDirect(1);

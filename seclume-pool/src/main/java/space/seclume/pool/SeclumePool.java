@@ -627,7 +627,7 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                     return entry;
                 }
                 retire(entry);
-                if (System.nanoTime() > deadline) {
+                if (System.nanoTime() - deadline > 0) {
                     return null;
                 }
             }

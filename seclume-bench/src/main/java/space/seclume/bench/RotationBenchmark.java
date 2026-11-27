@@ -178,7 +178,7 @@ public final class RotationBenchmark {
                 long firstRetirement = 0;
                 long finishedAt = 0;
                 long deadline = actedAt + patience.toNanos();
-                while (System.nanoTime() < deadline) {
+                while (deadline - System.nanoTime() > 0) {
                     PoolStatistics now = pool.statistics();
                     if (firstRetirement == 0 && now.retired() > before.retired()) {
                         firstRetirement = System.nanoTime();
