@@ -38,6 +38,21 @@ class DescriptorValueTest {
                 refused.getMessage().contains("not a host name"), refused.getMessage());
     }
 
+    /** The same through the DataSource's setter: an SQLException 08001, not an IllegalArgumentException. */
+    @Test
+    void aServiceSetOnTheDataSourceIsRefusedAsAnSqlException() {
+        OraDataSource source = new OraDataSource();
+        source.setHost("db.example.com");
+        source.setPort(1521);
+        source.setService("FREEPDB1)(SERVICE_NAME=OTHER");
+        source.setUser("app");
+        source.setSecretProvider(new space.seclume.tck.StaticSecretProvider("decoy-password"));
+        SQLException refused = assertThrows(SQLException.class, () -> source.getConnection().close());
+        assertEquals("08001", refused.getSQLState(), refused.getMessage());
+        org.junit.jupiter.api.Assertions.assertTrue(
+                refused.getMessage().contains("service name"), refused.getMessage());
+    }
+
     @Test
     void ordinaryNamesStillWork() {
         for (String target : new String[] {"db.example.com:1521/FREEPDB1",

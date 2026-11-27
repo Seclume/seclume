@@ -70,8 +70,9 @@ public final class SeclumeTls implements TlsLayer {
         if (alpn == null) {
             return startWithoutAlpn(transport, host, verify, identity);
         }
-        CertificateTrust trust = verify ? defaultTrust() : null;
-        return new SeclumeTls(ClientHandshake.connect(transport, host, trust, identity, alpn));
+        return new SeclumeTls(verify
+                ? ClientHandshake.connect(transport, host, defaultTrust(), identity, alpn)
+                : ClientHandshake.connectWithoutAuthenticating(transport, host, identity, alpn));
     }
 
     /**
@@ -82,9 +83,10 @@ public final class SeclumeTls implements TlsLayer {
     public static SeclumeTls startOffering(Transport transport, String host, boolean verify,
             ClientIdentity identity, space.seclume.tls.ClientHello.Offer offer)
             throws IOException {
-        CertificateTrust trust = verify ? defaultTrust() : null;
-        return new SeclumeTls(ClientHandshake.connect(transport, host, trust, identity, null,
-                offer));
+        return new SeclumeTls(verify
+                ? ClientHandshake.connect(transport, host, defaultTrust(), identity, null, offer)
+                : ClientHandshake.connectWithoutAuthenticating(transport, host, identity, null,
+                        offer));
     }
 
     /** The JVM's trust store - or the CA file this connection named, see {@link TrustChoice}. */

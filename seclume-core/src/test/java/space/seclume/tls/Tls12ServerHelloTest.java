@@ -52,8 +52,8 @@ class Tls12ServerHelloTest {
     void theSentinelMeansNothingWhenOnlyTwelveWasOffered() {
         Peer peer = new Peer(id -> serverHello(0x0303, downgradeRandom(), 0xC02F,
                 concat(extendedMasterSecret(), renegotiationInfo())));
-        IOException gone = assertThrows(IOException.class, () -> ClientHandshake.connect(peer,
-                "db.example.com", null, null, null, ClientHello.Offer.TLS12));
+        IOException gone = assertThrows(IOException.class, () -> ClientHandshake.connectWithoutAuthenticating(peer,
+                "db.example.com", null, null, ClientHello.Offer.TLS12));
         // Accepted, and then the server's flight simply ends here.
         assertInstanceOf(EOFException.class, gone, gone.toString());
     }

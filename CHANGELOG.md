@@ -185,6 +185,11 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **TLS: no `connect` takes a null trust as "do not check the server".** The overloads with
+  ALPN and with the versions to offer accepted a null trust and then encrypted without
+  authenticating, unlike the others, which refuse it so that an unauthenticated connection is
+  named where it is made. They refuse it too now. `connectWithoutAuthenticating` has the
+  matching variants, and the internal callers use them for `verify=false`.
 - **PostgreSQL: a statement with a NUL character is refused before it is sent.** The protocol
   carries a statement as a NUL-terminated string, so a NUL inside it ended the statement there
   and the rest was read as the message's next field. It is refused now with SQLState 22023

@@ -114,6 +114,15 @@ class HostnameMatchEdgeTest {
         assertFalse(HostnameMatch.matches(certificate(IP, "10.0.0.0.1"), "10.0.0.0.1"));
     }
 
+    /** An empty pattern matches nothing, and nothing matches an empty host - not even each other. */
+    @Test
+    void anEmptyPatternOrHostMatchesNothing() {
+        assertFalse(HostnameMatch.matchesPattern("", ""));
+        assertFalse(HostnameMatch.matchesPattern("", "db.example.com"));
+        assertFalse(HostnameMatch.matchesPattern("db.example.com", ""));
+        assertFalse(HostnameMatch.matchesPattern("*.example.com", ""));
+    }
+
     /**
      * Three dots and digits were taken for an address even with a label
      * empty: "1.2.3." is four labels of which the last is empty - a name.

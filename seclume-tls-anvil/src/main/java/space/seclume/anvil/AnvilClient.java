@@ -97,8 +97,8 @@ public final class AnvilClient {
             // A test that makes the server go quiet must not hang the client:
             // no read or write waits longer than this.
             socket.networkTimeout(10_000);
-            try (TlsConnection tls = ClientHandshake.connect(socket, "localhost", null, null,
-                    null, offer)) {
+            try (TlsConnection tls = ClientHandshake.connectWithoutAuthenticating(socket,
+                    "localhost", null, null, offer)) {
                 CONNECTED.incrementAndGet();
                 // A moment between our Finished and our first record. When
                 // both reach TLS-Attacker in one TCP read, it takes the record
