@@ -185,6 +185,13 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **Pool: housekeeping survives a driver whose `close()` throws an Error.** Closing a
+  connection for good caught only `SQLException`, and housekeeping caught `RuntimeException`
+  and `StackOverflowError`. An `AssertionError` or `LinkageError` from a driver's `close()`
+  ended the housekeeping thread, and the pool never swept or refilled again. Both catch it
+  now.
+- **TLS host names: `1.2.3.` is a name, not an IPv4 address.** A host of digits and three dots
+  was taken for an address even with an empty label.
 - **heapcheck: `--keep-dump` does not replace an existing file.** The JVM writes its dump
   itself and refuses a path that is taken, so the file there was deleted first, whatever it
   was. An existing path is refused now with exit 2, as `--redact` already did.

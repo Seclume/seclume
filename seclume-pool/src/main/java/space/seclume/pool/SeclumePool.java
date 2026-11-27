@@ -1377,8 +1377,9 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
         entry.closeStatements();
         try {
             entry.connection().close();
-        } catch (SQLException ignored) {
-            // Closing a broken connection must not hurt a second time.
+        } catch (SQLException | RuntimeException | LinkageError | AssertionError ignored) {
+            // Closing a broken connection must not hurt a second time - nor a
+            // driver whose close throws, which ended the housekeeping thread.
         }
     }
 
@@ -1409,8 +1410,10 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                 markLapsedForReturn();
                 replenish();
                 reportLeaks();
-            } catch (RuntimeException | StackOverflowError e) {
-                // Housekeeping must never die; the next round carries on.
+            } catch (RuntimeException | Error e) {
+                // Housekeeping must never die; the next round carries on. Every
+                // Error too: an AssertionError or a LinkageError out of a driver
+                // ended this thread, and the pool never swept or refilled again.
                 Logger.getLogger(SeclumePool.class.getName())
                         .warning(settings.getName() + " - housekeeping failed: " + e);
             }

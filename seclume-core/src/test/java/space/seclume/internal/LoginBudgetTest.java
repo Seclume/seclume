@@ -59,6 +59,41 @@ class LoginBudgetTest {
         }
     }
 
+    /**
+     * The factor is the setting it says: with 1, a login with a connect
+     * timeout of one second has one second, not the three of the default.
+     */
+    @Test
+    @org.junit.jupiter.api.parallel.ResourceLock(
+            org.junit.jupiter.api.parallel.Resources.SYSTEM_PROPERTIES)
+    void theFactorSetsTheBudget() throws Exception {
+        String before = System.getProperty("seclume.loginBudgetFactor");
+        System.setProperty("seclume.loginBudgetFactor", "1");
+        try (ServerSocket server = dribbling()) {
+            Transport transport = Transports.open("socket", "127.0.0.1", server.getLocalPort(), 1000);
+            long started = System.nanoTime();
+            ByteBuffer one = ByteBuffer.allocateDirect(1);
+            assertThrows(IOException.class, () -> {
+                while (true) {
+                    one.clear();
+                    if (transport.read(one) < 0) {
+                        throw new IOException("closed");
+                    }
+                }
+            });
+            long took = (System.nanoTime() - started) / 1_000_000;
+            assertTrue(took >= 800 && took < 2500, "a budget of 1 x 1000 ms closed after "
+                    + took + " ms");
+            transport.close();
+        } finally {
+            if (before == null) {
+                System.clearProperty("seclume.loginBudgetFactor");
+            } else {
+                System.setProperty("seclume.loginBudgetFactor", before);
+            }
+        }
+    }
+
     @Test
     void aLoginThatIsDoneIsNotClosed() throws Exception {
         try (ServerSocket server = dribbling()) {

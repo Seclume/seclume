@@ -491,6 +491,8 @@ protocol text or dribble bytes.
 | 109 | Dependency integrity | Only `--strict-checksums`, which trusts the repository's own checksum. A SHA-256 lock of 2,514 artifacts and plugins in `.mvn/checksums`, checked in all workflows through Maven Resolver's trusted checksums, recorded with `record-checksums.sh`. Unknown artifacts still pass (`failIfMissing=false`) until the lock covers every workflow | a changed hash in the lock stops the build (tried locally) | #PR |
 | 110 | Field length padding | Every value's length showed to the byte. Optional `Padding` (multiples or powers of two), marked by an authenticated flag bit; the length prefix and padding are encrypted. Columns read both forms, rotation pads old values, padding is never removed | `PaddingTest`, `FieldFormatEdgesTest` | #PR |
 | 111 | heapcheck keep-dump | `--keep-dump` deleted an existing file at its path before the dump. Refused with exit 2 | `CommandLineTest.keepDumpDoesNotReplaceAFile` | #PR |
+| 112 | Pool housekeeping | An Error from a driver's `close()` escaped `retire` and ended the housekeeping thread: no more sweeping or refilling. `retire` swallows it, housekeeping catches every Error | `ErrorPathsTest.housekeepingSweepsOnAfterACloseThrowsAnError` (red before the fix) | #PR |
+| 113 | Tests the audit asked for | SCRAM `c=` decoded and compared with GS2 header plus certificate hash, and `y,,`; masking 200,000 `&` stays linear; `loginBudgetFactor=1` gives one second; Shamir magic, CRC 0, mixed thresholds, share count 0/255/256; raw NUL in JSON; `1.2.3.` not an address | `ScramTest`, `LinearMaskingTest`, `LoginBudgetTest`, `ShamirSharesEdgesTest`, `JsonOffRegressionTest`, `HostnameMatchEdgeTest` | #PR |
 
 ### Mutation testing of the security paths
 
