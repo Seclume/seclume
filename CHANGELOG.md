@@ -222,6 +222,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **`SeclumeKeys.keyManager(chain, SecretProvider[, interval])`.** A key file a program's own
+  configuration names is read through a provider built in code; `provider=file` in a key spec
+  stays for where the JVM allows it. The admission webhook reads its TLS key so, as do the AWS
+  container and web-identity sources and MongoDB's Kubernetes OIDC token for a path the
+  platform sets; a token file named in the URL still needs the JVM's allowance.
 - **A credential placeholder can be taken back.** `SeclumeSslSocketFactory.forget(placeholder)`
   removes it - a request still carrying it is refused from then on - and closes its secret
   provider. For a client that is done, not for each request: placeholders are meant to be made

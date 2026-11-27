@@ -2,10 +2,8 @@ package space.seclume.keys;
 
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Map;
 
 import space.seclume.secret.SecretProvider;
-import space.seclume.secret.SecretProviders;
 import space.seclume.secret.SecretWatch;
 
 /**
@@ -26,19 +24,20 @@ final class ReloadingKeyManager extends RotatingKeyManager {
     private static final System.Logger LOG =
             System.getLogger(ReloadingKeyManager.class.getName());
     private final Path chain;
-    private final String keySpec;
+    private final java.util.function.Supplier<SeclumeKeyManager> loading;
     private final SecretProvider key;
     private final SecretWatch keyWatch;
     private final SecretWatch chainWatch;
 
-    ReloadingKeyManager(Path chain, String keySpec, SecretProvider key, Duration interval) {
+    ReloadingKeyManager(Path chain, SecretProvider key,
+                        java.util.function.Supplier<SeclumeKeyManager> loading, Duration interval) {
         this.chain = chain;
-        this.keySpec = keySpec;
+        this.loading = loading;
         this.key = key;
         install(load());
         this.keyWatch = SecretWatch.start("TLS key for " + chain, key, interval, this::reload);
-        SecretProvider chainFile = SecretProviders.of(Map.of("provider", "file",
-                "path", chain.toString(), "max-length", String.valueOf(1 << 20)));
+        // Built here, not from settings: the chain's path is the caller's, not a URL's.
+        SecretProvider chainFile = new space.seclume.secret.FileSecretProvider(chain, 1 << 20);
         this.chainWatch = SecretWatch.start("TLS certificate " + chain, chainFile, interval,
                 this::reload);
         register();
@@ -60,7 +59,7 @@ final class ReloadingKeyManager extends RotatingKeyManager {
     }
 
     private SeclumeKeyManager load() {
-        return (SeclumeKeyManager) SeclumeKeys.keyManager(chain, keySpec);
+        return loading.get();
     }
 
     /** Loads the pair again; throws - and keeps the old pair - if they do not belong together. */

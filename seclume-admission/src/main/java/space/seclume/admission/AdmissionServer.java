@@ -258,8 +258,12 @@ public final class AdmissionServer implements AutoCloseable {
                 options.getOrDefault("--spiffe-mount-path", defaults.spiffeMountPath()),
                 options.getOrDefault("--spiffe-socket", defaults.spiffeSocket()),
                 namespaces(options.get("--spiffe-namespaces")));
+        // The key file is the operator's argument, so its provider is built here:
+        // provider=file from a URL is for where the JVM allows it, and the
+        // webhook did not start with that guard in place (found in CI).
         X509ExtendedKeyManager keys = SeclumeKeys.keyManager(Path.of(options.get("--tls-cert")),
-                "provider=file&path=" + options.get("--tls-key"), Duration.ofMinutes(1));
+                new space.seclume.secret.FileSecretProvider(Path.of(options.get("--tls-key")),
+                        16_384), Duration.ofMinutes(1));
         SSLContext tls;
         try {
             tls = SSLContext.getInstance("TLSv1.3");    // the API server speaks it

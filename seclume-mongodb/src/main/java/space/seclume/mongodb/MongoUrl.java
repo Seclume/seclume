@@ -337,8 +337,10 @@ public record MongoUrl(String host, int port, String user, String authSource,
             if (file == null) {
                 file = space.seclume.mongodb.internal.MongoOidc.KUBERNETES_TOKEN;
             }
-            return SecretProviders.of(Map.of("provider", "file", "path", file,
-                    "max-length", "16384"));
+            // The platform's path - an environment variable or Kubernetes' own -
+            // not one a URL chose: read as such, without the provider=file check.
+            return new space.seclume.secret.FileSecretProvider(java.nio.file.Path.of(file),
+                    16_384);
         }
         if ("azure".equals(environment) || "gcp".equals(environment)) {
             if (resource == null || resource.isEmpty()) {
