@@ -280,6 +280,25 @@ class VaultSecretProviderTest {
     }
 
     /**
+     * An answer that cannot be read through - cut off, or not JSON - is an
+     * error, never "no lease_duration here": that would take a dynamic
+     * credential for a KV secret and keep it for the KV age.
+     */
+    @Test
+    void anUnreadableAnswerIsAnErrorNotAnAbsence() throws Exception {
+        for (String answer : new String[] {
+            "{\"lease_id\":\"database/creds/app/z\",\"lease_duration\":30,\"data\":{\"password\":\"C3c",
+            "{lease_duration:30,data:{password:\"C3c\"}}",
+            "{\"data\":{\"password\":\"C3c\"},\"lease_duration\":}"}) {
+            try (FakeVault vault = new FakeVault(200, answer);
+                 VaultSecretProvider provider = provider(vault, "database/creds/app",
+                         Clock.systemUTC())) {
+                assertThrows(SecretUnavailableException.class, () -> read(provider), answer);
+            }
+        }
+    }
+
+    /**
      * A leased secret follows its lease, not the KV age: with a lease of 30 s
      * it is read again after half of it, long before the 60 s a KV secret is
      * kept - and not before.
