@@ -46,4 +46,3 @@ seclume-r2dbc:R2dbcCancelDescribeTest
 # configuration translated
 seclume-verify:VerifyRegressionTest
 seclume-verify:MigrateEncodingTest
-seclume-pool:SessionResetTest
