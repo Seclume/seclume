@@ -173,7 +173,8 @@ public final class AdmissionServer implements AutoCloseable {
         if ("Pod".equals(kind) && !pod.isEmpty()) {
             String who = describe(request, pod);
             try {
-                Injection.Result result = Injection.mutate(pod, settings);
+                Injection.Result result = Injection.mutate(pod,
+                        Json.asString(request.get("namespace")), settings);
                 if (!result.patch().isEmpty()) {
                     response.put("patchType", "JSONPatch");
                     // seclume-allow: the patch holds the pod's structure and the webhook's own values, never a value of the pod's
@@ -255,7 +256,8 @@ public final class AdmissionServer implements AutoCloseable {
                 options.getOrDefault("--spiffe-csi-driver", defaults.spiffeCsiDriver()),
                 options.get("--spiffe-host-path"),
                 options.getOrDefault("--spiffe-mount-path", defaults.spiffeMountPath()),
-                options.getOrDefault("--spiffe-socket", defaults.spiffeSocket()));
+                options.getOrDefault("--spiffe-socket", defaults.spiffeSocket()),
+                namespaces(options.get("--spiffe-namespaces")));
         X509ExtendedKeyManager keys = SeclumeKeys.keyManager(Path.of(options.get("--tls-cert")),
                 "provider=file&path=" + options.get("--tls-key"), Duration.ofMinutes(1));
         SSLContext tls;
@@ -271,6 +273,18 @@ public final class AdmissionServer implements AutoCloseable {
                 + ", sidecar image " + settings.sidecarImage());
         Runtime.getRuntime().addShutdownHook(new Thread(server::close));
         Thread.currentThread().join();
+    }
+
+    private static java.util.Set<String> namespaces(String list) {
+        java.util.Set<String> namespaces = new java.util.LinkedHashSet<>();
+        if (list != null) {
+            for (String one : list.split(",")) {
+                if (!one.isBlank()) {
+                    namespaces.add(one.trim());
+                }
+            }
+        }
+        return namespaces;
     }
 
     private static int number(Map<String, String> options, String name, int fallback) {
@@ -294,7 +308,7 @@ public final class AdmissionServer implements AutoCloseable {
     private static final List<String> OPTIONS = List.of("--port", "--tls-cert", "--tls-key",
             "--sidecar-image", "--heapcheck-jar", "--interval-seconds", "--sidecar-memory",
             "--dump-size-limit", "--spiffe-csi-driver", "--spiffe-host-path",
-            "--spiffe-mount-path", "--spiffe-socket");
+            "--spiffe-mount-path", "--spiffe-socket", "--spiffe-namespaces");
 
     static String usage() {
         return """
@@ -315,6 +329,7 @@ public final class AdmissionServer implements AutoCloseable {
                   --dump-size-limit   the dump folder's sizeLimit (none)
                   --spiffe-csi-driver the Workload API volume's CSI driver (csi.spiffe.io)
                   --spiffe-host-path  a host directory with the socket instead
+                  --spiffe-namespaces the namespaces that get it (required with it)
                   --spiffe-mount-path where it is mounted (/spiffe-workload-api)
                   --spiffe-socket     the socket's file name there (spire-agent.sock)
 

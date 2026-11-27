@@ -236,11 +236,20 @@ class InjectionTest {
 
         Injection.Settings host = new Injection.Settings("img", "/x.jar", Duration.ofSeconds(10),
                 false, "256Mi", null, "csi.spiffe.io", "/run/spire/sockets", "/spire",
-                "agent.sock");
-        Map<String, Object> hostPath = applied(pod, Injection.mutate(pod, host));
+                "agent.sock", java.util.Set.of("payments"));
+        Map<String, Object> hostPath = applied(pod, Injection.mutate(pod, "payments", host));
         assertTrue(Json.write(volumes(hostPath)).contains("/run/spire/sockets"));
         assertEquals("unix:///spire/agent.sock",
                 env(container(hostPath, "a"), "SPIFFE_ENDPOINT_SOCKET"));
+
+        // A host directory only in the namespaces named: elsewhere a warning, no volume.
+        Injection.Result elsewhere = Injection.mutate(pod, "tenant-b", host);
+        assertTrue(!Json.write(elsewhere.patch()).contains("/run/spire/sockets"),
+                Json.write(elsewhere.patch()));
+        assertTrue(elsewhere.warnings().stream().anyMatch(w -> w.contains("--spiffe-namespaces")),
+                elsewhere.warnings().toString());
+        assertTrue(Injection.mutate(pod, null, host).warnings().stream()
+                .anyMatch(w -> w.contains("--spiffe-namespaces")));
     }
 
     @Test
@@ -250,5 +259,10 @@ class InjectionTest {
         org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
                 () -> new Injection.Settings("img", "/x.jar", Duration.ZERO, false, "1Mi",
                         null, "d", null, "/m", "s"));
+        // A host directory with no namespaces named would go to any pod that asks.
+        IllegalArgumentException host = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> new Injection.Settings("img", "/x.jar",
+                        Duration.ofSeconds(10), false, "1Mi", null, "d", "/run/spire", "/m", "s"));
+        assertTrue(host.getMessage().contains("--spiffe-namespaces"), host.getMessage());
     }
 }

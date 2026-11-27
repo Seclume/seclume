@@ -503,6 +503,7 @@ protocol text or dribble bytes.
 | 121 | JWT expiry | `verify` checked `exp` only when present, so a token without it was valid for ever. Required by default now (`require-exp=false` to opt out), and `max-lifetime` bounds `exp - iat` | `SeclumeJwtTest.aTokenWithoutExpIsRefusedUnlessSaidOtherwise`, `maxLifetimeBoundsWhatATokenMayClaim` | #PR |
 | 122 | Patroni | A scheme-less endpoint went over plain http, unwarned; IP members never matched a URL of host names. https by default, explicit http warned once, other schemes refused; `patroniHosts` CIDR ranges | `PatroniTopologyTest.anEndpointWithoutASchemeIsAskedOverHttps`, `patroniHostsAdmitsMembersByTheirAddress`, `aRangeThatIsNoneIsRefused` | #PR |
 | 123 | Redis plain cluster | Over plain `redis://`, forged `CLUSTER SLOTS`/`MOVED` answers steered data to any node, with no certificate check to stop it. Refused unless `allow-plain-discovery=true` | `SeclumeLettuceTopologyTest.clusterOverTlsAndPlainVerifiesEachNodeAndRewritesOnEveryShard` | #PR |
+| 124 | Admission hostPath | With `--spiffe-host-path` any annotated pod in any namespace got a hostPath volume. `--spiffe-namespaces` is required with it and limits it; other namespaces get a warning | `InjectionTest` | #PR |
 
 ### Mutation testing of the security paths
 

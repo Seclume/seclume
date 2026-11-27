@@ -12,6 +12,11 @@ All notable changes to seclume are recorded here. Versions follow
   is https now. `http://` still works where the URL says so, with a warning once per endpoint,
   and any other scheme is refused. New: `patroniHosts=` address ranges admit members that
   Patroni names by address, which no host name in the URL matches.
+- **Admission webhook: a SPIFFE host directory only for the namespaces named.** With
+  `--spiffe-host-path`, every pod annotated `seclume.space/spiffe: "true"` got a `hostPath`
+  volume, in any namespace, including privileged ones where Pod Security lets it through.
+  `--spiffe-namespaces` (Helm: `spiffe.namespaces`) is required with it now, and pods of other
+  namespaces get a warning instead of the volume. The CSI driver's volume is unchanged.
 - **Redis: a cluster over plain `redis://` needs `allow-plain-discovery=true`.** Its nodes come
   from `CLUSTER SLOTS` and `MOVED` answers that anybody on the way can write, and without TLS
   no certificate stops the application's data from going where they say (the password already

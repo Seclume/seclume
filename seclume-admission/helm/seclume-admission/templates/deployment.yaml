@@ -53,6 +53,10 @@ spec:
             - --spiffe-host-path
             - {{ . | quote }}
             {{- end }}
+            {{- with .Values.spiffe.namespaces }}
+            - --spiffe-namespaces
+            - {{ join "," . | quote }}
+            {{- end }}
             - --spiffe-mount-path
             - {{ .Values.spiffe.mountPath | quote }}
             - --spiffe-socket

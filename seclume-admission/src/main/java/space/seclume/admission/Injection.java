@@ -68,13 +68,33 @@ final class Injection {
      *                        {@code null}
      * @param spiffeMountPath where the socket's directory is mounted
      * @param spiffeSocket    the socket's file name in it
+     * @param spiffeNamespaces the namespaces whose pods get the host directory; required
+     *                        with {@code spiffeHostPath}
      */
     record Settings(String sidecarImage, String heapcheckJar, Duration interval,
             boolean nativeSidecar, String sidecarMemory, String dumpSizeLimit,
             String spiffeCsiDriver, String spiffeHostPath, String spiffeMountPath,
-            String spiffeSocket) {
+            String spiffeSocket, Set<String> spiffeNamespaces) {
+
+        /** Without a host directory, and so without namespaces to name. */
+        Settings(String sidecarImage, String heapcheckJar, Duration interval,
+                boolean nativeSidecar, String sidecarMemory, String dumpSizeLimit,
+                String spiffeCsiDriver, String spiffeHostPath, String spiffeMountPath,
+                String spiffeSocket) {
+            this(sidecarImage, heapcheckJar, interval, nativeSidecar, sidecarMemory,
+                    dumpSizeLimit, spiffeCsiDriver, spiffeHostPath, spiffeMountPath,
+                    spiffeSocket, Set.of());
+        }
 
         Settings {
+            spiffeNamespaces = spiffeNamespaces == null ? Set.of() : Set.copyOf(spiffeNamespaces);
+            if (spiffeHostPath != null && spiffeNamespaces.isEmpty()) {
+                // A hostPath volume is a host directory in the pod: added to any
+                // pod that asks by annotation, in any namespace, it went where
+                // Pod Security does not stop it - a privileged namespace.
+                throw new IllegalArgumentException("--spiffe-host-path mounts a host directory: "
+                        + "name the namespaces whose pods may have it with --spiffe-namespaces");
+            }
             if (sidecarImage == null || sidecarImage.isBlank()) {
                 throw new IllegalArgumentException("the sidecar needs an image: one with "
                         + "Java 25 and seclume-heapcheck.jar");
@@ -108,6 +128,15 @@ final class Injection {
 
     /** The patch for {@code pod}, a pod as the API server sends it. */
     static Result mutate(Map<String, Object> pod, Settings settings) {
+        return mutate(pod, Json.asString(Json.asObject(pod.get("metadata")).get("namespace")),
+                settings);
+    }
+
+    /**
+     * The same, for a pod of {@code namespace} - the admission request's: a
+     * pod being created often has none of its own yet.
+     */
+    static Result mutate(Map<String, Object> pod, String namespace, Settings settings) {
         Map<String, Object> metadata = Json.asObject(pod.get("metadata"));
         Map<String, Object> annotations = Json.asObject(metadata.get("annotations"));
         boolean dumps = yes(annotations.get(REDACT));
@@ -122,7 +151,11 @@ final class Injection {
                 settings)) {
             injected.add("redact-dumps");
         }
-        if (spiffe && patch.spiffe(targets, settings)) {
+        if (spiffe && settings.spiffeHostPath() != null
+                && (namespace == null || !settings.spiffeNamespaces().contains(namespace))) {
+            patch.warnings.add("seclume: namespace " + namespace + " is not among "
+                    + "--spiffe-namespaces, so the Workload API's host directory is not mounted");
+        } else if (spiffe && patch.spiffe(targets, settings)) {
             injected.add("spiffe");
         }
         if (!injected.isEmpty()) {

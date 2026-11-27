@@ -208,7 +208,11 @@ What a pod gets with `redact-dumps`:
   `restartPolicy: Always` (Kubernetes 1.29+), so it does not keep a Job's pod from completing.
 
 With `spiffe`, the SPIFFE CSI driver's volume (`--spiffe-csi-driver`, `csi.spiffe.io`) is mounted
-read-only at `/spiffe-workload-api`. `--spiffe-host-path` mounts a host directory instead.
+read-only at `/spiffe-workload-api`. `--spiffe-host-path` mounts a host directory instead - only
+into pods of the namespaces `--spiffe-namespaces` names, and the webhook does not start with the
+one and without the other: a host directory added to any pod that asks would also reach
+namespaces where Pod Security does not forbid `hostPath`. Pods elsewhere get a warning and no
+volume.
 `SPIFFE_ENDPOINT_SOCKET` names the socket, which `spiffe=` bundles read when they are given no
 `socket=`.
 
