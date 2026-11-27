@@ -112,23 +112,30 @@ public final class Deadline implements AutoCloseable {
             // cancellation being sent and its effect arriving, and it has to
             // find out that a deadline is why.
             expired.set(true);
-            try {
-                stop.now();
-            } catch (Exception beyondReach) {
-                // A cancellation that cannot be sent leaves the statement
-                // running, and the caller finds out when it finally answers.
-                // Nothing useful can be thrown from here - there is no caller
-                // on this thread.
-            }
+            // On a thread of its own: MySQL's cancellation is a login and a
+            // KILL, and against a busy server that login took up to the
+            // connect timeout - on the one scheduler thread, where every other
+            // deadline and every kill of the process waited behind it.
+            Thread.ofVirtual().name("seclume-cancel").start(() -> {
+                try {
+                    stop.now();
+                } catch (Exception beyondReach) {
+                    // A cancellation that cannot be sent leaves the statement
+                    // running; the kill after the grace is what is left.
+                }
+            });
         }, seconds, TimeUnit.SECONDS);
         Deadline deadline = new Deadline(timer, expired);
         if (kill != null) {
             long grace = Long.getLong("seclume.queryTimeoutGraceSeconds",
                     Math.max(2, Math.min(30, seconds)));
-            deadline.killer = Scheduler.SERVICE.schedule(() -> {
+            deadline.killer = Scheduler.SERVICE.schedule(() -> Thread.ofVirtual()
+                    .name("seclume-kill").start(() -> {
                 // Under the deadline's lock, and only while it is open: once
                 // close() has returned the statement is over and its
-                // connection may already be someone else's.
+                // connection may already be someone else's. Off the scheduler
+                // thread, like the cancellation: a close that blocks must not
+                // hold up the next deadline.
                 synchronized (deadline) {
                     if (deadline.finished) {
                         return;
@@ -139,7 +146,7 @@ public final class Deadline implements AutoCloseable {
                         // closing is all there is left to try
                     }
                 }
-            }, seconds + grace, TimeUnit.SECONDS);
+            }), seconds + grace, TimeUnit.SECONDS);
         }
         return deadline;
     }

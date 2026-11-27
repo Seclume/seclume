@@ -304,6 +304,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **A blocking cancellation no longer holds up every other query timeout.** The deadlines of
+  all connections of a process shared one scheduler thread, and the cancellation ran on it.
+  MySQL's cancellation is a login and a `KILL QUERY`; against a busy server that login took
+  up to the connect timeout - and meanwhile no other statement's timeout fired and no kill
+  after the grace either. A query that trickled its answer was bounded by about 11 seconds
+  instead of the timeout and the grace. Cancellation and kill run on threads of their own
+  now; the same query ends after 2 seconds.
 - **Oracle: a value is never read past what arrived.** The last cell of a row, and a LOB
   locator a call returned, could announce more bytes than the message held; they were framed
   anyway, and `getString` or the next LOB call read on into what an earlier message had left

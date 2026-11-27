@@ -64,4 +64,49 @@ class KilledWriteInDoubtTest {
             }
         }
     }
+
+    /**
+     * A server that answers a byte every 200 ms and ignores the KILL: never
+     * silent, so a timeout that counts silence never fires. The query timeout
+     * and the grace bound it, and the connection goes.
+     */
+    @Test
+    void aTricklingAnswerIsBoundedByTheQueryTimeoutAndTheGrace() throws Exception {
+        String before = System.getProperty("seclume.queryTimeoutGraceSeconds");
+        System.setProperty("seclume.queryTimeoutGraceSeconds", "1");
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.start();
+            space.seclume.mysql.jdbc.MyDataSource source = new space.seclume.mysql.jdbc.MyDataSource();
+            source.setHost("127.0.0.1");
+            source.setTls("prefer");
+            source.setPort(server.port());
+            source.setDatabase("testdb");
+            source.setUser(USER);
+            source.setAllowLegacyHashOverUnverifiedTls(true);
+            byte[] bytes = PASSWORD.getBytes(StandardCharsets.UTF_8);
+            source.setSecretProvider(new CallbackSecretProvider(64, target -> {
+                for (int i = 0; i < bytes.length; i++) {
+                    target.set(ValueLayout.JAVA_BYTE, i, bytes[i]);
+                }
+                return bytes.length;
+            }));
+            try (Connection connection = source.getConnection();
+                 Statement statement = connection.createStatement()) {
+                server.trickleQueries();
+                statement.setQueryTimeout(1);
+                long started = System.nanoTime();
+                assertThrows(SQLException.class,
+                        () -> statement.executeQuery("select * from big").close());
+                long took = (System.nanoTime() - started) / 1_000_000;
+                assertTrue(took < 6_000, "took " + took + " ms");
+                assertFalse(connection.isValid(1), "the connection is still in use");
+            }
+        } finally {
+            if (before == null) {
+                System.clearProperty("seclume.queryTimeoutGraceSeconds");
+            } else {
+                System.setProperty("seclume.queryTimeoutGraceSeconds", before);
+            }
+        }
+    }
 }

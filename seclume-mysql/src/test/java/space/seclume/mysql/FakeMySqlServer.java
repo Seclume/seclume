@@ -420,6 +420,18 @@ final class FakeMySqlServer implements AutoCloseable {
                 synchronized (received) {
                     received.add(sql);
                 }
+                if (trickling) {
+                    // A packet of a megabyte announced, then a byte every 200 ms:
+                    // never silent, never done - and a KILL waits its turn.
+                    out.write(new byte[] {0x00, 0x00, 0x10, 0x01});
+                    out.flush();
+                    while (!stopped) {
+                        out.write('x');
+                        out.flush();
+                        Thread.sleep(200);
+                    }
+                    return true;
+                }
                 java.util.concurrent.CountDownLatch release = held;
                 if (release != null) {
                     // A statement that runs until it is let go - long enough
@@ -476,6 +488,14 @@ final class FakeMySqlServer implements AutoCloseable {
     }
 
     private volatile byte[] lastLogin;
+
+    private volatile boolean trickling;
+
+    /** Every query from now on answered a byte every 200 ms, without end. */
+    FakeMySqlServer trickleQueries() {
+        trickling = true;
+        return this;
+    }
 
     /** The last HandshakeResponse41 as it arrived, or null before any. */
     byte[] lastLogin() {

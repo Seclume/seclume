@@ -46,6 +46,42 @@ class DeadlineKillTest {
         }
     }
 
+    /**
+     * A cancellation that blocks - MySQL's is a login and a KILL, and a busy
+     * server let that login take the connect timeout - ran on the one
+     * scheduler thread: its own kill and every other deadline of the process
+     * waited behind it. Neither waits now.
+     */
+    @Test
+    void aBlockingCancellationHoldsUpNeitherItsKillNorAnotherDeadline() throws Exception {
+        String before = System.getProperty("seclume.queryTimeoutGraceSeconds");
+        System.setProperty("seclume.queryTimeoutGraceSeconds", "1");
+        CountDownLatch releaseTheBlocker = new CountDownLatch(1);
+        try {
+            CountDownLatch killed = new CountDownLatch(1);
+            CountDownLatch otherCancelled = new CountDownLatch(1);
+            long started = System.nanoTime();
+            try (Deadline blocked = Deadline.of(1, () -> releaseTheBlocker.await(20, TimeUnit.SECONDS),
+                    killed::countDown);
+                 Deadline other = Deadline.of(1, otherCancelled::countDown)) {
+                assertTrue(otherCancelled.await(4, TimeUnit.SECONDS),
+                        "another statement's deadline waited behind a blocking cancellation");
+                assertTrue(killed.await(5, TimeUnit.SECONDS),
+                        "the kill waited behind its own blocking cancellation");
+                assertTrue(blocked.expired() && other.expired());
+            }
+            long took = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            assertTrue(took < 5_000, "took " + took + " ms");
+        } finally {
+            releaseTheBlocker.countDown();
+            if (before == null) {
+                System.clearProperty("seclume.queryTimeoutGraceSeconds");
+            } else {
+                System.setProperty("seclume.queryTimeoutGraceSeconds", before);
+            }
+        }
+    }
+
     @Test
     void aStatementThatEndedInTimeIsNeitherCancelledNorClosed() throws Exception {
         AtomicInteger cancelled = new AtomicInteger();
