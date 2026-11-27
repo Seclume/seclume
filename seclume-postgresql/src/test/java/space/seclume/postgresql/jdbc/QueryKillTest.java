@@ -40,8 +40,15 @@ class QueryKillTest {
         final AtomicInteger cancels = new AtomicInteger();
         final AtomicBoolean stop = new AtomicBoolean();
         final Thread thread;
+        /** Answers no query at all: not a byte - the silence a network timeout would see. */
+        final boolean silent;
 
         TricklingPostgres() throws IOException {
+            this(false);
+        }
+
+        TricklingPostgres(boolean silent) throws IOException {
+            this.silent = silent;
             listener = new ServerSocket();
             listener.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
             thread = new Thread(this::serve, "trickling-postgres");
@@ -101,6 +108,12 @@ class QueryKillTest {
                         break;
                     }
                 }
+                if (silent) {
+                    while (!stop.get() && in.read() >= 0) {
+                        // reads what comes - a second query - and answers nothing
+                    }
+                    return;
+                }
                 // A DataRow of a megabyte, a byte every 200 ms: never silent, never done.
                 out.write('D');
                 out.write(new byte[] {0, 16, 0, 0});
@@ -141,6 +154,49 @@ class QueryKillTest {
     void theGraceIsConfigurable() throws Exception {
         long took = killedAfter(2);
         assertTrue(took >= 2_500 && took < 8_000, "took " + took + " ms with a grace of 2 s");
+    }
+
+    /**
+     * The pool's capacity question to a server that says nothing: bounded by
+     * seclume.pool.probeSeconds and the grace, the connection closed after it
+     * - the pool must not lend it - and no capacity made up.
+     */
+    @Test
+    void aCapacityProbeToASilentServerIsBoundedAndClosesTheConnection() throws Exception {
+        String before = System.getProperty("seclume.queryTimeoutGraceSeconds");
+        System.setProperty("seclume.queryTimeoutGraceSeconds", "1");
+        java.lang.reflect.Field field = Class.forName("space.seclume.internal.jdbc.Capacities")
+                .getDeclaredField("PROBE_SECONDS");
+        field.setAccessible(true);
+        int probeSeconds = field.getInt(null);
+        try (TricklingPostgres server = new TricklingPostgres(true)) {
+            SeclumeDataSource source = new SeclumeDataSource();
+            source.setHost("127.0.0.1");
+            source.setPort(server.listener.getLocalPort());
+            source.setTls("off");
+            source.setDatabase("app");
+            source.setUser("app");
+            source.setSecretProvider(new CallbackSecretProvider(16, target -> {
+                target.set(ValueLayout.JAVA_BYTE, 0, (byte) 'x');
+                return 1;
+            }));
+            try (Connection c = source.getConnection()) {
+                long started = System.nanoTime();
+                space.seclume.ServerCapacity.Capacity capacity =
+                        c.unwrap(space.seclume.ServerCapacity.class).capacity();
+                long took = (System.nanoTime() - started) / 1_000_000;
+                assertTrue(capacity.allowed() < 0, "a capacity was made up: " + capacity);
+                long bound = (probeSeconds + 1) * 1000L * 2 + 3000;   // two questions, each bounded
+                assertTrue(took < bound, "took " + took + " ms, probeSeconds " + probeSeconds);
+                assertTrue(c.isClosed() || !c.isValid(1), "the probed connection is still usable");
+            }
+        } finally {
+            if (before == null) {
+                System.clearProperty("seclume.queryTimeoutGraceSeconds");
+            } else {
+                System.setProperty("seclume.queryTimeoutGraceSeconds", before);
+            }
+        }
     }
 
     /** Runs the query against the trickling server with this grace; the milliseconds it took. */
