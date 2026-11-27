@@ -48,6 +48,22 @@ final class StubDataSource implements DataSource {
         final java.util.Map<String, String> context = new java.util.concurrent.ConcurrentHashMap<>();
         /** Whether it can be unwrapped to a {@link space.seclume.SessionContext}. */
         volatile boolean takesContext;
+        final AtomicInteger commits = new AtomicInteger();
+        /** Whether it is a driver connection a pool tells when it is lent - see {@code Fronted}. */
+        volatile boolean fronted;
+        /** What the pool told it, in order. */
+        final List<Boolean> lentSaid = new CopyOnWriteArrayList<>();
+        private final space.seclume.internal.jdbc.Fronted frontedView =
+                new space.seclume.internal.jdbc.Fronted() {
+                    @Override
+                    public void front(Connection handle) {
+                    }
+
+                    @Override
+                    public void lent(boolean lent) {
+                        lentSaid.add(lent);
+                    }
+                };
         private final StubContext contextWriter = new StubContext() {
             @Override
             public void setSessionContext(String name, String value) {
@@ -89,6 +105,7 @@ final class StubDataSource implements DataSource {
                             yield null;
                         }
                         case "isClosed" -> closed.get();
+                        case "execute" -> false;
                         case "toString" -> "StubStatement";
                         case "hashCode" -> System.identityHashCode(self);
                         case "equals" -> self == args[0];
@@ -117,7 +134,8 @@ final class StubDataSource implements DataSource {
                 case "isWrapperFor" -> (args[0] == space.seclume.SessionReset.class
                         && state.sessionReset != null)
                         || ((args[0] == space.seclume.SessionContext.class
-                        || args[0] == StubContext.class) && state.takesContext);
+                        || args[0] == StubContext.class) && state.takesContext)
+                        || (args[0] == space.seclume.internal.jdbc.Fronted.class && state.fronted);
                 case "unwrap" -> {
                     if (args[0] == space.seclume.SessionReset.class && state.sessionReset != null) {
                         yield state.sessionReset;
@@ -125,6 +143,9 @@ final class StubDataSource implements DataSource {
                     if ((args[0] == space.seclume.SessionContext.class || args[0] == StubContext.class)
                             && state.takesContext) {
                         yield state.contextWriter;
+                    }
+                    if (args[0] == space.seclume.internal.jdbc.Fronted.class && state.fronted) {
+                        yield state.frontedView;
                     }
                     throw new SQLException("not a wrapper");
                 }
@@ -191,7 +212,11 @@ final class StubDataSource implements DataSource {
                     state.closed.set(true);
                     yield null;
                 }
-                case "commit", "clearWarnings" -> null;
+                case "commit" -> {
+                    state.commits.incrementAndGet();
+                    yield null;
+                }
+                case "clearWarnings" -> null;
                 case "getWarnings" -> null;
                 case "toString" -> "StubConnection";
                 case "hashCode" -> System.identityHashCode(proxy);

@@ -98,7 +98,7 @@ public final class SubjectKeys implements AutoCloseable {
         for (FieldKeys open : rings.values()) {
             open.close();
         }
-        rings.clear();
+        rings.clear(); // mutation-equivalent: with readAt cleared a kept ring is read again, and a second close changes nothing
         readAt.clear();
     }
 
@@ -278,7 +278,7 @@ public final class SubjectKeys implements AutoCloseable {
         for (FieldKeys open : rings.values()) {
             open.close();
         }
-        rings.clear();
+        rings.clear(); // mutation-equivalent: closed refuses every later use before the map is looked at
         readAt.clear();
     }
 

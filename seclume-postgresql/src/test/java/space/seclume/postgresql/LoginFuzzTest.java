@@ -171,7 +171,7 @@ class LoginFuzzTest {
             if (length < 4 || (long) i + 1 + length > script.length) {
                 return false;
             }
-            if (type == 'R' && length >= 8 && script[i + 5] == 0 && script[i + 6] == 0
+            if (type == 'R' && length >= 8 && i + 8 < script.length && script[i + 5] == 0 && script[i + 6] == 0
                     && script[i + 7] == 0 && script[i + 8] == 0) {
                 return true;
             }

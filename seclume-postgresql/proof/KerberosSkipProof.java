@@ -21,7 +21,7 @@ public class KerberosSkipProof {
 
     public static void main(String[] args) throws Exception {
         for (char skip : new char[] {'Z', 'R'}) {
-            try (ServerSocket listener = new ServerSocket()) {
+            try (ServerSocket listener = new ServerSocket()) { // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket - loopback stand-in server for a proof
                 listener.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
                 boolean[] tokenCame = new boolean[1];
                 Thread server = new Thread(() -> serve(listener, skip, tokenCame));

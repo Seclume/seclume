@@ -91,6 +91,46 @@ class SubjectKeysTest {
         }
     }
 
+    /**
+     * Within its age a cached ring is used as it is - the store is not asked
+     * on every read. (A shred on this node reaches it at once; one elsewhere,
+     * within the age.)
+     */
+    @Test
+    void aCachedRingIsUsedWithinItsAge() throws Exception {
+        SubjectKeyStore store = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys here = SubjectKeys.of(master, store);
+             SubjectKeys there = SubjectKeys.of(master, store)) {
+            byte[] stored = here.column("customer-2", "customer.email", Mode.RANDOMIZED)
+                    .encrypt(text("bob@example.org"));
+            assertTrue(there.shred("customer-2"));
+            assertEquals("bob@example.org", read(here.existingColumn("customer-2",
+                    "customer.email", Mode.RANDOMIZED), stored),
+                    "a ring within its age was read again from the store");
+        }
+    }
+
+    /** A ring past its age is read again, and the one it replaces is wiped. */
+    @Test
+    void aRingReadAgainWipesTheOneItReplaces() throws Exception {
+        SubjectKeyStore store = SubjectKeyStore.inMemory();
+        try (FieldKeys master = ring(1, MASTER1);
+             SubjectKeys here = SubjectKeys.of(master, store)) {
+            java.lang.reflect.Field age = SubjectKeys.class.getDeclaredField("maxAgeNanos");
+            age.setAccessible(true);
+            age.setLong(here, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(50));
+            EncryptedColumn before = here.column("customer-3", "customer.email", Mode.RANDOMIZED);
+            byte[] stored = before.encrypt(text("carol@example.org"));
+            Thread.sleep(150);
+            EncryptedColumn after = here.existingColumn("customer-3", "customer.email",
+                    Mode.RANDOMIZED);
+            assertEquals("carol@example.org", read(after, stored));
+            assertThrows(RuntimeException.class, () -> before.encrypt(text("x")),
+                    "the replaced ring still held its key");
+        }
+    }
+
     @Test
     void eachSubjectReadsItsOwnAndNoOneElses() {
         try (FieldKeys master = ring(1, MASTER1);

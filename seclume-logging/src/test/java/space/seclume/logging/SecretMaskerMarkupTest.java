@@ -1,6 +1,7 @@
 package space.seclume.logging;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -81,7 +82,7 @@ class SecretMaskerMarkupTest {
                 assertEquals("k=[redacted:db]", astral.mask("k=key&#x1F511;decoy-4711"));
             }
             String ordinary = "fish &amp; chips &lt;3";
-            assertTrue(ordinary == masker.mask(ordinary), "a line without a secret is the line itself");
+            assertSame(ordinary, masker.mask(ordinary), "a line without a secret is the line itself");
         }
     }
 

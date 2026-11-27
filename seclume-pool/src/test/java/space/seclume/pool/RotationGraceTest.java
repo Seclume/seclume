@@ -1,5 +1,6 @@
 package space.seclume.pool;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,6 +40,26 @@ class RotationGraceTest {
             assertFalse(fresh.isClosed(), "a connection of the new login was closed");
             fresh.close();
             held.close();                                // a no-op now, and no harm
+        }
+    }
+
+    /** Within the grace the borrower keeps its connection; the idle ones go at once, counted. */
+    @Test
+    void withinTheGraceTheConnectionStaysAndTheIdleOnesAreCounted() throws Exception {
+        StubDataSource source = new StubDataSource();
+        PoolSettings settings = new PoolSettings();
+        settings.setMaximumPoolSize(3);
+        settings.setMinimumIdle(0);
+        settings.setConnectionTimeout(Duration.ofSeconds(2));
+        try (SeclumePool pool = new SeclumePool(source, settings)) {
+            Connection held = pool.getConnection();
+            Connection idle = pool.getConnection();
+            idle.close();
+            assertEquals(1, pool.rotateSecret(true, Duration.ofSeconds(5)),
+                    "the idle connection closed at once was not counted");
+            Thread.sleep(300);
+            assertFalse(held.isClosed(), "closed before its grace was over");
+            held.close();
         }
     }
 }

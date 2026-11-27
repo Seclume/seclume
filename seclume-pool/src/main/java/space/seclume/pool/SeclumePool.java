@@ -627,7 +627,8 @@ public final class SeclumePool implements DataSource, AutoCloseable, space.seclu
                     return entry;
                 }
                 retire(entry);
-                if (System.nanoTime() - deadline > 0) {
+                // >= would differ from > for one nanosecond; LendingSignalsTest kills the other mutants
+                if (System.nanoTime() - deadline > 0) { // mutation-equivalent: the boundary, one nanosecond wide
                     return null;
                 }
             }

@@ -235,8 +235,8 @@ public interface OffHeapSecrets {
         static MemorySegment base64Inside(MemorySegment data, int offset, boolean urlSafe,
                 SegmentAllocator allocator) {
             long n = data.byteSize();
-            long from = (offset + 2) / 3 * 4;
-            long to = (offset + n) / 3 * 4;
+            long from = (offset + 2L) / 3 * 4;
+            long to = ((long) offset + n) / 3 * 4;
             if (to - from < 8) {
                 return null;
             }

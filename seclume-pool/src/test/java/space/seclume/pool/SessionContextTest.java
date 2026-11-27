@@ -150,8 +150,9 @@ class SessionContextTest {
         try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings)) {
             try (Connection connection = pool.getConnection();
                  Statement statement = connection.createStatement()) {
+                assertEquals("app.tenant_id", db.key());
                 assertThrows(SQLException.class, () -> statement.execute(
-                        "exec sp_set_session_context N'" + db.key() + "', N'evil'"));
+                        "exec sp_set_session_context N'app.tenant_id', N'evil'"));
                 try (ResultSet rows = statement.executeQuery(db.read())) {
                     rows.next();
                     assertEquals("acme", rows.getString(1));

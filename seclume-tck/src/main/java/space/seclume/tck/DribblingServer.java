@@ -20,7 +20,7 @@ public final class DribblingServer implements AutoCloseable {
     private final ServerSocket listener;
 
     public DribblingServer(byte[] prefix) throws IOException {
-        listener = new ServerSocket(0, 16, InetAddress.getLoopbackAddress());
+        listener = new ServerSocket(0, 16, InetAddress.getLoopbackAddress()); // nosemgrep: java.lang.security.audit.crypto.unencrypted-socket.unencrypted-socket - a loopback stand-in that dribbles a login prefix; TLS is not what it tests
         // Every client that comes, each on a thread of its own: a pool opens
         // several logins at once.
         Thread.ofVirtual().start(() -> {
