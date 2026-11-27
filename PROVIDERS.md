@@ -200,6 +200,25 @@ fetched. **Closing the provider revokes the lease**, and Vault drops the user at
 Tested against a real Vault and PostgreSQL (`.github/scripts/vault_fixtures.sh`), and the
 same fixture against OpenBao.
 
+**Revoking a lease does not end the sessions already open with it - unless the role says so.**
+With Vault's default revocation the user is dropped and new logins fail, but a session that is
+already logged in carries on: PostgreSQL does not end a session when its role is dropped. A
+pool holds its sessions until the lease would have ended, so revoking a leaked credential leaves
+them working until then. Measured with `.github/scripts/vault_revocation_proof.sh` (Vault 1.20,
+PostgreSQL 17): a session running 15 s finished its work after the revocation; with the
+statement below in the role's `revocation_statements` it was ended at once. seclume cannot do
+this from the client side - it learns of a revocation at the next renewal at the earliest - so
+put it in the role:
+
+| Database | In `revocation_statements`, before dropping the user |
+|---|---|
+| PostgreSQL | `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '{{name}}';` |
+| MySQL | a procedure that `KILL`s each id in `information_schema.processlist` where `user = '{{name}}'` |
+| SQL Server | `KILL` each `session_id` in `sys.dm_exec_sessions` where `login_name = '{{name}}'` (dynamic SQL) |
+| Oracle | `ALTER SYSTEM KILL SESSION` for each `sid,serial#` in `v$session` where `username = '{{name}}'` |
+
+Only the PostgreSQL row is measured; the other three are the same idea in each database's terms.
+
 A KV secret has no lease, so nothing says when it changed: it is read again once it is
 `seclume.vault.kvMaxAgeSeconds` old (60 by default), so that a rotation reaches the pool.
 

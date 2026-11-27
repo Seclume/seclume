@@ -146,6 +146,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **Documented, and measured: revoking a Vault lease leaves open sessions running.** With
+  Vault's default revocation a dropped PostgreSQL user's session carries on, and a pool holds it
+  until the lease would have ended. PROVIDERS.md gives the `revocation_statements` that end them
+  per database; `.github/scripts/vault_revocation_proof.sh` shows both cases.
 - **A SQL Server session that impersonated is closed on return, not lent dead.** After
   `EXECUTE AS` without `REVERT`, `SETUSER` or `sp_setapprole` without a cookie, SQL Server answers
   the reset by killing the session - and the reset rides on the next request, so the next
