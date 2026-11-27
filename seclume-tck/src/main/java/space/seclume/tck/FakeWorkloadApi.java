@@ -313,7 +313,7 @@ public final class FakeWorkloadApi implements AutoCloseable {
             // reset", now and then, under load).
             streams.add(client);
             client.shutdownOutput();
-            java.nio.ByteBuffer drain = java.nio.ByteBuffer.allocate(512);
+            java.nio.ByteBuffer drain = java.nio.ByteBuffer.allocateDirect(512);
             while (client.read(drain) >= 0) {
                 drain.clear();
             }
