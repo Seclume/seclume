@@ -51,7 +51,7 @@ class LocalDetachSeamTest {
         }
         String path = password.toString().replace(java.io.File.separatorChar, '/');
         url = "jdbc:seclume:mysql://" + host + ":" + port + "/seclume_test"
-                + "?user=seclume_test&allowPublicKeyRetrieval=true&tls=off"
+                + "?user=seclume_test&allowPublicKeyRetrieval=true&tls=off&allowLegacyHashOverUnverifiedTls=true"
                 + "&provider=file&path=" + path;
     }
 

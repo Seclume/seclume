@@ -58,8 +58,11 @@ class PatroniFailoverTest {
         String query = "/seclume_test?user=seclume_test"
                 + "&tls=off&connectTimeout=1000&targetServerType=primary&provider=file&path="
                 + password.toString().replace('\\', '/');
-        String both = "jdbc:seclume:postgresql://127.0.0.1:1," + host + ":" + port + query;
-        String goneOnly = "jdbc:seclume:postgresql://127.0.0.1:1" + query;
+        // The server that is gone has a name no real one has (RFC 2606): with
+        // 127.0.0.1 here, a database on 127.0.0.1 - as in CI - was the same
+        // host to Patroni's check, and the leader was taken as the URL's own.
+        String both = "jdbc:seclume:postgresql://gone.invalid:1," + host + ":" + port + query;
+        String goneOnly = "jdbc:seclume:postgresql://gone.invalid:1" + query;
         try (ServerSocket patroni = serve(cluster)) {
             String asked = "&patroni=http://127.0.0.1:" + patroni.getLocalPort();
             // The leader is not on the URL: the answer cannot add it.

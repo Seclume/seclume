@@ -33,7 +33,7 @@ class ProviderFailureTest {
             Assumptions.abort("no PostgreSQL on " + host);
         }
         String url = "jdbc:seclume:postgresql://" + host + ":" + port + "/seclume_test"
-                + "?user=seclume_test&tls=require&provider=file&path=/no/such/secret-file";
+                + "?user=seclume_test&tls=off&provider=file&path=/no/such/secret-file";
         SQLException refused = assertThrows(SQLException.class,
                 () -> DriverManager.getConnection(url).close());
         assertEquals("08001", refused.getSQLState(), String.valueOf(refused));
