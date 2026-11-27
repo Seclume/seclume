@@ -165,7 +165,16 @@ public final class Entropy {
         }
     }
 
-    private static void fillFromSecureRandom(MemorySegment target) {
+    /** How often the last resort was taken - on a platform with a kernel source, never. */
+    private static final java.util.concurrent.atomic.AtomicLong FALLBACK_USES =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    static long fallbackUses() {
+        return FALLBACK_USES.get();
+    }
+
+    static void fillFromSecureRandom(MemorySegment target) {
+        FALLBACK_USES.incrementAndGet();
         byte[] scratch = new byte[(int) target.byteSize()];
         try {
             FALLBACK.nextBytes(scratch);
