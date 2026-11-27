@@ -37,11 +37,43 @@ public final class Shell {
         Assumptions.assumeTrue(available(), "no POSIX shell here (on Windows: Git for Windows)");
         List<String> command = new ArrayList<>();
         command.add(SH);
-        command.addAll(List.of(arguments));
+        boolean windows = System.getProperty("os.name", "").toLowerCase().startsWith("windows");
+        for (String argument : arguments) {
+            // Java on Windows wraps an argument with a space in quotes but
+            // leaves the quotes inside it as they are: a script such as
+            // exec openssl "$@" then turned every later argument's quoting
+            // around, and "/CN=seclume KMS test CA" reached openssl as four.
+            // Escaped as the MSVCRT rules that sh.exe reads them say.
+            command.add(windows ? escapeQuotes(argument) : argument);
+        }
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.environment().put("MSYS_NO_PATHCONV", "1");
         builder.environment().put("MSYS2_ARG_CONV_EXCL", "*");
         return builder;
+    }
+
+    /** Every quote preceded by a backslash, the backslashes before it doubled - MSVCRT's rule. */
+    static String escapeQuotes(String argument) {
+        if (argument.indexOf('"') < 0) {
+            return argument;
+        }
+        StringBuilder out = new StringBuilder(argument.length() + 8);
+        int backslashes = 0;
+        for (int i = 0; i < argument.length(); i++) {
+            char c = argument.charAt(i);
+            if (c == '\\') {
+                backslashes++;
+                continue;
+            }
+            if (c == '"') {
+                out.append("\\".repeat(backslashes * 2 + 1)).append('"');
+            } else {
+                out.append("\\".repeat(backslashes)).append(c);
+            }
+            backslashes = 0;
+        }
+        out.append("\\".repeat(backslashes));
+        return out.toString();
     }
 
     private static String find() {

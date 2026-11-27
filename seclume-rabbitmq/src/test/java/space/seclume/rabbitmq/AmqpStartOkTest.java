@@ -96,7 +96,7 @@ class AmqpStartOkTest {
         Files.writeString(file, password);
         RabbitSettings settings = RabbitSettings.of("amqps://mq.example.com?user="
                 + URLEncoder.encode(user, StandardCharsets.UTF_8)
-                + "&provider=file&path=" + file);
+                + "&provider=file&path=" + URLEncoder.encode(file.toString(), StandardCharsets.UTF_8));
         wire = new Written();
         socket = new AmqpSocket(settings, wire);
         return socket.getOutputStream();

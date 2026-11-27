@@ -140,7 +140,9 @@ class VaultPkiTest {
     }
 
     static String jsonText(String text) {
-        return text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+        // OpenSSL on Windows writes its PEM files with CRLF: a raw CR is no JSON.
+        return text.replace("\r", "").replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n");
     }
 
     /** Vault's answer to a signed request. */
