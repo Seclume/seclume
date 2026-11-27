@@ -316,6 +316,10 @@ All notable changes to seclume are recorded here. Versions follow
   after the grace either. A query that trickled its answer was bounded by about 11 seconds
   instead of the timeout and the grace. Cancellation and kill run on threads of their own
   now; the same query ends after 2 seconds.
+- **A host is a name or an address, checked once for every driver and every list.** The URL's
+  first host, its failover hosts and what a cluster's topology adds: a space, a slash, an `@`,
+  a `?` or a control character in a host was taken as it stood into DNS, the TLS server name
+  and log lines. Such a URL is refused now, naming the character.
 - **Discovery adds no host, also where nothing was given to hold it to.** `PatroniTopology.of(option)`
   without the URL's hosts took every member Patroni's answer named; it takes none now (the
   driver always passed the URL's hosts, so connections are unchanged). An Aurora instance
