@@ -263,8 +263,18 @@ public final class WireBuffer implements AutoCloseable {
         return this;
     }
 
-    /** Text with a trailing zero, the way the protocol wants it everywhere. */
+    /**
+     * Text with a trailing zero, the way the protocol wants it everywhere.
+     * A zero inside {@code text} would end the
+     * field early, and what follows would be read as the next field - a
+     * statement name, a startup parameter, a portal - that nobody wrote: it is
+     * refused, before anything is written.
+     */
     public WireBuffer putCString(String text) {
+        if (text.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("a NUL character inside a NUL-terminated field "
+                    + "would end it early - refused");
+        }
         putText(text);
         return putByte((byte) 0);
     }

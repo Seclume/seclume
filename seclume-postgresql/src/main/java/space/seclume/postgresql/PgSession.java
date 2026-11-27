@@ -352,6 +352,7 @@ public final class PgSession implements AutoCloseable {
      * @return the value, or {@code null} when the statement answered no rows
      */
     public String askOneValue(String sql) throws SQLException {
+        noNul(sql);
         String[] answer = new String[1];
         simpleQuery(sql, row -> {
             if (answer[0] == null && row.columnCount() > 0 && !row.isNull(0)) {
@@ -587,6 +588,19 @@ public final class PgSession implements AutoCloseable {
 
     /** The user this login went out as: the URL's, or a dynamic secret's own (Vault). */
     private String loginUser;
+
+    /**
+     * The protocol carries a statement as a string ended by a zero byte: one
+     * inside it would end the statement there and make the rest the next
+     * field of the message. Refused before a byte of the message is written -
+     * the session stays as it was.
+     */
+    static void noNul(String sql) throws SQLException {
+        if (sql != null && sql.indexOf('\0') >= 0) {
+            throw new SQLException("the statement holds a NUL character, which PostgreSQL's "
+                    + "protocol cannot carry inside a statement", "22023");
+        }
+    }
 
     /** A StartupMessage value ends at the first zero byte; one inside would start a parameter of its own. */
     static String startupValue(String what, String value) throws SQLException {
@@ -1103,6 +1117,7 @@ public final class PgSession implements AutoCloseable {
      * injection.
      */
     public void simpleQuery(String sql, RowHandler handler) throws SQLException {
+        noNul(sql);
         // Anything that really needs an answer sends the block first - that
         // is the promise of the pipeline: it saves round trips nobody waited
         // for, never a value somebody asked for.
@@ -1218,6 +1233,7 @@ public final class PgSession implements AutoCloseable {
      * @return the rows the server says it copied
      */
     public long copyIn(String sql, java.io.InputStream data) throws SQLException {
+        noNul(sql);
         flushPipeline();
         java.io.IOException reading = null;
         try {
@@ -1318,6 +1334,7 @@ public final class PgSession implements AutoCloseable {
      * @return the rows the server says it copied
      */
     public long copyOut(String sql, java.io.OutputStream sink) throws SQLException {
+        noNul(sql);
         flushPipeline();
         java.io.IOException writing = null;
         try {
@@ -1421,6 +1438,7 @@ public final class PgSession implements AutoCloseable {
      * the normal case wherever a pool hands out fresh connections.
      */
     public void parseLater(String name, String sql) throws SQLException {
+        noNul(sql);
         if (!defer) {
             fields = parse(name, sql);
             return;
@@ -1523,6 +1541,7 @@ public final class PgSession implements AutoCloseable {
      * @return the columns the statement returns - empty for INSERT/UPDATE
      */
     public List<Field> parse(String name, String sql) throws SQLException {
+        noNul(sql);
         pendingParses.remove(name);           // parsed now; nothing is owed any more
         try {
             WireBuffer out = command(PgProtocol.PARSE);
@@ -1755,6 +1774,7 @@ public final class PgSession implements AutoCloseable {
      * <p>Only statements whose answer nobody looks at go through here.
      */
     public void runLater(String sql) throws SQLException {
+        noNul(sql);
         if (!defer) {
             execute(sql);
             return;
@@ -2614,6 +2634,7 @@ public final class PgSession implements AutoCloseable {
 
     /** Short form for statements without a result. */
     public void execute(String sql) throws SQLException {
+        noNul(sql);
         // Anything that really needs an answer sends the block first - that
         // is the promise of the pipeline: it saves round trips nobody waited
         // for, never a value somebody asked for.

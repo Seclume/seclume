@@ -185,6 +185,11 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **PostgreSQL: a statement with a NUL character is refused before it is sent.** The protocol
+  carries a statement as a NUL-terminated string, so a NUL inside it ended the statement there
+  and the rest was read as the message's next field. It is refused now with SQLState 22023
+  before a byte of the message is written, and the connection goes on. The wire buffer refuses
+  a NUL in any NUL-terminated field as well, for MongoDB's BSON keys among others.
 - **Vault: `seclume.vault.kvMaxAgeSeconds` is read when it is needed.** It was read once, when
   the provider class was loaded, so a setting made after that was ignored. It is now read on
   each use, and is at least one second.

@@ -118,6 +118,26 @@ class LocalJdbcTest {
         }
     }
 
+    /**
+     * A NUL in a statement ended it in the protocol's NUL-terminated field
+     * and made the rest the next field. Refused as 22023 before anything is
+     * written - and the connection goes on as before, nothing half-sent.
+     */
+    @Test
+    void aNulInAStatementIsRefusedAndTheConnectionGoesOn() throws Exception {
+        try (Connection connection = connect(); java.sql.Statement statement = connection.createStatement()) {
+            java.sql.SQLException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                    java.sql.SQLException.class, () -> statement.execute("select 1\u0000; select 2"));
+            assertEquals("22023", refused.getSQLState(), refused.getMessage());
+            org.junit.jupiter.api.Assertions.assertThrows(java.sql.SQLException.class,
+                    () -> connection.prepareStatement("select ?\u0000").executeQuery());
+            try (java.sql.ResultSet one = statement.executeQuery("select 41 + 1")) {
+                assertTrue(one.next());
+                assertEquals(42, one.getInt(1));
+            }
+        }
+    }
+
     @Test
     void theDriverManagerFindsUsThroughTheServiceFile() throws Exception {
         assertNotNull(DriverManager.getDriver(url));
