@@ -113,6 +113,7 @@ jobs:
           - { module: seclume-oracle, test: OracleDecoderFuzzTest, method: coverageGuided }
           - { module: seclume-oracle, test: OracleJsonFuzzTest, method: anyColumnValueIsReadOrRefused }
           - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileServerHelloFailsWithAnIoException }
+          - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileTls12FlightFailsWithAnIoException }
           - { module: seclume-core, test: ServerHelloFuzzTest, method: aHostileEncryptedFlightNeverConnectsUnauthenticated }
           - { module: seclume-core, test: TlsRecordFuzzTest, method: recordsAfterTheHandshake }
           - { module: seclume-core, test: TlsRecordFuzzTest, method: aFrozenConnection }
