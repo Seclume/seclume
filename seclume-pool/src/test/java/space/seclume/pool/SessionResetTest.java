@@ -236,6 +236,58 @@ class SessionResetTest {
         }
     }
 
+    /**
+     * MySQL: what COM_RESET_CONNECTION is relied on to put back - the active
+     * roles, sql_mode and the connection's character set - is put back for
+     * the next borrower. A role is set only where the test user has one to
+     * set; the rest everywhere.
+     */
+    @Test
+    void mysqlRolesModeAndCharsetDoNotReachTheNextBorrower() throws Exception {
+        Db db = databases().get(1);
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            String role;
+            String mode;
+            String charset;
+            boolean roleSet;
+            try (Connection c = pool.getConnection()) {
+                role = ask(c, "select current_role()");
+                mode = ask(c, "select @@session.sql_mode");
+                charset = ask(c, "select @@session.character_set_client");
+                // Without STRICT_TRANS_TABLES MySQL truncates silently, and with
+                // ANSI_QUOTES "x" is a name: what one borrower sets changes the
+                // meaning of the next one's SQL.
+                execute(c, "set @@session.sql_mode = 'ANSI_QUOTES'");
+                execute(c, "set names latin1");
+                try {
+                    execute(c, "create role if not exists seclume_reset_role");
+                    execute(c, "grant select on seclume_test.* to seclume_reset_role");
+                    execute(c, "grant seclume_reset_role to current_user()");
+                } catch (SQLException noPrivilege) {
+                    // the test user may not make roles: one it has already, or none
+                }
+                roleSet = !ask(c, "select count(*) from information_schema.applicable_roles")
+                        .equals("0");
+                if (roleSet) {
+                    execute(c, "set role all");
+                    assertTrue(!role.equals(ask(c, "select current_role()")),
+                            "set role all changed nothing - the role check would prove nothing");
+                }
+                System.out.println("MYSQL ROLE PATH " + roleSet);
+                assertEquals("ANSI_QUOTES", ask(c, "select @@session.sql_mode"));
+                assertEquals("latin1", ask(c, "select @@session.character_set_client"));
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals(mode, ask(c, "select @@session.sql_mode"),
+                        "the next borrower got the last one's sql_mode");
+                assertEquals(charset, ask(c, "select @@session.character_set_client"),
+                        "the next borrower got the last one's character set");
+                assertEquals(role, ask(c, "select current_role()"),
+                        "the next borrower got the last one's roles");
+            }
+        }
+    }
+
     @Test
     void sqlServerApplicationRoleDoesNotReachTheNextBorrower() throws Exception {
         Db db = databases().get(2);

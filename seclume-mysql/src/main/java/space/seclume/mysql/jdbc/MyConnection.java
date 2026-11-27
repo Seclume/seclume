@@ -197,6 +197,11 @@ public final class MyConnection implements Connection, space.seclume.internal.jd
         if (!autoCommit) {
             return false;
         }
+        // The active roles survive COM_RESET_CONNECTION; where they cannot be
+        // put back, the connection is closed rather than lent with them.
+        if (!session.rolesCanBePutBack()) {
+            return false;
+        }
         int wantedIsolation = isolation;
         boolean wantedReadOnly = readOnly;
         session.dropPendingVariables();

@@ -7,6 +7,13 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **MySQL and MariaDB: a borrower's `SET ROLE` no longer reaches the next borrower.**
+  `COM_RESET_CONNECTION` keeps the active roles (measured on MySQL 8.4 and MariaDB 11.4): a
+  borrower that activated a role handed its privileges to whoever borrowed the connection
+  next. The reset now puts the login's roles back in the same write - `SET ROLE DEFAULT` on
+  MySQL; on MariaDB, which has no such statement, the role the login activated, read with the
+  query the login already sends. Where it is not known the connection is closed instead.
+  Found by the new live reset tests, which also cover `sql_mode` and `SET NAMES`.
 - **A PKCS#11 module named in a URL is loaded only where the JVM allows it.**
   `clientCertPkcs11` names a native library that is loaded and run in the process; a URL or
   Properties - configuration some applications let others write - could name any. Such a module

@@ -225,8 +225,10 @@ class ProtocolTest {
                 session.ping();
             }
             server.rethrowFailure();
-            assertEquals(List.of("<reset>", "select 'next borrower'", "<reset>"),
-                    server.received());
+            // Behind each reset, in the same write, the login's roles put back:
+            // COM_RESET_CONNECTION leaves the active roles as they were.
+            assertEquals(List.of("<reset>", "SET ROLE DEFAULT", "select 'next borrower'",
+                    "<reset>", "SET ROLE DEFAULT"), server.received());
         }
     }
 
@@ -248,8 +250,8 @@ class ProtocolTest {
                 session.ping();
             }
             server.rethrowFailure();
-            assertEquals(List.of("select ?", "<reset>", "select ?", "<reset>", "select ?"),
-                    server.received());
+            assertEquals(List.of("select ?", "<reset>", "SET ROLE DEFAULT", "select ?", "<reset>",
+                    "SET ROLE DEFAULT", "select ?"), server.received());
         }
     }
 
@@ -271,7 +273,9 @@ class ProtocolTest {
                 org.junit.jupiter.api.Assertions.assertFalse(session.isOpen(),
                         "a session whose reset failed stays usable");
             }
-            assertEquals(List.of("<reset>"), server.received());
+            // Nothing of the next borrower's: the roles' line was written with
+            // the reset, before anybody could have asked for anything.
+            assertEquals(List.of("<reset>", "SET ROLE DEFAULT"), server.received());
         }
     }
 

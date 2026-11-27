@@ -2296,7 +2296,10 @@ public final class MySession implements AutoCloseable {
      */
     private void askServerIdentity() throws SQLException {
         try {
-            channel.beginCommand(COM_QUERY).putText("select @@hostname, @@port, @@server_id");
+            // MariaDB: the role the login activated, too - see putRolesBack.
+            channel.beginCommand(COM_QUERY).putText(isMariaDb()
+                    ? "select @@hostname, @@port, @@server_id, current_role()"
+                    : "select @@hostname, @@port, @@server_id");
             channel.end();
             channel.flush();
             identityOwed = true;
@@ -2312,9 +2315,18 @@ public final class MySession implements AutoCloseable {
         identityOwed = false;
         String[] seen = new String[1];
         try {
-            readResult(row -> seen[0] = row.getString(0) + ":" + row.getString(1) + ":"
-                    + row.getString(2), false);
+            String[] role = new String[1];
+            boolean[] roleRead = new boolean[1];
+            readResult(row -> {
+                seen[0] = row.getString(0) + ":" + row.getString(1) + ":" + row.getString(2);
+                if (isMariaDb()) {
+                    role[0] = row.getString(3);
+                    roleRead[0] = true;
+                }
+            }, false);
             serverIdentity = seen[0];
+            loginRole = role[0];
+            loginRoleKnown = roleRead[0];
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             throw brokenConnection(e);
         } catch (SQLException refused) {
@@ -2344,6 +2356,10 @@ public final class MySession implements AutoCloseable {
         resetOwed = false;
         try {
             readOkOrError("resetting the connection");
+            if (rolesOwed) {
+                rolesOwed = false;
+                readOkOrError("putting the login's roles back");
+            }
         } catch (IOException | space.seclume.internal.WireBuffer.Truncated e) {
             reprepared.clear();
             throw brokenConnection(e);
@@ -2389,6 +2405,7 @@ public final class MySession implements AutoCloseable {
         try {
             command(COM_RESET_CONNECTION);
             channel.end();
+            rolesOwed = putRolesBack();
             for (String sql : usedSinceReset) {
                 if (plans.containsKey(sql)) {
                     channel.beginCommand(COM_STMT_PREPARE).putText(sql);
@@ -2408,6 +2425,52 @@ public final class MySession implements AutoCloseable {
         pendingClose.clear();
     }
 
+    /** A SET ROLE sent behind the last deferred reset, its answer not read yet. */
+    private boolean rolesOwed;
+
+    /** MariaDB: the role the login activated (null: none), once {@link #loginRoleKnown}. */
+    private volatile String loginRole;
+    private volatile boolean loginRoleKnown;
+
+    /**
+     * Whether a reset can put the login's roles back: always on MySQL; on
+     * MariaDB once the login's role is known - if the server would not say,
+     * the connection is closed rather than lent with the last borrower's role.
+     */
+    public boolean rolesCanBePutBack() throws SQLException {
+        if (!isMariaDb()) {
+            return true;
+        }
+        settleIdentity();
+        return loginRoleKnown;
+    }
+
+    /**
+     * Writes {@code SET ROLE DEFAULT} behind a reset, in the same write: MySQL's
+     * COM_RESET_CONNECTION leaves the active roles as the last borrower set
+     * them (MySQL 8.4 and MariaDB 11.4, measured), and the next borrower would
+     * act with them. On MySQL DEFAULT is what a login activates; MariaDB has
+     * no SET ROLE DEFAULT, so the role its login activated is set again, read
+     * at the login (see {@link #askServerIdentity}).
+     *
+     * @return whether one was written, whose answer is owed
+     */
+    private boolean putRolesBack() {
+        String sql;
+        if (!isMariaDb()) {
+            sql = "SET ROLE DEFAULT";
+        } else if (!loginRoleKnown) {
+            // MyConnection asked rolesCanBePutBack first; here as a last guard.
+            throw new IllegalStateException("the login's role is not known");
+        } else {
+            sql = loginRole == null ? "SET ROLE NONE"
+                    : "SET ROLE `" + loginRole.replace("`", "``") + "`";
+        }
+        channel.beginCommand(COM_QUERY).putText(sql);
+        channel.end();
+        return true;
+    }
+
     /**
      * {@code COM_RESET_CONNECTION} - resets session variables, temporary
      * tables and prepared statements without logging in again. Exactly what a
@@ -2417,8 +2480,12 @@ public final class MySession implements AutoCloseable {
         try {
             command(COM_RESET_CONNECTION);
             channel.end();
+            boolean roles = putRolesBack();
             channel.flush();
             readOkOrError("resetting the connection");
+            if (roles) {
+                readOkOrError("putting the login's roles back");
+            }
             usedSinceReset.clear();
             // The server dropped every prepared statement with the rest. A
             // cached plan kept here would name a statement id that no longer
