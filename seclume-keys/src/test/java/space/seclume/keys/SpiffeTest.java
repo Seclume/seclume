@@ -76,6 +76,8 @@ class SpiffeTest {
     private static Svid payments;
     private static byte[] otherCa;
     private static Svid partner;
+    /** A second workload of other.org, its SVID as genuine as the partner's - but not named. */
+    private static Svid stranger;
     private static Svid impostor;
 
     private static final String PARTNER = "spiffe://other.org/partner";
@@ -107,6 +109,7 @@ class SpiffeTest {
         openssl("x509", "-in", "other-ca.pem", "-outform", "DER", "-out", "other-ca.der");
         otherCa = Files.readAllBytes(directory.resolve("other-ca.der"));
         partner = svid("partner", PARTNER, "other-ca");
+        stranger = svid("stranger", "spiffe://other.org/y", "other-ca");
         impostor = svid("impostor", "spiffe://example.org/impostor", "other-ca");
         // A server for the database side: localhost, from the same CA.
         openssl("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
@@ -544,6 +547,18 @@ class SpiffeTest {
             serving.init(server.keys().getKeyManagers(), server.trust().getTrustManagers(),
                     null);
             assertEquals(PARTNER, SpiffeTrustManager.spiffeId(mutual(serving, partnerClient)));
+
+            // Another workload of the federated domain, its SVID genuine: peer-ids
+            // names the partner, not the domain - it is refused.
+            try (FakeWorkloadApi strangers = new FakeWorkloadApi(socket("stranger"),
+                    () -> FakeWorkloadApi.x509SvidResponse("spiffe://other.org/y",
+                            stranger.certificate(), stranger.key(), otherCa,
+                            Map.of("example.org", ca)))) {
+                SSLContext strangerClient = SeclumeKeys.spiffeSslContext("socket=unix://"
+                        + strangers.socket() + "&peer-ids=" + ORDERS);
+                assertThrows(Exception.class, () -> mutual(serving, strangerClient),
+                        "a federated workload peer-ids does not name was let in");
+            }
 
             SSLContext impostorClient = SeclumeKeys.spiffeSslContext("socket=unix://"
                     + forged.socket());

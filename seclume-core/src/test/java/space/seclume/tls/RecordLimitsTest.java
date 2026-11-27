@@ -39,6 +39,24 @@ class RecordLimitsTest {
         return RecordProtection.forTls12(HashAlgorithm.SHA_256, block, 0, 16, 16);
     }
 
+    /**
+     * A TLS 1.3 record of exactly the tag has no room for the inner content
+     * type: not opened. One byte more is opened and fails on the tag. A
+     * negative length - a caller's arithmetic gone wrong - opens nothing.
+     */
+    @Test
+    void aTls13RecordOfOnlyTheTagOrANegativeLengthIsNotOpened() {
+        try (Arena arena = Arena.ofConfined()) {
+            RecordProtection v13 = tls13(arena);
+            MemorySegment record = arena.allocate(RecordProtection.HEADER + TAG + 1);
+            assertNull(v13.open(record, 0, RecordProtection.HEADER + TAG, arena.allocate(64), 0),
+                    "a record of only the tag was opened");
+            assertNull(v13.open(record, 0, -1, arena.allocate(64), 0), "a negative length");
+            assertNull(v13.open(record, 0, RecordProtection.HEADER + TAG + 1, arena.allocate(64), 0),
+                    "a forged one-byte record was let through");
+        }
+    }
+
     @Test
     void moreThanTwoToTheFourteenBytesAreNeverSealed() {
         try (Arena arena = Arena.ofConfined(); RecordProtection v13 = tls13(arena); RecordProtection v12 = tls12(arena)) {
