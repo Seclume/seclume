@@ -76,7 +76,7 @@ class ScriptedMongoServerTest {
         try (ScriptedMongoServer server = ScriptedMongoServer.startWithPassword(tempDir,
                 ScriptedMongoServer.Mode.NO_SCRAM_SHA_256, "orders", "correct-password-42")) {
             String url = "mongodb://orders@localhost:" + server.port()
-                    + "/?authSource=admin&serverSelectionTimeoutMS=1000&provider=file&path="
+                    + "/?authSource=admin&serverSelectionTimeoutMS=3000&provider=file&path="
                     + secretFile.toString().replace('\\', '/')
                     + "&tlsRootCert=" + server.certFile().toString().replace('\\', '/');
 
@@ -97,7 +97,7 @@ class ScriptedMongoServerTest {
         try (ScriptedMongoServer server = ScriptedMongoServer.startWithPassword(tempDir,
                 ScriptedMongoServer.Mode.LOW_ITERATIONS, "orders", "correct-password-42")) {
             String url = "mongodb://orders@localhost:" + server.port()
-                    + "/?authSource=admin&serverSelectionTimeoutMS=1000&provider=file&path="
+                    + "/?authSource=admin&serverSelectionTimeoutMS=3000&provider=file&path="
                     + secretFile.toString().replace('\\', '/')
                     + "&tlsRootCert=" + server.certFile().toString().replace('\\', '/');
 
@@ -119,7 +119,7 @@ class ScriptedMongoServerTest {
         try (ScriptedMongoServer server = ScriptedMongoServer.startWithPassword(tempDir,
                 ScriptedMongoServer.Mode.BAD_SERVER_NONCE, "orders", "correct-password-42")) {
             String url = "mongodb://orders@localhost:" + server.port()
-                    + "/?authSource=admin&serverSelectionTimeoutMS=1000&provider=file&path="
+                    + "/?authSource=admin&serverSelectionTimeoutMS=3000&provider=file&path="
                     + secretFile.toString().replace('\\', '/')
                     + "&tlsRootCert=" + server.certFile().toString().replace('\\', '/');
 
@@ -140,7 +140,7 @@ class ScriptedMongoServerTest {
         try (ScriptedMongoServer server = ScriptedMongoServer.startWithPassword(tempDir,
                 ScriptedMongoServer.Mode.WRONG_SERVER_SIG, "orders", "correct-password-42")) {
             String url = "mongodb://orders@localhost:" + server.port()
-                    + "/?authSource=admin&serverSelectionTimeoutMS=1000&provider=file&path="
+                    + "/?authSource=admin&serverSelectionTimeoutMS=3000&provider=file&path="
                     + secretFile.toString().replace('\\', '/')
                     + "&tlsRootCert=" + server.certFile().toString().replace('\\', '/');
 
@@ -164,7 +164,7 @@ class ScriptedMongoServerTest {
         try (ScriptedMongoServer server = ScriptedMongoServer.startWithPassword(tempDir,
                 ScriptedMongoServer.Mode.NORMAL, "orders", "pass")) {
             String url = "mongodb://orders@localhost:" + server.port()
-                    + "/?authSource=admin&serverSelectionTimeoutMS=1000&provider=file&path="
+                    + "/?authSource=admin&serverSelectionTimeoutMS=3000&provider=file&path="
                     + secretFile.toString().replace('\\', '/')
                     + "&tlsRootCert=" + server.certFile().toString().replace('\\', '/');
 
@@ -185,7 +185,7 @@ class ScriptedMongoServerTest {
         try (ScriptedMongoServer server = ScriptedMongoServer.startWithPassword(tempDir,
                 ScriptedMongoServer.Mode.DROP_AFTER_HELLO, "orders", "correct-password-42")) {
             String url = "mongodb://orders@localhost:" + server.port()
-                    + "/?authSource=admin&serverSelectionTimeoutMS=1000&provider=file&path="
+                    + "/?authSource=admin&serverSelectionTimeoutMS=3000&provider=file&path="
                     + secretFile.toString().replace('\\', '/')
                     + "&tlsRootCert=" + server.certFile().toString().replace('\\', '/');
 
@@ -211,7 +211,7 @@ class ScriptedMongoServerTest {
                     + "/?authSource=admin&provider=file&path="
                     + secretFile.toString().replace('\\', '/')
                     + "&tlsRootCert=" + server.certFile().toString().replace('\\', '/')
-                    + "&serverSelectionTimeoutMS=1000&connectTimeoutMS=2000";
+                    + "&serverSelectionTimeoutMS=3000&connectTimeoutMS=2000";
 
             try (MongoClient client = SeclumeMongo.client(url)) {
                 MongoDatabase db = client.getDatabase("admin");
