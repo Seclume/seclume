@@ -106,6 +106,11 @@ def status(entry, platform, cases):
         return "FAIL", counts
     if absent:
         return "FAIL", counts + "; did not pass: " + ", ".join(absent)
+    # A parameterized test emptied down to one case still has its method; the
+    # count it had is what says the property is tried as broadly as before.
+    least = entry.get("min_cases", 0)
+    if passed < least and not (skipped and entry.get("skips", {}).get(platform)):
+        return "FAIL", f"{counts}; at least {least} have to pass"
     reason = entry.get("skips", {}).get(platform)
     if skipped and reason:
         return ("PASS", f"{counts} - {reason}") if passed else ("SKIPPED", f"{counts} - {reason}")

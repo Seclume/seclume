@@ -569,6 +569,15 @@ jobs:
       # listed in .github/unpinned-inputs.json, and that list only shrinks.
       - name: No new input fetched by name alone
         run: python3 .github/scripts/pinned_inputs.py --check
+      # The gate a pull request is judged by is the base branch's; this makes a
+      # relaxation visible where it is made: named, with a reason, or red.
+      - name: The gate and the coverage floors only get stricter
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$BASE_SHA"
+          python3 .github/scripts/gate_ratchet.py --base "$BASE_SHA"
       - name: The Maven Central bundle stays under 1,000 files
         run: python3 .github/scripts/central_bundle.py
       - name: Test heapcheck report comparison

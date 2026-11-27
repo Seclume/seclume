@@ -113,6 +113,15 @@ class SecurityGateTest(unittest.TestCase):
         self.assertIn("wipesOnClose", note)
         self.assertIn("wipesOnError", note)
 
+    def test_a_parameterized_test_emptied_to_fewer_cases_fails(self):
+        entry = {"test": "a.Sweep", "module": "m", "property": "p",
+                 "methods": ["everyPrefix"], "min_cases": 3}
+        three = [case("a.Sweep", method="everyPrefix") for _ in range(3)]
+        self.assertEqual("PASS", self.method_statuses("linux-x64", entry, three)[0])
+        verdict, note = self.method_statuses("linux-x64", entry, three[:1])
+        self.assertEqual("FAIL", verdict, "one case left of three still passed the gate")
+        self.assertIn("at least 3", note)
+
     def test_every_listed_method_has_to_pass(self):
         entry = {"test": "a.Wipes", "module": "m", "property": "p",
                  "methods": ["wipesOnClose", "wipesOnError"]}
