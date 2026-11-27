@@ -7,6 +7,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A database login has a budget: `seclume.loginBudgetFactor` (3) times the connect timeout.**
+  A server - or something between - that answered a byte at a time kept a login going for as
+  long as it liked. Now a login, the TLS handshake included, that has not finished within three
+  connect timeouts is aborted with 08001 naming the budget. A login that is slow on purpose
+  (Kerberos with a distant KDC, a cold Vault) needs a longer `connectTimeout`, or a larger
+  factor.
 - **`/actuator/seclume` lists the weakened settings.** What the start-up line names - a data
   source off `verify-full`, the secret guard off, a lowered SCRAM floor, an opt-out such as
   `seclume.crac.holdExpiry=release` - is the endpoint's `weakenedSettings` too, for a dashboard

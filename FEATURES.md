@@ -1964,6 +1964,10 @@ SecretWatch watch = SecretWatch.start("orders-db", provider, Duration.ofSeconds(
   into it.
 - **What is not a change:** a source that cannot be read for a moment (Vault restarting, a
   file mid-swap). The watch keeps what it knew and looks again at the next tick.
+- **Rotation is not revocation:** `rotateSecret` makes new logins use the new secret and closes
+  the pool's connections - idle at once, borrowed ones on return or after the grace. A
+  connection opened with the old secret works until then; ending the old credential's sessions
+  at once is the server's part (a Vault role's `revocation_statements`, see PROVIDERS.md).
 - **Each rotation** is a `space.seclume.SecretRotation` JFR event with the watch's name and
   whether taking up the new secret worked. With `seclume.metrics.queries=true` it is also the
   Micrometer counter `seclume.secret.rotations{watch, outcome}`.
