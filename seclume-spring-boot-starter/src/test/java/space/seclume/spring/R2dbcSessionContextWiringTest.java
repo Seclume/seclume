@@ -42,12 +42,50 @@ class R2dbcSessionContextWiringTest {
         assertEquals("no tenant in this request", refused.getMessage());
     }
 
+    /**
+     * A blocking context alone still starts - the R2DBC connections get no
+     * context then, never one read on an event loop - and the log says so,
+     * naming what to declare instead.
+     */
     @Test
-    void aBlockingContextAloneStillStarts() {
-        StaticListableBeanFactory beans = new StaticListableBeanFactory(Map.of(
-                "tenant", (SeclumeSessionContext) Map::of));
-        new SeclumeR2dbcAutoConfiguration().connectionFactory(UNREACHED,
-                beans.getBeanProvider(ReactiveSessionContext.class),
-                beans.getBeanProvider(SeclumeSessionContext.class));
+    void aBlockingContextAloneStillStartsAndSaysSo() {
+        java.util.List<java.util.logging.LogRecord> said =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.logging.Logger log = java.util.logging.Logger.getLogger(
+                SeclumeR2dbcAutoConfiguration.class.getName());
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                said.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        log.addHandler(handler);
+        try {
+            StaticListableBeanFactory beans = new StaticListableBeanFactory(Map.of(
+                    "tenant", (SeclumeSessionContext) Map::of));
+            new SeclumeR2dbcAutoConfiguration().connectionFactory(UNREACHED,
+                    beans.getBeanProvider(ReactiveSessionContext.class),
+                    beans.getBeanProvider(SeclumeSessionContext.class));
+            org.junit.jupiter.api.Assertions.assertTrue(said.stream().anyMatch(r ->
+                    r.getLevel() == java.util.logging.Level.WARNING
+                    && r.getMessage().contains("ReactiveSessionContext")),
+                    "no warning naming ReactiveSessionContext: " + said.size() + " records");
+            said.clear();
+            new SeclumeR2dbcAutoConfiguration().connectionFactory(UNREACHED,
+                    new StaticListableBeanFactory().getBeanProvider(ReactiveSessionContext.class),
+                    new StaticListableBeanFactory().getBeanProvider(SeclumeSessionContext.class));
+            org.junit.jupiter.api.Assertions.assertTrue(said.isEmpty(),
+                    "a warning without any session context: " + said.size());
+        } finally {
+            log.removeHandler(handler);
+        }
     }
 }
