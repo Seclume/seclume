@@ -220,7 +220,10 @@ For each pool it reports:
   ends in an outage when nobody looks;
 - how many connections the server allows and how many are in use;
 - the pool's own numbers;
-- the seclume version.
+- the seclume version;
+- `weakenedSettings`: what weakens the defaults, as the start-up line names it - a data source
+  off `verify-full`, the secret guard off, an opt-out of a secure default; empty when nothing
+  does.
 
 It never reports a password, a statement or a value. `Version.current()` gives the same
 version to an application that wants to log it at start.
