@@ -7,6 +7,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **JWT: a token without `exp` is refused.** `SeclumeJwt.verify` accepted a token with no
+  expiry, which is valid for ever once it leaks. It is refused now; `require-exp=false` in the
+  spec accepts such tokens where that is meant. New: `max-lifetime=` seconds bounds
+  `exp - iat` (both then required) and refuses an `iat` in the future.
 - **Kafka: the credential goes only to brokers in the domains of `bootstrap.servers`.** The
   cluster's metadata names every broker a client logs in to, and one announced elsewhere - a
   compromised broker, a changed `advertised.listeners` - got the PLAIN password or the bearer
