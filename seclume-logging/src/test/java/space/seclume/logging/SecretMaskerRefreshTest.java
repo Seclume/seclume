@@ -1,5 +1,6 @@
 package space.seclume.logging;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -67,6 +68,35 @@ class SecretMaskerRefreshTest {
             masker.refresh();
             assertTrue(masker.complete());
             assertFalse(masker.mask("token " + SECRET).contains(SECRET));
+        }
+    }
+
+    /**
+     * A checkpoint wipes the key and every fingerprint; a restore whose
+     * provider fails keeps none of them - they were made with the wiped key -
+     * and says it is incomplete, so the scheduler retries early. Once the
+     * provider answers again, the secret is masked under the new key.
+     */
+    @Test
+    void aRestoreWithAFailingProviderReusesNoFingerprintsAndAsksForARetry() throws Exception {
+        AtomicBoolean down = new AtomicBoolean();
+        try (SecretMasker masker = new SecretMasker(Map.of("api", flaky(down)))) {
+            assertFalse(masker.mask("token " + SECRET).contains(SECRET), "the control");
+            space.seclume.internal.Checkpoint.wipeAll();
+            assertEquals(0, masker.forms(), "fingerprints outlived the checkpoint");
+            down.set(true);
+            masker.refresh();
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+            while (masker.complete() && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertFalse(masker.complete(), "a restore that read nothing claimed to be complete");
+            assertEquals(0, masker.forms(), "fingerprints of the wiped key were kept");
+            down.set(false);
+            masker.refresh();
+            assertTrue(masker.complete());
+            assertFalse(masker.mask("token " + SECRET).contains(SECRET),
+                    "not masked once the provider answered again");
         }
     }
 }
