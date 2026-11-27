@@ -482,6 +482,7 @@ protocol text or dribble bytes.
 | 100 | Kerberos budget | A bind that outlived its budget reported the broken write, not the budget. Mapped to "did not finish within N s" as StartTLS is | `LdapBindTest.aKerberosBindPastItsBudgetSaysSo` | #PR |
 | 101 | Login budget message | A login the budget stopped was reported as the broken read. The budget now notes the login's thread, and each driver's `openOne` reports a transient 08001 naming the budget, the factor and the connect timeout | `LoginBudgetMessageTest` in all four drivers (`DribblingServer`) | #PR |
 | 102 | heapcheck dump-dir | A `--dump-dir` not shared with the process gave a generic missing-file error and deleted the dump there without a word. It now names the cause and the fix, and says the dump was deleted | `DumpDirNotSharedTest` | #PR |
+| 103 | Pool health | Every probe borrowed with the pool's full timeout, on a saturated pool too, and reported a busy pool as `DOWN`. A saturated pool is not borrowed from, a pool timeout without a cause is `UNKNOWN`, and the answer is cached for 2 s | `PoolMetricsAndHealthTest` | #PR |
 
 ### Mutation testing of the security paths
 

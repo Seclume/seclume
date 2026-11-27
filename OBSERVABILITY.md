@@ -267,6 +267,14 @@ certificate expiring next week taking every instance out of service at once woul
 warning into the outage it warns of. Whether the database can be reached stays the health
 check's question alone; alert on the grade instead.
 
+**The check does not borrow from a busy pool.** It answers whether the database can be reached
+by borrowing a connection - except from a pool with threads waiting, or with every connection
+handed out, which would make the probe wait the pool's whole timeout and take the next free
+connection from a request. Such a pool is reported from its numbers as `UNKNOWN`, and so is a
+borrow that ran into the pool's timeout: busy, not down. `UNKNOWN` does not take an instance
+out of service. A server that refuses new connections is `DOWN`. One answer is given for two
+seconds, so probes from Kubernetes, a load balancer and a dashboard borrow once between them.
+
 ## `/actuator/heapdump`: a redacted copy, never the heap itself
 
 Spring Boot's heap dump endpoint hands out everything the application holds - every password,

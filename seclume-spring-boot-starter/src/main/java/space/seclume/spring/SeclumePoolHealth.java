@@ -2,10 +2,13 @@ package space.seclume.spring;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.SQLTransientConnectionException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongSupplier;
 
 import org.springframework.boot.health.contributor.Health;
 import org.springframework.boot.health.contributor.HealthIndicator;
@@ -26,23 +29,65 @@ import space.seclume.pool.SeclumePool;
  * check: if none can be had within the pool's own timeout, that is exactly the
  * failure an application would hit. Adding a {@code select 1} on top would put
  * load on a server that is already struggling.
+ *
+ * <p>Nor does it borrow from a pool that has none to spare: with threads
+ * waiting, or every connection handed out, a borrow would wait the pool's
+ * full timeout and take a connection a request needed - and every probe,
+ * every few seconds, would do it again. Such a pool is reported from its
+ * numbers as {@code UNKNOWN}, which does not take the instance out; so is a
+ * borrow that timed out, which says the pool is busy, not that the server is
+ * gone. And the answer is kept for {@link #CACHED}: Kubernetes, a load
+ * balancer and a dashboard asking at once borrow once.
  */
 public final class SeclumePoolHealth implements HealthIndicator {
 
+    /** How long one answer is given again. */
+    static final Duration CACHED = Duration.ofSeconds(2);
+
     private final List<SeclumePool> pools;
+    private final LongSupplier nanoTime;
+    private Health last;
+    private long lastAt;
 
     public SeclumePoolHealth(List<SeclumePool> pools) {
+        this(pools, System::nanoTime);
+    }
+
+    SeclumePoolHealth(List<SeclumePool> pools, LongSupplier nanoTime) {
         this.pools = List.copyOf(pools);
+        this.nanoTime = nanoTime;
     }
 
     @Override
-    public Health health() {
+    public synchronized Health health() {
+        long now = nanoTime.getAsLong();
+        if (last != null && now - lastAt < CACHED.toNanos()) {
+            return last;
+        }
+        last = check();
+        lastAt = now;
+        return last;
+    }
+
+    /** Whether a borrow could only wait: threads already waiting, or none free and no room. */
+    static boolean saturated(PoolStatistics statistics, int maximum) {
+        return statistics.waiting() > 0
+                || (statistics.idle() == 0 && statistics.total() >= maximum);
+    }
+
+    private Health check() {
         Health.Builder health = Health.up();
+        int checked = 0;
         for (SeclumePool pool : pools) {
             PoolStatistics statistics = pool.statistics();
             String name = statistics.name();
             Map<String, Object> detail = new LinkedHashMap<>();
             detail.put("pool", describe(statistics));
+            if (saturated(statistics, pool.settings().getMaximumPoolSize())) {
+                detail.put("status", "UNKNOWN - no connection to spare, not borrowed for the check");
+                health.withDetail(name, detail);
+                continue;
+            }
             try (Connection connection = pool.getConnection()) {
                 if (connection.isClosed()) {
                     return down(health, name, statistics, "the pool handed out a closed "
@@ -52,14 +97,34 @@ public final class SeclumePoolHealth implements HealthIndicator {
                 // SeclumeAssessment: a warning must not take the instance out.
                 assess(pool, statistics, connection, detail);
             } catch (SQLException e) {
+                if (busy(e)) {
+                    // The pool's own timeout: every connection was in use for
+                    // that long. Busy, not down - the next request may get one.
+                    detail.put("status", "UNKNOWN - no connection free within the pool's timeout");
+                    health.withDetail(name, detail);
+                    continue;
+                }
                 // The server's words stay in the log: a health endpoint is
                 // often anonymous, and "password authentication failed for
                 // user app" or a host name is nothing to answer it with.
                 return down(health, name, statistics, outward(e));
             }
+            checked++;
             health.withDetail(name, detail);
         }
+        if (checked == 0 && !pools.isEmpty()) {
+            health.unknown();
+        }
         return health.build();
+    }
+
+    /**
+     * The pool's timeout with nothing behind it: every connection was in use.
+     * One with a cause is the server refusing new connections - that is down.
+     */
+    static boolean busy(SQLException e) {
+        return e instanceof SQLTransientConnectionException && "08003".equals(e.getSQLState())
+                && e.getCause() == null;
     }
 
     /** What may leave the process about a failure: its kind and SQLState, not its text. */
