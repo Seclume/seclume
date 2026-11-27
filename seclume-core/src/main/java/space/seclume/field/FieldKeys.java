@@ -147,16 +147,29 @@ public final class FieldKeys implements AutoCloseable {
      *             {@code table.column}; it binds every value to the column, so
      *             it must not change while values exist
      */
-    public synchronized EncryptedColumn column(String name, EncryptedColumn.Mode mode) {
+    public EncryptedColumn column(String name, EncryptedColumn.Mode mode) {
+        return column(name, mode, EncryptedColumn.Context.OPTIONAL);
+    }
+
+    /**
+     * The column of this name and mode, its values bound to a context or not.
+     * A column with {@link EncryptedColumn.Context#REQUIRED} refuses a value
+     * written or read without one; the keys are the same as without it.
+     */
+    public synchronized EncryptedColumn column(String name, EncryptedColumn.Mode mode,
+                                               EncryptedColumn.Context context) {
         checkOpen();
+        if (context == null) {
+            throw new IllegalArgumentException("a column needs a context rule");
+        }
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("a column needs a name: it is part of its key");
         }
         if (mode == null) {
             throw new IllegalArgumentException("a column needs a mode");
         }
-        return columns.computeIfAbsent(mode.name() + '\u0000' + name,
-                ignored -> new EncryptedColumn(this, name, mode, derive(name, mode)));
+        return columns.computeIfAbsent(mode.name() + '\u0000' + context.name() + '\u0000' + name,
+                ignored -> new EncryptedColumn(this, name, mode, context, derive(name, mode)));
     }
 
     /**

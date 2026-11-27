@@ -458,11 +458,12 @@ es.index(i -> i.index("patients").document(patients.encrypt(document)));
 | MongoDB | the field's column | the column; the document only with a context passed to `encrypt` / `readInto` | `EncryptedFields.eq`, under every key of the ring |
 | Kafka | `kafka.<topic>.value` / `.key` | the topic and the record's key - a value copied to another topic, or under another key, does not open | a deterministic key keeps its partition; the key's (de)serializer wrapped in `KeyBinding` |
 | Redis | `redis.<name>.value` (`.key` with `withEncryptedKeys`) | the name; the key only through `encodeValueFor` / `decodeValueFor` | an encrypted key is found by `GET` again, not by a pattern |
-| Elasticsearch | `search.<index>.<field>` (`search:<length>:<index>.<field>` for an index with a dot) | index and field | a deterministic field by an exact `terms` query, through a rotation |
+| Elasticsearch | `search.<index>.<field>` (`search:<length>:<index>.<field>` for an index with a dot) | index and field; the document too when written and read with its id (`encrypt(id, source)`, `decrypt(id, source)`) - randomized fields only | a deterministic field by an exact `terms` query, through a rotation |
 
 A `null` - a Kafka tombstone, a missing field - stays `null`. A record or value that does not open
 with the ring is an error (`SerializationException` for Kafka, so a consumer can dead-letter it),
-never a wrong value. Elasticsearch values are bound to their field, not their document.
+never a wrong value. Elasticsearch values are bound to their field, and to their document only
+when it is written and read with its id.
 
 **Encrypted keys are equal across codecs of one name.** `withEncryptedKeys` encrypts a key
 deterministically, so that `GET` finds it again - and so the same key is the same ciphertext in
@@ -500,6 +501,14 @@ row's primary key, a tenant's id - is authenticated with the value but not store
 ciphertext copied into another row then fails there instead of turning up as that row's
 value. A deterministic value with a context is equal only within the same context, so a
 column that is searched across rows takes none.
+
+**A column that refuses a value without one.** Leaving the context out is allowed on a column,
+and a value written that way opens in every row. Where that must not happen, make the column
+with `keys.column("orders.note", Mode.RANDOMIZED, Context.REQUIRED)`: `encrypt`, `decrypt`,
+`seal`, `open`, `set`, `readInto` and `reencrypt` without a context (or with an empty one)
+throw `IllegalArgumentException`. The keys and the format are those of the same column without
+the rule, so a column can be switched to it without rewriting what it holds. The Kafka and
+Redis integrations use it: every value they write is bound to its topic or codec name.
 
 ## What stays off the heap
 

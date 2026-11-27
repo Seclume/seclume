@@ -36,8 +36,11 @@ import space.seclume.field.FieldKeys;
  * Full-text search, ranges and aggregations on an encrypted field are not
  * possible: what the cluster cannot read it cannot analyse. Each index name and
  * field has its own key, so a value copied into another field does not open
- * there; copied into the same field of another document, it does - the
- * document's id is not part of the value.
+ * there; copied into the same field of another document, it does - unless
+ * the document is written and read with its id ({@link #encrypt(String, Map)},
+ * {@link #decrypt(String, Map)}): then every randomized field is bound to
+ * that id and opens in no other document. A deterministic field is not bound -
+ * a term query finds it in every document, which is what it is for.
  */
 public final class EncryptedDocument {
 
@@ -80,6 +83,31 @@ public final class EncryptedDocument {
 
     /** A copy of {@code source} with the chosen fields encrypted, the rest as it was. */
     public Map<String, Object> encrypt(Map<String, ?> source) {
+        return encrypt(source, null);
+    }
+
+    /**
+     * As {@link #encrypt(Map)}, every randomized field bound to the document's
+     * {@code id}: copied into another document, it does not open. Read it back
+     * with {@link #decrypt(String, Map)} and the same id.
+     */
+    public Map<String, Object> encrypt(String id, Map<String, ?> source) {
+        return encrypt(source, documentContext(id));
+    }
+
+    /** As {@link #decrypt(Map)}, for a document written with {@link #encrypt(String, Map)}. */
+    public Map<String, Object> decrypt(String id, Map<String, ?> source) {
+        return decrypt(source, documentContext(id));
+    }
+
+    private static byte[] documentContext(String id) {
+        if (id == null || id.isEmpty()) {
+            throw new IllegalArgumentException("a document bound to its id needs one");
+        }
+        return ("document:" + id).getBytes(StandardCharsets.UTF_8); // seclume-allow: an id, not a secret
+    }
+
+    private Map<String, Object> encrypt(Map<String, ?> source, byte[] id) {
         Map<String, Object> out = new LinkedHashMap<>(source);
         for (Map.Entry<String, Mode> field : fields.entrySet()) {
             Object value = source.get(field.getKey());
@@ -90,13 +118,18 @@ public final class EncryptedDocument {
                 throw new IllegalArgumentException("the field " + field.getKey() + " is encrypted as a "
                         + "string, and this one is a " + value.getClass().getSimpleName());
             }
-            out.put(field.getKey(), base64(column(field.getKey()).encrypt(utf8(text))));
+            EncryptedColumn column = column(field.getKey(), id);
+            out.put(field.getKey(), base64(column.encrypt(utf8(text), bound(column, id))));
         }
         return out;
     }
 
     /** A copy of {@code source} with the chosen fields opened again. */
     public Map<String, Object> decrypt(Map<String, ?> source) {
+        return decrypt(source, null);
+    }
+
+    private Map<String, Object> decrypt(Map<String, ?> source, byte[] id) {
         Map<String, Object> out = new LinkedHashMap<>(source);
         for (String name : fields.keySet()) {
             Object value = source.get(name);
@@ -113,10 +146,10 @@ public final class EncryptedDocument {
             } catch (IllegalArgumentException e) {
                 throw new FieldEncryptionException("the field " + name + " holds no ciphertext", e);
             }
-            EncryptedColumn column = column(name);
+            EncryptedColumn column = column(name, id);
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment plain = arena.allocate(Math.max(1, column.plaintextLength(stored)));
-                int length = column.decrypt(stored, plain);
+                int length = column.decrypt(stored, bound(column, id), plain);
                 // The document is the application's own data, read as a String like every other field.
                 // seclume-allow: the application's document, which it reads as a String anyway
                 out.put(name, new String(plain.asSlice(0, length).toArray(ValueLayout.JAVA_BYTE),
@@ -147,6 +180,22 @@ public final class EncryptedDocument {
 
     private EncryptedColumn column(String field) {
         return ring.column(columnName(index, field), fields.get(field));
+    }
+
+    /**
+     * A randomized field of a document written with its id is read through a
+     * column that refuses a value without one - so a slip that drops the id
+     * fails instead of writing a value any document opens.
+     */
+    private EncryptedColumn column(String field, byte[] id) {
+        Mode mode = fields.get(field);
+        return id != null && mode == Mode.RANDOMIZED
+                ? ring.column(columnName(index, field), mode, EncryptedColumn.Context.REQUIRED)
+                : ring.column(columnName(index, field), mode);
+    }
+
+    private static byte[] bound(EncryptedColumn column, byte[] id) {
+        return column.context() == EncryptedColumn.Context.REQUIRED ? id : new byte[0];
     }
 
     /**

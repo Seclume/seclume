@@ -45,6 +45,29 @@ class EncryptedDocumentTest {
                 .field("diagnosis", Mode.RANDOMIZED);
     }
 
+    /**
+     * A randomized field copied into the same field of another document
+     * opened there. Written with its document's id, it opens only with it; a
+     * deterministic field stays searchable across documents.
+     */
+    @Test
+    void aFieldWrittenWithItsIdOpensInNoOtherDocument() {
+        try (FieldKeys keys = FieldKeys.builder().key(1, key(1)).build()) {
+            Map<String, Object> document = new HashMap<>();
+            document.put("ssn", "123-45-6789");
+            document.put("diagnosis", "zl-search-canary");
+            Map<String, Object> stored = patients(keys).encrypt("p-1", document);
+            assertEquals(document, patients(keys).decrypt("p-1", stored));
+            assertThrows(space.seclume.field.FieldEncryptionException.class,
+                    () -> patients(keys).decrypt("p-2", stored));
+            assertThrows(space.seclume.field.FieldEncryptionException.class,
+                    () -> patients(keys).decrypt(stored));
+            assertEquals(patients(keys).searchTerms("ssn", "123-45-6789").get(0), stored.get("ssn"));
+            assertThrows(IllegalArgumentException.class,
+                    () -> patients(keys).encrypt("", document));
+        }
+    }
+
     @Test
     void chosenFieldsAreSealedTheRestIsNot() {
         try (FieldKeys keys = FieldKeys.builder().key(1, key(1)).build()) {

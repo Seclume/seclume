@@ -119,6 +119,21 @@ public final class EncryptedColumn {
         }
     }
 
+    /**
+     * Whether a value must be bound to a context - the row's key, the
+     * tenant, the record's id - before it is written or read.
+     */
+    public enum Context {
+        /** A context may be given; without one a value opens in any row of the column. */
+        OPTIONAL,
+        /**
+         * Every value is bound to a context: one written or read without a
+         * context - which would open in any other row - is refused. The
+         * format is the same; only the column's use is checked.
+         */
+        REQUIRED
+    }
+
     /** The version byte of this format. */
     public static final byte VERSION = 1;
     /** Version, flags and key number: the associated data every value starts with. */
@@ -137,13 +152,16 @@ public final class EncryptedColumn {
     private final FieldKeys ring;
     private final String name;
     private final Mode mode;
+    private final Context context;
     /** Replaced when the ring reads its keys again after a checkpoint; see {@link FieldKeys}. */
     private volatile Map<Integer, SecretScope> keys;
 
-    EncryptedColumn(FieldKeys ring, String name, Mode mode, Map<Integer, SecretScope> keys) {
+    EncryptedColumn(FieldKeys ring, String name, Mode mode, Context context,
+                    Map<Integer, SecretScope> keys) {
         this.ring = ring;
         this.name = name;
         this.mode = mode;
+        this.context = context;
         this.keys = keys;
     }
 
@@ -153,6 +171,20 @@ public final class EncryptedColumn {
 
     public Mode mode() {
         return mode;
+    }
+
+    /** Whether every value of this column has to be bound to a context. */
+    public Context context() {
+        return context;
+    }
+
+    private byte[] bound(byte[] given) {
+        byte[] chosen = given == null ? NO_CONTEXT : given;
+        if (chosen.length == 0 && context == Context.REQUIRED) {
+            throw new IllegalArgumentException("the column " + name + " binds every value to a "
+                    + "context, and none was given - without one, a value opens in any row");
+        }
+        return chosen;
     }
 
     // ------------------------------------------------------------------- core
@@ -179,7 +211,7 @@ public final class EncryptedColumn {
         if (length > Integer.MAX_VALUE - OVERHEAD - 8) {
             throw new IllegalArgumentException("a field value is at most about 2 GB");
         }
-        byte[] context0 = context == null ? NO_CONTEXT : context;
+        byte[] context0 = bound(context);
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment value = arena.allocate(OVERHEAD + length);
             value.set(ValueLayout.JAVA_BYTE, 0, VERSION);
@@ -233,7 +265,7 @@ public final class EncryptedColumn {
             throw new FieldEncryptionException("the value of " + name + " is " + length
                     + " bytes and does not fit into " + target.byteSize());
         }
-        byte[] context0 = context == null ? NO_CONTEXT : context;
+        byte[] context0 = bound(context);
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment value = arena.allocate(ciphertext.length);
             MemorySegment.copy(ciphertext, 0, value, ValueLayout.JAVA_BYTE, 0, ciphertext.length);
@@ -296,6 +328,7 @@ public final class EncryptedColumn {
      * comes back as it is.
      */
     public byte[] reencrypt(byte[] ciphertext, byte[] context) {
+        bound(context);
         if (!needsReencryption(ciphertext)) {
             return ciphertext;
         }

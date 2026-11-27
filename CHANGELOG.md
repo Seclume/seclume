@@ -123,6 +123,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **`Context.REQUIRED` for an encrypted column.** `FieldKeys.column(name, mode,
+  Context.REQUIRED)` refuses a value written or read without a context, which would open in
+  any row. The keys and format are unchanged. Kafka and Redis use it. Elasticsearch gained
+  `encrypt(id, source)` / `decrypt(id, source)`, which bind randomized fields to their document.
 - **CRaC: any client can be registered.** `SeclumeCrac.register` took a `SeclumePool` only;
   `register(SeclumeCrac.Suspendable)` suspends and resumes any client - MongoDB, HTTP, Redis on
   seclume's TLS - and `closeBeforeCheckpoint(client)` closes one that cannot be suspended.

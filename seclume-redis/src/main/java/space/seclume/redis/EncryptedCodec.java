@@ -45,8 +45,11 @@ public final class EncryptedCodec<K, V> implements RedisCodec<K, V> {
 
     private EncryptedCodec(RedisCodec<K, V> inner, FieldKeys ring, String name, boolean encryptKeys) {
         this.inner = inner;
-        this.values = ring.column("redis." + name + ".value", Mode.RANDOMIZED);
-        this.keys = encryptKeys ? ring.column("redis." + name + ".key", Mode.DETERMINISTIC) : null;
+        // Every value is bound to the codec's name; the columns refuse one without it.
+        this.values = ring.column("redis." + name + ".value", Mode.RANDOMIZED,
+                EncryptedColumn.Context.REQUIRED);
+        this.keys = encryptKeys ? ring.column("redis." + name + ".key", Mode.DETERMINISTIC,
+                EncryptedColumn.Context.REQUIRED) : null;
         this.context = ("redis:" + name).getBytes(StandardCharsets.UTF_8); // seclume-allow: a name, not a secret
     }
 

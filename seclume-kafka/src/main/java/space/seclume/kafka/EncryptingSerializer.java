@@ -141,7 +141,10 @@ public class EncryptingSerializer<T> implements Serializer<T> {
     }
 
     static EncryptedColumn column(FieldKeys ring, String topic, boolean isKey, Mode mode) {
-        return ring.column("kafka." + topic + (isKey ? ".key" : ".value"), mode);
+        // Every record is bound to its topic, and with bind-to-key to its key:
+        // the column refuses one without a context.
+        return ring.column("kafka." + topic + (isKey ? ".key" : ".value"), mode,
+                EncryptedColumn.Context.REQUIRED);
     }
 
     static byte[] context(String topic) {
