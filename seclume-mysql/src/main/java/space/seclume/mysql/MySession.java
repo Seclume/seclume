@@ -612,6 +612,10 @@ public final class MySession implements AutoCloseable {
             opened.settings = settings;
             opened.askServerIdentity();
             return opened;
+        } catch (SQLException e) {
+            // The login budget closed the connection: that is what happened,
+            // not the read or write the close broke.
+            throw space.seclume.internal.Transports.late(e);
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "mysql",
                     settings.host() + ":" + settings.port(), settings.database(),

@@ -133,6 +133,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **A database login past its budget says so, in all four drivers.** The budget closed the
+  connection, and the error was the read or write the close broke ("the connection failed
+  during startup: ..."). It is now a `SQLTransientConnectionException` (08001): "the login to
+  host:port did not finish within its budget of N s (seclume.loginBudgetFactor F x the connect
+  timeout of T ms)".
 - **LDAP: a Kerberos bind past its budget says so.** The budget closed the socket under the
   bind, and the error was the write that the close broke. It is now a `SocketTimeoutException`
   saying the server did not finish within the budget's seconds, as StartTLS already said.

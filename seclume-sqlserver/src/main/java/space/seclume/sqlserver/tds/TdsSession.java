@@ -566,6 +566,10 @@ public final class TdsSession implements AutoCloseable {
         try {
             opened = connectAndLogIn(settings, recoveryData);
             return opened;
+        } catch (SQLException e) {
+            // The login budget closed the connection: that is what happened,
+            // not the read or write the close broke.
+            throw space.seclume.internal.Transports.late(e);
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "sqlserver",
                     settings.host() + ":" + settings.port(), settings.database(),

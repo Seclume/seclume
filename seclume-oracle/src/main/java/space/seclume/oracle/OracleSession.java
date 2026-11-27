@@ -653,6 +653,10 @@ public final class OracleSession implements AutoCloseable {
             opened = connectAndLogIn(settings);
             space.seclume.internal.Transports.loggedIn(opened.transport());
             return opened;
+        } catch (SQLException e) {
+            // The login budget closed the connection: that is what happened,
+            // not the read or write the close broke.
+            throw space.seclume.internal.Transports.late(e);
         } finally {
             space.seclume.jfr.Observed.endConnect(event, "oracle",
                     settings.host() + ":" + settings.port(), settings.service(),

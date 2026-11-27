@@ -126,9 +126,11 @@ public final class Transports {
             // liked. seclume.loginBudgetFactor times the connect timeout - at
             // least once it, as everywhere the factor is read: a factor of 0
             // closed every login at once.
-            long budget = connectTimeoutMillis
-                    * (long) Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
-            watch(opened, budget);
+            long factor = Math.max(1, Integer.getInteger("seclume.loginBudgetFactor", 3));
+            long budget = connectTimeoutMillis * factor;
+            watch(opened, budget, "the login to " + host + ":" + port + " did not finish within "
+                    + "its budget of " + (budget + 999) / 1000 + " s (seclume.loginBudgetFactor "
+                    + factor + " x the connect timeout of " + connectTimeoutMillis + " ms)");
         }
         return opened;
     }
@@ -145,13 +147,53 @@ public final class Transports {
 
     /** Closes {@code transport} after {@code millis} unless {@link #loggedIn} comes first. */
     static void watch(Transport transport, long millis) {
+        watch(transport, millis, null);
+    }
+
+    /**
+     * As {@link #watch(Transport, long)}; when the budget closes the
+     * connection, {@code spent} is what the login's thread is told - see
+     * {@link #late(java.sql.SQLException)} - instead of the read the close broke.
+     */
+    static void watch(Transport transport, long millis, String spent) {
         Watch watch = new Watch();
+        Thread login = Thread.currentThread();
+        if (spent != null) {
+            synchronized (SPENT) {
+                SPENT.remove(login);
+            }
+        }
         LOGINS.put(transport, watch);
         watch.task = Budget.SERVICE.schedule(() -> {
             if (LOGINS.remove(transport, watch)) {
+                if (spent != null) {
+                    synchronized (SPENT) {
+                        SPENT.put(login, spent);
+                    }
+                }
                 transport.close();
             }
         }, millis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /** Threads whose login a budget closed, and what to tell them. */
+    private static final java.util.Map<Thread, String> SPENT = new java.util.WeakHashMap<>();
+
+    /**
+     * What a failed login is reported as: {@code failure} itself, unless the
+     * login's budget closed its connection - then a timeout saying so, with
+     * the seconds and the factor, {@code failure} as its cause. Called on the
+     * thread that opened the connection, around the whole of the login.
+     */
+    public static java.sql.SQLException late(java.sql.SQLException failure) {
+        String spent;
+        synchronized (SPENT) {
+            spent = SPENT.remove(Thread.currentThread());
+        }
+        if (spent == null) {
+            return failure;
+        }
+        return new java.sql.SQLTransientConnectionException(spent, "08001", failure);
     }
 
     /** Takes the budget off {@code transport}; whether it was still on - then nothing closes it. */
