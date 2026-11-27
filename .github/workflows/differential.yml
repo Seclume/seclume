@@ -56,7 +56,7 @@ jobs:
     timeout-minutes: 60
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
         env:
           POSTGRES_USER: seclume_test
           POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -103,7 +103,7 @@ jobs:
     timeout-minutes: 60
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4@sha256:8c233bad33d520a7aae1c1e619c3a9775f4a1ba2d463d692fada04ec7f40be00
         env:
           MYSQL_ROOT_PASSWORD: ${{ secrets.MY_TEST_PASSWORD || 'seclume-ci-password' }}
           MYSQL_DATABASE: seclume_test

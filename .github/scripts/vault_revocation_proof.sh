@@ -22,9 +22,9 @@ pw=$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n')
 tok=$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n')
 podman pod create --name "$n" >/dev/null
 podman run -d --pod "$n" --name "$n-pg" -e POSTGRES_PASSWORD="$pw" \
-  docker.io/library/postgres:17 >/dev/null
+  docker.io/library/postgres:17@sha256:97fb53376be3e4fb1a8a61421daa69dcc3bf2fa39bda3259f5245f9a455af1a9 >/dev/null
 podman run -d --pod "$n" --name "$n-vault" --cap-add IPC_LOCK \
-  -e VAULT_DEV_ROOT_TOKEN_ID="$tok" docker.io/hashicorp/vault:1.20 >/dev/null
+  -e VAULT_DEV_ROOT_TOKEN_ID="$tok" docker.io/hashicorp/vault:1.20@sha256:268bb80aa9c6d13d65fcfa05c0c268caca068952240a8087291a6ce0b66e3a10 >/dev/null
 for i in $(seq 1 30); do
   podman exec "$n-pg" pg_isready -U postgres >/dev/null 2>&1 && break
   sleep 1

@@ -6,32 +6,8 @@
   ],
   "unpinned": [
     {
-      "file": ".github/scripts/mongo_fixtures.sh",
-      "input": "docker.io/library/mongo:8.0"
-    },
-    {
-      "file": ".github/scripts/mongo_lb_fixtures.sh",
-      "input": "docker.io/library/mongo:8.0"
-    },
-    {
-      "file": ".github/scripts/vault_fixtures.sh",
-      "input": "docker.io/hashicorp/vault:2.0.0"
-    },
-    {
-      "file": ".github/scripts/vault_fixtures.sh",
-      "input": "docker.io/library/postgres:18"
-    },
-    {
       "file": ".github/workflows/benchmarks.yml",
       "input": "gvenzl/oracle-free:23-slim"
-    },
-    {
-      "file": ".github/workflows/benchmarks.yml",
-      "input": "mysql:8.4"
-    },
-    {
-      "file": ".github/workflows/benchmarks.yml",
-      "input": "postgres:18"
     },
     {
       "file": ".github/workflows/ci.yml",
@@ -43,39 +19,11 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "input": "docker.io/library/eclipse-temurin:25-jdk"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "docker.io/library/eclipse-temurin:25-jre"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
       "input": "docker.io/library/mongo:${{matrix.version}}"
     },
     {
       "file": ".github/workflows/ci.yml",
-      "input": "docker.io/library/rabbitmq:4.4"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
       "input": "gvenzl/oracle-free:23-slim"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "mariadb:11.4"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "mariadb:12.3"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "mariadb:13.0"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "mariadb:13.1-rc"
     },
     {
       "file": ".github/workflows/ci.yml",
@@ -87,23 +35,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "input": "mysql:26.10"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "mysql:8.4"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "mysql:9.7"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
       "input": "postgres:${{matrix.version}}"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "postgres:18"
     },
     {
       "file": ".github/workflows/ci.yml",
@@ -114,28 +46,12 @@
       "input": "gvenzl/oracle-free:23-slim"
     },
     {
-      "file": ".github/workflows/differential.yml",
-      "input": "mysql:8.4"
-    },
-    {
-      "file": ".github/workflows/differential.yml",
-      "input": "postgres:18"
-    },
-    {
       "file": ".github/workflows/security.yml",
       "input": "aquasec/trivy:0.74.0"
     },
     {
       "file": ".github/workflows/security.yml",
       "input": "semgrep/semgrep:1.177.0"
-    },
-    {
-      "file": "examples/getting-started/compose.yaml",
-      "input": "docker.io/hashicorp/vault:2.0.0"
-    },
-    {
-      "file": "examples/getting-started/compose.yaml",
-      "input": "docker.io/library/postgres:17-alpine"
     }
   ]
 }

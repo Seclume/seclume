@@ -167,7 +167,26 @@ def maven_distribution(text):
         url = re.search(r"^distributionUrl=(\S+)", text, re.M).group(1)
         number = text[:text.index("distributionUrl=")].count("\n") + 1
         return [(number, url + "  (no distributionSha256Sum)")]
-    return []
+    return maven_wrapper_jar(text)
+
+
+def maven_wrapper_jar(text):
+    """The wrapper jar itself: without wrapperSha256Sum mvnw runs whatever the
+    server sends, and a wrapperUrl of another version than wrapperVersion says
+    the version was changed without the checksum that goes with it."""
+    if "wrapperUrl=" not in text and "wrapperVersion=" not in text:
+        return []
+    found = []
+    url = re.search(r"^wrapperUrl=(\S+)", text, re.M)
+    version = re.search(r"^wrapperVersion=(\S+)", text, re.M)
+    where = url or version
+    number = text[:where.start()].count("\n") + 1
+    name = url.group(1) if url else "maven-wrapper " + version.group(1)
+    if not re.search(r"^wrapperSha256Sum=[0-9a-f]{64}\s*$", text, re.M):
+        found.append((number, name + "  (no wrapperSha256Sum)"))
+    if url and version and ("/" + version.group(1) + "/") not in url.group(1):
+        found.append((number, name + "  (wrapperUrl is not wrapperVersion " + version.group(1) + ")"))
+    return found
 
 
 def unpinned(root):

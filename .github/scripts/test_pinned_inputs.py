@@ -121,6 +121,19 @@ class PinnedInputsTest(unittest.TestCase):
             self.assertNotIn("postgres:18", left)
             self.assertNotIn(mock.call("local-tool:ci"), asked.call_args_list)
 
+    def test_the_wrapper_jar_needs_its_checksum_and_a_matching_version(self):
+        url = "wrapperUrl=https://repo.example/maven-wrapper/3.3.3/maven-wrapper-3.3.3.jar\n"
+        good = "wrapperVersion=3.3.3\n" + url + "wrapperSha256Sum=" + "ab" * 32 + "\n"
+        self.assertEqual([], pinned_inputs.maven_wrapper_jar(good))
+        missing = pinned_inputs.maven_wrapper_jar("wrapperVersion=3.3.3\n" + url)
+        self.assertEqual(1, len(missing))
+        self.assertIn("no wrapperSha256Sum", missing[0][1])
+        bumped = pinned_inputs.maven_wrapper_jar(good.replace("wrapperVersion=3.3.3", "wrapperVersion=3.3.4"))
+        self.assertTrue(any("is not wrapperVersion" in what for _, what in bumped), bumped)
+        short = pinned_inputs.maven_wrapper_jar(good.replace("ab" * 32, "ab" * 31))
+        self.assertTrue(any("no wrapperSha256Sum" in what for _, what in short), short)
+        self.assertEqual([], pinned_inputs.maven_wrapper_jar("distributionType=bin\n"))
+
     def test_the_repository_has_no_input_its_ratchet_does_not_list(self):
         root = os.path.join(os.path.dirname(__file__), "..", "..")
         new, done = pinned_inputs.check(root)

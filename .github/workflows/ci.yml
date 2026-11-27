@@ -259,7 +259,7 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk@sha256:ce2ef9d2d67a68de5e196d4de9d743327c44a10b57fe02ec39f572c652cacfd3
           kubectl create secret generic app --from-literal=credential="$(openssl rand -hex 32)"
           kubectl create configmap probe --from-file=seclume-heapcheck/ci/Probe.java
           kubectl apply -f seclume-heapcheck/kubectl/ci/pods.yaml
@@ -273,7 +273,7 @@ jobs:
           done
           jar=$(find seclume-heapcheck/target -maxdepth 1 -name 'seclume-heapcheck-*.jar' | head -1)
           echo "SECLUME_HEAPCHECK_JAR=$PWD/$jar" >> "$GITHUB_ENV"
-          echo "SECLUME_HEAPCHECK_IMAGE=docker.io/library/eclipse-temurin:25-jdk" >> "$GITHUB_ENV"
+          echo "SECLUME_HEAPCHECK_IMAGE=docker.io/library/eclipse-temurin:25-jdk@sha256:ce2ef9d2d67a68de5e196d4de9d743327c44a10b57fe02ec39f572c652cacfd3" >> "$GITHUB_ENV"
       - name: The leak is found inside the pod, and only the report comes out
         run: |
           set -euo pipefail
@@ -340,8 +340,8 @@ jobs:
           command -v kind >/dev/null || go install sigs.k8s.io/kind@v0.27.0
           export PATH="$PATH:$(go env GOPATH)/bin"
           kind create cluster --name seclume --wait 180s
-          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk \
-            docker.io/library/eclipse-temurin:25-jre
+          bash .github/scripts/kind_load.sh seclume docker.io/library/eclipse-temurin:25-jdk@sha256:ce2ef9d2d67a68de5e196d4de9d743327c44a10b57fe02ec39f572c652cacfd3 \
+            docker.io/library/eclipse-temurin:25-jre@sha256:4ed132f6832e9804b123e89a849a7b4502756ae64a4ee08ebab939d9d5d0a9fa
           bash seclume-admission/deploy/build-image.sh seclume-admission:ci
           bash .github/scripts/kind_load.sh seclume seclume-admission:ci
           SECLUME_IMAGE=seclume-admission:ci bash seclume-admission/deploy/install.sh
@@ -1374,7 +1374,7 @@ jobs:
           docker run -d --name rabbit --hostname rabbit -p 5671:5671 \
             -v "$PWD/cert.pem:/tls/cert.pem:ro" -v "$PWD/key.pem:/tls/key.pem:ro" \
             -v "$PWD/20-tls.conf:/etc/rabbitmq/conf.d/20-tls.conf:ro" \
-            docker.io/library/rabbitmq:4.4
+            docker.io/library/rabbitmq:4.4@sha256:aa82e78ca0dfa59f4eeb9e8086ac7b5c8e0b31a7bb978d948c6d32756802fb27
           # As the broker's own user: a CLI run as root writes the Erlang
           # cookie first, owned by root, and the broker then cannot read it.
           for i in $(seq 1 60); do
@@ -1758,7 +1758,7 @@ jobs:
     runs-on: ubuntu-26.04
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
         env:
           POSTGRES_USER: seclume_test
           POSTGRES_PASSWORD: ${{ secrets.PG_TEST_PASSWORD || 'seclume-ci-password' }}
@@ -1844,13 +1844,13 @@ jobs:
           docker run -d --name pgprimary --network repl -p 5432:5432 \
             -e POSTGRES_USER=seclume_test -e POSTGRES_PASSWORD="$PW" -e POSTGRES_DB=seclume_test \
             -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 \
-            postgres:18
+            postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328
           # Over TCP: the server that initialises the data directory listens on its socket only.
           for i in $(seq 1 60); do docker exec pgprimary pg_isready -q -h 127.0.0.1 && break; sleep 1; done
           docker exec pgprimary bash -c 'echo "host replication all all scram-sha-256" >> "$PGDATA/pg_hba.conf"'
           docker exec -u postgres pgprimary pg_ctl reload
           docker run -d --name pgstandby --network repl -p 5433:5432 --user postgres \
-            -e PGPASSWORD="$PW" -e PGDATA=/tmp/standby --entrypoint bash postgres:18 \
+            -e PGPASSWORD="$PW" -e PGDATA=/tmp/standby --entrypoint bash postgres:18@sha256:64c8b0d31e4ab6ea665e8426ea406a94bf52de3c05b3a4a8bf713704eefa9328 \
             -c 'pg_basebackup -h pgprimary -U seclume_test -D "$PGDATA" -R -X stream && chmod 700 "$PGDATA" && exec postgres'
           for i in $(seq 1 60); do docker exec pgstandby pg_isready -q -h 127.0.0.1 && break; sleep 1; done
           docker exec -e PGPASSWORD="$PW" pgstandby psql -h 127.0.0.1 -U seclume_test -At \
@@ -1860,7 +1860,7 @@ jobs:
           for server in 1 2; do
             name=$([ $server = 1 ] && echo myprimary || echo myreplica)
             docker run -d --name $name --network repl -p $((3305 + server)):3306 \
-              -e MYSQL_ROOT_PASSWORD="$PW" mysql:8.4 \
+              -e MYSQL_ROOT_PASSWORD="$PW" mysql:8.4@sha256:8c233bad33d520a7aae1c1e619c3a9775f4a1ba2d463d692fada04ec7f40be00 \
               --server-id=$server --gtid-mode=ON --enforce-gtid-consistency=ON
           done
           # Over TCP, for the same reason as above.
@@ -1903,6 +1903,8 @@ jobs:
           docker rm -f pgprimary pgstandby myprimary myreplica || true
 
   mysql:
+    # The name the required checks know - the tag, not the digest
+    name: mysql (${{ matrix.server }}, ${{ matrix.health }})
     runs-on: ubuntu-26.04
     services:
       mysql:
@@ -1923,22 +1925,29 @@ jobs:
         # both paths have to work. They do not agree on what a health check is
         # called either: mysqladmin is gone from the MariaDB images.
         include:
-          - image: 'mysql:8.4'
+          - server: 'mysql:8.4'
+            image: 'mysql:8.4@sha256:8c233bad33d520a7aae1c1e619c3a9775f4a1ba2d463d692fada04ec7f40be00'
             health: 'mysqladmin ping -h 127.0.0.1'
-          - image: 'mariadb:11.4'
+          - server: 'mariadb:11.4'
+            image: 'mariadb:11.4@sha256:a8992b5e5404d11e03c54a31d0c1bdea3fd116d283aa6d1a627551f29045309b'
             health: 'healthcheck.sh --connect --innodb_initialized'
           # The current lines: MySQL 9.7 LTS and the 26.x innovation release,
           # MariaDB 12.3 LTS and 13.0 - and 13.1's release candidate, as with
           # PostgreSQL's, so that a protocol change shows up before the release.
-          - image: 'mysql:9.7'
+          - server: 'mysql:9.7'
+            image: 'mysql:9.7@sha256:1f2ca53a9e94ff9f1f313099fa7dc7fb2f72e180ca5b2ef83574031e451bbbf1'
             health: 'mysqladmin ping -h 127.0.0.1'
-          - image: 'mysql:26.10'
+          - server: 'mysql:26.10'
+            image: 'mysql:26.10@sha256:9092489f49fb59c4ba6c1425c6a59f71f864f24bf4339a5a26b718adc7a8b343'
             health: 'mysqladmin ping -h 127.0.0.1'
-          - image: 'mariadb:12.3'
+          - server: 'mariadb:12.3'
+            image: 'mariadb:12.3@sha256:4aaf88b3106382c8c18e49f0cec60267be618fc22f858c4503afb2a2555afed3'
             health: 'healthcheck.sh --connect --innodb_initialized'
-          - image: 'mariadb:13.0'
+          - server: 'mariadb:13.0'
+            image: 'mariadb:13.0@sha256:54f493ea0d60b621a5bff84e5b20100f8b86b6efa6b79158e04756c5194a5e4d'
             health: 'healthcheck.sh --connect --innodb_initialized'
-          - image: 'mariadb:13.1-rc'
+          - server: 'mariadb:13.1-rc'
+            image: 'mariadb:13.1-rc@sha256:fa0f01b29a8a082133834957dacf0b3d2cddb0de63a9b71da26866783c208d9a'
             health: 'healthcheck.sh --connect --innodb_initialized'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1989,14 +1998,14 @@ jobs:
       # server; this job's is on 3306. Without saying so they skipped here -
       # eighteen of them - and require_servers.py now fails a job where that
       # happens again.
-      - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.image == 'mysql:8.4' && '-Pcoverage' || '' }} -pl seclume-mysql -am test -Dseclume.mysql.port=3306
+      - run: .github/scripts/mvnw-own-tests.sh -B ${{ matrix.server == 'mysql:8.4' && '-Pcoverage' || '' }} -pl seclume-mysql -am test -Dseclume.mysql.port=3306
       # The execution data and the classes it was recorded against, for the
       # coverage job, which merges every job's into one report.
       - name: Coverage data
-        if: (success() || failure()) && matrix.image == 'mysql:8.4'
+        if: (success() || failure()) && matrix.server == 'mysql:8.4'
         run: echo "${{ github.job }}" > coverage-job.txt
       - name: Coverage data upload
-        if: (success() || failure()) && matrix.image == 'mysql:8.4'
+        if: (success() || failure()) && matrix.server == 'mysql:8.4'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-exec-mysql
