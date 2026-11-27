@@ -482,7 +482,12 @@ open refuses the checkpoint, naming who opened it. Before the checkpoint it also
 After the restore, OpenSSL's random generator is reseeded from the operating system before
 any new secret is made: otherwise every instance started from one image would begin with the
 same generator state, and draw the same ephemeral key shares. With it the image was searched
-and holds no password; `seclume-crac/proof` repeats that search on a CRaC JDK.
+and holds no password; `seclume-crac/proof` repeats that search on a CRaC JDK. After the restore
+it reseeds OpenSSL's random generator, which makes the TLS key shares and ECDSA nonces: a
+snapshot that keeps the process id - a VM snapshot, Lambda SnapStart - would otherwise restore
+the generator's state twice and draw the same keys twice. `seclume-crac/proof/run-random.sh`
+restores one image twice and compares the bytes drawn (27.11.2026: different with seclume
+registered; in a container the pid changes, so OpenSSL also reseeds on its own there).
 
 ## Several servers, and which one to take
 

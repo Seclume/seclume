@@ -515,6 +515,7 @@ protocol text or dribble bytes.
 | 133 | Write in doubt (#62) | An auto-commit UPDATE whose answer never comes and whose cancel is ignored gives 08007 (`TransactionResolutionUnknownException`), and the connection is not used again | `KilledWriteInDoubtTest` (MySQL) | #PR |
 | 134 | Security regressions job | The regression tests ran only in their modules' jobs, so a renamed or skipped one went unnoticed. A list file and `security-regressions.sh` run all 33 together and fail on any class that did not run | `.github/scripts/security-regressions.sh` (run locally: 33 of 33) | #PR |
 | 135 | CRaC auto-registration | No Spring or Quarkus wiring loaded `SeclumeCrac`: without a pool the process's part was never registered, and Spring pools had to be registered by hand. `SeclumeCracAutoConfiguration` (process and pools) and a Quarkus start-up bean (process); pool registration idempotent | `SeclumeCracAutoRegisterTest`, `CracRegistrationTest` | #PR |
+| 136 | Two restores, one image | OpenSSL's DRBG (key shares, ECDSA nonces) is in the checkpoint image. SeclumeCrac reseeds it after a restore - now also in Spring and Quarkus apps without a pool (#135). On Azul's CRaC JDK one image restored twice drew different bytes; the unregistered control did too, because the container gives the restored process a new pid and OpenSSL reseeds on its own. A pid-keeping snapshot (SnapStart) is where only seclume's reseed separates them | `seclume-crac/proof/run-random.sh` (run on Linux with podman) | #PR |
 
 ### Mutation testing of the security paths
 
