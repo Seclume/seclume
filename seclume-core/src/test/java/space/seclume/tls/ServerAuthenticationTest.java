@@ -44,6 +44,8 @@ import space.seclume.internal.jdbc.TlsStack;
  * validator itself; this checks that each handshake asks it.
  */
 @Timeout(60)
+// Counts the JVM's open TLS connections: another test's handshake beside it moves the count.
+@org.junit.jupiter.api.parallel.Isolated
 class ServerAuthenticationTest {
 
     private static TestCertificates certificates;

@@ -35,16 +35,19 @@ class LinearMaskingTest {
     void aLineOfAmpersandsStaysLinear() {
         try (SecretMasker masker = new SecretMasker(Map.of("db",
                 new StaticSecretProvider("linear-Pa55word")))) {
-            String small = "&".repeat(200_000);
-            String large = "&".repeat(400_000);
+            // Eight times the line: linear is about 8 times the time, quadratic
+            // 64. Twice the line put linear (2) and quadratic (4) so close that a
+            // busy CI runner's noise crossed the line between them.
+            String small = "&".repeat(100_000);
+            String large = "&".repeat(800_000);
             for (int i = 0; i < 5; i++) {          // warm up, both sizes
                 masker.mask(small);
                 masker.mask(large);
             }
             long once = median(masker, small);
             long twice = median(masker, large);
-            assertTrue(once < 1_000_000_000L, "200,000 '&' took " + once / 1_000_000 + " ms");
-            assertTrue(twice < 3.2 * once + 2_000_000, "twice the line took "
+            assertTrue(once < 1_000_000_000L, "100,000 '&' took " + once / 1_000_000 + " ms");
+            assertTrue(twice < 20 * once + 5_000_000, "eight times the line took "
                     + (double) twice / once + " times as long - not linear (" + once / 1_000_000
                     + " ms, then " + twice / 1_000_000 + " ms)");
         }

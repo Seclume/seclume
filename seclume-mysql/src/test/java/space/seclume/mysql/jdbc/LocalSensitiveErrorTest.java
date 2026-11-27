@@ -49,12 +49,13 @@ class LocalSensitiveErrorTest {
         }
         Assumptions.assumeTrue(password != null, "no .local-mysql-password");
         String host = TestHosts.database();
+        int port = Integer.getInteger("seclume.mysql.port", 3307);
         try (Socket probe = new Socket()) {
-            probe.connect(new InetSocketAddress(host, 3307), 2000);
+            probe.connect(new InetSocketAddress(host, port), 2000);
         } catch (IOException e) {
-            Assumptions.abort("no MySQL on " + host + ":3307");
+            Assumptions.abort("no MySQL on " + host + ":" + port);
         }
-        String url = "jdbc:seclume:mysql://" + host + ":3307/seclume_test?user=seclume_test"
+        String url = "jdbc:seclume:mysql://" + host + ":" + port + "/seclume_test?user=seclume_test"
                 + "&tls=off&allowPublicKeyRetrieval=true&provider=file&path="
                 + password.toString().replace('\\', '/');
         try (Connection connection = DriverManager.getConnection(url);

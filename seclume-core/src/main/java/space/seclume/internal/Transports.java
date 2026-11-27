@@ -172,17 +172,23 @@ public final class Transports {
     static void watch(Transport transport, long millis, String spent) {
         Watch watch = new Watch();
         Thread login = Thread.currentThread();
-        if (spent != null) {
-            synchronized (SPENT) {
-                SPENT.remove(login);
-            }
+        long number = LOGIN_NUMBERS.incrementAndGet();
+        synchronized (SPENT) {
+            SPENT.remove(login);
+            LATEST.put(login, number);
         }
         LOGINS.put(transport, watch);
         watch.task = Budget.SERVICE.schedule(() -> {
             if (LOGINS.remove(transport, watch)) {
                 if (spent != null) {
                     synchronized (SPENT) {
-                        SPENT.put(login, spent);
+                        // Only for the thread's latest login: a login that failed
+                        // without its budget lifted left the budget running, and it
+                        // fired into the next login of the same thread - a refused
+                        // password reported as a login past its budget (found in CI).
+                        if (Long.valueOf(number).equals(LATEST.get(login))) {
+                            SPENT.put(login, spent);
+                        }
                     }
                 }
                 transport.close();
@@ -192,6 +198,10 @@ public final class Transports {
 
     /** Threads whose login a budget closed, and what to tell them. */
     private static final java.util.Map<Thread, String> SPENT = new java.util.WeakHashMap<>();
+    /** Each thread's latest login, by number - see {@link #watch(Transport, long, String)}. */
+    private static final java.util.Map<Thread, Long> LATEST = new java.util.WeakHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicLong LOGIN_NUMBERS =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * What a failed login is reported as: {@code failure} itself, unless the
