@@ -128,6 +128,79 @@ class CleartextPasswordTest {
         });
     }
 
+    /**
+     * The same server, letting the client in without a password - trust - and
+     * then holding the session open until the client goes.
+     */
+    private static CompletableFuture<Void> serveTrusted(ServerSocket listener) {
+        return CompletableFuture.runAsync(() -> {
+            try (Socket plain = listener.accept()) {
+                plain.setSoTimeout(30_000);
+                InputStream request = plain.getInputStream();
+                request.readNBytes(readInt(request) - 4);           // SSLRequest
+                plain.getOutputStream().write('S');
+                plain.getOutputStream().flush();
+                SSLSocket tls = (SSLSocket) serverContext.getSocketFactory()
+                        .createSocket(plain, "127.0.0.1", plain.getPort(), true);
+                tls.setUseClientMode(false);
+                tls.startHandshake();
+                InputStream in = tls.getInputStream();
+                OutputStream out = tls.getOutputStream();
+                in.readNBytes(readInt(in) - 4);                      // startup message
+                out.write('R');
+                writeInt(out, 8);
+                writeInt(out, 0);                                    // AuthenticationOk
+                for (String[] parameter : new String[][] {{"server_version", "18.0"},
+                    {"client_encoding", "UTF8"}, {"integer_datetimes", "on"},
+                    {"DateStyle", "ISO, MDY"}, {"TimeZone", "UTC"}}) {
+                    byte[] body = (parameter[0] + "\0" + parameter[1] + "\0")
+                            .getBytes(StandardCharsets.US_ASCII);
+                    out.write('S');
+                    writeInt(out, 4 + body.length);
+                    out.write(body);
+                }
+                out.write('K');
+                writeInt(out, 12);
+                writeInt(out, 7);
+                writeInt(out, 9);
+                out.write('Z');
+                writeInt(out, 5);
+                out.write('I');
+                out.flush();
+                while (in.read() >= 0) {
+                    // until the client goes
+                }
+            } catch (IOException e) {
+                // the client went
+            }
+        });
+    }
+
+    /**
+     * serverAuthenticated() through a real session: false where TLS checked
+     * nothing (tls=require), true where the server's key was checked (a pin).
+     */
+    @Test
+    void theSessionSaysWhetherTheServerWasAuthenticated() throws Exception {
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Void> served = serveTrusted(listener);
+            try (PgSession session = PgSession.open(settings(listener.getLocalPort(),
+                    TlsMode.REQUIRE))) {
+                assertEquals(Boolean.FALSE, session.serverAuthenticated(), "tls=require checked nothing");
+            }
+            served.get(30, TimeUnit.SECONDS);
+        }
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<Void> served = serveTrusted(listener);
+            TrustChoice.Choice pin = TrustChoice.of("jdbc:x://h/db?tlsPin=" + serverPin, null);
+            try (PgSession session = TrustChoice.using(pin,
+                    () -> PgSession.open(settings(listener.getLocalPort(), TlsMode.VERIFY_FULL)))) {
+                assertEquals(Boolean.TRUE, session.serverAuthenticated(), "the pinned key was checked");
+            }
+            served.get(30, TimeUnit.SECONDS);
+        }
+    }
+
     private static int readInt(InputStream in) throws IOException {
         byte[] four = in.readNBytes(4);
         if (four.length < 4) {
