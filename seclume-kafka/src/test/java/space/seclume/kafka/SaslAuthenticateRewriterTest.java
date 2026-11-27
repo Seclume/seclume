@@ -149,6 +149,22 @@ class SaslAuthenticateRewriterTest {
         client.dispose();
     }
 
+    /**
+     * The placeholder belongs in the auth bytes and nowhere else: put into
+     * the client id - a field the broker logs - it is refused, not filled in.
+     */
+    @Test
+    void aPlaceholderOutsideTheAuthBytesIsRefused() throws Exception {
+        SaslClient client = new PlainClient("orders", file("pw-outside"));
+        String message = new String(client.evaluateChallenge(new byte[0]), StandardCharsets.UTF_8);
+        String placeholder = message.substring(message.lastIndexOf('\0') + 1);
+        byte[] plainAuth = "\0orders\0nothing-to-see".getBytes(StandardCharsets.UTF_8);
+        IOException refused = assertThrows(IOException.class,
+                () -> rewrite(frame(plainAuth, (short) 2, placeholder)));
+        assertTrue(refused.getMessage().contains("outside the auth bytes"), refused.getMessage());
+        client.dispose();
+    }
+
     @Test
     void aDisposedLoginLeavesNothingToSend() throws Exception {
         SaslClient client = new PlainClient("orders", file("pw"));
