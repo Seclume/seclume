@@ -531,6 +531,7 @@ protocol text or dribble bytes.
 | 149 | Server status lines in messages (T132) | `SeclumeHttp` put the status line into exceptions and `Response.reason()` unescaped; IMAP/POP3/SMTP refusals the reply line. All through `ServerText.printable` now (control characters as `\xNN`, length bounded) | `SeclumeHttpTest.theServersStatusLineReachesNoLogRaw` | #PR |
 | 150 | Access log: signing removed, another key, unvouched tail (T153-T156) | Unvouched entries and a chain without checkpoints already gave `vouched()==false` and exit 1/3 in `--audit-verify`. New: checked against a key, a log no `log.opened` of which names that key (signing `none` - removed and rehashed - or another key) is refused, naming the line; a log unsigned at first and later opened with the key is unaffected | `AccessLogTest` (4 cases), `AccessLogRestartTest` | #PR |
 | 151 | Weakened settings in the actuator (T219) | Only the start-up WARN named them. `SeclumeEndpoint` reports `weakenedSettings` (the same list) | `WeakenedSettingsTest.theEndpointNamesThemToo` | #PR |
+| 152 | TLS 1.2 past the AES-GCM key limit (H15) | The client's own KeyUpdate after 2^24 records skipped TLS 1.2, which has none, so a 1.2 connection went on under one key indefinitely. Now closed at the limit (close_notify, IOException), in both directions; the pool reconnects with new keys | `SendingKeyUpdateTest.aTls12ConnectionIsClosedAtTheLimit` | #PR |
 
 ### Mutation testing of the security paths
 

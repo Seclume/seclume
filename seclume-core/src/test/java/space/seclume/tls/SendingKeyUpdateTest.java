@@ -98,6 +98,58 @@ class SendingKeyUpdateTest {
         return (RecordStream) records.get(connection);
     }
 
+    /**
+     * TLS 1.2 has no KeyUpdate: at the limit the connection is closed rather
+     * than go on under the worn key - the pool opens a new one.
+     */
+    @Test
+    void aTls12ConnectionIsClosedAtTheLimit() throws Exception {
+        try (SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()
+                .createServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+            listener.setEnabledProtocols(new String[] {"TLSv1.2"});
+            Thread echo = new Thread(() -> {
+                try (Socket socket = listener.accept()) {
+                    socket.getInputStream().transferTo(socket.getOutputStream());
+                } catch (IOException gone) {
+                    // the client closed
+                }
+            });
+            echo.setDaemon(true);
+            echo.start();
+
+            SocketTransport transport = SocketTransport.connect("localhost",
+                    listener.getLocalPort(), 5000);
+            TlsLayer tls = TlsLayers.start(TlsStack.SECLUME, transport, "localhost",
+                    listener.getLocalPort(), false);
+            try {
+                TlsConnection connection = connectionOf(tls, 4);
+                assertTrue(connection != null, "no TlsConnection in " + tls.getClass());
+                RecordStream records = records(connection);
+                assertTrue(records.writeProtection().isTls12(), "not TLS 1.2 - proves nothing");
+                java.lang.reflect.Field limit = TlsConnection.class.getDeclaredField(
+                        "keyUpdateAfter");
+                limit.setAccessible(true);
+                limit.setLong(connection, records.writeProtection().sequence() + 2);
+
+                byte[] sent = new byte[40_000];                  // three records
+                ByteBuffer out = ByteBuffer.allocateDirect(sent.length).put(sent).flip();
+                IOException closed = org.junit.jupiter.api.Assertions.assertThrows(
+                        IOException.class, () -> {
+                            while (out.hasRemaining()) {
+                                tls.write(out);
+                            }
+                        });
+                assertTrue(String.valueOf(closed.getMessage()).contains("TLS 1.2 cannot change it"),
+                        closed.getMessage());
+                org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+                        () -> tls.write(ByteBuffer.allocateDirect(1)),
+                        "the connection was used on after its key wore out");
+            } finally {
+                tls.close();
+            }
+        }
+    }
+
     @Test
     void after2To24RecordsTheClientChangesItsKey() throws Exception {
         try (SSLServerSocket listener = (SSLServerSocket) serverContext.getServerSocketFactory()

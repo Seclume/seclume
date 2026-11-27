@@ -13,6 +13,10 @@ All notable changes to seclume are recorded here. Versions follow
   connect timeouts is aborted with 08001 naming the budget. A login that is slow on purpose
   (Kerberos with a distant KDC, a cold Vault) needs a longer `connectTimeout`, or a larger
   factor.
+- **A TLS 1.2 connection is closed when its key wears out.** TLS 1.3 connections change their
+  sending key after 2^24 records; TLS 1.2 has no KeyUpdate, and its connections went on under
+  one AES-GCM key past that limit. Such a connection is now closed at the limit, sending or
+  receiving - the pool opens a new one, with new keys. (2^24 records is up to 256 GiB.)
 - **`/actuator/seclume` lists the weakened settings.** What the start-up line names - a data
   source off `verify-full`, the secret guard off, a lowered SCRAM floor, an opt-out such as
   `seclume.crac.holdExpiry=release` - is the endpoint's `weakenedSettings` too, for a dashboard
