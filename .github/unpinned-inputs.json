@@ -6,16 +6,8 @@
   ],
   "unpinned": [
     {
-      "file": ".github/workflows/benchmarks.yml",
-      "input": "gvenzl/oracle-free:23-slim"
-    },
-    {
       "file": ".github/workflows/ci.yml",
       "input": "${{matrix.image}}"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "cockroachdb/cockroach:v26.2.11"
     },
     {
       "file": ".github/workflows/ci.yml",
@@ -23,35 +15,11 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "input": "gvenzl/oracle-free:23-slim"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
       "input": "mcr.microsoft.com/mssql/server:${{matrix.version}}-latest"
     },
     {
       "file": ".github/workflows/ci.yml",
-      "input": "motoserver/moto:5.1.22"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
       "input": "postgres:${{matrix.version}}"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "input": "yugabytedb/yugabyte:2026.1.3.0-b100"
-    },
-    {
-      "file": ".github/workflows/differential.yml",
-      "input": "gvenzl/oracle-free:23-slim"
-    },
-    {
-      "file": ".github/workflows/security.yml",
-      "input": "aquasec/trivy:0.74.0"
-    },
-    {
-      "file": ".github/workflows/security.yml",
-      "input": "semgrep/semgrep:1.177.0"
     }
   ]
 }

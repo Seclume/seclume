@@ -1570,7 +1570,7 @@ jobs:
             -keyout "$RUNNER_TEMP/moto/key.pem" -out "$RUNNER_TEMP/moto/cert.pem" 2>/dev/null
           chmod 644 "$RUNNER_TEMP/moto/key.pem"
           docker run -d --name slm-moto -p 4443:4443 -v "$RUNNER_TEMP/moto:/certs:ro" \
-            motoserver/moto:5.1.22 -p 4443 -c /certs/cert.pem -k /certs/key.pem
+            motoserver/moto:5.1.22@sha256:1e3802c95726373544967b428201c548f0247c15b00db2d96a5ba0a77d8643b8 -p 4443 -c /certs/cert.pem -k /certs/key.pem
           python3 .github/scripts/kms_fixture.py https://127.0.0.1:4443 "$RUNNER_TEMP/moto/cert.pem"
           .github/scripts/mvnw-retry.sh -B -pl seclume-core -am test -Dtest=LocalAwsKmsDecryptTest \
             -Dsurefire.failIfNoSpecifiedTests=false
@@ -2197,7 +2197,7 @@ jobs:
             -e APP_USER_PASSWORD="$ORA_PASSWORD" \
             --health-cmd healthcheck.sh --health-interval 10s \
             --health-timeout 10s --health-retries 60 \
-            gvenzl/oracle-free:23-slim
+            gvenzl/oracle-free:23-slim@sha256:48a3d9db7fa7c2a2fdbdf5fff7502c93e807349a2d625718fe61668cc3daa844
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -2333,7 +2333,7 @@ jobs:
       - name: Start CockroachDB with certificates and a password
         run: |
           set -e
-          image=cockroachdb/cockroach:v26.2.11
+          image=cockroachdb/cockroach:v26.2.11@sha256:811e5001de2f003ca4539b03853d98e1fd79f70bf929393b17a645673f8d5f47
           certs="--certs-dir=/certs --ca-key=/certs/ca.key"
           docker volume create crdb-certs
           docker run --rm -v crdb-certs:/certs "$image" cert create-ca $certs
@@ -2381,7 +2381,7 @@ jobs:
       - name: Start YugabyteDB with authentication
         run: |
           set -e
-          docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2026.1.3.0-b100 bin/yugabyted start --daemon=false --ysql_enable_auth=true
+          docker run -d --name yb -p 5433:5433 yugabytedb/yugabyte:2026.1.3.0-b100@sha256:c1ddbf9c189f6ef33f03c648efadb1b1e82b5e7c8be472c56b1357c024221528 bin/yugabyted start --daemon=false --ysql_enable_auth=true
           pw="$S_YB_TEST_PASSWORD"
           for i in $(seq 1 60); do
             ip=$(docker exec yb hostname -i | tr -d '\r' | awk '{print $1}')
