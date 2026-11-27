@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **CRaC: a checkpoint's hold no longer ends by itself.** After `seclume.crac.holdMillis` (60 s)
+  the hold on new secrets used to end, though a resource notified after seclume's could still
+  be running and the image not yet written - a secret made then was in it (shown on a CRaC JDK).
+  Now the waiting secret is refused and the hold stays until the restore or the abort.
+  `seclume.crac.holdExpiry=release` restores the old behaviour, with a warning.
 - **Patroni: an endpoint without a scheme is asked over https.** `patroni=db1:8008` was asked
   over plain http, where anybody on the way could write the answer that picks the server. It
   is https now. `http://` still works where the URL says so, with a warning once per endpoint,

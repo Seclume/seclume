@@ -37,12 +37,19 @@ public final class Checkpoint {
     private static long heldSince;
 
     /**
-     * The longest a secret waits for a checkpoint, in milliseconds
-     * ({@code seclume.crac.holdMillis}): if the restore - or the abort -
-     * never comes round to {@link #release()}, logins carry on rather than
-     * hang forever.
+     * The longest one secret waits for a checkpoint, in milliseconds
+     * ({@code seclume.crac.holdMillis}). Then that one is refused, rather than
+     * hang - and the hold stays until the restore or the abort, since the
+     * image may still be being written.
      */
     static final long HOLD_MILLIS = Long.getLong("seclume.crac.holdMillis", 60_000);
+
+    /**
+     * {@code seclume.crac.holdExpiry=release}: the opt-out - the hold ends
+     * after {@link #HOLD_MILLIS}, as it did before 0.15.0, with a warning.
+     */
+    static final boolean RELEASE_ON_EXPIRY =
+            "release".equals(System.getProperty("seclume.crac.holdExpiry"));
 
     private Checkpoint() {
     }
@@ -82,15 +89,33 @@ public final class Checkpoint {
         if (!holding) {
             return;
         }
+        awaitOpen(HOLD_MILLIS, RELEASE_ON_EXPIRY);
+    }
+
+    /** {@link #awaitOpen()} with its limits given - for a test. */
+    static void awaitOpen(long holdMillis, boolean releaseOnExpiry) {
         synchronized (GATE) {
             while (holding) {
-                long left = HOLD_MILLIS - (System.nanoTime() - heldSince) / 1_000_000L;
+                long left = holdMillis - (System.nanoTime() - heldSince) / 1_000_000L;
                 if (left <= 0) {
-                    // The restore or abort never released it: carry on rather
-                    // than hang every login of the process.
-                    holding = false;
-                    GATE.notifyAll();
-                    return;
+                    if (releaseOnExpiry) {
+                        // Opted out: carry on, and say so - a secret made now
+                        // may be in the image if the checkpoint is still going.
+                        holding = false;
+                        GATE.notifyAll();
+                        System.getLogger("space.seclume.crac").log(System.Logger.Level.WARNING,
+                                "a checkpoint held new secrets back for " + holdMillis
+                                        + " ms and seclume.crac.holdExpiry=release lets them be "
+                                        + "made again; one made before the image is written is in it");
+                        return;
+                    }
+                    // Fail closed: the checkpoint may still be writing the
+                    // image - a slow resource notified after seclume's - and a
+                    // secret made now would be in it. This one is refused; the
+                    // hold stays until the restore or the abort releases it.
+                    throw new IllegalStateException("a checkpoint has held new secrets back for "
+                            + holdMillis + " ms (seclume.crac.holdMillis) and the restore has not "
+                            + "come; none is made until it does");
                 }
                 try {
                     GATE.wait(left);

@@ -477,7 +477,10 @@ open refuses the checkpoint, naming who opened it. Before the checkpoint it also
   image like any other;
 - **holds new secrets back** from that moment until the restore, so a login that starts in
   between waits instead of landing in the image (`seclume.crac.holdSecrets=false` switches
-  this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits).
+  this off; `seclume.crac.holdMillis`, 60 s, is the longest a login waits - then it is
+  refused, and the hold stays until the restore or the abort, since the image may still be
+  being written; `seclume.crac.holdExpiry=release` ends the hold instead, with a warning).
+  `seclume-crac/proof/run-hold.sh` shows it on a CRaC JDK with a resource slower than the hold.
 
 After the restore, OpenSSL's random generator is reseeded from the operating system before
 any new secret is made: otherwise every instance started from one image would begin with the
