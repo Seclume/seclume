@@ -431,6 +431,7 @@ The inventory judged against rules - `space.seclume.inventory.CryptoPolicy`:
 | `tls.min-version` | 1.2 | a session below it (`1.2` or `1.3`) |
 | `tls.forward-secrecy` | true | a TLS 1.2 suite without (EC)DHE |
 | `tls.require-hybrid` | false | a key exchange that is not the ML-KEM hybrid |
+| `tls.require-authentication` | false | a TLS connection whose server was not authenticated, by its chain and name or by a pin (`tls=require`, `trustServerCertificate=true`) |
 | `certificate.min-days` | 14 | a server certificate this close to its end, or past it |
 | `signature.forbidden` | `SHA1,MD5` | a certificate signed with one of them |
 | `algorithm.forbidden` | - | a key, cipher suite or key exchange that names one |

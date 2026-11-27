@@ -77,6 +77,35 @@ class CryptoPolicyTest {
         return policy.check(List.of(assets), T);
     }
 
+    /**
+     * A connection encrypted to whoever answered - tls=require,
+     * trustServerCertificate=true - is TLS without authentication. With
+     * tls.require-authentication it fails the policy, so the start fails and
+     * the health check is DOWN; by default it does not.
+     */
+    @Test
+    void aConnectionWhoseServerWasNotCheckedFailsWhenAuthenticationIsRequired() {
+        Asset unchecked = new Asset("protocol:tls-unauthenticated:db:5432:seclume", Kind.PROTOCOL,
+                "TLS without server authentication to db:5432", null, 0, "seclume", T, T, 1, null,
+                Map.of("peer", "db:5432", "stack", "seclume", "authenticated", "false"));
+        assertEquals(List.of(), check(CryptoPolicy.of(Map.of("quantum", "off")), unchecked));
+        List<Finding> findings = check(CryptoPolicy.of(Map.of("quantum", "off",
+                "tls.require-authentication", "true")), unchecked,
+                tls("1.3", "TLS_AES_256_GCM_SHA384", "X25519MLKEM768"));
+        assertEquals(List.of("tls.require-authentication"), rules(findings, Severity.FAIL));
+        assertTrue(CryptoPolicy.fails(findings));
+        assertTrue(findings.get(0).message().contains("not checked"), findings.get(0).message());
+    }
+
+    /** What the inventory keeps for such a connection is what the rule looks at. */
+    @Test
+    void theInventoryKeepsAnUnauthenticatedConnection() {
+        space.seclume.inventory.CryptoInventory.unauthenticated("policy-test.example:1", "JSSE");
+        assertTrue(space.seclume.inventory.CryptoInventory.snapshot().stream().anyMatch(a ->
+                "false".equals(a.facts().get("authenticated"))
+                        && "policy-test.example:1".equals(a.facts().get("peer"))));
+    }
+
     @Test
     void theDefaultsPassAModernSetup() {
         List<Finding> findings = check(CryptoPolicy.of(Map.of("quantum", "off")),

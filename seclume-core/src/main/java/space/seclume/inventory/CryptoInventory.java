@@ -191,6 +191,34 @@ public final class CryptoInventory {
         }
     }
 
+    /**
+     * A TLS connection whose server was not authenticated - no chain and host
+     * name checked, no pin compared: encrypted to whoever answered. Kept as a
+     * protocol asset with {@code authenticated=false}, which the crypto
+     * policy's {@code tls.require-authentication} refuses.
+     */
+    public static void unauthenticated(String peer, String stack) {
+        try {
+            Map<String, String> facts = new LinkedHashMap<>();
+            facts.put("peer", peer);
+            facts.put("stack", stack);
+            facts.put("authenticated", "false");
+            synchronized (SESSIONS) {
+                seen("protocol:tls-unauthenticated:" + peer + ":" + stack, Kind.PROTOCOL,
+                        "TLS without server authentication to " + peer, null, 0, stack,
+                        Instant.now(), null, facts);
+                while (SESSIONS.size() > MAX_SESSIONS) {
+                    String oldest = SESSIONS.values().stream()
+                            .min(Comparator.comparing(Asset::lastUsed)).map(Asset::ref)
+                            .orElseThrow();
+                    SESSIONS.remove(oldest);
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // best effort
+        }
+    }
+
     private static void certificate(X509Certificate certificate, String peer, Instant now) {
         String[] key = algorithmOf(certificate.getPublicKey().getEncoded());
         Map<String, String> facts = new LinkedHashMap<>();

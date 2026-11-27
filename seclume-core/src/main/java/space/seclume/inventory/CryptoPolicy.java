@@ -31,6 +31,10 @@ import space.seclume.inventory.CryptoInventory.Asset;
  *       fails; TLS 1.3 always has it;</li>
  *   <li>{@code tls.require-hybrid} [false] - every key exchange post-quantum
  *       hybrid (ML-KEM);</li>
+ *   <li>{@code tls.require-authentication} [false] - every TLS connection's
+ *       server authenticated, by its chain and name or by a pin: one
+ *       encrypted to whoever answered ({@code tls=require},
+ *       {@code trustServerCertificate=true}) fails;</li>
  *   <li>{@code certificate.min-days} [14] - a server certificate this close to
  *       its end fails;</li>
  *   <li>{@code signature.forbidden} [SHA1,MD5] - in a certificate's signature
@@ -66,7 +70,8 @@ public final class CryptoPolicy {
     }
 
     static final Set<String> RULES = Set.of("rsa.min-bits", "ec.min-bits", "tls.min-version",
-            "tls.forward-secrecy", "tls.require-hybrid", "certificate.min-days",
+            "tls.forward-secrecy", "tls.require-hybrid", "tls.require-authentication",
+            "certificate.min-days",
             "signature.forbidden", "algorithm.forbidden", "secret.forbidden-providers",
             "data-key.require-kms", "data-key.forbidden-providers", "quantum", "warn-only");
 
@@ -75,6 +80,7 @@ public final class CryptoPolicy {
     private final String tlsMinVersion;
     private final boolean forwardSecrecy;
     private final boolean requireHybrid;
+    private final boolean requireAuthentication;
     private final int certificateMinDays;
     private final List<String> forbiddenSignatures;
     private final List<String> forbiddenAlgorithms;
@@ -99,6 +105,7 @@ public final class CryptoPolicy {
         }
         forwardSecrecy = bool(rules, "tls.forward-secrecy", true);
         requireHybrid = bool(rules, "tls.require-hybrid", false);
+        requireAuthentication = bool(rules, "tls.require-authentication", false);
         certificateMinDays = number(rules, "certificate.min-days", 14);
         forbiddenSignatures = list(rules.getOrDefault("signature.forbidden", "SHA1,MD5"));
         forbiddenAlgorithms = list(rules.getOrDefault("algorithm.forbidden", ""));
@@ -251,6 +258,10 @@ public final class CryptoPolicy {
             add(findings, "tls.require-hybrid", asset, "agreed its key with "
                     + (group == null ? "a classical exchange" : group)
                     + ", not a post-quantum hybrid (X25519MLKEM768)");
+        }
+        if (requireAuthentication && "false".equals(facts.get("authenticated"))) {
+            add(findings, "tls.require-authentication", asset, "is encrypted to whoever "
+                    + "answered: the server's certificate was not checked");
         }
         forbidden(asset, suite, findings);
         forbidden(asset, group, findings);

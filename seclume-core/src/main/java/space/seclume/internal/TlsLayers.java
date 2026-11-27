@@ -160,7 +160,7 @@ public final class TlsLayers {
                     throw wrongKey;
                 }
             }
-            authenticated(layer, verify || pinned);
+            authenticated(layer, verify || pinned, host + ":" + port);
             return layer;
         } finally {
             space.seclume.jfr.Observed.endHandshake(event, host + ":" + port,
@@ -209,7 +209,7 @@ public final class TlsLayers {
                     throw wrongKey;
                 }
             }
-            authenticated(layer, verify || pinned);
+            authenticated(layer, verify || pinned, host + ":" + port);
             return layer;
         } finally {
             space.seclume.jfr.Observed.endHandshake(event, host + ":" + port, "seclume",
@@ -218,7 +218,13 @@ public final class TlsLayers {
     }
 
     /** A pin compared, or a chain and host name checked: the server is who it says. */
-    private static void authenticated(TlsLayer layer, boolean checked) {
+    private static void authenticated(TlsLayer layer, boolean checked, String peer) {
+        if (!checked) {
+            // For the crypto policy's tls.require-authentication: a connection
+            // encrypted to whoever answered is a fact of the inventory too.
+            space.seclume.inventory.CryptoInventory.unauthenticated(peer,
+                    layer instanceof SeclumeTls ? "seclume" : "JSSE");
+        }
         if (layer instanceof SeclumeTls own) {
             own.authenticated(checked);
         } else if (layer instanceof TlsChannel jdk) {

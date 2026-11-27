@@ -169,6 +169,10 @@ All notable changes to seclume are recorded here. Versions follow
   column reports unpadded ones as needing re-encryption, and padding is never taken off.
   `plaintextLength` is an upper bound for a padded value. The JPA bytes converter returns the
   exact length.
+- **Crypto policy: `tls.require-authentication`.** A TLS connection encrypted to whoever
+  answered - `tls=require`, `trustServerCertificate=true` - is kept in the crypto inventory with
+  `authenticated=false`. With the rule set, it fails the policy: the start fails in `fail` mode
+  and the `cryptoPolicy` health contributor is `DOWN`.
 - **`Context.REQUIRED` for an encrypted column.** `FieldKeys.column(name, mode,
   Context.REQUIRED)` refuses a value written or read without a context, which would open in
   any row. The keys and format are unchanged. Kafka and Redis use it. Elasticsearch gained
