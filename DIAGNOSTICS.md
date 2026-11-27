@@ -298,7 +298,8 @@ A heap dump is needed - for a memory leak, for a vendor's support ticket - and i
 every credential the process held. `--redact` writes a copy with each of them overwritten:
 
 - **What goes:** every occurrence of each named secret, in every encoding it can lie in
-  (UTF-8, UTF-16 in both byte orders, Base64; a binary secret as its bytes and as Base64),
+  (UTF-8, UTF-16 in both byte orders, Base64, percent-encoded as `URLEncoder` and as RFC 3986
+  strictly write it, hex digits in either case; a binary secret as its bytes and as Base64),
   and with `--discover` the value of every credential of a known shape - the password of a
   URL rather than the URL, all of a PEM block.
 - **Echoes too:** what discovery found is then looked for where it has no shape - the URL's
@@ -316,8 +317,23 @@ every credential the process held. `--redact` writes a copy with each of them ov
 
 Exit 0 means the copy is written and checked, whatever the original held - the reports, if
 asked for, still describe the original. What it does not reach: a credential named by nobody
-and of no known shape, one split across objects, compressed or encrypted. The check proves
-that what was looked for is gone, not that nothing else is there; name what you know.
+and of no known shape, one split across objects, compressed or encrypted. Nor these forms of a
+named one:
+
+- **Partly percent-encoded.** A URI builder that encodes only what its component forbids -
+  Spring's `UriComponentsBuilder`, `java.net.URI`'s multi-argument constructors - leaves `!`,
+  `*` or `@` as they are where the strict form encodes them. Every subset of a password's
+  characters is a form of its own, so they cannot all be looked for.
+- **XML and HTML character references, JSON's `\uXXXX`.** A secret that went through an XML or
+  JSON writer can be in a dump in that form. Each character can be written several ways
+  (`&#64;`, `&#x40;`, `&commat;`), so the forms multiply with the length.
+- **Encoded twice.** `%2540` for `@`, a Base64 of a Base64, a percent-encoded Base64. Every
+  combination would be a search of its own over the whole dump.
+
+Each search is a full pass over a dump of gigabytes, and the forms above multiply instead of
+adding up. The log masker reads these forms (see below): a line is short, a dump is not. The
+check proves that what was looked for is gone, not that nothing else is there; name what you
+know.
 
 The redaction itself is in `seclume-heapdump`, a library without dependencies
 (`space.seclume.heapdump.Redactor`), together with the discovery and the object attribution.
