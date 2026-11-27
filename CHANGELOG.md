@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **Patroni: an endpoint without a scheme is asked over https.** `patroni=db1:8008` was asked
+  over plain http, where anybody on the way could write the answer that picks the server. It
+  is https now. `http://` still works where the URL says so, with a warning once per endpoint,
+  and any other scheme is refused. New: `patroniHosts=` address ranges admit members that
+  Patroni names by address, which no host name in the URL matches.
 - **JWT: a token without `exp` is refused.** `SeclumeJwt.verify` accepted a token with no
   expiry, which is valid for ever once it leaks. It is refused now; `require-exp=false` in the
   spec accepts such tokens where that is meant. New: `max-lifetime=` seconds bounds

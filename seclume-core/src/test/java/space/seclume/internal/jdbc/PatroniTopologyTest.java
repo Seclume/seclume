@@ -74,6 +74,58 @@ class PatroniTopologyTest {
     }
 
     /**
+     * Patroni names members by address; a URL that names its servers by host
+     * name matched none of them. patroniHosts= admits addresses in the
+     * ranges it names - 10.0.0.4 when 10.0.0.0/30 is not enough, and only then.
+     */
+    @Test
+    void patroniHostsAdmitsMembersByTheirAddress() throws IOException {
+        try (ServerSocket patroni = serve(CLUSTER, new AtomicInteger())) {
+            String prefix = "jdbc:seclume:postgresql:";
+            String url = prefix + "//db1.example.com,db2.example.com/app?patroni=http://127.0.0.1:"
+                    + patroni.getLocalPort();
+            assertEquals("[]", space.seclume.internal.JdbcUrl.parse(url, null, prefix, 5432)
+                    .hosts().topology().hosts(TargetServer.PRIMARY).toString(),
+                    "no member is a host of the URL");
+            assertEquals("[10.0.0.2:5433, 10.0.0.1:5432]", space.seclume.internal.JdbcUrl.parse(
+                    url + "&patroniHosts=10.0.0.0/30", null, prefix, 5432)
+                    .hosts().topology().hosts(TargetServer.PRIMARY).toString(),
+                    "10.0.0.4 is outside 10.0.0.0/30");
+            assertEquals("[10.0.0.2:5433, 10.0.0.1:5432, 10.0.0.4:5432]",
+                    space.seclume.internal.JdbcUrl.parse(url + "&patroniHosts=10.0.0.0/29",
+                            null, prefix, 5432).hosts().topology().hosts(TargetServer.PRIMARY)
+                            .toString());
+        }
+    }
+
+    /** Ranges are address/bits; anything else is refused when the URL is read. */
+    @Test
+    void aRangeThatIsNoneIsRefused() {
+        for (String bad : new String[] {"10.0.0.0", "10.0.0.0/33", "db.example.com/24",
+                "10.0.0.0/x", "::1/129"}) {
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                    () -> PatroniTopology.of("https://p:8008", List.of("db"), bad), bad);
+        }
+        assertTrue(PatroniTopology.Range.of("fd00::/8").contains(
+                PatroniTopology.Range.address("fd12::5")));
+        org.junit.jupiter.api.Assertions.assertFalse(PatroniTopology.Range.of("fd00::/8")
+                .contains(PatroniTopology.Range.address("10.0.0.1")));
+    }
+
+    /**
+     * An endpoint without a scheme was asked over plain http, where anybody on
+     * the way writes the answer that picks the server. It is https now; http
+     * only when the URL says so, and no other scheme at all.
+     */
+    @Test
+    void anEndpointWithoutASchemeIsAskedOverHttps() {
+        assertEquals("https", PatroniTopology.of("db1:8008").endpoints().get(0).getScheme());
+        assertEquals("http", PatroniTopology.of("http://db1:8008").endpoints().get(0).getScheme());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> PatroniTopology.of("file:///etc/passwd"));
+    }
+
+    /**
      * An answer nested without end - over plain HTTP anybody's - was a
      * StackOverflowError out of connect, which the pool does not catch.
      */

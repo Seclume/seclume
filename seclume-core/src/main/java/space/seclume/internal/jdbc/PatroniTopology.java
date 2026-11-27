@@ -39,6 +39,15 @@ public final class PatroniTopology implements ClusterTopology {
     private static final int TIMEOUT_MILLIS = 1500;
     private static final int MAX_ANSWER = 1 << 20;
 
+    /** The REST endpoints, in the order they are asked. */
+    List<URI> endpoints() {
+        return endpoints;
+    }
+
+    /** The plain-http endpoints warned of already, so that the warning comes once. */
+    private static final java.util.Set<String> PLAIN_WARNED =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private final List<URI> endpoints;
     private volatile List<Member> cached;
     private volatile long cachedAt;
@@ -57,14 +66,33 @@ public final class PatroniTopology implements ClusterTopology {
 
     /** The URL's own hosts: a member the answer names that is not one of them is not used. */
     private final java.util.Set<String> allowed;
+    /** {@code patroniHosts=}: address ranges a member named by its address may be in too. */
+    private final List<Range> ranges;
 
     private PatroniTopology(List<URI> endpoints, java.util.Set<String> allowed) {
+        this(endpoints, allowed, List.of());
+    }
+
+    private PatroniTopology(List<URI> endpoints, java.util.Set<String> allowed,
+                            List<Range> ranges) {
         this.endpoints = endpoints;
         this.allowed = allowed;
+        this.ranges = ranges;
     }
 
     /** The option, with the hosts of the URL it came with - the only servers a member may be. */
     public static PatroniTopology of(String option, java.util.Collection<String> urlHosts) {
+        return of(option, urlHosts, null);
+    }
+
+    /**
+     * The same, with {@code patroniHosts=10.0.0.0/24,fd00::/8}: Patroni names
+     * its members by address, which no host name in the URL matches - such a
+     * member is taken when its address is in one of the ranges. Named by
+     * whoever writes the URL, never widened by the answer.
+     */
+    public static PatroniTopology of(String option, java.util.Collection<String> urlHosts,
+                                     String patroniHosts) {
         PatroniTopology plain = of(option);
         if (plain == null) {
             return null;
@@ -73,7 +101,91 @@ public final class PatroniTopology implements ClusterTopology {
         for (String host : urlHosts) {
             hosts.add(host.toLowerCase(Locale.ROOT));
         }
-        return new PatroniTopology(plain.endpoints, java.util.Set.copyOf(hosts));
+        return new PatroniTopology(plain.endpoints, java.util.Set.copyOf(hosts),
+                Range.list(patroniHosts));
+    }
+
+    /** One {@code address/bits} range. */
+    record Range(byte[] network, int bits) {
+
+        static List<Range> list(String option) {
+            if (option == null || option.isBlank()) {
+                return List.of();
+            }
+            List<Range> ranges = new ArrayList<>();
+            for (String one : option.split(",")) {
+                String trimmed = one.trim();
+                if (!trimmed.isEmpty()) {
+                    ranges.add(of(trimmed));
+                }
+            }
+            return List.copyOf(ranges);
+        }
+
+        static Range of(String text) {
+            int slash = text.indexOf('/');
+            if (slash < 0) {
+                throw new IllegalArgumentException("patroniHosts takes address/bits ranges, "
+                        + "not '" + text + "'");
+            }
+            byte[] network = address(text.substring(0, slash));
+            int bits;
+            try {
+                bits = Integer.parseInt(text.substring(slash + 1));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("patroniHosts: '" + text + "' has no number "
+                        + "of bits", e);
+            }
+            if (network == null || bits < 0 || bits > network.length * 8) {
+                throw new IllegalArgumentException("patroniHosts: '" + text + "' is no address "
+                        + "range");
+            }
+            return new Range(network, bits);
+        }
+
+        /** The address a literal names, or null for a host name. */
+        static byte[] address(String literal) {
+            if (literal.isEmpty() || !(literal.indexOf(':') >= 0
+                    || literal.chars().allMatch(c -> c == '.' || (c >= '0' && c <= '9')))) {
+                return null;
+            }
+            try {
+                return java.net.InetAddress.ofLiteral(literal).getAddress();
+            } catch (IllegalArgumentException notAnAddress) {
+                return null;
+            }
+        }
+
+        boolean contains(byte[] candidate) {
+            if (candidate == null || candidate.length != network.length) {
+                return false;
+            }
+            int full = bits / 8;
+            for (int i = 0; i < full; i++) {
+                if (candidate[i] != network[i]) {
+                    return false;
+                }
+            }
+            int rest = bits % 8;
+            if (rest == 0) {
+                return true;
+            }
+            int mask = (0xff << (8 - rest)) & 0xff;
+            return (candidate[full] & mask) == (network[full] & mask);
+        }
+    }
+
+    private boolean admitted(String host) {
+        if (allowed == null || allowed.contains(host.toLowerCase(Locale.ROOT))) {
+            return true;
+        }
+        byte[] address = ranges.isEmpty() ? null : Range.address(host);
+        for (Range range : ranges) {
+            if (range.contains(address)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The {@code patroni=} option, or null when there is none. */
@@ -85,7 +197,24 @@ public final class PatroniTopology implements ClusterTopology {
         for (String one : option.split(",")) {
             String trimmed = one.trim();
             if (!trimmed.isEmpty()) {
-                endpoints.add(URI.create(trimmed.contains("://") ? trimmed : "http://" + trimmed));
+                // Without a scheme, https: the answer decides which server a
+                // connection goes to, and plain http lets anyone on the way
+                // write it. http is still there, when the URL says so.
+                URI uri = URI.create(trimmed.contains("://") ? trimmed : "https://" + trimmed);
+                String scheme = uri.getScheme() == null ? ""
+                        : uri.getScheme().toLowerCase(Locale.ROOT);
+                if (!scheme.equals("https") && !scheme.equals("http")) {
+                    throw new IllegalArgumentException("patroni= takes http:// or https:// "
+                            + "endpoints, not '" + trimmed + "'");
+                }
+                if (scheme.equals("http") && PLAIN_WARNED.add(uri.getHost() + ":" + uri.getPort())) {
+                    System.getLogger(PatroniTopology.class.getName()).log(
+                            System.Logger.Level.WARNING, "Patroni's REST API at " + uri.getHost()
+                                    + " is asked over plain http: whoever is on the way can "
+                                    + "send this driver to another of the URL's servers. Use "
+                                    + "https:// where Patroni serves it");
+                }
+                endpoints.add(uri);
             }
         }
         return endpoints.isEmpty() ? null : new PatroniTopology(List.copyOf(endpoints), null);
@@ -100,7 +229,7 @@ public final class PatroniTopology implements ClusterTopology {
         List<HostList.Host> leaders = new ArrayList<>();
         List<HostList.Host> replicas = new ArrayList<>();
         for (Member member : members()) {
-            if (allowed != null && !allowed.contains(member.host().toLowerCase(Locale.ROOT))) {
+            if (!admitted(member.host())) {
                 continue;                  // an answer may reorder the URL's servers, not add one
             }
             if (member.usable()) {

@@ -501,6 +501,7 @@ protocol text or dribble bytes.
 | 119 | Edge tests | Oracle service through the DataSource is an SQLException 08001; JSON escapes at U+007F, U+07FF and U+0800, a field named by DEL; empty pattern or host matches nothing | `DescriptorValueTest`, `JsonOffRegressionTest`, `HostnameMatchEdgeTest` | #PR |
 | 120 | HTTP/2 headers | HTTP/1.1 rewrote only credential headers, HTTP/2 every non-pseudo header, so a placeholder in `x-opaque-id` got the secret. Both use one list now, extended by name with `seclume.http.credential-headers` | `PlaceholderServerTest.overHttp2OnlyACredentialHeaderGetsTheSecret` | #PR |
 | 121 | JWT expiry | `verify` checked `exp` only when present, so a token without it was valid for ever. Required by default now (`require-exp=false` to opt out), and `max-lifetime` bounds `exp - iat` | `SeclumeJwtTest.aTokenWithoutExpIsRefusedUnlessSaidOtherwise`, `maxLifetimeBoundsWhatATokenMayClaim` | #PR |
+| 122 | Patroni | A scheme-less endpoint went over plain http, unwarned; IP members never matched a URL of host names. https by default, explicit http warned once, other schemes refused; `patroniHosts` CIDR ranges | `PatroniTopologyTest.anEndpointWithoutASchemeIsAskedOverHttps`, `patroniHostsAdmitsMembersByTheirAddress`, `aRangeThatIsNoneIsRefused` | #PR |
 
 ### Mutation testing of the security paths
 

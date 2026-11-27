@@ -500,6 +500,10 @@ connect over an unanswered question would turn a working cluster into an outage.
 **Or ask the cluster, with `patroni=`.** For a cluster managed by Patroni, the driver asks the
 REST API (`/cluster`) where the leader and the replicas are before it connects, instead of
 trying hosts until one answers the right way. If no endpoint answers, the URL's hosts are used.
+A member is only connected to if it is one of the URL's hosts, or if its address is in a range
+named by `patroniHosts=10.0.0.0/24,fd00::/8` (Patroni usually names members by address). An
+endpoint without a scheme is asked over `https`. `http://` is used where the URL says so, with a
+warning: whoever can write the answer on the way chooses among the URL's servers.
 
 **Aurora, with `aurora=true`.** An Aurora cluster endpoint is a DNS name for the writer. After a
 failover it keeps pointing at the old writer for as long as resolvers cache it. Every Aurora

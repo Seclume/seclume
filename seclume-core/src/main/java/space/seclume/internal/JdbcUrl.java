@@ -164,7 +164,7 @@ public final class JdbcUrl {
                 // patroni=http://db1:8008,...: the cluster says where its leader
                 // is now - see PatroniTopology.
                 .discovering(space.seclume.internal.jdbc.PatroniTopology.of(
-                        options.get("patroni"), urlHosts));
+                        options.get("patroni"), urlHosts, options.get("patroniHosts")));
         // aurora=true: the instances an Aurora cluster reported, remembered
         // for the next connect - see AuroraTopology.
         space.seclume.internal.jdbc.AuroraTopology aurora =
