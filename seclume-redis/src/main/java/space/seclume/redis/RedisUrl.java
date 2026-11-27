@@ -25,7 +25,8 @@ import space.seclume.secret.SecretProviders;
  */
 record RedisUrl(List<Node> nodes, String user, String sentinelMasterId, String sentinelUser,
                 SecretProvider sentinelSecret, boolean tls, TrustChoice.Choice trust,
-                int connectTimeout, int timeout, SecretProvider secret, List<String> discovered) {
+                int connectTimeout, int timeout, SecretProvider secret, List<String> discovered,
+                boolean allowPlainDiscovery) {
 
     /** Whether {@code host:port} is one of the URL's own nodes - the Sentinels, with a master id. */
     boolean isListedNode(String host, int port) {
@@ -158,6 +159,17 @@ record RedisUrl(List<Node> nodes, String user, String sentinelMasterId, String s
                 }
             }
         }
+        // A cluster asked over plain redis:// names its nodes in answers anybody
+        // on the way can write: the data would go where they say. Allowed only
+        // where the URL says so.
+        String plainDiscovery = removeFirst(options, "allow-plain-discovery",
+                "allowPlainDiscovery");
+        if (plainDiscovery != null && !plainDiscovery.equals("true")
+                && !plainDiscovery.equals("false")) {
+            throw new IllegalArgumentException("allow-plain-discovery is true or false, not '"
+                    + plainDiscovery + "'");
+        }
+        boolean allowPlainDiscovery = "true".equals(plainDiscovery);
         int connectTimeout = Integer.parseInt(options.getOrDefault("connectTimeout", "5000"));
         int timeout = Integer.parseInt(options.getOrDefault("timeout", "2000"));
         options.remove("connectTimeout");
@@ -199,7 +211,7 @@ record RedisUrl(List<Node> nodes, String user, String sentinelMasterId, String s
         }
         return new RedisUrl(List.copyOf(nodes), user, sentinelMasterId, sentinelUser,
                 sentinelSecret, tls, trust, connectTimeout, timeout, secret,
-                List.copyOf(discovered));
+                List.copyOf(discovered), allowPlainDiscovery);
     }
 
     private static List<Node> parseNodes(String authority, int defaultPort) {

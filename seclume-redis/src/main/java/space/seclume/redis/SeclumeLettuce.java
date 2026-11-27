@@ -153,6 +153,15 @@ public final class SeclumeLettuce {
             throw new IllegalArgumentException("sentinelMasterId is for Redis Sentinel with "
                     + "SeclumeLettuce.client(url), not SeclumeLettuce.clusterClient(url)");
         }
+        if (!parsed.tls() && !parsed.allowPlainDiscovery()) {
+            // The nodes come from CLUSTER SLOTS and MOVED: over plain redis://
+            // whoever is on the way names them, and with no certificate to
+            // check, the application's data goes where they say. The password
+            // stays with the listed hosts either way.
+            throw new IllegalArgumentException("a Redis Cluster over plain redis:// learns its "
+                    + "nodes from answers anybody on the way can write - use rediss://, or say "
+                    + "allow-plain-discovery=true where the network is trusted");
+        }
         String placeholder = RespPasswordRewriter.newPlaceholder();
         ClientResources resources = DefaultClientResources.builder()
                 .nettyCustomizer(customizer(parsed, placeholder, null)).build();

@@ -144,7 +144,14 @@ class SeclumeLettuceTopologyTest {
 
             String url = "redis://localhost:" + node1.port() + ",127.0.0.1:" + node2.port()
                     + "?user=orders&provider=file&path=" + slash(redisSecretFile);
-            RedisClusterClient cluster = SeclumeLettuce.clusterClient(url);
+            // Over plain redis:// the nodes come from answers anybody on the
+            // way can write: refused unless the URL says the network is trusted.
+            IllegalArgumentException plain = org.junit.jupiter.api.Assertions.assertThrows(
+                    IllegalArgumentException.class, () -> SeclumeLettuce.clusterClient(url));
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    plain.getMessage().contains("allow-plain-discovery"), plain.getMessage());
+            RedisClusterClient cluster = SeclumeLettuce.clusterClient(
+                    url + "&allow-plain-discovery=true");
             try (StatefulRedisClusterConnection<String, String> conn = cluster.connect()) {
                 assertEquals("OK", conn.sync().set("b", "plain-1"));
                 assertEquals("OK", conn.sync().set("a", "plain-2"));

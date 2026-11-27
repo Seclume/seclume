@@ -1069,7 +1069,10 @@ written in the placeholder's place, together with its RESP length, just before i
   `master-hosts=` allow (a host, an IP, a `.suffix`, `*` for any). A node discovery names beyond
   them gets the placeholder, and a forged redirect gets no password.
 - over `redis://` and `redis-sentinel://`, by the first handler before the socket, which hands the
-  socket a direct buffer over the native memory and wipes it once the socket has taken it.
+  socket a direct buffer over the native memory and wipes it once the socket has taken it. A
+  Redis Cluster over plain `redis://` is refused unless the URL says `allow-plain-discovery=true`:
+  its nodes come from `CLUSTER SLOTS` and `MOVED` answers that anybody on the way can write, and
+  with no certificate to check, the data would go where they say.
 
 Only into the password argument of `AUTH` or `HELLO ... AUTH`: the rewriter follows the RESP
 commands from the connection's first byte, and a placeholder anywhere else - a value an

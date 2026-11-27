@@ -12,6 +12,10 @@ All notable changes to seclume are recorded here. Versions follow
   is https now. `http://` still works where the URL says so, with a warning once per endpoint,
   and any other scheme is refused. New: `patroniHosts=` address ranges admit members that
   Patroni names by address, which no host name in the URL matches.
+- **Redis: a cluster over plain `redis://` needs `allow-plain-discovery=true`.** Its nodes come
+  from `CLUSTER SLOTS` and `MOVED` answers that anybody on the way can write, and without TLS
+  no certificate stops the application's data from going where they say (the password already
+  stayed with the listed hosts). `rediss://` is unchanged.
 - **JWT: a token without `exp` is refused.** `SeclumeJwt.verify` accepted a token with no
   expiry, which is valid for ever once it leaks. It is refused now; `require-exp=false` in the
   spec accepts such tokens where that is meant. New: `max-lifetime=` seconds bounds
