@@ -36,6 +36,31 @@ class DeferredDiscardTest {
         }
     }
 
+    /**
+     * A borrower sets a session context and returns the connection without a
+     * statement: the set_config waits to ride with the next one - which
+     * would be the next borrower's. The reset drops it; on the wire there is
+     * the discard, then the next borrower's statement, and no tenant A.
+     */
+    @Test
+    void aContextNeverSentDoesNotReachTheNextBorrower() throws Exception {
+        Recording wire = new Recording(answer(complete("DISCARD ALL"), complete("SELECT 1")));
+        try (PgSession session = session(wire)) {
+            java.sql.Connection connection = space.seclume.postgresql.jdbc.PgConnection.resume(
+                    session, false);
+            ((space.seclume.SessionContext) connection).setSessionContext("app.tenant",
+                    "tenant-A");
+            assertTrue(((space.seclume.SessionReset) connection).resetSessionState(),
+                    "an autocommit connection is reset");
+            session.execute("select 'next borrower'");
+            String sent = wire.sent();
+            assertFalse(sent.contains("tenant-A") || sent.contains("app.tenant"),
+                    "the first borrower's context reached the second: " + sent);
+            assertTrue(sent.indexOf("discard all") >= 0
+                    && sent.indexOf("discard all") < sent.indexOf("next borrower"), sent);
+        }
+    }
+
     @Test
     void aRefusedDiscardLetsNothingThrough() throws Exception {
         Recording wire = new Recording(answer(error("25001",
