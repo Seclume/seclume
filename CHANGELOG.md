@@ -311,6 +311,9 @@ All notable changes to seclume are recorded here. Versions follow
   after the grace either. A query that trickled its answer was bounded by about 11 seconds
   instead of the timeout and the grace. Cancellation and kill run on threads of their own
   now; the same query ends after 2 seconds.
+- **R2DBC: a transaction left open at `close()` is rolled back before the close.** It was left
+  to what closing means underneath - a pool's return, a driver's disconnect; now its writes
+  and locks end with the connection, explicitly, before anyone else gets the session.
 - **Oracle: a value is never read past what arrived.** The last cell of a row, and a LOB
   locator a call returned, could announce more bytes than the message held; they were framed
   anyway, and `getString` or the next LOB call read on into what an earlier message had left

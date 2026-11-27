@@ -255,7 +255,17 @@ final class SeclumeConnection implements Connection, Wrapped<java.sql.Connection
         return Mono.defer(() -> lane.isClosed() ? Mono.empty()
                 : lane.run(() -> {
                     lane.closeOpenStatements();
-                    jdbc.close();
+                    // A transaction still open is rolled back here, not left to
+                    // whatever closing means underneath - a pool's return, a
+                    // driver's close: its writes and locks end with this
+                    // connection, before anyone else gets the session.
+                    try {
+                        if (!jdbc.isClosed() && !jdbc.getAutoCommit()) {
+                            jdbc.rollback();
+                        }
+                    } finally {
+                        jdbc.close();
+                    }
                 })
                         .onErrorResume(failure -> Mono.fromRunnable(lane::close)
                                 .then(Mono.error(failure)))
