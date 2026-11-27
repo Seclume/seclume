@@ -109,6 +109,7 @@ jobs:
         target:
           - { module: seclume-postgresql, test: PgDecoderFuzzTest, method: coverageGuided }
           - { module: seclume-mysql, test: MyDecoderFuzzTest, method: coverageGuided }
+          - { module: seclume-mysql, test: MyGetterFuzzTest, method: coverageGuided }
           - { module: seclume-sqlserver, test: TdsDecoderFuzzTest, method: coverageGuided }
           - { module: seclume-oracle, test: OracleDecoderFuzzTest, method: coverageGuided }
           - { module: seclume-oracle, test: OracleJsonFuzzTest, method: anyColumnValueIsReadOrRefused }
