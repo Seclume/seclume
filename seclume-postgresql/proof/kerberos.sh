@@ -70,14 +70,17 @@ sleep 3
 
 client() {
   podman run --rm --network seclume-krb -v "$shared":/shared:ro,z -v "$jars":/jars:ro,z \
-    -v "$proof":/proof:ro,z -e KRB5_CONFIG=/shared/krb5.conf \
+    -v "$proof":/proof:ro,z -e KRB5_CONFIG=/shared/krb5.conf ${3:-} \
     docker.io/library/eclipse-temurin:25-jdk-alpine sh -c "
       apk add -q krb5 >/dev/null
       $1
       java --enable-native-access=ALL-UNNAMED \
-        -cp /jars/seclume-core.jar:/jars/seclume-postgresql.jar /proof/KerberosProof.java"
+        -cp /jars/seclume-core.jar:/jars/seclume-postgresql.jar /proof/${2:-KerberosProof}.java"
 }
 echo "== with a ticket (kinit from alice's keytab)"
 client "kinit -kt /shared/alice.keytab alice@SECLUME.TEST" | grep PROOF
 echo "== control: no ticket"
 client "true" | grep PROOF
+echo "== a server that begins Kerberos and skips its end (pg.seclume.test is the client itself)"
+client "kinit -kt /shared/alice.keytab alice@SECLUME.TEST" KerberosSkipProof \
+  "--add-host pg.seclume.test:127.0.0.1" | grep PROOF

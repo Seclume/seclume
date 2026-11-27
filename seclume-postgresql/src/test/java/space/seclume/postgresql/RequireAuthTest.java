@@ -151,6 +151,62 @@ class RequireAuthTest {
         }
     }
 
+    /**
+     * Kerberos begun and skipped: the server asks for GSSAPI, takes the first
+     * token and then answers ReadyForQuery - or AuthenticationOk - without the
+     * reply that proves it is the service the ticket was for. Needs a GSSAPI
+     * that makes a first token here; without one the login fails before the
+     * skip, and the test says so instead of passing.
+     */
+    @Test
+    void kerberosBegunAndSkippedIsRefused() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(space.seclume.internal.Gssapi.available(),
+                "no GSSAPI on this machine");
+        for (char skip : new char[] {'Z', 'R'}) {
+            try (ServerSocket listener = listener()) {
+                CompletableFuture<Boolean> served = CompletableFuture.supplyAsync(() -> {
+                    try (Socket socket = listener.accept();
+                         DataInputStream in = new DataInputStream(socket.getInputStream())) {
+                        OutputStream out = socket.getOutputStream();
+                        in.readNBytes(in.readInt() - 4);             // the startup message
+                        out.write('R');
+                        writeInt(out, 8);
+                        writeInt(out, 7);                            // AuthenticationGSS
+                        out.flush();
+                        if (in.read() != 'p') {
+                            return false;                            // no token came
+                        }
+                        in.readNBytes(in.readInt() - 4);             // the first token
+                        if (skip == 'R') {
+                            out.write('R');                          // AuthenticationOk
+                            writeInt(out, 8);
+                            writeInt(out, 0);
+                        }
+                        for (int i = 0; i < 2; i++) {
+                            out.write('Z');
+                            writeInt(out, 5);
+                            out.write('I');
+                        }
+                        out.flush();
+                        in.read();
+                        return true;
+                    } catch (IOException gone) {
+                        return true;                 // the client hung up - what it should do
+                    }
+                });
+                SQLException refused = assertThrows(SQLException.class,
+                        () -> PgSession.open(settings(listener.getLocalPort(), null)).close());
+                if (!served.get(10, TimeUnit.SECONDS)) {
+                    org.junit.jupiter.api.Assumptions.abort("no first Kerberos token here (no "
+                            + "ticket or KDC): " + refused.getMessage());
+                }
+                assertEquals("28000", refused.getSQLState(), refused.getMessage());
+                assertTrue(refused.getMessage().contains(skip == 'Z' ? "before AuthenticationOk"
+                        : "before mutual authentication was complete"), refused.getMessage());
+            }
+        }
+    }
+
     private static void assertRefusedUnanswered(int request, String requireAuth, String says)
             throws Exception {
         try (ServerSocket listener = listener()) {
