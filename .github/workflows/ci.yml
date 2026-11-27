@@ -1540,7 +1540,7 @@ jobs:
         run: |
           rm -f .local-vault-*
           docker rm -f slm-vault slm-vault-pg || true
-          VAULT_IMAGE=quay.io/openbao/openbao:2.7.2 VAULT_CLI=bao \
+          VAULT_IMAGE=quay.io/openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f VAULT_CLI=bao \
             bash .github/scripts/vault_fixtures.sh "$RUNNER_TEMP/openbao"
           .github/scripts/mvnw-retry.sh -B -pl seclume-postgresql -am test -Dseclume.vault.host=127.0.0.1 \
             -Dtest='LocalVaultDynamicCredentialsTest,LocalVaultLoginTest,LocalVaultPkiLoginTest,LocalVaultTransitLoginTest,LocalVaultTransitFieldKeyTest' \

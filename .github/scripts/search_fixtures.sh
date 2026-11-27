@@ -13,8 +13,8 @@
 set -euo pipefail
 work=$(mkdir -p "${1:?usage: search_fixtures.sh <work directory> [host address]}" && cd "$1" && pwd)
 address=${2:-127.0.0.1}
-es_image=docker.io/library/elasticsearch:9.5.5
-os_image=docker.io/opensearchproject/opensearch:3.9.0
+es_image=docker.io/library/elasticsearch:9.5.5@sha256:8baa90f33c54cbe3c964401d8263c696e7ce2f2a74b12143d7e9e51d5e931168
+os_image=docker.io/opensearchproject/opensearch:3.9.0@sha256:3bf4fe26aeb9f7b03c0ebcb1302bb24e855ee6b89fd926d26a71a83ef6f7e076
 
 cd "$work"
 mkdir -p certs

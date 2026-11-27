@@ -153,7 +153,7 @@ jobs:
     timeout-minutes: 60
     services:
       sqlserver:
-        image: mcr.microsoft.com/mssql/server:2022-latest
+        image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
         env:
           ACCEPT_EULA: 'Y'
           MSSQL_SA_PASSWORD: ${{ secrets.MSSQL_TEST_PASSWORD || 'seclume-CI-password-1' }}
@@ -174,7 +174,7 @@ jobs:
       # No health check in the image: creating the database is the first login that has to work.
       - name: Wait for SQL Server and create the test database
         run: |
-          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest" | head -1)
+          id=$(docker ps -q --filter "ancestor=mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f" | head -1)
           if [ -z "$id" ]; then echo "::error title=sqlserver::no SQL Server container found"; exit 1; fi
           pw="$S_MSSQL_TEST_PASSWORD"
           for i in $(seq 1 40); do
