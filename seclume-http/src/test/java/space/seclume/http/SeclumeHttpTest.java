@@ -53,6 +53,31 @@ class SeclumeHttpTest {
         }
     }
 
+    /**
+     * The server's status line goes into messages and into Response.reason(),
+     * which applications log: an ESC sequence or a bare control character in
+     * it arrives escaped, never as the server wrote it.
+     */
+    @Test
+    void theServersStatusLineReachesNoLogRaw() throws Exception {
+        try (FakeHttpsServer server = new FakeHttpsServer(pki.serverContext());
+             SeclumeHttp http = SeclumeHttp.of(url(server, "", ""))) {
+            try (SeclumeHttp.Response response = http.send("GET", "/escape", Map.of(), null)) {
+                assertEquals(500, response.status());
+                assertTrue(response.reason().indexOf('\u001b') < 0, response.reason());
+                assertTrue(response.reason().contains("\\x1b[31mRED"), response.reason());
+                assertTrue(response.toString().indexOf('\u001b') < 0, response.toString());
+            }
+            IOException garbled = assertThrows(IOException.class,
+                    () -> http.send("GET", "/garbled", Map.of(), null).close());
+            String message = String.valueOf(garbled.getMessage());
+            for (char c : message.toCharArray()) {
+                assertTrue(c >= 0x20 && c != 0x7f, "a control character in: " + message);
+            }
+            assertTrue(message.contains("\\x1b]0;owned\\x07"), message);
+        }
+    }
+
     /** Each request that carries the token is a SecretUse event - without the token. */
     @Test
     void eachRequestWithTheTokenIsRecorded() throws Exception {

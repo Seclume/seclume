@@ -188,7 +188,7 @@ public final class SeclumeHttp implements AutoCloseable {
             char c = line.charAt(i);
             if (c <= ' ' || c >= 127) {
                 throw new IllegalArgumentException("the request target has a space, control "
-                        + "or non-ASCII character in it - encode it: " + line);
+                        + "or non-ASCII character in it - encode it: " + space.seclume.internal.ServerText.printable(line));
             }
         }
         return line;
@@ -247,7 +247,8 @@ public final class SeclumeHttp implements AutoCloseable {
                         + abbreviate(statusLine));
             }
             int status = parseStatus(statusLine);
-            String reason = statusLine.length() > 13 ? statusLine.substring(13) : "";
+            // The reason phrase is the server's text, and applications log it.
+            String reason = space.seclume.internal.ServerText.printable(statusLine.length() > 13 ? statusLine.substring(13) : "");
             boolean http10 = statusLine.startsWith("HTTP/1.0");
             TreeMap<String, List<String>> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
             int count = 0;
@@ -339,8 +340,13 @@ public final class SeclumeHttp implements AutoCloseable {
         return false;
     }
 
+    /**
+     * The server's text, for a message: cut short and its control characters
+     * escaped - an ESC or a bare CR in a status line would otherwise reach the
+     * log and the terminal that shows it as the server wrote them.
+     */
     private static String abbreviate(String text) {
-        return text.length() > 120 ? text.substring(0, 120) + "..." : text;
+        return space.seclume.internal.ServerText.printable(text.length() > 120 ? text.substring(0, 120) + "..." : text);
     }
 
     // ---- the pool -------------------------------------------------------------

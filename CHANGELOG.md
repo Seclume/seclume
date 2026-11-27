@@ -7,6 +7,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A server's status or reply line reaches no log raw.** `SeclumeHttp`'s messages and
+  `Response.reason()`, and the IMAP, POP3 and SMTP refusals, carried the server's line as it
+  came - an ESC sequence or a bare CR in it went on to the log and the terminal showing it. It
+  is escaped now, as the database drivers' server messages already were.
 - **A pull request is held to the coverage floors of the base branch.** The floors and their
   gate script were read from the change itself, which could lower a floor in the commit that
   drops the tests it guarded. As with the security gate, a pull request is now checked with the
