@@ -68,6 +68,12 @@ final class AuditVerify {
                         + "the file");
                 return 1;
             }
+            if (key != null && result.first() > 1) {
+                out.println("  vouched for from entry " + result.first() + " on only - the "
+                        + (result.first() - 1) + " entries before are not here: exit 3, not 0. "
+                        + "Give the files before it too, in order");
+                return 3;
+            }
             if (key != null && result.unsigned() > 0) {
                 out.println("  the last " + result.unsigned() + " entries are vouched for by no "
                         + "checkpoint yet: exit 3, not 0");

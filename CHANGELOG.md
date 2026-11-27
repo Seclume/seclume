@@ -33,6 +33,10 @@ All notable changes to seclume are recorded here. Versions follow
   source off `verify-full`, the secret guard off, a lowered SCRAM floor, an opt-out such as
   `seclume.crac.holdExpiry=release` - is the endpoint's `weakenedSettings` too, for a dashboard
   or a check that asks rather than reads the log.
+- **A signed access log is vouched for only from its first entry.** One whose start was cut
+  off - its checkpoints holding over what is left - counted as vouched for. `vouched()` now
+  needs the log from entry 1, and `--audit-verify` with a key exits 3 for such a log, naming the
+  entry it starts at; given with the files before it, the whole log is checked.
 - **The access log check names a log never opened with the key it is checked against.** A
   log whose `log.opened` says it was unsigned - its signing taken out and the chain hashed
   again - or names another key, without a checkpoint to show it, passed as a chain that merely

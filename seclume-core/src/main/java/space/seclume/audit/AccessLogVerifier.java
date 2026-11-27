@@ -53,11 +53,14 @@ public final class AccessLogVerifier {
         /**
          * Whether the signing key vouches for every entry: the log holds, it
          * was checked against a key, at least one checkpoint's signature
-         * held, and no entry follows the last one. This, not {@link #holds()},
-         * is what a check against forgery asks.
+         * held, no entry follows the last one, and the log starts at its first
+         * entry. This, not {@link #holds()}, is what a check against forgery
+         * asks. A log whose start is not here - a rotated file checked alone,
+         * or one cut at the start - is vouched for from {@link #first()} on
+         * only, and that is not the whole log.
          */
         public boolean vouched() {
-            return holds() && checkpoints > 0 && unsigned() == 0;
+            return holds() && checkpoints > 0 && unsigned() == 0 && first == 1;
         }
 
         /** Entries after the last held checkpoint - written, but not yet vouched for. */

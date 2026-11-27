@@ -25,6 +25,44 @@ class AuditVerifyTest {
     @TempDir
     Path directory;
 
+    /**
+     * Checked against the key, a signed log with its start cut off - its
+     * checkpoints hold over what is left - is vouched for from its first
+     * entry here on only: exit 3. With the file before it, the whole log: 0.
+     */
+    @Test
+    void aSignedLogCutAtTheStartIsNotVouchedForWhole() throws Exception {
+        assumeTrue(PrivateSigningKey.available(), "no OpenSSL 3 or CNG to sign with");
+        try (PrivateSigningKey key = PrivateSigningKey.generateP256()) {
+            Path file = directory.resolve("signed.jsonl");
+            try (AccessLog log = AccessLog.open(file, key, null)) {
+                AccessLog.install(log);
+                for (int i = 0; i < 4; i++) {
+                    AccessLog.event("secret.read", Map.of("provider", "file", "outcome", "ok"));
+                }
+                log.checkpoint();
+                AccessLog.event("secret.read", Map.of("provider", "file", "outcome", "ok"));
+            } finally {
+                AccessLog.install(null);
+            }
+            Path der = Files.write(directory.resolve("signed-key.der"), key.publicKey());
+            List<String> lines = Files.readAllLines(file);
+            Path older = Files.writeString(directory.resolve("signed.jsonl.1"),
+                    String.join("\n", lines.subList(0, 3)) + "\n");
+            Path newer = Files.writeString(directory.resolve("signed-now.jsonl"),
+                    String.join("\n", lines.subList(3, lines.size())) + "\n");
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            PrintStream print = new PrintStream(out, true, StandardCharsets.UTF_8);
+            assertEquals(3, AuditVerify.run(List.of(newer.toString(), der.toString()), print, print),
+                    out.toString(StandardCharsets.UTF_8));
+            assertTrue(out.toString(StandardCharsets.UTF_8).contains("vouched for from entry 4"),
+                    out.toString(StandardCharsets.UTF_8));
+            out.reset();
+            assertEquals(0, AuditVerify.run(List.of(older.toString(), newer.toString(),
+                    der.toString()), print, print), out.toString(StandardCharsets.UTF_8));
+        }
+    }
+
     @Test
     void holdsChangedAndTheKeyInBothSpellings() throws Exception {
         assumeTrue(PrivateSigningKey.available(), "no OpenSSL 3 or CNG to sign with");
