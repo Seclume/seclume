@@ -306,6 +306,17 @@ public final class FakeWorkloadApi implements AutoCloseable {
                 trailers.write('0');
                 write(client, frame(0x1, 0x4 | 0x1, 1, trailers.toByteArray()));
             }
+            // Closed as an agent closes: our side first, then what the client
+            // still sends (its SETTINGS ACK, a WINDOW_UPDATE) read to the end.
+            // Closed with those unread, the socket was reset - on Windows the
+            // client then lost the answer already in its buffer ("Connection
+            // reset", now and then, under load).
+            streams.add(client);
+            client.shutdownOutput();
+            java.nio.ByteBuffer drain = java.nio.ByteBuffer.allocate(512);
+            while (client.read(drain) >= 0) {
+                drain.clear();
+            }
             return;
         }
         Mode now = mode;
