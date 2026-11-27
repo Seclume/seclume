@@ -1324,7 +1324,9 @@ webhooks.verifyStripe(request.getHeader("Stripe-Signature"), body, Duration.ofMi
   there. So OpenSSL 3 on 64-bit Linux and macOS or CNG on Windows; HMAC works everywhere.
 - **Verifying** tokens signed with this HMAC key takes the algorithm from the key, never from
   the token (`alg: none` and a swapped algorithm are refused). It compares in constant time
-  and checks `exp` and `nbf` with a leeway (`leeway=`, 60 seconds by default). Tokens signed
+  and checks `exp` and `nbf` with a leeway (`leeway=`, 60 seconds by default). A token without
+  `exp` is refused unless the spec says `require-exp=false`, and `max-lifetime=` seconds
+  bounds `exp - iat`, with both required. Tokens signed
   with a private key are checked with the public key, which is no secret, so any JWT library
   can do that.
 

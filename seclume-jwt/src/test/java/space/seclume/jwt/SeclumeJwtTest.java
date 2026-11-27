@@ -38,6 +38,9 @@ import space.seclume.crypto.OpenSslSigningKey;
  */
 class SeclumeJwtTest {
 
+    /** An expiry far ahead, for the tests about something else. */
+    private static final long FAR = 4_102_444_800L;
+
     private static final String KEY = "a-32-byte-hmac-key-for-hs256-ok!";
     private static final Base64.Decoder B64 = Base64.getUrlDecoder();
 
@@ -73,7 +76,7 @@ class SeclumeJwtTest {
         Path key = file(dir, "hs", KEY);
         try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
             var events = space.seclume.tck.Recorded.during(() -> {
-                String token = jwt.sign(Map.of("sub", "x"));
+                String token = jwt.sign(Map.of("sub", "x", "exp", FAR));
                 jwt.verify(token);
                 assertThrows(InvalidTokenException.class, () -> jwt.verify(
                         token.substring(0, token.lastIndexOf('.') + 1) + "AAAA"));
@@ -95,6 +98,7 @@ class SeclumeJwtTest {
             claims.put("sub", "user-42");
             claims.put("roles", List.of("a", "b"));
             claims.put("n", 7);
+            claims.put("exp", FAR);
             String token = jwt.sign(claims);
             String[] parts = token.split("\\.");
             assertEquals("{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"k1\"}",
@@ -105,7 +109,7 @@ class SeclumeJwtTest {
                     .getBytes(StandardCharsets.US_ASCII));
             assertEquals(Base64.getUrlEncoder().withoutPadding().encodeToString(expected),
                     parts[2]);
-            assertEquals("{\"sub\":\"user-42\",\"roles\":[\"a\",\"b\"],\"n\":7}",
+            assertEquals("{\"sub\":\"user-42\",\"roles\":[\"a\",\"b\"],\"n\":7,\"exp\":4102444800}",
                     jwt.verify(token));
         }
     }
@@ -114,7 +118,7 @@ class SeclumeJwtTest {
     void whatVerifyRefuses(@TempDir Path dir) throws Exception {
         Path key = file(dir, "hs", KEY);
         try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
-            String token = jwt.sign(Map.of("sub", "a"));
+            String token = jwt.sign(Map.of("sub", "a", "exp", FAR));
             String[] parts = token.split("\\.");
             String none = Base64.getUrlEncoder().withoutPadding().encodeToString(
                     "{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8));
@@ -132,7 +136,7 @@ class SeclumeJwtTest {
         try (SeclumeJwt wrongKey = SeclumeJwt.of(spec("HS256", file(dir, "other",
                 "another-32-byte-key-for-hs256!!!"), ""));
              SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
-            String token = wrongKey.sign(Map.of("sub", "a"));
+            String token = wrongKey.sign(Map.of("sub", "a", "exp", FAR));
             assertMessage("does not match", () -> jwt.verify(token));
         }
     }
@@ -147,7 +151,7 @@ class SeclumeJwtTest {
     void aTokenIsAcceptedOnlyAsItIsWritten(@TempDir Path dir) throws Exception {
         Path key = file(dir, "hs", KEY);
         try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
-            String token = jwt.sign(Map.of("sub", "a"));
+            String token = jwt.sign(Map.of("sub", "a", "exp", FAR));
             jwt.verify(token);
             int dot = token.lastIndexOf('.');
             String signature = token.substring(dot + 1);
@@ -173,7 +177,7 @@ class SeclumeJwtTest {
                     Map.of("sub", "a"));
             assertMessage("crit", () -> jwt.verify(token));
             // Without crit the same extra header parameter is only information.
-            jwt.verify(jwt.sign(Map.of("exp-bound", true), Map.of("sub", "a")));
+            jwt.verify(jwt.sign(Map.of("exp-bound", true), Map.of("sub", "a", "exp", FAR)));
         }
     }
 
@@ -186,8 +190,8 @@ class SeclumeJwtTest {
             jwt.verify(jwt.sign(Map.of("exp", 1005)));                 // in time
             jwt.verify(jwt.sign(Map.of("exp", 995)));                  // within the leeway
             assertMessage("expired", () -> jwt.verify(jwt.sign(Map.of("exp", 990))));
-            jwt.verify(jwt.sign(Map.of("nbf", 1008)));                 // within the leeway
-            assertMessage("not valid before", () -> jwt.verify(jwt.sign(Map.of("nbf", 1011))));
+            jwt.verify(jwt.sign(Map.of("nbf", 1008, "exp", 2000)));                 // within the leeway
+            assertMessage("not valid before", () -> jwt.verify(jwt.sign(Map.of("nbf", 1011, "exp", 2000))));
             assertMessage("whole number", () -> jwt.verify(jwt.sign(Map.of("exp", "soon"))));
         }
     }
@@ -196,7 +200,7 @@ class SeclumeJwtTest {
     void aShortHmacKeyIsRefused(@TempDir Path dir) throws Exception {
         try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", file(dir, "short", "too-short"), ""))) {
             IllegalStateException e = assertThrows(IllegalStateException.class,
-                    () -> jwt.sign(Map.of("sub", "a")));
+                    () -> jwt.sign(Map.of("sub", "a", "exp", FAR)));
             assertTrue(e.getMessage().contains("at least 32 bytes"), e.getMessage());
         }
     }
@@ -224,7 +228,7 @@ class SeclumeJwtTest {
 
         try (SeclumeJwt wrong = SeclumeJwt.of(spec("ES256", rsaKey, ""))) {
             IllegalStateException e = assertThrows(IllegalStateException.class,
-                    () -> wrong.sign(Map.of("sub", "a")));
+                    () -> wrong.sign(Map.of("sub", "a", "exp", FAR)));
             assertTrue(e.getMessage().contains("needs an EC key"), e.getMessage());
             assertThrows(IllegalStateException.class, () -> wrong.verify("a.b.c"));
         }
@@ -247,7 +251,7 @@ class SeclumeJwtTest {
             Path key = file(dir, wrong[0] + "-" + wrong[1] + ".pem", pem(ecGenerator.generateKeyPair()));
             try (SeclumeJwt jwt = SeclumeJwt.of(spec(wrong[0], key, ""))) {
                 IllegalStateException e = assertThrows(IllegalStateException.class,
-                        () -> jwt.sign(Map.of("sub", "a")), wrong[0] + " with " + wrong[1]);
+                        () -> jwt.sign(Map.of("sub", "a", "exp", FAR)), wrong[0] + " with " + wrong[1]);
                 assertTrue(e.getMessage().contains("curve"), e.getMessage());
             }
         }
@@ -280,5 +284,41 @@ class SeclumeJwtTest {
     private static void assertMessage(String part, org.junit.jupiter.api.function.Executable e) {
         RuntimeException thrown = assertThrows(RuntimeException.class, e);
         assertTrue(thrown.getMessage().contains(part), thrown.getMessage());
+    }
+
+    /**
+     * A token without exp was accepted: valid for ever, a key for good once
+     * it leaks. Refused by default now; require-exp=false accepts it where
+     * that is meant.
+     */
+    @Test
+    void aTokenWithoutExpIsRefusedUnlessSaidOtherwise(@TempDir Path dir) throws Exception {
+        Path key = file(dir, "hs", KEY);
+        try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, ""))) {
+            assertMessage("no exp", () -> jwt.verify(jwt.sign(Map.of("sub", "a"))));
+        }
+        try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, "&require-exp=false"))) {
+            assertTrue(jwt.verify(jwt.sign(Map.of("sub", "a"))).contains("\"a\""));
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> SeclumeJwt.of(spec("HS256", key, "&require-exp=maybe")));
+    }
+
+    /** max-lifetime: iat and exp required, exp - iat at most that long, iat not ahead. */
+    @Test
+    void maxLifetimeBoundsWhatATokenMayClaim(@TempDir Path dir) throws Exception {
+        Path key = file(dir, "hs", KEY);
+        Clock at1000 = Clock.fixed(Instant.ofEpochSecond(1000), ZoneOffset.UTC);
+        try (SeclumeJwt jwt = SeclumeJwt.of(spec("HS256", key, "&leeway=10&max-lifetime=900"))) {
+            jwt.clock(at1000);
+            jwt.verify(jwt.sign(Map.of("iat", 1000, "exp", 1900)));
+            assertMessage("longer than max-lifetime",
+                    () -> jwt.verify(jwt.sign(Map.of("iat", 1000, "exp", 1901))));
+            assertMessage("needs both iat and exp", () -> jwt.verify(jwt.sign(Map.of("exp", 1500))));
+            assertMessage("in the future",
+                    () -> jwt.verify(jwt.sign(Map.of("iat", 1500, "exp", 1600))));
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> SeclumeJwt.of(spec("HS256", key, "&max-lifetime=0")));
     }
 }

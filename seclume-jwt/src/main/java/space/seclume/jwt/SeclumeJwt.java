@@ -33,7 +33,10 @@ import space.seclume.internal.JsonOff;
  * <p>{@link #verify} is for tokens signed with this HMAC key. It takes the
  * algorithm from the key, never from the token - a token that names another
  * one, {@code none} included, is refused - compares the signature in constant
- * time, and checks {@code exp} and {@code nbf} when they are there. A token
+ * time, and checks {@code exp} - required unless {@code require-exp=false}:
+ * a token without it is valid for ever - and {@code nbf} when it is there;
+ * with {@code max-lifetime=} seconds, {@code iat} is required too and
+ * {@code exp - iat} may be no longer than that. A token
  * signed with a private key is checked with the public key, which is no secret
  * and any JWT library will do.
  */
@@ -44,20 +47,30 @@ public final class SeclumeJwt implements AutoCloseable {
 
     private final SigningKey key;
     private final Duration leeway;
+    private final boolean requireExp;
+    /** The longest {@code exp - iat} accepted, or null for no bound. */
+    private final Long maxLifetime;
     private Clock clock = Clock.systemUTC();
 
     private SeclumeJwt(SigningKey key, Duration leeway) {
+        this(key, leeway, true, null);
+    }
+
+    private SeclumeJwt(SigningKey key, Duration leeway, boolean requireExp, Long maxLifetime) {
         this.key = key;
         this.leeway = leeway;
+        this.requireExp = requireExp;
+        this.maxLifetime = maxLifetime;
     }
 
     /**
      * {@code ALG?kid=...&provider=...} - see the class comment; {@code leeway=}
      * seconds of clock difference allowed for {@code exp} and {@code nbf}
-     * (60 by default).
+     * (60 by default); {@code require-exp=false} to accept a token without
+     * {@code exp}; {@code max-lifetime=} seconds, the longest {@code exp - iat}.
      */
     public static SeclumeJwt of(String spec) {
-        SigningKey key = SigningKey.of(spec, "leeway");
+        SigningKey key = SigningKey.of(spec, "leeway", "require-exp", "max-lifetime");
         String leeway = key.options.get("leeway");
         long seconds;
         try {
@@ -73,7 +86,30 @@ public final class SeclumeJwt implements AutoCloseable {
             throw new IllegalArgumentException("leeway is 0 to " + MAX_LEEWAY_SECONDS
                     + " seconds of clock skew, not " + seconds);
         }
-        return new SeclumeJwt(key, Duration.ofSeconds(seconds));
+        String require = key.options.getOrDefault("require-exp", "true");
+        if (!require.equals("true") && !require.equals("false")) {
+            key.close();
+            throw new IllegalArgumentException("require-exp is true or false, not '" + require
+                    + "'");
+        }
+        String lifetime = key.options.get("max-lifetime");
+        Long maxLifetime = null;
+        if (lifetime != null) {
+            try {
+                maxLifetime = Long.parseLong(lifetime);
+            } catch (NumberFormatException e) {
+                key.close();
+                throw new IllegalArgumentException("max-lifetime is a number of seconds, not '"
+                        + lifetime + "'", e);
+            }
+            if (maxLifetime < 1) {
+                key.close();
+                throw new IllegalArgumentException("max-lifetime is at least one second, not "
+                        + maxLifetime);
+            }
+        }
+        return new SeclumeJwt(key, Duration.ofSeconds(seconds), require.equals("true"),
+                maxLifetime);
     }
 
     /** Clock skew, not a second lifetime: five minutes at most. */
@@ -180,8 +216,29 @@ public final class SeclumeJwt implements AutoCloseable {
         }
         long now = clock.instant().getEpochSecond();
         Long exp = number(payload, "exp");
+        if (exp == null && requireExp) {
+            // Without exp a token is valid for ever: one that leaks once is a
+            // key for good. Accepted only where require-exp=false says so.
+            throw new InvalidTokenException("the token has no exp - it would be valid for ever; "
+                    + "require-exp=false accepts such tokens");
+        }
         if (exp != null && now - leeway.toSeconds() >= exp) {
             throw new InvalidTokenException("the token expired at " + exp);
+        }
+        if (maxLifetime != null) {
+            Long iat = number(payload, "iat");
+            if (iat == null || exp == null) {
+                throw new InvalidTokenException("max-lifetime needs both iat and exp in the "
+                        + "token");
+            }
+            if (iat > now + leeway.toSeconds()) {
+                throw new InvalidTokenException("the token says it was issued at " + iat
+                        + ", in the future");
+            }
+            if (exp - iat > maxLifetime) {
+                throw new InvalidTokenException("the token lives " + (exp - iat) + " s, longer "
+                        + "than max-lifetime " + maxLifetime + " s");
+            }
         }
         Long nbf = number(payload, "nbf");
         if (nbf != null && now + leeway.toSeconds() < nbf) {
