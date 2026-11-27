@@ -215,6 +215,56 @@ class SessionResetTest {
     }
 
     /**
+     * A transaction begun by a statement with auto-commit on - the driver does
+     * not know of it - is not lent on, and the next borrower is not the one
+     * who finds out: their first statement works, the row is not there, and
+     * they are not inside a transaction.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void aTransactionBegunBehindTheDriversBackIsNotLentOn(Db db) throws Exception {
+        String begin = switch (db.name()) {
+            case "PostgreSQL" -> "begin";
+            case "MySQL" -> "start transaction";
+            case "SQL Server" -> "begin transaction";
+            default -> null;                          // Oracle has no BEGIN statement
+        };
+        org.junit.jupiter.api.Assumptions.assumeTrue(begin != null, "no explicit BEGIN");
+        String table = db.name().equals("SQL Server") ? "dbo.seclume_begun_tx" : "seclume_begun_tx";
+        PoolSettings settings = settings();
+        settings.setMaximumPoolSize(1);
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings)) {
+            try (Connection c = pool.getConnection()) {
+                try {
+                    execute(c, "drop table " + table);
+                } catch (SQLException absent) {
+                    // not there yet
+                }
+                execute(c, "create table " + table + " (id int)");
+            }
+            long refusedBefore = pool.resetsRefused();
+            try (Connection c = pool.getConnection()) {
+                assertTrue(c.getAutoCommit());
+                execute(c, begin);
+                execute(c, "insert into " + table + " values (1)");
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals("0", ask(c, "select count(*) from " + table),
+                        "the row of the begun transaction reached the next borrower");
+                if (db.name().equals("SQL Server")) {
+                    assertEquals("0", ask(c, "select @@trancount"));
+                }
+                execute(c, "drop table " + table);
+            }
+            if (db.name().equals("PostgreSQL")) {
+                // DISCARD ALL cannot run in a transaction block: the reset is
+                // refused and the session replaced, not lent with the block open.
+                assertEquals(1, pool.resetsRefused() - refusedBefore);
+            }
+        }
+    }
+
+    /**
      * SQL Server: EXECUTE AS without REVERT must not hand the next borrower
      * the impersonated user, and an application role set without a cookie -
      * which no reset can undo - must not either.
