@@ -57,9 +57,11 @@ class GrpcTest {
             assertTrue(server.isAlive() && System.nanoTime() < deadline, "the server did not start");
             Thread.sleep(50);
         }
-        channel = SeclumeGrpc.channel("localhost", Integer.parseInt(Files.readString(port).trim()),
+        int number = Integer.parseInt(Files.readString(port).trim());
+        channel = SeclumeGrpc.channel("localhost", number,
                 "tlsRootCert=" + directory.resolve("cert.pem")).build();
-        bearer = SeclumeGrpc.bearer("provider=file&path=" + directory.resolve("token"));
+        endpoint = "localhost:" + number;
+        bearer = SeclumeGrpc.bearer("provider=file&path=" + directory.resolve("token"), endpoint);
     }
 
     @AfterAll
@@ -76,6 +78,9 @@ class GrpcTest {
             }
         }
     }
+
+    /** The channel's {@code host:port}, which the credentials are bound to. */
+    private static String endpoint;
 
     private static String call(CallCredentials credentials, String request) {
         return ClientCalls.blockingUnaryCall(channel, Echo.METHOD,
@@ -107,8 +112,21 @@ class GrpcTest {
     @Test
     void apiKeyHeader() {
         CallCredentials apiKey = SeclumeGrpc.header("x-api-key", "provider=file&path="
-                + directory.resolve("token"));
+                + directory.resolve("token"), endpoint);
         assertEquals("ok key", call(apiKey, "key"));
+    }
+
+    /**
+     * Credentials bound to another server, used on this channel: the token
+     * does not go - this server gets the placeholder, and refuses it.
+     */
+    @Test
+    void credentialsForAnotherServerSendNoToken() {
+        CallCredentials elsewhere = SeclumeGrpc.bearer("provider=file&path="
+                + directory.resolve("token"), "api.example.com:443");
+        StatusRuntimeException refused = assertThrows(StatusRuntimeException.class,
+                () -> call(elsewhere, "elsewhere"));
+        assertEquals(Status.Code.UNAUTHENTICATED, refused.getStatus().getCode());
     }
 
     @Test

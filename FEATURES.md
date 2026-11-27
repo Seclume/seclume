@@ -1849,12 +1849,16 @@ Without the remote URL, the secret is bound to the first server that asks for it
 
 ```java
 ManagedChannel channel = SeclumeGrpc.channel("api.example.com", 443, "").build();
-CallCredentials token = SeclumeGrpc.bearer("provider=file&path=/run/secrets/token");
+CallCredentials token = SeclumeGrpc.bearer("provider=file&path=/run/secrets/token",
+        "api.example.com:443");
 stub.withCallCredentials(token).call(request);
 ```
 
 - **Transport:** the channel is gRPC's OkHttp transport over the HTTP/2 sockets above.
-  `SeclumeGrpc.header("x-api-key", spec)` covers API keys.
+  `SeclumeGrpc.header("x-api-key", spec, "api.example.com:443")` covers API keys.
+- **Bound to its server:** the token goes to the `host:port` named, and only there. The same
+  credentials used on a channel to another host send the placeholder, which that host refuses.
+  The forms without a server (deprecated) bound the token to whichever server came first.
 - **Limits:** the transport must not Huffman-code header strings; gRPC's OkHttp transport
   does not, and a block that does is refused rather than sent. The Netty transport is not
   covered: it does its own TLS.

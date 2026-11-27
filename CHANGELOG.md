@@ -7,6 +7,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **gRPC call credentials name their server.** `SeclumeGrpc.bearer(spec, "host:port")` and
+  `header(name, spec, "host:port")` send the secret to that server only; the forms without one
+  are deprecated, as `SeclumeGit.credentials(user, spec)` was - they bound the secret to
+  whichever server they were first used with.
 - **MySQL and MariaDB: a borrower's `SET ROLE` no longer reaches the next borrower.**
   `COM_RESET_CONNECTION` keeps the active roles (measured on MySQL 8.4 and MariaDB 11.4): a
   borrower that activated a role handed its privileges to whoever borrowed the connection
