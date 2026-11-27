@@ -328,7 +328,7 @@ class SpiffeTest {
                 space.seclume.internal.Checkpoint.wipeAll();
                 for (String by : PrivateSigningKey.heldBy()) {
                     assertFalse(by.contains("Spiffe"), "a key is still held by " + by
-                            + " - it would be in the image");
+                            + " - it would be in the image" + spiffeThreads());
                 }
                 String alias = manager.chooseServerAlias("EC", null, null);
                 assertEquals(2, manager.generations(), "the agent was not asked again");
@@ -379,8 +379,32 @@ class SpiffeTest {
 
     private static void assertNoSpiffeKey(String when) {
         for (String by : PrivateSigningKey.heldBy()) {
-            assertFalse(by.contains("Spiffe"), "a key is still held by " + by + " " + when);
+            assertFalse(by.contains("Spiffe"), "a key is still held by " + by + " " + when
+                    + spiffeThreads());
         }
+    }
+
+    /**
+     * For a failure's message: the threads of SPIFFE key managers still alive
+     * and where each is - which one fetched the key that is still held. The
+     * failure seen only on the sanitizer job's runner did not say.
+     */
+    private static String spiffeThreads() {
+        StringBuilder out = new StringBuilder("; threads:");
+        Thread.getAllStackTraces().forEach((thread, frames) -> {
+            if (thread.getName().contains("spiffe") || java.util.Arrays.stream(frames)
+                    .anyMatch(f -> f.getClassName().contains("Spiffe"))) {
+                out.append(" [").append(thread.getName()).append(' ')
+                        .append(thread.getState());
+                for (int i = 0; i < Math.min(6, frames.length); i++) {
+                    String type = frames[i].getClassName();
+                    out.append(" < ").append(type.substring(type.lastIndexOf('.') + 1))
+                            .append('.').append(frames[i].getMethodName());
+                }
+                out.append(']');
+            }
+        });
+        return out.toString();
     }
 
     /**

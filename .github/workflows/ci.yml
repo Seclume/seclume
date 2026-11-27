@@ -1690,15 +1690,17 @@ jobs:
             seclume-postgresql/target/surefire-reports/*ProcessMemoryTest.txt
           # R2DBC's heap against the same server; the other three databases
           # are not in this job and skip. Case [1] is PostgreSQL, and it must
-          # have run and passed - a self-closed testcase has no <skipped/>.
+          # have run and passed - no <failure>, <error> or <skipped> in it.
           .github/scripts/mvnw-retry.sh -B -pl seclume-r2dbc -am test \
             -Dtest='LocalR2dbcFourDatabasesTest#thePasswordIsNotOnTheHeap,LocalEncryptedR2dbcTest' \
             -Dsurefire.failIfNoSpecifiedTests=false
-          grep -qE 'name="thePasswordIsNotOnTheHeap\(Db\)\[1\]"[^>]*/>' \
-            seclume-r2dbc/target/surefire-reports/TEST-*LocalR2dbcFourDatabasesTest.xml
+          python3 .github/scripts/require_testcase.py \
+            'seclume-r2dbc/target/surefire-reports/TEST-*LocalR2dbcFourDatabasesTest.xml' \
+            'thePasswordIsNotOnTheHeap(Db)[1]'
           # Field encryption over R2DBC, against the same server: case [1] again.
-          grep -qE 'name="valuesGoInEncryptedAndComeBackIntoNativeMemory\(Db\)\[1\]"[^>]*/>' \
-            seclume-r2dbc/target/surefire-reports/TEST-*LocalEncryptedR2dbcTest.xml
+          python3 .github/scripts/require_testcase.py \
+            'seclume-r2dbc/target/surefire-reports/TEST-*LocalEncryptedR2dbcTest.xml' \
+            'valuesGoInEncryptedAndComeBackIntoNativeMemory(Db)[1]'
       - if: always()
         run: |
           rm -f .local-pgtls-password
@@ -2057,7 +2059,7 @@ jobs:
                       print(f"::error title={case.get('classname')}.{case.get('name')}::{text}")
           PY
       - name: Verify pool isolation against MySQL
-        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306
+        run: .github/scripts/mvnw-retry.sh -B -pl seclume-pool -am test -Dtest=SessionResetTest -Dsurefire.failIfNoSpecifiedTests=false -Dseclume.mysql.port=3306 ${{ startsWith(matrix.server, 'mariadb') && '-Dseclume.mysql.allowLegacyHashOverUnverifiedTls=true' || '' }}
       - name: Require executed database regression tests
         if: always()
         run: python3 .github/scripts/require_pool_tests.py "MySQL"

@@ -117,7 +117,7 @@ final class SpiffeKeyManager extends RotatingKeyManager {
                 svid.key().close();
                 return;
             }
-            fresh = take(svid);
+            fresh = takeOrClose(svid);
         }
         succeeded();
         if (fresh) {
@@ -136,7 +136,7 @@ final class SpiffeKeyManager extends RotatingKeyManager {
             SpiffeWorkloadApi.X509Svid svid = api.fetchX509Svid();
             boolean fresh;
             synchronized (this) {
-                fresh = take(svid);
+                fresh = takeOrClose(svid);
             }
             space.seclume.jfr.Observed.endCertificateRenewal(event, name(),
                     api.socket().toString(), true, notAfter.toEpochMilli(), null);
@@ -145,6 +145,21 @@ final class SpiffeKeyManager extends RotatingKeyManager {
             space.seclume.jfr.Observed.endCertificateRenewal(event, name(),
                     api.socket().toString(), false, notAfter == null ? 0 : notAfter.toEpochMilli(),
                     e.getMessage());
+            throw e;
+        }
+    }
+
+    /**
+     * {@link #take}, and the SVID's key closed if taking it failed: thrown
+     * past here it was nobody's - not installed, not closed, and in OpenSSL's
+     * memory and every checkpoint image from then on. What can throw in take
+     * comes before the install; after it there are assignments only.
+     */
+    private boolean takeOrClose(SpiffeWorkloadApi.X509Svid svid) {
+        try {
+            return take(svid);
+        } catch (RuntimeException e) {
+            svid.key().close();
             throw e;
         }
     }
