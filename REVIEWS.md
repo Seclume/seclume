@@ -478,6 +478,7 @@ protocol text or dribble bytes.
 | 96 | Azure SharedKey | The finding asked for header values to be trimmed and their whitespace folded, as the REST documentation describes. The Azure SDK's credential, the reference that works against the service, does neither, so neither do we. Comparing with it showed a real defect instead: names were sorted by code point, the SDK and service use a `Collator`, so metadata names with `-` or `_` produced a rejected signature. Sorted as the SDK sorts now; a value with a control character is refused | `SharedKeyEquivalenceTest` | #PR |
 | 97 | SPIFFE peers | Without `peer-ids` any workload of the own trust domain was accepted without a word. The trust stays domain-wide, as SPIFFE authorizes by default, and a warning at start names it | `SpiffeTest.withoutPeerIdsTheWideTrustIsWarnedOf` | #PR |
 | 98 | Field context | Every column accepted `encrypt` and `decrypt` without a context, and a value written that way opened in any row. `Context.REQUIRED` columns refuse it; Kafka and Redis use them, and Elasticsearch documents can be bound to their id | `RequiredContextTest`, `EncryptedDocumentTest.aFieldWrittenWithItsIdOpensInNoOtherDocument` | #PR |
+| 99 | NATS options | `configure()` followed by the builder's own `build()` named seclume's data port without registering it, and the port then connected without pin, root CA or filled login. An unregistered port is refused | `UnregisteredOptionsTest` | #PR |
 
 ### Mutation testing of the security paths
 

@@ -72,6 +72,14 @@ public final class SeclumeNatsDataPort extends SocketDataPort {
         synchronized (REGISTRY) {
             this.settings = REGISTRY.get(options);
         }
+        if (this.settings == null) {
+            // SeclumeNats.configure() names this port, and only build()
+            // registers what it needs: without that the connection went out
+            // with neither the pin nor the root CA, the login line unfilled.
+            throw new IllegalStateException("these NATS Options name seclume's data port but "
+                    + "were not built by SeclumeNats.build(builder, url) - builder.build() "
+                    + "alone registers no TLS trust and no credentials; refused");
+        }
         if (this.settings != null
                 && this.settings.mode != NatsSettings.AuthMode.PASSWORD
                 && this.settings.mode != NatsSettings.AuthMode.TOKEN) {

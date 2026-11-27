@@ -85,7 +85,9 @@ public final class SeclumeNats {
      * Configures {@code builder} from a seclume NATS URL (server, TLS, data
      * port, timeouts, and authentication) and returns {@code builder} so the
      * caller may set listeners, reconnect policies or buffer sizes before
-     * calling {@link #build(Options.Builder, String)}.
+     * calling {@link #build(Options.Builder, String)}. Build with that, not
+     * with {@code builder.build()}: only it registers the trust and the
+     * credentials, and Options built otherwise are refused when they connect.
      */
     public static Options.Builder configure(Options.Builder builder, String url) {
         return apply(builder, NatsSettings.of(url));

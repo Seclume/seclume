@@ -133,6 +133,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **NATS: Options not built by `SeclumeNats.build` are refused.** `SeclumeNats.configure()`
+  names seclume's data port, and only `build()` registers the trust and the credentials. Options
+  finished with the builder's own `build()` connected with neither the pin nor the root CA and
+  the login line unfilled; that data port now refuses with a message naming `build`.
 - **SPIFFE: a warning when no `peer-ids` are set.** Every workload of the own trust domain is
   then a peer, as SPIFFE means it; the trust is not narrowed, but the start now says so once.
 - **Azure SharedKey: names sorted as the service sorts them.** `x-ms-*` headers and query
