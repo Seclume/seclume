@@ -225,6 +225,9 @@ For each pool it reports:
 - how many connections the server allows and how many are in use;
 - the pool's own numbers;
 - the seclume version;
+- what a connection tells about itself (login, TLS, certificate, capacity) is asked once and
+  shown again for ten seconds: a dashboard that polls the endpoint does not take a connection
+  from each pool at every poll. The pool's own numbers are always current;
 - `weakenedSettings`: what weakens the defaults, as the start-up line names it - a data source
   off `verify-full`, the secret guard off, an opt-out of a secure default; empty when nothing
   does.

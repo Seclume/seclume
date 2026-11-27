@@ -16,6 +16,9 @@ All notable changes to seclume are recorded here. Versions follow
   connect timeouts is aborted with 08001 naming the budget. A login that is slow on purpose
   (Kerberos with a distant KDC, a cold Vault) needs a longer `connectTimeout`, or a larger
   factor.
+- **`/actuator/seclume` takes no connection from the application at every poll.** It borrowed
+  one from each pool per call to read the login, TLS and certificate; what it learned is shown
+  again for ten seconds now, the pool's numbers always current.
 - **A TLS 1.2 connection is closed when its key wears out.** TLS 1.3 connections change their
   sending key after 2^24 records; TLS 1.2 has no KeyUpdate, and its connections went on under
   one AES-GCM key past that limit. Such a connection is now closed at the limit, sending or

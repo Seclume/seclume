@@ -38,6 +38,20 @@ public final class SeclumeEndpoint {
 
     private final List<SeclumePool> pools;
 
+    /**
+     * How long what a connection told about itself - login, TLS, the
+     * server's certificate and capacity - is shown again without asking: a
+     * dashboard polling the endpoint every second took a connection from each
+     * pool every second, away from the application. The pool's own numbers
+     * are always current.
+     */
+    static final java.time.Duration FACTS_FOR = java.time.Duration.ofSeconds(10);
+
+    private record Facts(long until, Map<String, Object> shown) {
+    }
+
+    private final Map<SeclumePool, Facts> facts = new java.util.concurrent.ConcurrentHashMap<>();
+
     public SeclumeEndpoint(List<SeclumePool> pools) {
         this.pools = List.copyOf(pools);
     }
@@ -64,7 +78,7 @@ public final class SeclumeEndpoint {
         return report;
     }
 
-    private static Map<String, Object> describe(SeclumePool pool, PoolStatistics statistics) {
+    private Map<String, Object> describe(SeclumePool pool, PoolStatistics statistics) {
         Map<String, Object> source = new LinkedHashMap<>();
         Map<String, Object> numbers = new LinkedHashMap<>();
         numbers.put("active", statistics.active());
@@ -72,6 +86,23 @@ public final class SeclumeEndpoint {
         numbers.put("total", statistics.total());
         numbers.put("waiting", statistics.waiting());
         source.put("pool", numbers);
+        Facts known = facts.get(pool);
+        if (known != null && !space.seclume.internal.Deadlines.passed(known.until())) {
+            source.putAll(known.shown());
+            return source;
+        }
+        Map<String, Object> asked = ask(pool, statistics);
+        if (!asked.containsKey("error")) {
+            facts.put(pool, new Facts(space.seclume.internal.Deadlines.after(FACTS_FOR),
+                    java.util.Collections.unmodifiableMap(asked)));
+        }
+        source.putAll(asked);
+        return source;
+    }
+
+    /** What a connection of {@code pool} says about itself - one borrowed for it. */
+    private static Map<String, Object> ask(SeclumePool pool, PoolStatistics statistics) {
+        Map<String, Object> source = new LinkedHashMap<>();
         try (Connection connection = pool.getConnection()) {
             Secured secured = Secured.of(connection);
             source.put("authentication", secured.authenticationMethod());
