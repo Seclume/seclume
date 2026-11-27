@@ -1584,7 +1584,11 @@ public final class OracleSession implements AutoCloseable {
      * {@code LocalLogInAgainTest} checks one by one. About 8 ms instead of
      * 28 for a new connection, without TLS.
      *
-     * <p>An open transaction is rolled back first: a logoff commits it.
+     * <p>An open transaction is rolled back first: a logoff commits it. With
+     * autoCommit on nothing is rolled back, and nothing needs to be: the
+     * server commits a PL/SQL block's or a CALL's DML at once, a query cannot
+     * change data (ORA-14551), and what a SELECT ... FOR UPDATE leaves open
+     * holds locks only - {@code LocalLogInAgainTest} measures each.
      * Everything this side knew about the old session goes with it - parsed
      * cursors, the row window, the session's zone. On any failure the
      * connection is closed; it is not to be used again.
