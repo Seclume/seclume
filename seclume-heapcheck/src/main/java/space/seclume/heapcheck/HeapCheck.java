@@ -462,6 +462,7 @@ public final class HeapCheck {
         boolean takesDump = options.dumpFile() == null;
         Path dump = null;
         Path pendingDump = null;
+        boolean notShared = false;
         try {
             AuditReport.Target target;
             if (takesDump) {
@@ -502,6 +503,16 @@ public final class HeapCheck {
                 System.out.println("asking process " + options.pid() + " for a heap dump ...");
                 ProcessHeap.Jvm jvm = ProcessHeap.dump(options.pid(), writtenAs);
                 target = new AuditReport.Target(options.pid(), jvm, null);
+                if (options.dumpDir() != null
+                        && !Files.exists(dump, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    // --dump-dir names a directory both are meant to share; one
+                    // that is not shared left the dump in the process's file
+                    // system, and "could not check ... NoSuchFile" said nothing
+                    // of where it went.
+                    System.err.println(notSharedMessage(options.pid(), writtenAs, dump));
+                    notShared = true;
+                    return 2;
+                }
             } else {
                 dump = options.dumpFile();
                 if (!Files.isRegularFile(dump)) {
@@ -577,7 +588,11 @@ public final class HeapCheck {
         } finally {
             if (takesDump && options.keep() == null && dump != null) {
                 deleteQuietly(dump);
-                leftInProcess(options.pid(), pendingDump, dump);
+                boolean deletedThere = leftInProcess(options.pid(), pendingDump, dump);
+                if (notShared && deletedThere) {
+                    System.err.println("the dump was deleted in process " + options.pid()
+                            + "'s file system");
+                }
             } else if (takesDump && dump != null) {
                 System.out.println();
                 System.out.println("the dump was kept at " + dump
@@ -823,23 +838,33 @@ public final class HeapCheck {
      * a process whose file system changed under the check - deleted there, or
      * named as left behind.
      */
-    private static void leftInProcess(String pid, Path writtenAs, Path deletedHere) {
+    private static boolean leftInProcess(String pid, Path writtenAs, Path deletedHere) {
         if (writtenAs == null || pid == null || !otherFileSystem(pid)) {
-            return;
+            return false;
         }
         Path absolute = writtenAs.toAbsolutePath();
         Path there = Path.of("/proc", pid, "root").resolve(
                 absolute.getRoot().relativize(absolute).toString());
         if (there.equals(deletedHere) || !Files.exists(there, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-            return;
+            return false;
         }
         try {
             Files.delete(there);
+            return true;
         } catch (IOException e) {
             System.err.println("process " + pid + " wrote its dump to " + writtenAs + " in its "
                     + "own file system, and it could not be deleted - delete it by hand, it "
                     + "contains everything the process had in memory");
+            return false;
         }
+    }
+
+    /** What a --dump-dir that is not shared with the process is reported as. */
+    static String notSharedMessage(String pid, Path writtenAs, Path lookedFor) {
+        return "process " + pid + " wrote its dump to " + writtenAs + ", and it is not at "
+                + lookedFor + " here: --dump-dir has to be a directory this check and the "
+                + "process share (the same volume mounted in both), or run with --in-target, "
+                + "which reads the dump through /proc/" + pid + "/root. Nothing was checked";
     }
 
     private static void deleteQuietly(Path dump) {

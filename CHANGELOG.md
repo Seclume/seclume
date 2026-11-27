@@ -133,6 +133,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **heapcheck: a `--dump-dir` the process does not share is named as such.** The dump stayed in
+  the process's file system, and the check said "could not check process ... - <the missing
+  file>". It now says where the process wrote it, that `--dump-dir` must be shared (or
+  `--in-target` used), and that the dump was deleted in the process's file system.
 - **A database login past its budget says so, in all four drivers.** The budget closed the
   connection, and the error was the read or write the close broke ("the connection failed
   during startup: ..."). It is now a `SQLTransientConnectionException` (08001): "the login to
