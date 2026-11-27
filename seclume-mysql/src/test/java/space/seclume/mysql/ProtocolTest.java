@@ -277,6 +277,38 @@ class ProtocolTest {
 
     // ---- through the JDBC surface ----------------------------------------
 
+    /**
+     * A catalog pattern beyond ASCII goes into the catalog query as
+     * {@code _utf8mb4 X'...'} - its bytes as hex, whatever the connection's
+     * character set would make of the text - with the JDBC wildcard kept.
+     */
+    @Test
+    void aPatternBeyondAsciiGoesAsHex() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.answerWith(List.of(new Column("TABLE_CAT", MyTypes.VAR_STRING, 0, 80)),
+                    List.of());
+            server.start();
+            space.seclume.mysql.jdbc.MyDataSource dataSource =
+                    new space.seclume.mysql.jdbc.MyDataSource();
+            dataSource.setHost("127.0.0.1");
+            dataSource.setPort(server.port());
+            dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
+            dataSource.setDatabase("testdb");
+            dataSource.setUser(USER);
+            dataSource.setSecretProvider(secret());
+            try (Connection connection = dataSource.getConnection();
+                 ResultSet tables = connection.getMetaData().getTables(null, null, "中%",
+                         null)) {
+                assertFalse(tables.next());
+            }
+            String query = server.received().stream().filter(sql -> sql.contains("table_name"))
+                    .findFirst().orElseThrow(() -> new AssertionError(server.received().toString()));
+            assertTrue(query.toLowerCase(java.util.Locale.ROOT).contains("_utf8mb4 x'e4b8ad25'"),
+                    query);
+            assertFalse(query.contains("中"), "the pattern went as text: " + query);
+        }
+    }
+
     @Test
     void theDriverManagerSpeaksToTheServer() throws Exception {
         try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {

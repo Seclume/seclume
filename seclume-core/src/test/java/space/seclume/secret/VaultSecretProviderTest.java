@@ -236,6 +236,33 @@ class VaultSecretProviderTest {
         }
     }
 
+    /** The maximum age is the setting: with kvMaxAgeSeconds=5, read again after five seconds. */
+    @Test
+    @org.junit.jupiter.api.parallel.ResourceLock(
+            org.junit.jupiter.api.parallel.Resources.SYSTEM_PROPERTIES)
+    void theMaximumAgeIsConfigurable() throws Exception {
+        String before = System.getProperty("seclume.vault.kvMaxAgeSeconds");
+        System.setProperty("seclume.vault.kvMaxAgeSeconds", "5");
+        String answer = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
+        MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
+        try (FakeVault vault = new FakeVault(200, answer);
+             VaultSecretProvider provider = provider(vault, "secret/data/app", clock)) {
+            assertEquals("hunter2", read(provider));
+            clock.advance(Duration.ofSeconds(4));
+            assertEquals("hunter2", read(provider));
+            assertEquals(1, vault.served(), "within five seconds: " + vault.requests);
+            clock.advance(Duration.ofSeconds(2));
+            assertEquals("hunter2", read(provider));
+            assertEquals(2, vault.served(), "read again after five seconds: " + vault.requests);
+        } finally {
+            if (before == null) {
+                System.clearProperty("seclume.vault.kvMaxAgeSeconds");
+            } else {
+                System.setProperty("seclume.vault.kvMaxAgeSeconds", before);
+            }
+        }
+    }
+
     /** A target exactly as long as the secret takes it; one byte shorter is refused. */
     @Test
     void theSecretFillsATargetOfItsOwnLengthAndNoShorter() throws Exception {

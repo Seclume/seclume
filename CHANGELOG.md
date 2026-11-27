@@ -185,6 +185,9 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **Vault: `seclume.vault.kvMaxAgeSeconds` is read when it is needed.** It was read once, when
+  the provider class was loaded, so a setting made after that was ignored. It is now read on
+  each use, and is at least one second.
 - **Pool: housekeeping survives a driver whose `close()` throws an Error.** Closing a
   connection for good caught only `SQLException`, and housekeeping caught `RuntimeException`
   and `StackOverflowError`. An `AssertionError` or `LinkageError` from a driver's `close()`

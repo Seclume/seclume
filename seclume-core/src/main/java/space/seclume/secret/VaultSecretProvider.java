@@ -97,9 +97,16 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     /** Ten years. See {@link #refresh}. */
     static final long MAX_LEASE_SECONDS = 10L * 366 * 24 * 3600;
 
-    /** How long a KV secret is used before it is read again ({@code seclume.vault.kvMaxAgeSeconds}). */
-    static final java.time.Duration STATIC_MAX_AGE =
-            java.time.Duration.ofSeconds(Long.getLong("seclume.vault.kvMaxAgeSeconds", 60));
+    /**
+     * How long a KV secret is used before it is read again:
+     * {@code seclume.vault.kvMaxAgeSeconds} (60), at least one second. Read
+     * when it is needed - it was read once, when the class was loaded, so a
+     * setting made after that was ignored.
+     */
+    static java.time.Duration staticMaxAge() {
+        return java.time.Duration.ofSeconds(Math.max(1,
+                Long.getLong("seclume.vault.kvMaxAgeSeconds", 60)));
+    }
     /** The credential in hand, or {@code null} before the first fetch. */
     private SecretScope cached;
     private Instant fetchedAt;
@@ -336,10 +343,10 @@ public final class VaultSecretProvider implements SecretProvider, ExpiringCreden
     private boolean dueForRefresh() {
         if (validUntil == null) {
             // No lease: a KV secret. It does not expire, but it is rotated -
-            // a new version - and is read again after STATIC_MAX_AGE, or a
+            // a new version - and is read again after staticMaxAge(), or a
             // rotation at the source is never taken up (nor seen by a watch).
             return fetchedAt != null
-                    && !clock.instant().isBefore(fetchedAt.plus(STATIC_MAX_AGE));
+                    && !clock.instant().isBefore(fetchedAt.plus(staticMaxAge()));
         }
         if (tokenReplaced()) {
             return true;

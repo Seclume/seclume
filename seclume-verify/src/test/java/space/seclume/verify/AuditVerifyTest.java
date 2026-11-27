@@ -63,6 +63,39 @@ class AuditVerifyTest {
     }
 
     /**
+     * Entries after the last signed checkpoint are in the chain but vouched
+     * for by no signature yet: not a clean 0, and not a broken 1 either - 3,
+     * and the count of them said.
+     */
+    @Test
+    void unsignedEntriesAtTheEndExitWithThree() throws Exception {
+        assumeTrue(PrivateSigningKey.available(), "no OpenSSL 3 or CNG to sign with");
+        try (PrivateSigningKey key = PrivateSigningKey.generateP256()) {
+            Path file = directory.resolve("tail.jsonl");
+            try (AccessLog log = AccessLog.open(file, key, null)) {
+                AccessLog.install(log);
+                AccessLog.event("secret.read", Map.of("provider", "file", "outcome", "ok"));
+            } finally {
+                AccessLog.install(null);
+            }
+            try (AccessLog log = AccessLog.open(file, null, null)) {
+                AccessLog.install(log);
+                AccessLog.event("secret.read", Map.of("provider", "file", "outcome", "ok"));
+                AccessLog.event("secret.read", Map.of("provider", "env", "outcome", "ok"));
+            } finally {
+                AccessLog.install(null);
+            }
+            Path der = Files.write(directory.resolve("tail.der"), key.publicKey());
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            PrintStream print = new PrintStream(out, true, StandardCharsets.UTF_8);
+            int code = AuditVerify.run(List.of(file.toString(), der.toString()), print, print);
+            String said = out.toString(StandardCharsets.UTF_8);
+            assertEquals(3, code, said);
+            assertTrue(said.contains("vouched for by no checkpoint yet"), said);
+        }
+    }
+
+    /**
      * Cut at the start, a log holds - it is what a rotated one looks like. The
      * tool says the first entries are not there; given the file before, it
      * checks the chain across both and finds what is missing.

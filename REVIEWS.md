@@ -493,6 +493,7 @@ protocol text or dribble bytes.
 | 111 | heapcheck keep-dump | `--keep-dump` deleted an existing file at its path before the dump. Refused with exit 2 | `CommandLineTest.keepDumpDoesNotReplaceAFile` | #PR |
 | 112 | Pool housekeeping | An Error from a driver's `close()` escaped `retire` and ended the housekeeping thread: no more sweeping or refilling. `retire` swallows it, housekeeping catches every Error | `ErrorPathsTest.housekeepingSweepsOnAfterACloseThrowsAnError` (red before the fix) | #PR |
 | 113 | Tests the audit asked for | SCRAM `c=` decoded and compared with GS2 header plus certificate hash, and `y,,`; masking 200,000 `&` stays linear; `loginBudgetFactor=1` gives one second; Shamir magic, CRC 0, mixed thresholds, share count 0/255/256; raw NUL in JSON; `1.2.3.` not an address | `ScramTest`, `LinearMaskingTest`, `LoginBudgetTest`, `ShamirSharesEdgesTest`, `JsonOffRegressionTest`, `HostnameMatchEdgeTest` | #PR |
+| 114 | More tests the audit asked for | Unsigned entries after the last checkpoint exit 3; `kvMaxAgeSeconds=5` (now read at use, not at class load); a MySQL catalog pattern beyond ASCII goes as `_utf8mb4 X'...'`; PostgreSQL login fuzzing with ReadyForQuery before AuthenticationOk, and the invariant that no session opens without it | `AuditVerifyTest`, `VaultSecretProviderTest`, `ProtocolTest` (MySQL), `LoginFuzzTest` | #PR |
 
 ### Mutation testing of the security paths
 
