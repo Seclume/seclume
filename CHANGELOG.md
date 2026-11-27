@@ -207,6 +207,10 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **AES-GCM: a close during an encryption is safe.** The OpenSSL and CNG keys read their native
+  context several times per call. A `close()` from another thread freed it in between, a use
+  after free in the memory of the key schedule. Encrypt, decrypt and close are serialized per
+  key now, and CNG refuses a closed key by name instead of with an invalid-handle status.
 - **Kafka and AWS placeholders are random each.** They were a process nonce and a count (AWS:
   and an identity hash), so a placeholder seen in a log named every one after it. Anybody who
   could put text where the rewriter looks could have prepared the next login's. Each is 16

@@ -508,6 +508,7 @@ protocol text or dribble bytes.
 | 126 | Pool schema | A borrower that set a schema on a connection that had none: the connection is closed, not lent on that tenant's schema. It was implemented, the test was missing | `CatalogAndSchemaOnReturnTest.whereNoSchemaWasChosenNoneCanBeChosenAgainAndTheConnectionGoes` | #PR |
 | 127 | Policy: authenticated TLS (#61) | The crypto policy could require forward secrecy and hybrid key exchange, but not that the server was authenticated at all. `TlsLayers` records an unauthenticated connection in the inventory, and `tls.require-authentication` fails the policy on it | `CryptoPolicyTest.aConnectionWhoseServerWasNotCheckedFailsWhenAuthenticationIsRequired`, `theInventoryKeepsAnUnauthenticatedConnection` | #PR |
 | 128 | Pool tests the audit asked for | A wall-clock jump after the open moves no credential deadline; logins that dribble free both slots and name the budget | `CredentialDeadlineClockTest`, `DribblingLoginTest` | #PR |
+| 129 | AES-GCM close race | `OpenSslAesGcm`/`CngAesGcm` freed the native context in `close()` while another thread's `encrypt` still used it (use after free). Encrypt, decrypt and close are synchronized per key; CNG checks for a closed key | `AesGcmCipherTest.aCloseDuringEncryptionIsSafe` | #PR |
 
 ### Mutation testing of the security paths
 
