@@ -169,7 +169,7 @@ public final class AesGcm {
     }
 
     /** The low 32 bits of the counter block, big endian, plus one. */
-    private static void increment(MemorySegment counter) {
+    static void increment(MemorySegment counter) {
         for (int i = 15; i >= 12; i--) {
             int value = (counter.get(ValueLayout.JAVA_BYTE, i) & 0xff) + 1;
             counter.set(ValueLayout.JAVA_BYTE, i, (byte) value);

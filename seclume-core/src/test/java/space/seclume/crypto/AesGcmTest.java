@@ -193,4 +193,28 @@ class AesGcmTest {
         RANDOM.nextBytes(bytes);
         return bytes;
     }
+
+    /**
+     * GCM's counter is the low 32 bits of the block, and it carries across
+     * its bytes: at 2^24 blocks (00 ff ff ff) into the fourth byte from the
+     * end, and at 2^32 round to zero - the twelve bytes of the nonce never
+     * touched. A carry that stopped one byte early would repeat a key stream.
+     */
+    @Test
+    void theCounterCarriesAcrossItsBytesAndWrapsInItsLow32Bits() {
+        String[][] cases = {
+            {"000000ff", "00000100"},
+            {"0000ffff", "00010000"},
+            {"00ffffff", "01000000"},
+            {"ffffffff", "00000000"},
+            {"00000000", "00000001"},
+        };
+        for (String[] c : cases) {
+            byte[] block = HexFormat.of().parseHex("a1a2a3a4a5a6a7a8a9aaabac" + c[0]);
+            MemorySegment counter = MemorySegment.ofArray(block);
+            AesGcm.increment(counter);
+            assertEquals("a1a2a3a4a5a6a7a8a9aaabac" + c[1], HexFormat.of().formatHex(block),
+                    c[0] + " + 1");
+        }
+    }
 }

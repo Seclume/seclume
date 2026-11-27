@@ -1152,6 +1152,12 @@ KMS or Windows, which run in their own CI jobs and not under PIT. The survivors 
 each is a line whose effect no test checks, and the answer is a test that would fail without
 it - not a lower bar.
 
+No mutant is set aside as equivalent. The one that was - `AesGcm.increment`'s carry, which no
+encryption reaches below 2^24 blocks - is killed by testing the counter directly at `00ffffff`
+and `ffffffff` (`AesGcmTest.theCounterCarriesAcrossItsBytesAndWrapsInItsLow32Bits`). A mutant
+that truly cannot change behaviour is listed here, with its class, line and the reason, before
+it is left alive; until then a survivor is a missing test.
+
 ## Required pool isolation and migration coverage
 
 The PostgreSQL, MySQL/MariaDB, SQL Server and Oracle CI jobs run
