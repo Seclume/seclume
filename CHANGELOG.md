@@ -146,6 +146,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **`heapcheck --in-target`: a hostile application cannot lead the check out of its file
+  system.** The check, usually root, walked the application's links itself and opened the path
+  afterwards; in between the application could swap a directory for an absolute link, which
+  the kernel follows from the host's root - and the check read, or deleted, a host file. Every
+  file is now opened by the kernel inside the application's root (`openat2`,
+  `RESOLVE_IN_ROOT`) and read by its descriptor; deletion removes a link, never its target.
+  The same for the dump a process in another container left behind. A FIFO in place of the
+  dump is refused instead of blocking. Linux 5.6 or later.
 - **Documented, and measured: revoking a Vault lease leaves open sessions running.** With
   Vault's default revocation a dropped PostgreSQL user's session carries on, and a pool holds it
   until the lease would have ended. PROVIDERS.md gives the `revocation_statements` that end them

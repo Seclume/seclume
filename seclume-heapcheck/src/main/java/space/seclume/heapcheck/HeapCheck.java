@@ -459,9 +459,43 @@ public final class HeapCheck {
     }
 
     static int run(Options options) {
+        // --in-target: the process's files opened by the kernel inside its
+        // root, never by a path walked here first - see RootedFiles.
+        RootedFiles rooted = null;
+        if (options.inTarget()) {
+            try {
+                rooted = RootedFiles.of(options.pid());
+            } catch (IOException e) {
+                System.err.println("cannot open the file system of process " + options.pid()
+                        + " - " + e.getMessage());
+                return 2;
+            }
+        }
+        try {
+            return run(options, rooted);
+        } finally {
+            if (rooted != null) {
+                rooted.close();
+            }
+        }
+    }
+
+    private static int run(Options options, RootedFiles rooted) {
         List<Secret> secrets = new ArrayList<>();
         for (Path file : options.secretFiles()) {
-            Secret secret = Secret.read(file, options.local(file));
+            Path from;
+            try {
+                from = rooted != null ? rooted.open(file) : options.local(file);
+            } catch (IOException e) {
+                System.err.println("cannot read " + file + " - " + e.getMessage());
+                return 2;
+            }
+            if (from == null) {
+                System.err.println("cannot read " + file + " - it is not there in the file "
+                        + "system of process " + options.pid());
+                return 2;
+            }
+            Secret secret = Secret.read(file, from);
             if (secret == null) {
                 return 2;
             }
@@ -507,11 +541,24 @@ public final class HeapCheck {
                     return 2;
                 }
                 pendingDump = writtenAs;
-                dump = options.local(writtenAs);
-                Files.deleteIfExists(dump);       // the JVM insists on writing it itself
+                // The JVM insists on writing the dump itself.
+                if (rooted != null) {
+                    rooted.delete(writtenAs);
+                } else {
+                    dump = options.local(writtenAs);
+                    Files.deleteIfExists(dump);
+                }
                 System.out.println("asking process " + options.pid() + " for a heap dump ...");
                 ProcessHeap.Jvm jvm = ProcessHeap.dump(options.pid(), writtenAs);
                 target = new AuditReport.Target(options.pid(), jvm, null);
+                if (rooted != null) {
+                    dump = rooted.open(writtenAs);
+                    if (dump == null) {
+                        System.err.println("process " + options.pid() + " wrote no dump at "
+                                + writtenAs + " in its file system; nothing was checked");
+                        return 2;
+                    }
+                }
                 if (options.dumpDir() != null
                         && !Files.exists(dump, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                     // --dump-dir names a directory both are meant to share; one
@@ -532,12 +579,16 @@ public final class HeapCheck {
             }
             // The process could put a link where its dump was written; read
             // through /proc/<pid>/root it would lead into this file system.
-            if (!Files.isRegularFile(dump, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            // (Opened in the process's root, it is checked already, and read by
+            // its descriptor - a link here that leads to the file itself.)
+            if (rooted == null
+                    && !Files.isRegularFile(dump, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
                 System.err.println("the heap dump at " + dump + " is not a regular file - a link "
                         + "or something else was put in its place; nothing was read");
                 return 2;
             }
-            long size = Files.readAttributes(dump, java.nio.file.attribute.BasicFileAttributes.class,
+            long size = rooted != null ? Files.size(dump) : Files.readAttributes(dump,
+                    java.nio.file.attribute.BasicFileAttributes.class,
                     java.nio.file.LinkOption.NOFOLLOW_LINKS).size();
             // A recording holds the environment, the system properties and the
             // command line: what is named secret there is looked for as well.
@@ -595,7 +646,11 @@ public final class HeapCheck {
                     : options.dumpFile()) + " - " + e.getMessage());
             return 2;
         } finally {
-            if (takesDump && options.keep() == null && dump != null) {
+            if (rooted != null) {
+                if (takesDump && pendingDump != null) {
+                    deleteInRoot(rooted, pendingDump);
+                }
+            } else if (takesDump && options.keep() == null && dump != null) {
                 deleteQuietly(dump);
                 boolean deletedThere = leftInProcess(options.pid(), pendingDump, dump);
                 if (notShared && deletedThere) {
@@ -854,12 +909,13 @@ public final class HeapCheck {
         Path absolute = writtenAs.toAbsolutePath();
         Path there = Path.of("/proc", pid, "root").resolve(
                 absolute.getRoot().relativize(absolute).toString());
-        if (there.equals(deletedHere) || !Files.exists(there, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+        if (there.equals(deletedHere)) {
             return false;
         }
-        try {
-            Files.delete(there);
-            return true;
+        // Inside the process's root, by the kernel: a link the process put on
+        // the way must not lead the deletion into this file system.
+        try (RootedFiles rooted = RootedFiles.of(pid)) {
+            return rooted.delete(writtenAs);
         } catch (IOException e) {
             System.err.println("process " + pid + " wrote its dump to " + writtenAs + " in its "
                     + "own file system, and it could not be deleted - delete it by hand, it "
@@ -874,6 +930,15 @@ public final class HeapCheck {
                 + lookedFor + " here: --dump-dir has to be a directory this check and the "
                 + "process share (the same volume mounted in both), or run with --in-target, "
                 + "which reads the dump through /proc/" + pid + "/root. Nothing was checked";
+    }
+
+    private static void deleteInRoot(RootedFiles rooted, Path dump) {
+        try {
+            rooted.delete(dump);
+        } catch (IOException e) {
+            System.err.println("could not delete " + dump + " in the process's file system - "
+                    + "delete it by hand, it contains everything the process had in memory");
+        }
     }
 
     private static void deleteQuietly(Path dump) {

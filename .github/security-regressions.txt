@@ -48,3 +48,4 @@ seclume-verify:VerifyRegressionTest
 seclume-verify:MigrateEncodingTest
 seclume-core:CheckpointHoldTest
 seclume-core:SessionStateTest
+seclume-heapcheck:RootedFilesTest

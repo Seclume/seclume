@@ -253,6 +253,14 @@ application container's process namespace, and seclume-heapcheck runs in it with
   lines go to stderr, and the exit code is the check's.
 - **Same reports as before.** Secrets are named by their paths as given, so reports compare
   across runs with `compare.py` as before.
+- **A hostile application cannot lead it out.** The check usually runs as root, and through
+  `/proc/<pid>/root` the kernel follows an absolute link from the *host's* root. So every file
+  of the application - dump, secrets - is opened by the kernel inside the application's root
+  in one step (`openat2` with `RESOLVE_IN_ROOT`, `RESOLVE_NO_MAGICLINKS`), then read by its
+  descriptor. Deletion goes through the directory opened the same way, so a link is removed,
+  never followed. A FIFO or device in place of the dump is refused. Needs Linux 5.6 or later;
+  without `openat2` nothing is read. `seclume-heapcheck/proof/run-rooted.sh` plants such links
+  in a container: the plain path reads the host's file, the check reads the container's.
 
 **A dump that has to leave the pod.** For a memory leak or a vendor's support case, `redact`
 makes the dump the same way and redacts it inside the pod with `--redact`. Only the redacted
