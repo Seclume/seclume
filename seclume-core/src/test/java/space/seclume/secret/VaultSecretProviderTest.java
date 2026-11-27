@@ -280,6 +280,31 @@ class VaultSecretProviderTest {
     }
 
     /**
+     * A KV secret rotated in Vault reaches a SecretWatch: within the KV age
+     * the provider answers what it read, after it - 61 s on - the new version,
+     * and the watch says it changed.
+     */
+    @Test
+    void aSecretWatchOverVaultSeesTheRotationAfterTheKvAge() throws Exception {
+        String v1 = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter2\"}}}";
+        String v2 = "{\"lease_duration\":0,\"data\":{\"data\":{\"password\":\"hunter3\"}}}";
+        MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
+        java.util.concurrent.atomic.AtomicInteger changed =
+                new java.util.concurrent.atomic.AtomicInteger();
+        try (FakeVault vault = new FakeVault(200, v1, v2);
+             VaultSecretProvider provider = provider(vault, "secret/data/app", clock);
+             SecretWatch watch = SecretWatch.start("app", provider, Duration.ofHours(1),
+                     changed::incrementAndGet)) {
+            assertFalse(watch.checkNow(), "a change within the KV age");
+            assertEquals(0, changed.get());
+            clock.advance(Duration.ofSeconds(61));
+            assertTrue(watch.checkNow(), "the rotation in Vault was not seen");
+            assertEquals(1, changed.get());
+            assertEquals("hunter3", read(provider));
+        }
+    }
+
+    /**
      * An answer that cannot be read through - cut off, or not JSON - is an
      * error, never "no lease_duration here": that would take a dynamic
      * credential for a KV secret and keep it for the KV age.
