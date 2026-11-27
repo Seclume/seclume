@@ -87,6 +87,20 @@ class ForbiddenApiTest {
                 "forbidden constructs in production code:\n" + String.join("\n", findings));
     }
 
+    /** The nested modules are among them, the examples and the test application are not. */
+    @Test
+    void nestedModulesAreScannedToo() throws IOException {
+        List<String> found = productionSources().stream()
+                .map(p -> p.toString().replace('\\', '/')).toList();
+        for (String nested : List.of("seclume-quarkus/runtime/src/main/java",
+                "seclume-quarkus/deployment/src/main/java", "seclume-core/src/main/java")) {
+            assertTrue(found.stream().anyMatch(p -> p.endsWith(nested)), nested + " not in "
+                    + found);
+        }
+        assertTrue(found.stream().noneMatch(p -> p.contains("/examples/")
+                || p.contains("native-it")), found.toString());
+    }
+
     /**
      * The {@code src/main/java} of every module of the build.
      *
@@ -100,11 +114,23 @@ class ForbiddenApiTest {
             root = root.getParent();
         }
         Assumptions.assumeTrue(root != null, "cannot find the root of the build");
+        // Every module at any depth: seclume-quarkus/runtime and /deployment
+        // are production code one level down, and a list of the top level
+        // alone never checked them. Not the examples, which are documentation,
+        // nor a test application, nor anything a build put into target.
+        Path top = root;
         List<Path> sources = new ArrayList<>();
-        try (Stream<Path> modules = Files.list(root)) {
-            for (Path module : modules.sorted().toList()) {
-                Path java = module.resolve("src").resolve("main").resolve("java");
-                if (Files.isDirectory(java)) {
+        try (Stream<Path> tree = Files.walk(root, 4)) {
+            for (Path dir : tree.filter(Files::isDirectory).sorted().toList()) {
+                Path relative = top.relativize(dir);
+                String first = relative.getNameCount() == 0 ? "" : relative.getName(0).toString();
+                if (first.startsWith(".") || first.equals("examples") || first.equals("node_modules")
+                        || relative.toString().replace('\\', '/').contains("/target")
+                        || relative.toString().replace('\\', '/').contains("native-it")) {
+                    continue;
+                }
+                Path java = dir.resolve("src").resolve("main").resolve("java");
+                if (Files.isRegularFile(dir.resolve("pom.xml")) && Files.isDirectory(java)) {
                     sources.add(java);
                 }
             }
