@@ -111,6 +111,17 @@ public final class ChannelBinding {
         if (name.startsWith("SHA512")) {
             return HashAlgorithm.SHA_512;
         }
+        // EdDSA signs without a separate hash, and RFC 5929 names none for it.
+        // OpenSSL reports no digest for such a certificate, and PostgreSQL's
+        // own tls-server-end-point then fails the login on the server side: a
+        // guess here - SHA-512, say - could never match, and leaving the
+        // binding out would give up what it is for.
+        if (name.equals("ED25519") || name.equals("ED448") || name.equals("EDDSA")) {
+            throw new IllegalArgumentException("the server's certificate is signed with "
+                    + signatureAlgorithm + ", for which tls-server-end-point channel binding "
+                    + "defines no hash (RFC 5929) - PostgreSQL cannot compute it either, and "
+                    + "libpq fails the same login. Give the server an RSA or ECDSA certificate");
+        }
         throw new IllegalArgumentException(
                 "the server's certificate is signed with \"" + signatureAlgorithm
                 + "\", and seclume cannot tell which hash belongs to that. Channel binding "
