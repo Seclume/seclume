@@ -123,6 +123,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **Every release is rebuilt from its tag and compared with Maven Central.** `reproducible.yml`
+  runs when a GitHub release is published (or by hand for an earlier tag). It builds the tag as
+  the release is built and compares every jar, sources and javadoc included, byte for byte with
+  Maven Central. Only jars that match get a SLSA build provenance attestation. Rebuilding 0.14.0
+  showed that no jar matched: the release was built on Windows, where `core.autocrlf` put the
+  LICENSE, the license texts and the bundled `pom.xml` into the jars with CRLF. With
+  `.gitattributes` now checking out text with LF everywhere, a Windows build and a Linux build
+  of 0.14.0 are byte for byte the same. 0.15.0 is the first release the check can pass for.
 - **Pull requests that change the security gate are named.** A new workflow, `gates.yml`, lists
   the changed files the gate is made of (workflows, build files, Maven wrapper, `SECURITY.md`,
   the source-rule tests) in the run summary and labels the pull request `touches-gates`. It reads
