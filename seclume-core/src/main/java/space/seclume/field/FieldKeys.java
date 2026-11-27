@@ -569,12 +569,22 @@ public final class FieldKeys implements AutoCloseable {
          */
         private static void refuseTrivial(int id, SecretScope key) {
             int any = 0;
+            int differ = 0;
+            byte first = key.segment().get(ValueLayout.JAVA_BYTE, 0);
             for (int i = 0; i < KEY_LENGTH; i++) {
-                any |= key.segment().get(ValueLayout.JAVA_BYTE, i);
+                byte b = key.segment().get(ValueLayout.JAVA_BYTE, i);
+                any |= b;
+                differ |= b ^ first;
             }
             if (any == 0) {
                 throw new IllegalArgumentException("key " + id + " is 32 zero bytes - a file "
                         + "of zeros or an empty field, not a key");
+            }
+            if (differ == 0) {
+                // One byte 32 times: a placeholder filled in, a test value -
+                // a key with eight bits of choice, not 256.
+                throw new IllegalArgumentException("key " + id + " is one byte repeated 32 "
+                        + "times - a placeholder or a test value, not a key");
             }
         }
 

@@ -7,6 +7,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A field encryption key of one repeated byte is refused.** 32 zero bytes already were; one
+  byte 32 times - a placeholder filled in, a test value - has eight bits of choice and is
+  refused now as well when the key ring is built. Make a real key: `openssl rand -base64 32`.
 - **A database login has a budget: `seclume.loginBudgetFactor` (3) times the connect timeout.**
   A server - or something between - that answered a byte at a time kept a login going for as
   long as it liked. Now a login, the TLS handshake included, that has not finished within three

@@ -533,6 +533,7 @@ protocol text or dribble bytes.
 | 151 | Weakened settings in the actuator (T219) | Only the start-up WARN named them. `SeclumeEndpoint` reports `weakenedSettings` (the same list) | `WeakenedSettingsTest.theEndpointNamesThemToo` | #PR |
 | 152 | TLS 1.2 past the AES-GCM key limit (H15) | The client's own KeyUpdate after 2^24 records skipped TLS 1.2, which has none, so a 1.2 connection went on under one key indefinitely. Now closed at the limit (close_notify, IOException), in both directions; the pool reconnects with new keys | `SendingKeyUpdateTest.aTls12ConnectionIsClosedAtTheLimit` | #PR |
 | 153 | Native ECDSA/ECDH keys closed during use (H51) | `EcdsaSigner` was already synchronized; `NativeEcdh` is thread-confined by contract. The OpenSSL and CNG backends themselves freed the key in `close()` under a running call. Now a read-write lock: calls share it, close waits and frees alone, calls after close are refused (defence in depth, as AES-GCM got) | `NativeKeyCloseRaceTest` (x20) | #PR |
+| 154 | Trivial field keys (H108) | Only 32 zero bytes were refused. Now one repeated byte too (eight bits of choice). Arithmetic sequences are not refused: no key source makes them, and test fixtures do | `FieldKeysTrivialKeyTest`; fixtures in inventory, R2DBC and MongoDB tests changed | #PR |
 
 ### Mutation testing of the security paths
 

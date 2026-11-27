@@ -63,7 +63,9 @@ class LocalEncryptedR2dbcTest {
         return FieldKeys.builder().key(1, new SecretProvider() {
             @Override
             public int writeSecret(MemorySegment target) {
-                target.asSlice(0, 32).fill((byte) 0x2a);
+                for (int i = 0; i < 32; i++) {
+                    target.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, (byte) (0x2a + i * 31));
+                }
                 return 32;
             }
 
