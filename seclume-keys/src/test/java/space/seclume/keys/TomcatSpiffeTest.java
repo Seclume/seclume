@@ -105,9 +105,16 @@ class TomcatSpiffeTest {
             });
             context.addServletMapping("/", "who");
             tomcat.start();
+            // Built from its parts, not with spiffeSslContext: the SVID keys are
+            // closed after the test - left open, the next test that counts the
+            // SPIFFE keys still held found these (seen in CI).
+            SeclumeKeys.Spiffe workloadKeys = SeclumeKeys.spiffe("socket=unix://"
+                    + clientAgent.socket() + "&peer-ids=" + WEB);
             try {
-                SSLContext workload = SeclumeKeys.spiffeSslContext("socket=unix://"
-                        + clientAgent.socket() + "&peer-ids=" + WEB);
+                SSLContext workload = SSLContext.getInstance("TLSv1.3");
+                workload.init(workloadKeys.keys().getKeyManagers(),
+                        workloadKeys.trust().getTrustManagers(),
+                        null);
                 AtomicReference<X509Certificate> seen = new AtomicReference<>();
                 String answer = get(workload, connector.getLocalPort(), seen);
                 assertTrue(answer.contains("secure=true peer=" + CLIENT), answer);
@@ -136,6 +143,8 @@ class TomcatSpiffeTest {
             } finally {
                 tomcat.stop();
                 tomcat.destroy();
+                ((SpiffeKeyManager) workloadKeys.keys().getKeyManagers()[0]).close();
+                ((SpiffeKeyManager) keys).close();
             }
         }
     }
