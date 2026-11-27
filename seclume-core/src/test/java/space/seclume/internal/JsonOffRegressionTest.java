@@ -92,6 +92,14 @@ class JsonOffRegressionTest {
         assertThrows(JsonOff.NotFound.class, () -> string("{\"p\": \"a\nb\"}", "p"));
     }
 
+    /** The edges of RFC 8259's range: NUL and U+001F refused, a space read. */
+    @Test
+    void aRawNulInAStringIsRefused() {
+        assertThrows(JsonOff.NotFound.class, () -> string("{\"p\": \"a\u0000b\"}", "p"));
+        assertThrows(JsonOff.NotFound.class, () -> string("{\"p\": \"a\u001fb\"}", "p"));
+        assertEquals(3, string("{\"p\": \"a b\"}", "p"));
+    }
+
     @Test
     void aRawControlCharacterInASkippedValueIsRefused() {
         assertThrows(JsonOff.NotFound.class,
