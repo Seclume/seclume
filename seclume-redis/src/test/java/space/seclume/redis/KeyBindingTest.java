@@ -50,6 +50,21 @@ class KeyBindingTest {
         }
     }
 
+    /** The edges of the bound round trip: nothing at all, and a value of a mebibyte. */
+    @Test
+    void anEmptyAndAMebibyteValueComeBackUnderTheirKey() {
+        try (FieldKeys keys = ring()) {
+            EncryptedCodec<String, String> codec = EncryptedCodec.of(StringCodec.UTF8, keys, "accounts");
+            for (String value : new String[] {"", "x".repeat(1 << 20)}) {
+                ByteBuffer written = codec.encodeValueFor("account:17", value);
+                assertEquals(value, codec.decodeValueFor("account:17", written.duplicate()),
+                        value.length() + " characters");
+                assertThrows(RuntimeException.class,
+                        () -> codec.decodeValueFor("account:18", written.duplicate()));
+            }
+        }
+    }
+
     @Test
     void aValueBoundToItsKeyIsRefusedUnderAnother() {
         try (FieldKeys keys = ring()) {
