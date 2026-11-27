@@ -74,6 +74,7 @@ final class ScriptedTlsServer implements Transport {
         0, 8,                                 // extensions
         0, 13, 0, 4, 0, 2, 4, 3};             // signature_algorithms: ecdsa_secp256r1_sha256
 
+    private byte[] encryptedExtensions = {Handshake.ENCRYPTED_EXTENSIONS, 0, 0, 2, 0, 0};
     private final Arena arena = Arena.ofShared();
     private final ByteArrayOutputStream fromClient = new ByteArrayOutputStream();
     private ByteBuffer toClient = ByteBuffer.allocate(0);
@@ -151,6 +152,41 @@ final class ScriptedTlsServer implements Transport {
     ScriptedTlsServer certificateRequest(byte[] message) {
         this.certificateRequest = message.clone();
         return this;
+    }
+
+    /** The EncryptedExtensions to send, header included, instead of an empty one. */
+    ScriptedTlsServer encryptedExtensions(byte[] message) {
+        this.encryptedExtensions = message.clone();
+        return this;
+    }
+
+    /**
+     * EncryptedExtensions with one ALPN extension naming {@code protocol} -
+     * whatever the client offered.
+     */
+    static byte[] alpnExtensions(String protocol) {
+        byte[] name = protocol.getBytes(java.nio.charset.StandardCharsets.US_ASCII); // seclume-allow: a protocol name
+        int list = 1 + name.length;
+        int extension = 2 + list;
+        int extensions = 4 + extension;
+        int body = 2 + extensions;
+        byte[] out = new byte[4 + body];
+        int p = 0;
+        out[p++] = Handshake.ENCRYPTED_EXTENSIONS;
+        out[p++] = 0;
+        out[p++] = (byte) (body >> 8);
+        out[p++] = (byte) body;
+        out[p++] = (byte) (extensions >> 8);
+        out[p++] = (byte) extensions;
+        out[p++] = 0;
+        out[p++] = 16;                                  // application_layer_protocol_negotiation
+        out[p++] = (byte) (extension >> 8);
+        out[p++] = (byte) extension;
+        out[p++] = (byte) (list >> 8);
+        out[p++] = (byte) list;
+        out[p++] = (byte) name.length;
+        System.arraycopy(name, 0, out, p, name.length);
+        return out;
     }
 
     /** The alert description the client sent, or -1 if it sent none. */
@@ -390,7 +426,7 @@ final class ScriptedTlsServer implements Transport {
     private byte[] message(Step step, TranscriptHash transcript, KeySchedule schedule,
             MemorySegment digest) throws GeneralSecurityException {
         return switch (step) {
-            case ENCRYPTED_EXTENSIONS -> new byte[] {Handshake.ENCRYPTED_EXTENSIONS, 0, 0, 2, 0, 0};
+            case ENCRYPTED_EXTENSIONS -> encryptedExtensions.clone();
             case CERTIFICATE_REQUEST -> certificateRequest.clone();
             case CERTIFICATE -> {
                 try (Arena scratch = Arena.ofConfined()) {
