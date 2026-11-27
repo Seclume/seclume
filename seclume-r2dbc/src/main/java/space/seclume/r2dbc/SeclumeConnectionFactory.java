@@ -193,12 +193,48 @@ public final class SeclumeConnectionFactory implements ConnectionFactory {
             closeQuietly(jdbc);
             return Mono.error(Errors.translate(e));
         }
+        // A cancel before the lane ran the task dropped it, and nothing closed
+        // the connection already borrowed: IN_USE for good (#63). Whoever
+        // comes first - the task or the cancel - takes it; a cancel that comes
+        // while the task runs is seen by the task when it is done.
+        // And one described but not yet handed on is held here until it is:
+        // handing on and a cancel take it from here, and only one of them can.
+        java.util.concurrent.atomic.AtomicBoolean taken = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean gone = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicReference<Connection> pending =
+                new java.util.concurrent.atomic.AtomicReference<>();
         return lane.call(() -> {
+            if (!taken.compareAndSet(false, true)) {
+                return null;                          // the cancel took it and closed it
+            }
+            Connection made;
             try {
-                return (Connection) new SeclumeConnection(jdbc, lane, dialect);
+                made = new SeclumeConnection(jdbc, lane, dialect);
             } catch (java.sql.SQLException | RuntimeException e) {
                 jdbc.close();
                 throw e;
+            }
+            pending.set(made);
+            if (gone.get() && pending.getAndSet(null) != null) {
+                // Nobody has had it: closed here, at once, not through a
+                // close() that is one more task on a lane being given up.
+                lane.close();
+                closeQuietly(jdbc);
+                return null;
+            }
+            return made;
+        }).<Connection>handle((made, sink) -> {
+            if (pending.compareAndSet(made, null)) {
+                sink.next(made);                      // a cancel took it otherwise, and closed it
+            }
+        }).doOnCancel(() -> {
+            gone.set(true);
+            if (taken.compareAndSet(false, true)) {
+                lane.close();
+                closeQuietly(jdbc);
+            } else if (pending.getAndSet(null) != null) {
+                lane.close();
+                closeQuietly(jdbc);
             }
         }).doOnError(failure -> lane.close())
                 .doOnDiscard(Connection.class, late -> Mono.from(late.close()).subscribe());

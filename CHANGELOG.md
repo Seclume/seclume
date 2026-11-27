@@ -212,6 +212,11 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **R2DBC: a cancelled borrow over SQL Server or Oracle closes its connection.** A connection
+  lent at once is described on the lane for these drivers. A subscriber that cancelled before
+  the lane ran that left the connection borrowed and never closed (#63), and so did one that
+  cancelled while it was being described. Every connection lent is now either handed on or
+  closed.
 - **AES-GCM: a close during an encryption is safe.** The OpenSSL and CNG keys read their native
   context several times per call. A `close()` from another thread freed it in between, a use
   after free in the memory of the key schedule. Encrypt, decrypt and close are serialized per
