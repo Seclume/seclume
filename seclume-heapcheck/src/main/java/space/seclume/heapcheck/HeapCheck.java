@@ -269,6 +269,15 @@ public final class HeapCheck {
             System.exit(2);
             return;
         }
+        // The JVM writes its dump itself and refuses a path that is taken, so
+        // the file there was deleted first - whatever it was. Refused instead,
+        // as --redact refuses.
+        if (keep != null && Files.exists(keep, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            System.err.println("--keep-dump " + keep + ": the file exists, and a dump "
+                    + "does not replace one");
+            System.exit(2);
+            return;
+        }
         if (redact != null && Files.exists(redact)) {
             System.err.println("--redact " + redact + ": the file exists, and a redaction "
                     + "does not overwrite one");

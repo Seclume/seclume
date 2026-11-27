@@ -54,6 +54,23 @@ class CommandLineTest {
                 "a check that could not run reported a clean heap: " + result.output());
     }
 
+    /**
+     * --keep-dump to a path that exists deleted the file there - the JVM
+     * insists on writing its dump itself. It is refused now, as --redact is.
+     */
+    @Test
+    void keepDumpDoesNotReplaceAFile(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path taken = java.nio.file.Files.writeString(dir.resolve("taken.hprof"),
+                "somebody's file");
+        java.nio.file.Path secret = java.nio.file.Files.writeString(dir.resolve("s"), "secret-x1");
+        ChildJvm.Result result = ChildJvm.run(HeapCheck.class, List.of("--pid", "1",
+                "--secret-file", secret.toString(), "--keep-dump", taken.toString()), 60);
+        assertEquals(2, result.exitCode(), result.output());
+        assertTrue(result.output().contains("the file exists"), result.output());
+        assertEquals("somebody's file", java.nio.file.Files.readString(taken));
+    }
+
     /** A dump and a process at once is a misuse, not a guess at which was meant. */
     @Test
     void aDumpAndAProcessTogetherAreRefused() throws Exception {
