@@ -316,6 +316,7 @@ final class FakeMySqlServer implements AutoCloseable {
              OutputStream out = socket.getOutputStream()) {
             sendHandshake(out);
             byte[] login = readPacket(in);
+            lastLogin = login.clone();
             loginAnswers.incrementAndGet();
             if (switchBack) {
                 firstAnswerPlugin = pluginOf(login);
@@ -472,6 +473,14 @@ final class FakeMySqlServer implements AutoCloseable {
         payload.writeBytes("mysql_native_password".getBytes(StandardCharsets.US_ASCII));
         payload.write(0);
         writePacket(out, payload.toByteArray(), 0);
+    }
+
+    private volatile byte[] lastLogin;
+
+    /** The last HandshakeResponse41 as it arrived, or null before any. */
+    byte[] lastLogin() {
+        byte[] login = lastLogin;
+        return login == null ? null : login.clone();
     }
 
     /** The plugin name at the end of a HandshakeResponse41. */
