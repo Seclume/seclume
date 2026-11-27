@@ -298,6 +298,17 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Oracle: a value is never read past what arrived.** The last cell of a row, and a LOB
+  locator a call returned, could announce more bytes than the message held; they were framed
+  anyway, and `getString` or the next LOB call read on into what an earlier message had left
+  in the receive buffer. Both are refused now, like any answer cut short. Found by the new
+  getter fuzzing, which also found two exceptions `getString` does not promise: a time zone
+  offset beyond 18 hours (now `22009`) and a UTF-8 sequence beyond U+10FFFF. The UTF-8
+  decoder follows RFC 3629 now - overlong forms, surrogates and five-byte forms become the
+  replacement character instead of a second spelling of `/` or a quote.
+- **MySQL: getters over a hostile answer, swept and fuzzed like the other drivers'.** The
+  decoder fuzzing's seeds ended their rows in a way a modern session reads as one more row,
+  so they never reached a value; they do now.
 - **PostgreSQL: a ReadyForQuery in place of the login is refused.** A server - or whoever stands
   between - that answered the startup message with ReadyForQuery alone was taken as logged in,
   so neither `requireAuth` nor SCRAM's server signature was ever checked; under `tls=prefer` a

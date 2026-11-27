@@ -44,6 +44,27 @@ class TtcRowCarryTest {
         }
     }
 
+    /**
+     * The last cell of a row announcing more bytes than arrived: refused, not
+     * framed over whatever an earlier message left in the buffer.
+     */
+    @Test
+    void aLastCellLongerThanWhatArrivedIsRefused() {
+        try (WireBuffer in = new WireBuffer(64)) {
+            for (int i = 0; i < 40; i++) {                    // an earlier message
+                in.putByte((byte) 'X');
+            }
+            in.rewind();                                      // the pointers only: the bytes stay
+            putRow(in, "ZL_TICKET");
+            in.putByte((byte) 30);                            // 30 bytes announced
+            in.putByte((byte) 'S');                           // one arrives
+            in.limit(in.position());
+            TtcRow row = new TtcRow(in, COLUMNS);
+            org.junit.jupiter.api.Assertions.assertThrows(WireBuffer.Truncated.class,
+                    () -> row.read(0, null));
+        }
+    }
+
     @Test
     void keepsAValueThatTheNextBlockDoesNotSendAgain() {
         try (WireBuffer first = new WireBuffer(64);

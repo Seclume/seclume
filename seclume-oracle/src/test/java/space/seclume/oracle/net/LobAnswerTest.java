@@ -54,6 +54,28 @@ class LobAnswerTest {
     }
 
     /**
+     * A locator announced longer than what arrived is refused: it is copied
+     * and sent back, and would carry bytes an earlier message left behind.
+     */
+    @Test
+    void aLocatorReachingPastTheAnswerIsRefused() {
+        try (WireBuffer in = new WireBuffer(128); WireBuffer sink = new WireBuffer(16)) {
+            in.putByte((byte) TtcMessage.TYPE_PARAMETER);
+            in.putByte((byte) 0x00);
+            in.putByte((byte) 100);                           // 100 bytes announced
+            for (int i = 0; i < 10; i++) {                    // ten arrive
+                in.putByte((byte) i);
+            }
+            int end = in.position();
+            for (int i = 0; i < 100; i++) {                   // an earlier message's leftovers
+                in.putByte((byte) 0x5a);
+            }
+            org.junit.jupiter.api.Assertions.assertThrows(WireBuffer.Truncated.class,
+                    () -> TtcLob.read(in, 0, end, sink, false));
+        }
+    }
+
+    /**
      * Every value the counter's low byte takes, and 7 - ROW_DATA - among
      * them: the one that used to fail the write.
      */

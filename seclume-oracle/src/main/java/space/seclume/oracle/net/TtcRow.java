@@ -287,6 +287,15 @@ public final class TtcRow {
                 p = skipSigned(p);                     // return code, 1405 if null
             }
         }
+        // Every cell has to lie within what arrived. A length is only read,
+        // never checked against the buffer, and the next column's read is what
+        // used to notice - so the last cell of a row could claim bytes that
+        // never came, and getString read on into whatever an earlier message
+        // had left in the buffer (OraGetterFuzzTest, a ROWID). Reading the
+        // row's last byte throws the Truncated every other short read does.
+        if (p > at) {
+            in.getByte(p - 1);
+        }
         end = p;
         return p;
     }
