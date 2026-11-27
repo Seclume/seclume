@@ -90,8 +90,13 @@ public final class TdsResultSet extends ReadOnlyResultSet implements space.seclu
         } catch (space.seclume.internal.WireBuffer.Truncated cut) {
             throw new SQLException("the value of column " + (column + 1) + " ends before its "
                     + "length says - the server sent less than it announced", "08S01", cut);
-        } catch (IllegalArgumentException | ArithmeticException
-                 | java.time.DateTimeException unreadable) {
+        } catch (ArithmeticException outOfRange) {
+            // A number that is one, and too large for what was asked:
+            // 2^64 + 5 read with getLong. Out of range, as the other drivers
+            // say it - not "not a number".
+            throw new java.sql.SQLDataException("the value of column " + (column + 1)
+                    + " is out of range for the type asked", "22003", outOfRange);
+        } catch (IllegalArgumentException | java.time.DateTimeException unreadable) {
             // A value the converter does not take - a type byte that is not
             // the column's, text where a number was asked for. Only the
             // getters' own paths caught this; getBoolean's did not.
