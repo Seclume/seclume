@@ -1,6 +1,7 @@
 package space.seclume.pool;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -361,6 +362,92 @@ class SessionResetTest {
                 assertEquals(self, ask(c, "select user_name()"),
                         "the next borrower runs as the application role");
                 execute(c, "drop application role " + role);
+            }
+        }
+    }
+
+    /** Whether {@code sql} runs - a table that is there - or fails because it is not. */
+    private static boolean runs(Connection c, String sql) {
+        try {
+            ask(c, sql);
+            return true;
+        } catch (SQLException missing) {
+            return false;
+        }
+    }
+
+    /**
+     * A temporary table a borrower made - a session's own, where it may have
+     * put the last tenant's rows - is gone for the next borrower of the same
+     * connection.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void aTemporaryTableDoesNotReachTheNextBorrower(Db db) throws Exception {
+        String[] table = switch (db.name()) {
+            case "PostgreSQL" -> new String[] {"create temp table seclume_tmp (x int)",
+                "select count(*) from seclume_tmp"};
+            case "MySQL" -> new String[] {"create temporary table seclume_tmp (x int)",
+                "select count(*) from seclume_tmp"};
+            case "SQL Server" -> new String[] {"create table #seclume_tmp (x int)",
+                "select count(*) from #seclume_tmp"};
+            default -> new String[] {"create private temporary table ora$ptt_seclume (x number) "
+                + "on commit preserve definition", "select count(*) from ora$ptt_seclume"};
+        };
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            try (Connection c = pool.getConnection()) {
+                execute(c, table[0]);
+                assertTrue(runs(c, table[1]), "the borrower cannot see its own table");
+            }
+            try (Connection c = pool.getConnection()) {
+                assertFalse(runs(c, table[1]), "the next borrower sees the temporary table");
+            }
+        }
+    }
+
+    /**
+     * An advisory lock a borrower took is the session's, not the
+     * transaction's: kept, the next borrower held it without knowing, and
+     * everyone else waited for it. After the return another session gets it.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void anAdvisoryLockIsReleasedOnReturn(Db db) throws Exception {
+        String[] lock = switch (db.name()) {
+            case "PostgreSQL" -> new String[] {"select pg_advisory_lock(4711)",
+                "select pg_try_advisory_lock(4711)", "select pg_advisory_unlock(4711)"};
+            case "MySQL" -> new String[] {"select get_lock('seclume_lock', 0)",
+                "select get_lock('seclume_lock', 0)", "select release_lock('seclume_lock')"};
+            case "SQL Server" -> new String[] {"declare @r int; exec @r = sp_getapplock "
+                + "@Resource = 'seclume_lock', @LockMode = 'Exclusive', @LockOwner = 'Session', "
+                + "@LockTimeout = 0; select @r",
+                "declare @r int; exec @r = sp_getapplock @Resource = 'seclume_lock', "
+                + "@LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 0; "
+                + "select case when @r >= 0 then 1 else 0 end",
+                "exec sp_releaseapplock @Resource = 'seclume_lock', @LockOwner = 'Session'"};
+            default -> null;
+        };
+        Assumptions.assumeTrue(lock != null, "Oracle's DBMS_LOCK needs a grant the test user "
+                + "does not have; its sessions are replaced on return anyway");
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings());
+             SeclumePool other = new SeclumePool(new UrlSource(url(db)), settings())) {
+            try (Connection c = pool.getConnection()) {
+                ask(c, lock[0]);
+                // The control: while it is held, another session does not get it.
+                try (Connection elsewhere = other.getConnection()) {
+                    String got = ask(elsewhere, lock[1]);
+                    assertTrue("0".equals(got) || "f".equals(got) || "false".equalsIgnoreCase(got),
+                            "the lock was not taken - the test would prove nothing: " + got);
+                }
+            }
+            try (Connection c = pool.getConnection()) {
+                ask(c, "select 1" + (db.name().equals("Oracle") ? " from dual" : ""));
+            }
+            try (Connection elsewhere = other.getConnection()) {
+                String got = ask(elsewhere, lock[1]);
+                assertTrue("1".equals(got) || "t".equals(got) || "true".equalsIgnoreCase(got),
+                        "another session cannot take the lock the returned borrower held: " + got);
+                execute(elsewhere, lock[2]);
             }
         }
     }
