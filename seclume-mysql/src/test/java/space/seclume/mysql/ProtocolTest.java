@@ -413,4 +413,24 @@ class ProtocolTest {
         assertFalse(driver.acceptsURL("jdbc:seclume:postgresql://localhost/db"));
         assertNull(driver.connect("jdbc:mysql://localhost/db", null));
     }
+
+    /**
+     * A server that repeats the password in its refusal: the password would
+     * be in the exception's message, on the heap and in every log. It is
+     * masked before the message is text; the codes stay.
+     */
+    @Test
+    void anEchoedPasswordNeverBecomesText() throws Exception {
+        try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD)) {
+            server.rejectLoginEchoingThePassword().start();
+            java.sql.SQLException refused = assertThrows(java.sql.SQLException.class,
+                    () -> MySession.open(settings(server)).close());
+            java.io.StringWriter all = new java.io.StringWriter();
+            refused.printStackTrace(new java.io.PrintWriter(all));
+            org.junit.jupiter.api.Assertions.assertFalse(all.toString().contains(PASSWORD)
+                    || all.toString().contains("Testpasswort"),
+                    "the echoed password is in the exception: " + refused.getMessage());
+            assertEquals("28000", refused.getSQLState());
+        }
+    }
 }

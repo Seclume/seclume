@@ -309,6 +309,15 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **A password a server repeats in its refusal no longer reaches the heap.** Where the
+  password itself goes to the server - PostgreSQL's `password` (and `ldap`, `pam`, `radius`),
+  MySQL's `mysql_clear_password` and the SHA-2 plugins over TLS, an LDAP simple bind - a server
+  that answers "password authentication failed for '...'" with it, or one in the middle that was
+  given it, put the password into the exception's message: a `String` on the heap, and in every
+  log of the exception. The answer after the password is now masked in native memory before it
+  becomes text (PostgreSQL: every error and notice of the login; MySQL: every refusal of the
+  login, the secret read again for it; LDAP: the bytes after the bind, read through native
+  memory before JNDI sees them). Mail and Redis did this already.
 - **A blocking cancellation no longer holds up every other query timeout.** The deadlines of
   all connections of a process shared one scheduler thread, and the cancellation ran on it.
   MySQL's cancellation is a login and a `KILL QUERY`; against a busy server that login took

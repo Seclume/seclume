@@ -27,6 +27,7 @@ import space.seclume.internal.TlsLayers;
 import space.seclume.internal.TrustChoice;
 import space.seclume.internal.jdbc.Deadline;
 import space.seclume.internal.jdbc.TlsStack;
+import space.seclume.secret.SecretProvider;
 import space.seclume.secret.SecretScope;
 
 /**
@@ -259,6 +260,10 @@ final class LdapSocket extends Socket {
                     return copy;
                 }
             }
+            SecretProvider guarded = echoGuard;
+            if (guarded != null) {
+                return readMasked(target, offset, length, guarded);
+            }
             return open().read(ByteBuffer.wrap(target, offset, length));
         }
 
@@ -267,6 +272,56 @@ final class LdapSocket extends Socket {
             LdapSocket.this.close();
         }
     };
+
+    /**
+     * After a simple bind this socket wrote the password into: the secret of
+     * that bind, while what follows it is guarded - see {@link #readMasked}.
+     */
+    private volatile SecretProvider echoGuard;
+    /** How many bytes are left to guard after the bind. */
+    private int echoGuarded;
+    /** The bytes after a simple bind that are read through native memory and masked. */
+    static final int ECHO_GUARD_BYTES = 65_536;
+
+    /**
+     * The server's answer to a simple bind - and what follows it - may repeat
+     * the password it was sent: a diagnostic of "invalid credentials for ...".
+     * JNDI makes a String of that diagnostic, and the exception it throws
+     * carries it into every log. So the bytes after the bind are read into
+     * native memory first, every run of the password in them is overwritten
+     * with {@code *} ({@link space.seclume.internal.EchoMask}), and only then
+     * do they reach JNDI's buffer. Where the secret cannot be read again, the
+     * bytes are withheld: the connection ends rather than pass them on.
+     */
+    private int readMasked(byte[] target, int offset, int length, SecretProvider guarded)
+            throws IOException {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment landing = arena.allocate(length);
+            int n = open().read(landing.asByteBuffer());
+            if (n <= 0) {
+                return n;
+            }
+            try (SecretScope secret = SecretScope.fromProvider(guarded)) {
+                space.seclume.internal.EchoMask.mask(landing, n, secret.secret(),
+                        secret.length());
+            } catch (RuntimeException unreadable) {
+                landing.fill((byte) 0);
+                close();
+                throw new IOException("the LDAP server's answer after the bind could not be "
+                        + "checked for the password - the secret could not be read again; "
+                        + "the connection is closed instead");
+            }
+            MemorySegment.copy(landing, ValueLayout.JAVA_BYTE, 0, target, offset, n);
+            landing.fill((byte) 0);
+            synchronized (this) {
+                echoGuarded -= n;
+                if (echoGuarded <= 0) {
+                    echoGuard = null;
+                }
+            }
+            return n;
+        }
+    }
 
     private final OutputStream out = new OutputStream() {
         @Override
@@ -462,6 +517,10 @@ final class LdapSocket extends Socket {
                 p += bindAfter;
                 MemorySegment.copy(message, opEnd, w, ValueLayout.JAVA_BYTE, p, messageAfter);
                 p += messageAfter;
+                synchronized (this) {
+                    echoGuard = registered.secret;
+                    echoGuarded = ECHO_GUARD_BYTES;
+                }
                 open().write(w.asSlice(0, p).asByteBuffer());
             }
         }

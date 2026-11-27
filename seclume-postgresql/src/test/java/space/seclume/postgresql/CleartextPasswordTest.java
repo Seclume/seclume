@@ -88,6 +88,11 @@ class CleartextPasswordTest {
      * returns what comes back - the PasswordMessage's body, or null for nothing.
      */
     private static CompletableFuture<byte[]> serve(ServerSocket listener) {
+        return serve(listener, false);
+    }
+
+    /** The same; with {@code echo}, its refusal repeats the password it was given. */
+    private static CompletableFuture<byte[]> serve(ServerSocket listener, boolean echo) {
         return CompletableFuture.supplyAsync(() -> {
             try (Socket plain = listener.accept()) {
                 plain.setSoTimeout(30_000);
@@ -116,7 +121,11 @@ class CleartextPasswordTest {
                     return null;
                 }
                 byte[] body = in.readNBytes(readInt(in) - 4);
-                byte[] error = "SFATAL\0C28P01\0Mno\0\0".getBytes(StandardCharsets.US_ASCII);
+                byte[] error = (echo
+                        ? "SFATAL\0C28P01\0Mpassword authentication failed for \""
+                                + new String(body, 0, body.length - 1, StandardCharsets.US_ASCII)
+                                + "\"\0\0"
+                        : "SFATAL\0C28P01\0Mno\0\0").getBytes(StandardCharsets.US_ASCII);
                 out.write('E');
                 writeInt(out, 4 + error.length);
                 out.write(error);
@@ -250,6 +259,29 @@ class CleartextPasswordTest {
                         refused.getMessage());
                 assertNull(received.get(30, TimeUnit.SECONDS), "the password went out");
             }
+        }
+    }
+
+    /**
+     * A server - or one in the middle that was given the password - repeats it
+     * in its refusal: "password authentication failed for "hunter2"". The
+     * driver made a String of that message, the exception carried it, and
+     * every log of the exception. It is masked before it is text.
+     */
+    @Test
+    void anEchoedPasswordNeverBecomesText() throws Exception {
+        try (ServerSocket listener = listener()) {
+            CompletableFuture<byte[]> received = serve(listener, true);
+            TrustChoice.Choice pin = TrustChoice.of("jdbc:x://h/db?tlsPin=" + serverPin, null);
+            SQLException failed = assertThrows(SQLException.class, () -> TrustChoice.using(pin,
+                    () -> PgSession.open(settings(listener.getLocalPort(), TlsMode.REQUIRE)))
+                    .close());
+            received.get(30, TimeUnit.SECONDS);
+            java.io.StringWriter all = new java.io.StringWriter();
+            failed.printStackTrace(new java.io.PrintWriter(all));
+            assertTrue(!all.toString().contains(PASSWORD) && !all.toString().contains("hunter2"),
+                    "the echoed password is in the exception: " + failed.getMessage());
+            assertEquals("28P01", failed.getSQLState());
         }
     }
 

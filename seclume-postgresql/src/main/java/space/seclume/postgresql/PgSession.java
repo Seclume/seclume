@@ -703,9 +703,19 @@ public final class PgSession implements AutoCloseable {
             boolean scramServerProved = false;
             boolean oauthStarted = false;
             boolean asked = false;
+            // Set once the password itself went out: what the server says after
+            // that may repeat it - "password authentication failed for ..." -
+            // and is masked in native memory before any of it becomes text.
+            boolean passwordSent = false;
             while (true) {
                 byte tag = channel.nextMessage();
                 WireBuffer in = channel.message();
+                if (passwordSent && (tag == PgProtocol.ERROR_RESPONSE
+                        || tag == PgProtocol.NOTICE_RESPONSE)) {
+                    space.seclume.internal.EchoMask.mask(
+                            in.segment().asSlice(in.position(), in.limit() - in.position()),
+                            in.limit() - in.position(), secret.secret(), secret.length());
+                }
                 if (tag == PgProtocol.ERROR_RESPONSE) {
                     throw readError();
                 }
@@ -775,6 +785,7 @@ public final class PgSession implements AutoCloseable {
                         authenticationMethod = "password";
                         channel.endMessage();
                         sendPassword(secret.secret());
+                        passwordSent = true;
                     }
                     case PgProtocol.AUTH_MD5 -> {
                         settings.requireAuth().check("md5");

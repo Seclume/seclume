@@ -1052,7 +1052,7 @@ public final class MySession implements AutoCloseable {
                         return;
                     }
                     case MyPackets.ERR -> {
-                        SQLException failure = readError(in, "the server rejected the login");
+                        SQLException failure = readLoginError(in, settings);
                         channel.endPacket();
                         throw failure;
                     }
@@ -1145,7 +1145,7 @@ public final class MySession implements AutoCloseable {
                 int first = channel.nextPacket();
                 WireBuffer in = channel.packet();
                 if (first == MyPackets.ERR) {
-                    SQLException failure = readError(in, "the server rejected the login");
+                    SQLException failure = readLoginError(in, settings);
                     channel.endPacket();
                     throw failure;
                 }
@@ -2775,6 +2775,29 @@ public final class MySession implements AutoCloseable {
         if (state != null && state.startsWith("08")) {
             channel.close();
         }
+    }
+
+    /**
+     * The server's refusal of the login, with the password taken out of it
+     * first. sha256_password and caching_sha2_password over TLS, and
+     * mysql_clear_password, send the password itself; a server - or one in
+     * the middle given it - may repeat it in its refusal, and the message
+     * would have it on the heap and in every log. The secret is read again
+     * into native memory for this, and the packet masked before it is text;
+     * where it cannot be read, the message is withheld whole.
+     */
+    private static SQLException readLoginError(WireBuffer in, Settings settings) {
+        int from = in.position();
+        int length = in.limit() - from;
+        try (SecretScope secret = SecretScope.fromProvider(settings.secret())) {
+            space.seclume.internal.EchoMask.mask(in.segment().asSlice(from, length), length,
+                    secret.secret(), secret.length());
+        } catch (RuntimeException unreadable) {
+            // Past the error number and the SQLState: the text goes, the codes stay.
+            int text = Math.min(length, 9);
+            in.segment().asSlice(from + text, length - text).fill((byte) '*');
+        }
+        return readError(in, "the server rejected the login");
     }
 
     /** An error packet: number, SQLState and message. */

@@ -119,6 +119,14 @@ final class FakeMySqlServer implements AutoCloseable {
      * <p>For the wipe tests: the password has been read, hashed and sent by
      * then, so the refusal arrives while the driver still holds it.
      */
+    private volatile boolean echoPassword;
+
+    /** Refuse the login, repeating the password in the refusal - a server that echoes. */
+    FakeMySqlServer rejectLoginEchoingThePassword() {
+        echoPassword = true;
+        return rejectLogin();
+    }
+
     FakeMySqlServer rejectLogin() {
         this.rejectLogin = true;
         return this;
@@ -338,8 +346,10 @@ final class FakeMySqlServer implements AutoCloseable {
                 // is then told "wrong password" would pass the test for the
                 // wrong reason.
                 checkLogin(login);
-                sendError(out, 2, 1045, "28000",
-                        "Access denied for user '" + expectedUser + "'@'localhost'");
+                sendError(out, 2, 1045, "28000", echoPassword
+                        ? "Access denied for user '" + expectedUser + "' with password '"
+                                + password + "'"
+                        : "Access denied for user '" + expectedUser + "'@'localhost'");
                 return;
             }
             checkLogin(login);
