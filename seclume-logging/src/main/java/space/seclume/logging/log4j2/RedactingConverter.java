@@ -59,7 +59,27 @@ public final class RedactingConverter extends LogEventPatternConverter {
         if (warning != null) {
             StatusLogger.getLogger().warn(warning);
         }
+        String cut = precisionWarning(options[0]);
+        if (cut != null) {
+            StatusLogger.getLogger().warn(cut);
+        }
         return converter;
+    }
+
+    /** A format modifier with a precision - {@code %.20msg}, {@code %-10.-30m} - in the pattern. */
+    private static final java.util.regex.Pattern PRECISION =
+            java.util.regex.Pattern.compile("%-?\\d*\\.-?\\d+");
+
+    /**
+     * A precision inside {@code %redact{...}} cuts the text before it is
+     * masked: a secret cut in half is no longer the secret, and its first
+     * half reaches the log as it is. Truncate outside instead.
+     */
+    static String precisionWarning(String pattern) {
+        java.util.regex.Matcher found = PRECISION.matcher(pattern);
+        return found.find() ? "seclume: %redact{" + pattern + "} truncates inside (" + found.group()
+                + "...): a secret cut there is not recognized, and the part before the cut is "
+                + "logged as it is. Truncate outside, around %redact: %.200redact{%msg}." : null;
     }
 
     /**
