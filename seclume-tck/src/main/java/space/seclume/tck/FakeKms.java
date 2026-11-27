@@ -262,7 +262,7 @@ public final class FakeKms implements AutoCloseable {
                 if (version < 1 || version > versions.size()) {
                     return new String[] {"400", "{\"errors\":[\"no such key version\"]}"};
                 }
-                byte[] hash = Base64.getDecoder().decode(field(body, "input", "")); // seclume-allow: a public hash
+                byte[] hash = space.seclume.internal.Base64Text.decode(field(body, "input", "")); // seclume-allow: a public hash
                 String digest = sign.group(3).replace("sha2-", "sha");
                 String padding = field(body, "signature_algorithm", "pss");
                 byte[] signature = sign(versions.get(version - 1), digest, hash,
@@ -318,7 +318,7 @@ public final class FakeKms implements AutoCloseable {
             return new String[] {"400", "{\"__type\":\"InvalidKeyUsageException\","
                     + "\"message\":\"" + algorithm + " is not valid for " + spec + "\"}"};
         }
-        byte[] hash = Base64.getDecoder().decode(field(body, "Message", "")); // seclume-allow: a public hash
+        byte[] hash = space.seclume.internal.Base64Text.decode(field(body, "Message", "")); // seclume-allow: a public hash
         byte[] signature = sign(key, digest, hash, algorithm.startsWith("RSASSA_PSS"));
         return new String[] {"200", "{\"KeyId\":\"" + keyName + "\",\"Signature\":\""
                 + Base64.getEncoder().encodeToString(signature) // seclume-allow: a fake signature
@@ -359,7 +359,7 @@ public final class FakeKms implements AutoCloseable {
             return new String[] {"400", "{\"error\":{\"code\":400,\"message\":"
                     + "\"Digest type must match the key's algorithm " + algorithm + ".\"}}"};
         }
-        byte[] signature = sign(key, digest, Base64.getDecoder().decode(hash.group(1)), // seclume-allow: a public hash
+        byte[] signature = sign(key, digest, space.seclume.internal.Base64Text.decode(hash.group(1)), // seclume-allow: a public hash
                 type.rsa());
         return new String[] {"200", "{\"signature\":\""
                 + Base64.getEncoder().encodeToString(signature) // seclume-allow: a fake signature
@@ -421,7 +421,7 @@ public final class FakeKms implements AutoCloseable {
                     + "\"message\":\"" + algorithm + " does not fit the key\"}}"};
         }
         byte[] signature = sign(file, digest,
-                Base64.getUrlDecoder().decode(field(body, "value", "")), // seclume-allow: a public hash
+                space.seclume.internal.Base64Text.decodeUrl(field(body, "value", "")), // seclume-allow: a public hash
                 algorithm.startsWith("PS"));
         if (!type.rsa()) {
             signature = raw(signature, type == KeyType.P384 ? 48 : 32);

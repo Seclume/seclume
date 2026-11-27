@@ -103,6 +103,6 @@ final class AuditVerify {
         }
         String body = text.substring(begin + "-----BEGIN PUBLIC KEY-----".length(), end).replaceAll("\\s", "");
         // seclume-allow: a public key, not a secret
-        return java.util.Base64.getDecoder().decode(body);
+        return space.seclume.internal.Base64Text.decode(body);
     }
 }

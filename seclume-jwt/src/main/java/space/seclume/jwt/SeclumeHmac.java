@@ -79,7 +79,7 @@ public final class SeclumeHmac implements AutoCloseable {
     public boolean verifyBase64(String signature, byte[]... parts) {
         byte[] given;
         try {
-            given = Base64.getDecoder().decode(signature.trim()); // seclume-allow: the signature the sender put in the header - public
+            given = space.seclume.internal.Base64Text.decode(signature.trim()); // seclume-allow: the signature the sender put in the header - public
         } catch (IllegalArgumentException e) {
             return false;
         }

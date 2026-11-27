@@ -57,7 +57,16 @@ class ForbiddenApiTest {
             // System.nanoTime (space.seclume.internal.Deadlines). The wall
             // clock jumps with NTP and with a restored checkpoint.
             Map.entry("System.currentTimeMillis()", "the wall clock jumps - measure time with "
-                    + "System.nanoTime, deadlines with space.seclume.internal.Deadlines"));
+                    + "System.nanoTime, deadlines with space.seclume.internal.Deadlines"),
+            // Not a heap path - the JDK's Base64 decoders run an intrinsic that
+            // CVE-2026-114938 makes exploitable on unpatched JVMs, and what is
+            // decoded is often the attacker's (a token, a server's answer).
+            Map.entry("Base64.getDecoder()", "decode with space.seclume.internal.Base64Text "
+                    + "(or Base64Off into native memory), not the JDK's intrinsic"),
+            Map.entry("Base64.getUrlDecoder()", "decode with space.seclume.internal.Base64Text"
+                    + ".decodeUrl, not the JDK's intrinsic"),
+            Map.entry("Base64.getMimeDecoder()", "decode with space.seclume.internal.Base64Text, "
+                    + "not the JDK's intrinsic"));
 
     /**
      * Every module, not only this one.

@@ -16,6 +16,12 @@ All notable changes to seclume are recorded here. Versions follow
   connect timeouts is aborted with 08001 naming the budget. A login that is slow on purpose
   (Kerberos with a distant KDC, a cold Vault) needs a longer `connectTimeout`, or a larger
   factor.
+- **No Base64 is decoded with the JDK's intrinsic.** On unpatched JVMs CVE-2026-114938 makes
+  `java.util.Base64`'s decoder exploitable with crafted input, and seclume decoded with it what
+  an attacker controls - a JWT before its MAC was checked, an HMAC signature, a KMS's answer, a
+  stored ciphertext. A decoder of its own does it now, as strictly as the JDK's and stricter on
+  stray bits; a source rule refuses the JDK's decoders in production code. SECURITY.md names the
+  fixed JDK, 25.0.5.1.
 - **`/actuator/seclume` takes no connection from the application at every poll.** It borrowed
   one from each pool per call to read the login, TLS and certificate; what it learned is shown
   again for ten seconds now, the pool's numbers always current.

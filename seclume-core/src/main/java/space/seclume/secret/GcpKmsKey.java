@@ -105,7 +105,7 @@ final class GcpKmsKey implements KmsSigningKey.Service {
         String answer = call("POST", "/v1/" + key + ":asymmetricSign", "{\"digest\":{\""
                 + field + "\":\"" + Base64.getEncoder().encodeToString(hash) // seclume-allow: a public hash
                 + "\"}}");
-        return Base64.getDecoder().decode(field(answer, "signature")); // seclume-allow: a public signature
+        return space.seclume.internal.Base64Text.decode(field(answer, "signature")); // seclume-allow: a public signature
     }
 
     private String call(String method, String path, String body) throws IOException {

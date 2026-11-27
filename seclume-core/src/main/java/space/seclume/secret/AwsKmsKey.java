@@ -91,7 +91,7 @@ final class AwsKmsKey implements KmsSigningKey.Service {
             throw new IOException("the key is " + keySpec + " - ECC_NIST_P256, ECC_NIST_P384 "
                     + "and RSA keys sign for TLS");
         }
-        return Base64.getDecoder().decode(field(answer, "PublicKey")); // seclume-allow: a public key
+        return space.seclume.internal.Base64Text.decode(field(answer, "PublicKey")); // seclume-allow: a public key
     }
 
     @Override
@@ -109,7 +109,7 @@ final class AwsKmsKey implements KmsSigningKey.Service {
         String answer = call("TrentService.Sign", "{\"KeyId\":\"" + json(keyId)
                 + "\",\"Message\":\"" + Base64.getEncoder().encodeToString(hash) // seclume-allow: a public hash
                 + "\",\"MessageType\":\"DIGEST\",\"SigningAlgorithm\":\"" + algorithm + "\"}");
-        return Base64.getDecoder().decode(field(answer, "Signature")); // seclume-allow: a public signature
+        return space.seclume.internal.Base64Text.decode(field(answer, "Signature")); // seclume-allow: a public signature
     }
 
     /** One operation; its answer - a public key, a signature - as text. */

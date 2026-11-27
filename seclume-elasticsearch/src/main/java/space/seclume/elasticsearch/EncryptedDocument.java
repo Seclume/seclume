@@ -142,7 +142,7 @@ public final class EncryptedDocument {
             byte[] stored;
             try {
                 // seclume-allow: ciphertext, not a secret
-                stored = java.util.Base64.getDecoder().decode(text);
+                stored = space.seclume.internal.Base64Text.decode(text);
             } catch (IllegalArgumentException e) {
                 throw new FieldEncryptionException("the field " + name + " holds no ciphertext", e);
             }

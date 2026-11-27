@@ -661,7 +661,7 @@ public abstract class EncryptedColumnContract {
         // seclume-allow: test code: the control's String, the test's own key file, or ciphertext
         String keyText = Files.readString(key1).trim();
         // seclume-allow: test code: the control's String, the test's own key file, or ciphertext
-        byte[] keyBytes = Base64.getDecoder().decode(keyText);
+        byte[] keyBytes = space.seclume.internal.Base64Text.decode(keyText);
         for (String mode : List.of("native", "string")) {
             Path dump = directory.resolve(mode + ".hprof");
             ChildJvm.Result result = ChildJvm.run(EncryptedColumnProbe.class,

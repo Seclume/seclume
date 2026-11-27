@@ -78,6 +78,9 @@ and on Windows. How the test strategy got here and what it still lacks:
 
 ## The JDK underneath
 
-seclume decodes untrusted Base64 with `java.util.Base64` in places - a JWT's parts before their
-MAC is checked, among others. Run a patched JDK: on unpatched JVMs with AVX-512 VBMI, CVE-2026-114938
-makes that decoder reachable from outside. seclume needs Java 25; take its latest update.
+On unpatched JVMs with AVX-512 VBMI, CVE-2026-114938 makes `java.util.Base64`'s decoder - an
+intrinsic - exploitable with crafted input. seclume decodes no Base64 with it any more: a JWT's
+parts, signatures, keys and servers' answers go through its own decoder (`Base64Text`, or
+`Base64Off` into native memory), and a source rule keeps it that way. The application around it
+may still use the JDK's decoder, so run **Java 25.0.5.1 or later** (or your vendor's build with
+the fix). Until the update is in, `-XX:-UseBASE64Intrinsics` turns the intrinsic off.

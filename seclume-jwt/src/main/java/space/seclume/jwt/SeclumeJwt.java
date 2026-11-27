@@ -43,7 +43,6 @@ import space.seclume.internal.JsonOff;
 public final class SeclumeJwt implements AutoCloseable {
 
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding(); // seclume-allow: JWS header, claims, signature or MAC - public
-    private static final Base64.Decoder DECODER = Base64.getUrlDecoder(); // seclume-allow: JWS header, claims, signature or MAC - public
 
     private final SigningKey key;
     private final Duration leeway;
@@ -258,9 +257,11 @@ public final class SeclumeJwt implements AutoCloseable {
     private static byte[] canonical(String part) {
         byte[] decoded;
         try {
-            decoded = DECODER.decode(part);
+            decoded = space.seclume.internal.Base64Text.decodeUrl(part);
         } catch (IllegalArgumentException e) {
-            throw new InvalidTokenException("a part of the token is not base64url", e);
+            throw new InvalidTokenException("a part of the token is not base64url as a JWS "
+                    + "writes it - " + e.getMessage() + " (padded, spare bits set, or another "
+                    + "alphabet)", e);
         }
         if (!ENCODER.encodeToString(decoded).equals(part)) {
             throw new InvalidTokenException("a part of the token is not base64url as a JWS "

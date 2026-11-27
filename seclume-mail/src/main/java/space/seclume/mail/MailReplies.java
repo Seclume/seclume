@@ -18,7 +18,7 @@ final class MailReplies {
         String text = continuation.trim();
         try {
             // seclume-allow: the server's refusal reason, a JSON it sent us - no secret in it
-            return new String(Base64.getDecoder().decode(text), StandardCharsets.UTF_8);
+            return new String(space.seclume.internal.Base64Text.decode(text), StandardCharsets.UTF_8);
         } catch (IllegalArgumentException notBase64) {
             return text;
         }

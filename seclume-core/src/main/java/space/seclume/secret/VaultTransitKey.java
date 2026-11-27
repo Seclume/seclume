@@ -175,7 +175,7 @@ final class VaultTransitKey implements KmsSigningKey.Service {
             if (!signature.startsWith("vault:") || colon < 0) {
                 throw new IOException("Vault's signature is not vault:v<n>:<base64>");
             }
-            return Base64.getDecoder().decode(signature.substring(colon + 1)); // seclume-allow: a public signature
+            return space.seclume.internal.Base64Text.decode(signature.substring(colon + 1)); // seclume-allow: a public signature
         } catch (JsonOff.NotFound e) {
             throw new IOException("Vault's answer to " + path + " holds no signature", e);
         }
@@ -241,7 +241,7 @@ final class VaultTransitKey implements KmsSigningKey.Service {
         String body = pem.substring(begin + "-----BEGIN PUBLIC KEY-----".length(), end)
                 .replaceAll("\\s", "");
         try {
-            return Base64.getDecoder().decode(body); // seclume-allow: a public key
+            return space.seclume.internal.Base64Text.decode(body); // seclume-allow: a public key
         } catch (IllegalArgumentException e) {
             throw new IOException("the public key PEM is not Base64", e);
         }

@@ -267,7 +267,7 @@ public final class TrustChoice {
                 .replace("%3d", "=");
         byte[] pin;
         try {
-            pin = Base64.getDecoder().decode(value); // seclume-allow: a pin, public by design
+            pin = space.seclume.internal.Base64Text.decode(value); // seclume-allow: a pin, public by design
         } catch (IllegalArgumentException e) {
             if (!value.startsWith("/")) {
                 throw new SQLException("tlsPin is not base64: " + e.getMessage(), "08001");
@@ -278,7 +278,7 @@ public final class TrustChoice {
         // is only curl's extra slash when the pin does not stand without it.
         if (pin.length != 32 && value.startsWith("/")) {
             try {
-                pin = Base64.getDecoder().decode(value.substring(1)); // seclume-allow: a pin, public by design
+                pin = space.seclume.internal.Base64Text.decode(value.substring(1)); // seclume-allow: a pin, public by design
             } catch (IllegalArgumentException e) {
                 throw new SQLException("tlsPin is not base64: " + e.getMessage(), "08001");
             }
