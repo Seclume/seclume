@@ -29,7 +29,7 @@ public final class PgProbe {
 
         FileSecretProvider provider = new FileSecretProvider(secretFile, 256);
         PgSession.Settings settings = new PgSession.Settings(
-                TestHosts.postgres(), TestHosts.postgresPort(), "seclume_test", "seclume_test", provider);
+                TestHosts.postgres(), TestHosts.postgresPort(), "seclume_test", "seclume_test", provider).withTls(space.seclume.internal.jdbc.TlsMode.PREFER);
 
         List<String> results = new ArrayList<>();
         for (int i = 0; i < cycles; i++) {

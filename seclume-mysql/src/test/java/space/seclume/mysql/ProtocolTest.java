@@ -55,7 +55,7 @@ class ProtocolTest {
 
     private static MySession.Settings settings(FakeMySqlServer server) {
         // The stand-in logs in with mysql_native_password, without TLS.
-        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret())
+        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret()).withTls(space.seclume.internal.jdbc.TlsMode.PREFER)
                 .allowingLegacyHash();
     }
 
@@ -295,6 +295,7 @@ class ProtocolTest {
             space.seclume.mysql.jdbc.MyDataSource dataSource =
                     new space.seclume.mysql.jdbc.MyDataSource();
             dataSource.setHost("127.0.0.1");
+            dataSource.setTls("prefer");
             dataSource.setPort(server.port());
             dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
             dataSource.setDatabase("testdb");
@@ -330,6 +331,7 @@ class ProtocolTest {
             space.seclume.mysql.jdbc.MyDataSource dataSource =
                     new space.seclume.mysql.jdbc.MyDataSource();
             dataSource.setHost("127.0.0.1");
+            dataSource.setTls("prefer");
             dataSource.setPort(server.port());
             dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
             dataSource.setDatabase("testdb");
@@ -368,6 +370,7 @@ class ProtocolTest {
             space.seclume.mysql.jdbc.MyDataSource dataSource =
                     new space.seclume.mysql.jdbc.MyDataSource();
             dataSource.setHost("127.0.0.1");
+            dataSource.setTls("prefer");
             dataSource.setPort(server.port());
             dataSource.setAllowLegacyHashOverUnverifiedTls(true);   // the stand-in: native, no TLS
             dataSource.setDatabase("testdb");
@@ -396,7 +399,7 @@ class ProtocolTest {
     void aPasswordInTheUrlIsRefused() {
         SQLException failure = assertThrows(SQLException.class,
                 () -> DriverManager.getConnection(
-                        "jdbc:seclume:mysql://127.0.0.1:3306/db?user=x&password=geheim"));
+                        "jdbc:seclume:mysql://127.0.0.1:3306/db?tls=prefer&user=x&password=geheim"));
         assertTrue(failure.getMessage().contains("not a seclume setting"),
                 "expected the refusal to explain itself, got: " + failure.getMessage());
     }

@@ -42,7 +42,7 @@ class LegacyHashOverUnverifiedTlsTest {
     }
 
     private static MySession.Settings settings(FakeMySqlServer server) {
-        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret());
+        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret()).withTls(space.seclume.internal.jdbc.TlsMode.PREFER);
     }
 
     @Test

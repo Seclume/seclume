@@ -35,21 +35,21 @@ class ConnectionDetailsTest {
 
     @Test
     void theUrlsTheContainersUseAreTranslated() {
-        assertEquals("jdbc:seclume:postgresql://localhost:32768/test",
+        assertEquals("jdbc:seclume:postgresql://localhost:32768/test?tls=prefer",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:postgresql://localhost:32768/test?loggerLevel=OFF"));
-        assertEquals("jdbc:seclume:mysql://localhost:32769/test?allowPublicKeyRetrieval=true"
+        assertEquals("jdbc:seclume:mysql://localhost:32769/test?tls=prefer&allowPublicKeyRetrieval=true"
                 + "&allowCleartextOverUnverifiedTls=true&allowLegacyHashOverUnverifiedTls=true",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:mysql://localhost:32769/test?useSSL=false"));
-        assertEquals("jdbc:seclume:mysql://localhost:32770/test?allowPublicKeyRetrieval=true"
+        assertEquals("jdbc:seclume:mysql://localhost:32770/test?tls=prefer&allowPublicKeyRetrieval=true"
                 + "&allowCleartextOverUnverifiedTls=true&allowLegacyHashOverUnverifiedTls=true",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:mariadb://localhost:32770/test"));
         assertEquals("jdbc:seclume:sqlserver://localhost:32771/master?trustServerCertificate=true",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:sqlserver://localhost:32771;encrypt=false"));
-        assertEquals("jdbc:seclume:oracle://localhost:32772/freepdb1",
+        assertEquals("jdbc:seclume:oracle://localhost:32772/freepdb1?tls=off",
                 SeclumeConnectionDetailsAutoConfiguration.translate(
                         "jdbc:oracle:thin:@localhost:32772/freepdb1"));
     }

@@ -270,7 +270,7 @@ public final class MyDataSource implements DataSource, ExpiringCredentials {
      * are two different promises: only {@code verify-full} checks who is at the
      * other end. See {@link TlsMode}.
      */
-    private TlsMode tls = TlsMode.PREFER;
+    private TlsMode tls = TlsMode.VERIFY_FULL;
 
     public void setTls(String mode) throws SQLException {
         this.tls = TlsMode.of(mode);

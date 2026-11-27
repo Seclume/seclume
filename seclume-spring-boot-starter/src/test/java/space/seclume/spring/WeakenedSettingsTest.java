@@ -25,9 +25,11 @@ class WeakenedSettingsTest {
                 settings::get, properties::get, new java.util.TreeMap<>(Map.of(
                         "orders", "jdbc:seclume:postgresql://db/orders?tls=prefer",
                         "reports", "jdbc:seclume:mysql://db/reports",
+                        "staging", "jdbc:seclume:sqlserver://db/staging?trustServerCertificate=true",
                         "billing", "jdbc:seclume:sqlserver://db/billing?tls=verify-full")));
+        // reports names no tls: verify-full, the default - nothing to say.
         assertEquals(List.of("datasource orders: tls not verify-full (prefer)",
-                "datasource reports: tls not verify-full (the driver's default)",
+                "datasource staging: trustServerCertificate=true",
                 "seclume.secret-guard=off", "seclume.crypto-policy.enabled=false",
                 "seclume.crac.holdExpiry=release",
                 "seclume.allowUnverifiedSecretSources=true", "seclume.scram.minIterations=1000"),

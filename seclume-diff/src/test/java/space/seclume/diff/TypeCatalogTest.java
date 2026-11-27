@@ -396,7 +396,7 @@ class TypeCatalogTest {
         String host = System.getProperty("seclume.oracle.host", TestHosts.database());
         reachable(host, port, secret);
         try (Ours ours = new Ours("jdbc:seclume:oracle://" + host + ":"
-                + port + "/FREEPDB1?user=seclume_test&provider=file&path=" + slash(secret));
+                + port + "/FREEPDB1?tls=off&user=seclume_test&provider=file&path=" + slash(secret));
              Connection theirs = DriverManager.getConnection(
                      "jdbc:oracle:thin:@//" + host + ":" + port + "/FREEPDB1",
                      JsonFunctionTest.oracleVendor(secret))) {

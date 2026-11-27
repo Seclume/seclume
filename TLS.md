@@ -15,7 +15,14 @@ jdbc:seclume:postgresql://db:5432/app?tls=verify-full
 | `off` | no encryption |
 | `prefer` | encrypt if offered — stops a listener, not a man in the middle |
 | `require` | encrypt or refuse; still no certificate check |
-| `verify-full` | encrypt **and** check the certificate against the trust store and the host dialled |
+| `verify-full` | encrypt **and** check the certificate against the trust store and the host dialled - **the default** |
+
+**`verify-full` is what a URL without `tls=` gets** - PostgreSQL, MySQL and Oracle (over TCPS)
+alike; SQL Server always encrypts and checks the certificate unless `trustServerCertificate=true`.
+A weaker mode is a choice written into the URL, and it is named among the weakened settings
+(the start-up line and `/actuator/seclume` in Spring Boot). A server whose certificate the JVM
+does not trust is refused until it does - `tlsRootCert`, `tlsPin` or the JVM's trust store,
+below - or until the URL says `tls=require` (or `prefer`, `off`) on purpose.
 
 Only `verify-full` authenticates the server. A driver that offers the first three and calls
 the result secure is lying by omission. On PostgreSQL the login is additionally bound to the

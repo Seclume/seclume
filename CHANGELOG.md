@@ -7,6 +7,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **`verify-full` is the default TLS mode.** A URL without `tls=` encrypted where the server
+  offered it and checked no certificate (`prefer`; Oracle: no encryption at all) - so a server
+  in the middle was taken for the database. Now PostgreSQL, MySQL and Oracle check the
+  certificate and the host name unless the URL says otherwise; SQL Server did already. A
+  connection to a server with a self-signed or private-CA certificate fails until the CA is
+  given (`tlsRootCert=...`, `tlsPin=...` or the JVM's trust store), or the URL relaxes it on
+  purpose: `tls=require` (encrypted, certificate not checked), `tls=prefer` or `tls=off`. A
+  relaxed mode is named among the weakened settings. Oracle without TCPS needs `tls=off`.
 - **A field encryption key of one repeated byte is refused.** 32 zero bytes already were; one
   byte 32 times - a placeholder filled in, a test value - has eight bits of choice and is
   refused now as well when the key ring is built. Make a real key: `openssl rand -base64 32`.

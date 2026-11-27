@@ -175,7 +175,7 @@ class LocalPostgresTest {
         SQLException failure = null;
         for (int attempt = 0; attempt < attempts; attempt++) {
             failure = assertThrows(SQLException.class,
-                    () -> PgSession.open(new PgSession.Settings(HOST, PORT, DATABASE, USER, wrong))
+                    () -> PgSession.open(new PgSession.Settings(HOST, PORT, DATABASE, USER, wrong).withTls(space.seclume.internal.jdbc.TlsMode.PREFER))
                             .close());
             if (!"08001".equals(failure.getSQLState())) {
                 break;
@@ -187,7 +187,7 @@ class LocalPostgresTest {
 
     private static PgSession open() throws SQLException {
         return PgSession.open(new PgSession.Settings(HOST, PORT, DATABASE, USER,
-                new FileSecretProvider(passwordFile, 256)));
+                new FileSecretProvider(passwordFile, 256)).withTls(space.seclume.internal.jdbc.TlsMode.PREFER));
     }
 
     /** Depending on where it starts, the project directory is one level up. */

@@ -83,10 +83,11 @@ class LocalOraXaTest {
         }
     }
 
-    private static OraXaDataSource source() {
+    private static OraXaDataSource source() throws java.sql.SQLException {
         OraXaDataSource source = new OraXaDataSource();
         OraDataSource settings = source.settings();
         settings.setHost(HOST);
+        settings.setTls("off");
         settings.setPort(PORT);
         settings.setService(SERVICE);
         settings.setUser(USER);

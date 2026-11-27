@@ -79,7 +79,7 @@ class OraclePropertyTest {
         System.out.println("OraclePropertyTest seed=" + seed + " rows=" + rows);
 
         seclumeUrl = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/" + SERVICE
-                + "?user=" + USER + "&provider=file&path="
+                + "?tls=off&user=" + USER + "&provider=file&path="
                 + file.toString().replace('\\', '/');
         vendorUrl = "jdbc:oracle:thin:@//" + HOST + ":" + PORT + "/" + SERVICE;
         password = Files.readString(file).trim();

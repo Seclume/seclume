@@ -77,7 +77,7 @@ class LoginFailureWipeTest {
     }
 
     private OracleSession.Settings settings(String at, int atPort, SecretProvider secret) {
-        return new OracleSession.Settings(at, atPort, service, user, secret, 10_000);
+        return new OracleSession.Settings(at, atPort, service, user, secret, 10_000).withTls(space.seclume.internal.jdbc.TlsMode.OFF);
     }
 
     /**

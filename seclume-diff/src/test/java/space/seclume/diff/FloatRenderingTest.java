@@ -80,7 +80,7 @@ class FloatRenderingTest {
                         ".local-mssql-password", "&trustServerCertificate=true",
                         "select cast(? as real) as f, cast(? as float) as d"),
                 new Database("Oracle", "oracle", 1521, "oracle", "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", "",
+                        ".local-oracle-password", "&tls=off",
                         "select cast(? as binary_float) as f, "
                                 + "cast(? as binary_double) as d from dual"));
     }

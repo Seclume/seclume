@@ -55,9 +55,10 @@ class PoolHandOnSeamTest {
         }
     }
 
-    private static SeclumeDataSource dataSource() {
+    private static SeclumeDataSource dataSource() throws java.sql.SQLException {
         SeclumeDataSource source = new SeclumeDataSource();
         source.setHost(TestHosts.postgres());
+        source.setTls("prefer");
         source.setPort(TestHosts.postgresPort());
         source.setDatabase("seclume_test");
         source.setUser("seclume_test");

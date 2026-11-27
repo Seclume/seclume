@@ -61,7 +61,7 @@ class LocalRunAgainTest {
         }
         url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/"
                 + System.getProperty("seclume.oracle.service", "FREEPDB1")
-                + "?user=seclume_test&provider=file&path="
+                + "?tls=off&user=seclume_test&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

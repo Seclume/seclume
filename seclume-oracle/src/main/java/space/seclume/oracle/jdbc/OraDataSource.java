@@ -223,7 +223,7 @@ public final class OraDataSource implements DataSource, ExpiringCredentials {
      * <p>Oracle decides this by the endpoint and not by a negotiation, so
      * {@code prefer} means the same as {@code off} here. See {@link TlsMode}.
      */
-    private TlsMode tls = TlsMode.OFF;
+    private TlsMode tls = TlsMode.VERIFY_FULL;
 
     public void setTls(String mode) throws SQLException {
         this.tls = TlsMode.of(mode);

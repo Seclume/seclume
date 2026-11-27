@@ -33,7 +33,7 @@ class NulInLoginFieldsTest {
                             target.set(java.lang.foreign.ValueLayout.JAVA_BYTE, i, bytes[i]);
                         }
                         return bytes.length;
-                    }))
+                    })).withTls(space.seclume.internal.jdbc.TlsMode.PREFER)
                     .allowingLegacyHash();
             if (field.equals("none")) {
                 // The control: a clean login is counted, or the zeros prove nothing.

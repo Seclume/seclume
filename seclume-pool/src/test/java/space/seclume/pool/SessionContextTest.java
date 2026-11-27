@@ -66,7 +66,7 @@ class SessionContextTest {
                         ".local-mssql-password", "app.tenant_id",
                         "select cast(session_context(N'app.tenant_id') as nvarchar(100))", false),
                 new Db("Oracle", "jdbc:seclume:oracle://" + host + ":1521/FREEPDB1"
-                        + "?user=seclume_test", ".local-oracle-password", "client_identifier",
+                        + "?tls=off&user=seclume_test", ".local-oracle-password", "client_identifier",
                         "select sys_context('USERENV', 'CLIENT_IDENTIFIER') from dual", false));
     }
 

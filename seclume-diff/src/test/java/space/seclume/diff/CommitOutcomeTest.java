@@ -77,7 +77,7 @@ class CommitOutcomeTest {
                         ".local-mssql-password", "&trustServerCertificate=true",
                         "create table " + TABLE + " (n int)"),
                 new Database("Oracle", "oracle", 1521, "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", "",
+                        ".local-oracle-password", "&tls=off",
                         "create table " + TABLE + " (n number(9))"));
     }
 

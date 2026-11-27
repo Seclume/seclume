@@ -87,7 +87,7 @@ final class OraUrl {
                     // wants encryption says require and points at the TCPS
                     // port, usually 2484.
                     space.seclume.internal.jdbc.TlsMode.of(
-                            parsed.option("tls", "off")),
+                            parsed.option("tls", null)),
                     space.seclume.internal.jdbc.TlsStack.of(
                             parsed.option("tlsStack", null)),
                     // A client certificate, when one is configured. Building

@@ -61,10 +61,10 @@ class LocalR2dbcPostgresTest {
         }
         // A seclume JDBC URL names its user in user=, never before the host.
         jdbcUrl = "jdbc:seclume:postgresql://" + HOST + ":" + PORT
-                + "/seclume_test?user=seclume_test&provider=file&path=" + password.toString().replace('\\', '/')
+                + "/seclume_test?tls=prefer&user=seclume_test&provider=file&path=" + password.toString().replace('\\', '/')
                 + "&trustServerCertificate=true";
         factory = ConnectionFactories.get("r2dbc:seclume:postgresql://seclume_test@" + HOST + ":"
-                + PORT + "/seclume_test?provider=file&path="
+                + PORT + "/seclume_test?tls=prefer&provider=file&path="
                 + password.toString().replace('\\', '/') + "&trustServerCertificate=true");
         run("drop table if exists zl_r2dbc");
         run("create table zl_r2dbc (id serial primary key, name text, n int)");

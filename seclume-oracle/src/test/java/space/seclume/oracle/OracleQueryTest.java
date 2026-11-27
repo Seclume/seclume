@@ -63,7 +63,7 @@ class OracleQueryTest {
 
     private static OracleSession open() throws Exception {
         return OracleSession.open(new OracleSession.Settings(HOST, PORT, SERVICE, USER,
-                new FileSecretProvider(passwordFile, 256)));
+                new FileSecretProvider(passwordFile, 256)).withTls(space.seclume.internal.jdbc.TlsMode.OFF));
     }
 
     @Test

@@ -35,6 +35,7 @@ class DribblingLoginTest {
                 (byte) 0xe8})) {
             SeclumeDataSource source = new SeclumeDataSource();
             source.setHost("127.0.0.1");
+            source.setTls("prefer");
             source.setPort(server.port());
             source.setDatabase("app");
             source.setUser("app");

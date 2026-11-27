@@ -64,7 +64,7 @@ class OracleDifferentialTest {
             Assumptions.abort("no Oracle listener on " + HOST + ":" + PORT);
         }
         seclumeUrl = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/" + SERVICE
-                + "?user=" + USER + "&provider=file&path="
+                + "?tls=off&user=" + USER + "&provider=file&path="
                 + file.toString().replace('\\', '/');
         vendorUrl = "jdbc:oracle:thin:@//" + HOST + ":" + PORT + "/" + SERVICE;
         password = Files.readString(file).trim();

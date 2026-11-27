@@ -166,7 +166,7 @@ class FaultInjectionTest {
                 System.getProperty("seclume.oracle.host", TestHosts.database()), port,
                 ".local-oracle-password",
                 "jdbc:seclume:oracle://127.0.0.1:{port}/" + service
-                + "?user=" + user + "&provider=file&path={path}",
+                + "?tls=off&user=" + user + "&provider=file&path={path}",
                 connectBy(ROWS), connectBy(SHORT_ROWS),
                 // DDL commits in Oracle, so the table is made before the
                 // transaction starts rather than inside it.

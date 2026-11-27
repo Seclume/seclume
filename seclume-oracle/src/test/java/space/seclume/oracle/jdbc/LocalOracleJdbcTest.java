@@ -74,7 +74,7 @@ class LocalOracleJdbcTest {
             Assumptions.abort("no Oracle listener on " + HOST + ":" + PORT);
         }
         url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/" + SERVICE
-                + "?user=" + USER + "&provider=file&path="
+                + "?tls=off&user=" + USER + "&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

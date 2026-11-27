@@ -61,7 +61,7 @@ class JdbcHeapDumpTest {
         Path dump = directory.resolve("jdbc.hprof");
         String url = "jdbc:seclume:postgresql://" + TestHosts.postgres()
                 + ":" + TestHosts.postgresPort() + "/seclume_test"
-                + "?user=seclume_test&provider=file&path="
+                + "?tls=prefer&user=seclume_test&provider=file&path="
                 + passwordFile.toString().replace('\\', '/');
 
         ChildJvm.Result result = ChildJvm.run(JdbcProbe.class,

@@ -62,7 +62,7 @@ class SessionTimeZoneTest {
         String host = System.getProperty("seclume.oracle.host", HOST);
         TypeCatalogTest.reachable(host, port, secret);
         same(zone, secret,
-                "jdbc:seclume:oracle://" + host + ":" + port + "/FREEPDB1?user=seclume_test",
+                "jdbc:seclume:oracle://" + host + ":" + port + "/FREEPDB1?tls=off&user=seclume_test",
                 "jdbc:oracle:thin:@//" + host + ":" + port + "/FREEPDB1", "seclume_test",
                 "select to_char(cast(timestamp '2024-01-01 23:30:00 +00:00' "
                         + "as timestamp with local time zone), 'YYYY-MM-DD HH24:MI'), "

@@ -64,6 +64,19 @@ class CycloneDxCbomTest {
         return m.group();
     }
 
+    /**
+     * An unauthenticated TLS connection is a protocol asset without a version
+     * - recorded before the version is known. The CBOM writes it, its
+     * authenticated=false property kept, rather than failing the endpoint.
+     */
+    @Test
+    void anUnauthenticatedConnectionIsWrittenWithoutAVersion() {
+        CryptoInventory.unauthenticated("db.example:5432", "seclume");
+        String json = CycloneDxCbom.write("orders");
+        assertTrue(json.contains("TLS without server authentication to db.example:5432"), json);
+        assertTrue(json.contains("\"version\": \"unknown\""), json);
+    }
+
     @Test
     void everyKindAndItsQuantumLevel() throws Exception {
         String json = CycloneDxCbom.write("orders \"service\"", everyKind(), T);

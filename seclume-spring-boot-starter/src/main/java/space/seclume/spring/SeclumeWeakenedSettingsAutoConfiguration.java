@@ -77,10 +77,20 @@ public class SeclumeWeakenedSettingsAutoConfiguration {
             Function<String, String> systemProperty, Map<String, String> urls) {
         List<String> found = new ArrayList<>();
         for (Map.Entry<String, String> source : urls.entrySet()) {
-            String tls = tlsOf(source.getValue());
-            if (!"verify-full".equals(tls)) {
-                found.add("datasource " + source.getKey() + ": tls not verify-full ("
-                        + (tls == null ? "the driver's default" : tls) + ")");
+            // Not given is verify-full, the drivers' default; anything else
+            // the URL says is weaker - every spelling of it.
+            String tls = option(source.getValue(), "tls");
+            boolean verified;
+            try {
+                verified = space.seclume.internal.jdbc.TlsMode.of(tls).verifies();
+            } catch (java.sql.SQLException unknown) {
+                verified = false;               // the driver refuses it; said here as well
+            }
+            if (!verified) {
+                found.add("datasource " + source.getKey() + ": tls not verify-full (" + tls + ")");
+            }
+            if ("true".equalsIgnoreCase(option(source.getValue(), "trustServerCertificate"))) {
+                found.add("datasource " + source.getKey() + ": trustServerCertificate=true");
             }
         }
         flag(found, setting, "seclume.secret-guard", "off");
@@ -110,6 +120,11 @@ public class SeclumeWeakenedSettingsAutoConfiguration {
 
     /** The URL's tls option, or null when it sets none. */
     static String tlsOf(String url) {
+        return option(url, "tls");
+    }
+
+    /** A query option of a URL, decoded and lower-cased; null when it is not there. */
+    static String option(String url, String name) {
         int question = url.indexOf('?');
         if (question < 0) {
             return null;
@@ -118,7 +133,7 @@ public class SeclumeWeakenedSettingsAutoConfiguration {
         String query = hash < 0 ? url.substring(question + 1) : url.substring(question + 1, hash);
         for (String pair : query.split("&")) {
             int equals = pair.indexOf('=');
-            if (equals > 0 && "tls".equalsIgnoreCase(pair.substring(0, equals))) {
+            if (equals > 0 && name.equalsIgnoreCase(pair.substring(0, equals))) {
                 return java.net.URLDecoder.decode(pair.substring(equals + 1),
                         java.nio.charset.StandardCharsets.UTF_8).toLowerCase(java.util.Locale.ROOT);
             }

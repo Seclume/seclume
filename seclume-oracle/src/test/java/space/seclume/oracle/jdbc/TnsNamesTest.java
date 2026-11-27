@@ -91,7 +91,7 @@ class TnsNamesTest {
         Files.writeString(admin.resolve("tnsnames.ora"), "TEST_PDB = (DESCRIPTION=(ADDRESS="
                 + "(PROTOCOL=TCP)(HOST=" + host + ")(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=FREEPDB1)))\n",
                 StandardCharsets.UTF_8);
-        String url = OraUrl.PREFIX + "tns:test_pdb?user=seclume_test&provider=file&path="
+        String url = OraUrl.PREFIX + "tns:test_pdb?tls=off&user=seclume_test&provider=file&path="
                 + password.toString().replace('\\', '/') + "&tnsAdmin="
                 + admin.toString().replace('\\', '/');
         try (Connection c = DriverManager.getConnection(url);

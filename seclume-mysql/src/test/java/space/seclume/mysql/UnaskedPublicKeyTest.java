@@ -40,7 +40,7 @@ class UnaskedPublicKeyTest {
             server.offerPublicKeyUnasked(pem()).start();
             SQLException refused = assertThrows(SQLException.class,
                     () -> MySession.open(new MySession.Settings("127.0.0.1", server.port(),
-                            "testdb", USER, secret()).allowingLegacyHash()).close());
+                            "testdb", USER, secret()).withTls(space.seclume.internal.jdbc.TlsMode.PREFER).allowingLegacyHash()).close());
             assertEquals("28000", refused.getSQLState(), refused.getMessage());
             assertTrue(refused.getMessage().contains("did not ask"), refused.getMessage());
             server.awaitDone();

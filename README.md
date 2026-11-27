@@ -162,6 +162,10 @@ try (Connection c = DriverManager.getConnection(url)) {
 }
 ```
 
+The server's certificate and name are checked - `verify-full` is the default; give a private
+CA with `tlsRootCert=/etc/ssl/db-ca.pem`, and relax it only on purpose, `tls=require` say
+([TLS.md](TLS.md)).
+
 A URL may name a file, or anything else of this machine, only where the JVM is started to
 allow it - `-Dseclume.secret.providers=file` here: whoever writes a URL also picks the host the
 secret goes to ([PROVIDERS.md](PROVIDERS.md)).

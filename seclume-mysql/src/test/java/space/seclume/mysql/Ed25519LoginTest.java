@@ -37,7 +37,7 @@ class Ed25519LoginTest {
 
     private static MySession.Settings settings(FakeMySqlServer server, String password) {
         return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER,
-                secret(password));
+                secret(password)).withTls(space.seclume.internal.jdbc.TlsMode.PREFER);
     }
 
     @Test

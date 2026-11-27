@@ -171,7 +171,7 @@ class LocalLogInAgainTest {
     @Test
     void anAutoCommitSessionLeavesNoDataOpenAndTheLocksGoWithIt() throws Exception {
         String url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/" + SERVICE
-                + "?user=seclume_test&provider=file&path="
+                + "?tls=off&user=seclume_test&provider=file&path="
                 + password.toString().replace(java.io.File.separatorChar, '/');
         String open = "select nvl(dbms_transaction.local_transaction_id, '-') from dual";
         try (Connection c = java.sql.DriverManager.getConnection(url);
@@ -233,7 +233,7 @@ class LocalLogInAgainTest {
     @Test
     void thePoolsResetIsALoginOnTheSameConnection() throws Exception {
         String url = "jdbc:seclume:oracle://" + HOST + ":" + PORT + "/" + SERVICE
-                + "?user=seclume_test&provider=file&path="
+                + "?tls=off&user=seclume_test&provider=file&path="
                 + password.toString().replace(java.io.File.separatorChar, '/');
         try (Connection c = java.sql.DriverManager.getConnection(url)) {
             SessionReset reset = c.unwrap(SessionReset.class);

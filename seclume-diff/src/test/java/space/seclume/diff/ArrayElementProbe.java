@@ -38,7 +38,7 @@ class ArrayElementProbe {
         Assumptions.assumeTrue(reachable(), "no PostgreSQL");
 
         String seclumeUrl = "jdbc:seclume:postgresql://" + TestHosts.postgres() + ":"
-                + TestHosts.postgresPort() + "/seclume_test?user=seclume_test"
+                + TestHosts.postgresPort() + "/seclume_test?tls=prefer&user=seclume_test"
                 + "&provider=file&path=" + file.toString().replace('\\', '/');
         Properties vendor = new Properties();
         vendor.setProperty("user", "seclume_test");

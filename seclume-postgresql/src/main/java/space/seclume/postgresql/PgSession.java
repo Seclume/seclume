@@ -51,6 +51,14 @@ public final class PgSession implements AutoCloseable {
                            boolean directTls, RequireAuth requireAuth,
                            boolean allowLegacyHashOverUnverifiedTls) {
 
+        /**
+         * The same settings with TLS mode {@code mode} - for a caller that
+         * talks to a server it knows has no certificate to check, and says so.
+         */
+        public Settings withTls(TlsMode mode) {
+            return new Settings(host, port, database, user, secret, applicationName, connectTimeoutMillis, hosts, resultLimit, mode, tlsStack, identity, directTls, requireAuth, allowLegacyHashOverUnverifiedTls);
+        }
+
         public Settings {
             requireAuth = requireAuth == null ? RequireAuth.ANY : requireAuth;
         }
@@ -140,7 +148,7 @@ public final class PgSession implements AutoCloseable {
                         SecretProvider secret, String applicationName,
                         int connectTimeoutMillis, HostList hosts) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    hosts, ResultLimit.NONE, TlsMode.PREFER);
+                    hosts, ResultLimit.NONE, TlsMode.VERIFY_FULL);
         }
 
         /** With a result limit but the default TLS mode. */
@@ -148,7 +156,7 @@ public final class PgSession implements AutoCloseable {
                         SecretProvider secret, String applicationName,
                         int connectTimeoutMillis, HostList hosts, ResultLimit resultLimit) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    hosts, resultLimit, TlsMode.PREFER);
+                    hosts, resultLimit, TlsMode.VERIFY_FULL);
         }
 
         public Settings(String host, int port, String database, String user, SecretProvider secret) {

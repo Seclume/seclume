@@ -69,7 +69,7 @@ class SessionResetTest {
                         "exec sp_set_session_context 'tenant_id', '42'",
                         "select cast(session_context(N'tenant_id') as varchar(10))", null),
                 new Db("Oracle", "jdbc:seclume:oracle://" + host + ":1521/FREEPDB1"
-                        + "?user=seclume_test", ".local-oracle-password",
+                        + "?tls=off&user=seclume_test", ".local-oracle-password",
                         "select sys_context('USERENV', 'SESSIONID') from dual",
                         "begin dbms_session.set_identifier('42'); end;",
                         "select sys_context('USERENV', 'CLIENT_IDENTIFIER') from dual", null));

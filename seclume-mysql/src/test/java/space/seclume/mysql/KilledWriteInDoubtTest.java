@@ -37,6 +37,7 @@ class KilledWriteInDoubtTest {
             server.start();
             space.seclume.mysql.jdbc.MyDataSource source = new space.seclume.mysql.jdbc.MyDataSource();
             source.setHost("127.0.0.1");
+            source.setTls("prefer");
             source.setPort(server.port());
             source.setDatabase("testdb");
             source.setUser(USER);

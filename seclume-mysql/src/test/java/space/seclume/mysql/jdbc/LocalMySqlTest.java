@@ -83,7 +83,7 @@ class LocalMySqlTest {
         // the only way to exercise our own RSA and OAEP against a real MySQL
         // instead of against our own arithmetic.
         url = "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/" + DATABASE
-                + "?user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
+                + "?tls=prefer&user=" + USER + "&allowPublicKeyRetrieval=true&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

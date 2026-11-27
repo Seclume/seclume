@@ -48,11 +48,11 @@ class R2dbcTckOnPostgresTest implements TestKit<String> {
         }
         String path = password.toString().replace('\\', '/');
         factory = ConnectionFactories.get("r2dbc:seclume:postgresql://seclume_test@" + HOST + ":"
-                + PORT + "/seclume_test?provider=file&path=" + path
+                + PORT + "/seclume_test?tls=prefer&provider=file&path=" + path
                 + "&trustServerCertificate=true");
         jdbc = new JdbcTemplate(new SimpleDriverDataSource(
                 new space.seclume.postgresql.jdbc.SeclumeDriver(),
-                "jdbc:seclume:postgresql://" + HOST + ":" + PORT + "/seclume_test?user=seclume_test"
+                "jdbc:seclume:postgresql://" + HOST + ":" + PORT + "/seclume_test?tls=prefer&user=seclume_test"
                         + "&provider=file&path=" + path + "&trustServerCertificate=true"));
     }
 

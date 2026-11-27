@@ -45,7 +45,7 @@ class LoginFailureWipeTest {
 
     private static MySession.Settings settings(FakeMySqlServer server) {
         // The stand-in logs in with mysql_native_password, without TLS.
-        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret())
+        return new MySession.Settings("127.0.0.1", server.port(), "testdb", USER, secret()).withTls(space.seclume.internal.jdbc.TlsMode.PREFER)
                 .allowingLegacyHash();
     }
 
@@ -110,7 +110,7 @@ class LoginFailureWipeTest {
         long read = SecretScope.allocations();
 
         assertThrows(SQLException.class, () -> MySession.open(
-                new MySession.Settings("127.0.0.1", port, "testdb", USER, secret())).close());
+                new MySession.Settings("127.0.0.1", port, "testdb", USER, secret()).withTls(space.seclume.internal.jdbc.TlsMode.PREFER)).close());
 
         assertEquals(read, SecretScope.allocations(),
                 "the secret was read although no connection was ever made");

@@ -49,7 +49,7 @@ class LocalNoBackslashEscapesTest {
         } catch (IOException e) {
             Assumptions.abort("no MySQL on " + HOST + ":" + PORT);
         }
-        url = "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/seclume_test?user=seclume_test"
+        url = "jdbc:seclume:mysql://" + HOST + ":" + PORT + "/seclume_test?tls=prefer&user=seclume_test"
                 + "&allowPublicKeyRetrieval=true&provider=file&path="
                 + password.toString().replace('\\', '/');
     }

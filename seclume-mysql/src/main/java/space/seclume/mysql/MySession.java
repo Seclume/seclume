@@ -89,6 +89,14 @@ public final class MySession implements AutoCloseable {
                            boolean allowLegacyHashOverUnverifiedTls) {
 
         /**
+         * The same settings with TLS mode {@code mode} - for a caller that
+         * talks to a server it knows has no certificate to check, and says so.
+         */
+        public Settings withTls(TlsMode mode) {
+            return new Settings(host, port, database, user, secret, applicationName, connectTimeoutMillis, allowPublicKeyRetrieval, hosts, resultLimit, mode, tlsStack, identity, tinyInt1isBit, disabledAuthenticationPlugins, allowCleartextOverUnverifiedTls, allowLegacyHashOverUnverifiedTls);
+        }
+
+        /**
          * The process-wide default of {@code allowCleartextOverUnverifiedTls}:
          * {@code -Dseclume.mysql.allowCleartextOverUnverifiedTls=true}. Off.
          */
@@ -225,7 +233,7 @@ public final class MySession implements AutoCloseable {
                         int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
                         HostList hosts) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    allowPublicKeyRetrieval, hosts, ResultLimit.NONE, TlsMode.PREFER);
+                    allowPublicKeyRetrieval, hosts, ResultLimit.NONE, TlsMode.VERIFY_FULL);
         }
 
         /** With a result limit but the default TLS mode. */
@@ -234,7 +242,7 @@ public final class MySession implements AutoCloseable {
                         int connectTimeoutMillis, boolean allowPublicKeyRetrieval,
                         HostList hosts, ResultLimit resultLimit) {
             this(host, port, database, user, secret, applicationName, connectTimeoutMillis,
-                    allowPublicKeyRetrieval, hosts, resultLimit, TlsMode.PREFER);
+                    allowPublicKeyRetrieval, hosts, resultLimit, TlsMode.VERIFY_FULL);
         }
 
         public Settings(String host, int port, String database, String user,

@@ -51,7 +51,7 @@ class LocalDetachSeamTest {
         String path = password.toString().replace(java.io.File.separatorChar, '/');
         url = "jdbc:seclume:oracle://" + host + ":" + port + "/"
                 + System.getProperty("seclume.oracle.service", "FREEPDB1")
-                + "?user=seclume_test&provider=file&path=" + path;
+                + "?tls=off&user=seclume_test&provider=file&path=" + path;
     }
 
     /** The connection whose session was handed over says it is closed, in JDBC's words. */

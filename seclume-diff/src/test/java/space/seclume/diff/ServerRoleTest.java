@@ -59,7 +59,7 @@ class ServerRoleTest {
                 new Database("SQL Server", "mssql", 1433, "sqlserver", "master", "sa",
                         ".local-mssql-password", "&trustServerCertificate=true"),
                 new Database("Oracle", "oracle", 1521, "oracle", "FREEPDB1", "seclume_test",
-                        ".local-oracle-password", ""));
+                        ".local-oracle-password", "&tls=off"));
     }
 
     /**

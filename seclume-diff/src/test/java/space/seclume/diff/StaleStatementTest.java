@@ -90,7 +90,7 @@ class StaleStatementTest {
         String host = System.getProperty("seclume.oracle.host", TestHosts.database());
         TypeCatalogTest.reachable(host, port, secret);
         run(secret, "jdbc:seclume:oracle://" + host + ":" + port
-                        + "/FREEPDB1?user=seclume_test",
+                        + "/FREEPDB1?tls=off&user=seclume_test",
                 "jdbc:oracle:thin:@//" + host + ":" + port + "/FREEPDB1", "seclume_test",
                 "number(10)", "varchar2(20)", new String[][] {{"long raw", "hextoraw('ab')"},
                         {"date", "date '2024-01-02'"}, {"long", "'x'"},

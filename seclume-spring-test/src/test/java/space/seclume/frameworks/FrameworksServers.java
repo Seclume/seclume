@@ -61,7 +61,7 @@ final class FrameworksServers {
 
     static String oracleUrl() {
         return "jdbc:seclume:oracle://" + reachable(TestHosts.database(), 1521)
-                + "/FREEPDB1?user=seclume_test" + secret(".local-oracle-password");
+                + "/FREEPDB1?user=seclume_test&tls=off" + secret(".local-oracle-password");
     }
 
     static DataSource postgres() throws Exception {

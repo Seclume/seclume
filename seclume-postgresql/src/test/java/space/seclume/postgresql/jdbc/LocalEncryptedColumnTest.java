@@ -40,7 +40,7 @@ class LocalEncryptedColumnTest extends EncryptedColumnContract {
         }
         url = "jdbc:seclume:postgresql://" + space.seclume.tck.TestHosts.postgres() + ":"
                 + space.seclume.tck.TestHosts.postgresPort()
-                + "/seclume_test?user=seclume_test&provider=file&path="
+                + "/seclume_test?tls=prefer&user=seclume_test&provider=file&path="
                 + password.toString().replace('\\', '/');
     }
 

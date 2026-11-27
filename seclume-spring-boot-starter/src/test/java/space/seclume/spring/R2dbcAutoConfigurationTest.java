@@ -61,7 +61,7 @@ class R2dbcAutoConfigurationTest {
         Map<String, Object> properties = new LinkedHashMap<>();
         String prefix = "seclume.datasources.main";
         properties.put(prefix + ".url", "jdbc:seclume:postgresql://" + TestHosts.postgres() + ":"
-                + TestHosts.postgresPort() + "/seclume_test");
+                + TestHosts.postgresPort() + "/seclume_test?tls=prefer");
         properties.put(prefix + ".username", "seclume_test");
         properties.put(prefix + ".secret.provider", "file");
         properties.put(prefix + ".secret.path", passwordFile.toString().replace('\\', '/'));

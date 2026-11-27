@@ -79,6 +79,14 @@ public final class OracleSession implements AutoCloseable {
                            boolean legacyVerifier11g) {
 
         /**
+         * The same settings with TLS mode {@code mode} - for a caller that
+         * talks to a server it knows has no certificate to check, and says so.
+         */
+        public Settings withTls(TlsMode mode) {
+            return new Settings(host, port, service, user, secret, connectTimeoutMillis, hosts, resultLimit, mode, tlsStack, identity, nativeEncryption, legacyVerifier11g);
+        }
+
+        /**
          * Host and service go into the (DESCRIPTION=...) as they are: a
          * parenthesis or an equals sign in either would add entries of its own.
          */
@@ -147,15 +155,15 @@ public final class OracleSession implements AutoCloseable {
         public Settings(String host, int port, String service, String user,
                         SecretProvider secret, int connectTimeoutMillis, HostList hosts) {
             this(host, port, service, user, secret, connectTimeoutMillis, hosts,
-                    ResultLimit.NONE, TlsMode.OFF);
+                    ResultLimit.NONE, TlsMode.VERIFY_FULL);
         }
 
-        /** With a result limit but without encryption - see the tls component. */
+        /** With a result limit and the default TLS mode, verify-full. */
         public Settings(String host, int port, String service, String user,
                         SecretProvider secret, int connectTimeoutMillis, HostList hosts,
                         ResultLimit resultLimit) {
             this(host, port, service, user, secret, connectTimeoutMillis, hosts,
-                    resultLimit, TlsMode.OFF);
+                    resultLimit, TlsMode.VERIFY_FULL);
         }
 
         public Settings(String host, int port, String service, String user,

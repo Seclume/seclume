@@ -69,7 +69,7 @@ class LoginTimeoutTest {
                         "jdbc:seclume:sqlserver://%s:%s/master?user=sa"
                                 + "&trustServerCertificate=true", "waitfor delay '00:00:02'"},
                 new String[] {".local-oracle-password", TestHosts.database(), "1521",
-                        "jdbc:seclume:oracle://%s:%s/FREEPDB1?user=seclume_test",
+                        "jdbc:seclume:oracle://%s:%s/FREEPDB1?tls=off&user=seclume_test",
                         "begin dbms_session.sleep(2); end;"})) {
             Path secret = TypeCatalogTest.locate(db[0]);
             if (secret == null || !reachable(db[1], Integer.parseInt(db[2]))) {
