@@ -206,6 +206,10 @@ What a pod gets with `redact-dumps`:
   its owner only. Its root file system is read-only, it holds no capabilities, and its memory is
   limited (`--sidecar-memory`, 256Mi). `--native-sidecar` makes it an init container with
   `restartPolicy: Always` (Kubernetes 1.29+), so it does not keep a Job's pod from completing.
+- **Set `--dump-size-limit`.** The dump folder is an `emptyDir` on the node's disk, and without
+  a `sizeLimit` - the default - a dump as large as the heap, or several in a row, fills the
+  node's ephemeral storage for every pod on it. A little more than the largest heap
+  (`-Xmx`) of the annotated pods is enough: a dump is about the size of the heap in use.
 
 With `spiffe`, the SPIFFE CSI driver's volume (`--spiffe-csi-driver`, `csi.spiffe.io`) is mounted
 read-only at `/spiffe-workload-api`. `--spiffe-host-path` mounts a host directory instead - only

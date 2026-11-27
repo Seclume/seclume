@@ -989,6 +989,35 @@ Scope: `seclume-kubernetes` and `seclume-jpa`.
   at the first value and kept, as the documented rotation (a new key in the ring, then a
   restart) expects.
 
+## Round 17 - November 2026
+
+Scope: `seclume-ssh`, `seclume-admission`, the HTTP/2 header rewriting in `seclume-http`
+(`Http2Requests`), and the starter's health grade and R2DBC wiring - read against the two
+promises: no secret on the heap, no way into the host for whoever controls what seclume reads.
+
+| # | Area | Finding | Severity | Fixed in |
+|---|------|---------|----------|----------|
+| 1 | Admission | The dump folder is an `emptyDir` without a `sizeLimit` unless `--dump-size-limit` is given: a dump the size of the heap, or several, fills the node's ephemeral storage for every pod on it. No way into the host, but a way to disturb it. Documented in DIAGNOSTICS.md with the size to give. | low | #PR (documentation) |
+
+### Reviewed, nothing found
+
+- **SSH**: the private key stays in OpenSSL; only public values (the exponent and modulus, the
+  EC point) and the session hash to be signed are on the heap. `ssh-rsa` with SHA-1 is not
+  signed; the DER-to-SSH conversion only reads the signer's own output. Host key checking is
+  the SSH library's, as the module's documentation says.
+- **Admission**: a host directory is mounted only from the operator's `--spiffe-host-path`,
+  never from an annotation, only into the namespaces `--spiffe-namespaces` names, and
+  read-only. `secret-volumes` reaches only volumes the pod already has, and none of the
+  webhook's own. The sidecar has no capabilities, no privilege escalation and a read-only root
+  file system; its image and command are the operator's. An AdmissionReview is bounded in size
+  (413) and the JSON in depth; the patch is built from indices, never from names.
+- **HTTP/2 rewriting**: placeholders are replaced only in credential headers, the same set as
+  over HTTP/1, never in a pseudo-header (`:path`, `:authority`) or in DATA; a placeholder whose
+  secret does not go to this server is sent as it is.
+- **Starter health grade and R2DBC wiring**: the grade is read from the driver behind the
+  pool's wrapper (`AssessmentWiringTest`); R2DBC with only a blocking session context gets no
+  context and a warning, never one read on an event loop (`R2dbcSessionContextWiringTest`).
+
 ## The next review
 
 `SeclumeCollection`, `Iterables` and `BatchCursor` of `seclume-mongodb-driver` have been
