@@ -35,8 +35,11 @@ class DhGroupTest {
         assertEquals(512, AdvancedNegotiation.checkGroup(512, 512));
     }
 
+    // The bound that matters is publicValue's, asserted below; finding a
+    // 4096-bit prime takes a random while, and under a full build's load more
+    // than 20 s (seen 27.11.2026).
     @Test
-    @Timeout(20)
+    @Timeout(120)
     void theExponentIs256Bits() throws Exception {
         byte[] prime = BigInteger.probablePrime(4096, new SecureRandom()).toByteArray();
         byte[] exact = new byte[512];

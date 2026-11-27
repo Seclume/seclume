@@ -34,6 +34,8 @@ import space.seclume.secret.CallbackSecretProvider;
  * before anything of the answer is sent - against a fake server that asks for
  * exactly that method and records what comes back.
  */
+// Counts the open secret scopes of the whole JVM: another test running beside it moves the count.
+@org.junit.jupiter.api.parallel.Isolated
 class RequireAuthTest {
 
     private static final int OK = 0;
