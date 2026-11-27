@@ -82,6 +82,61 @@ class DeadlineKillTest {
         }
     }
 
+    /**
+     * close() at the very moment the kill is due, two hundred times at once:
+     * a kill either comes and ends before close() has returned - close()
+     * waits for one under way - or not at all. One after it would close a connection that may
+     * already be the next borrower's.
+     */
+    @Test
+    void noKillComesAfterCloseHasReturned() throws Exception {
+        String before = System.getProperty("seclume.queryTimeoutGraceSeconds");
+        System.setProperty("seclume.queryTimeoutGraceSeconds", "0");
+        try {
+            AtomicInteger late = new AtomicInteger();
+            AtomicInteger kills = new AtomicInteger();
+            java.util.List<Thread> runs = new java.util.ArrayList<>();
+            java.util.Random jitter = new java.util.Random(253);
+            for (int run = 0; run < 200; run++) {
+                long closeAfter = 1_000 + jitter.nextInt(41) - 20;   // 980 to 1020 ms
+                runs.add(Thread.ofVirtual().start(() -> {
+                    java.util.concurrent.atomic.AtomicBoolean returned =
+                            new java.util.concurrent.atomic.AtomicBoolean();
+                    Deadline deadline = Deadline.of(1, () -> { }, () -> {
+                        // A close takes a moment; one that close() did not wait
+                        // for is still going when close() has returned.
+                        kills.incrementAndGet();
+                        if (returned.get()) {
+                            late.incrementAndGet();
+                        }
+                        Thread.sleep(30);
+                        if (returned.get()) {
+                            late.incrementAndGet();
+                        }
+                    });
+                    try {
+                        Thread.sleep(closeAfter);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    deadline.close();
+                    returned.set(true);
+                }));
+            }
+            for (Thread run : runs) {
+                run.join(30_000);
+            }
+            Thread.sleep(300);                                      // a straggler would land now
+            assertEquals(0, late.get(), "kills after close() had returned, of " + kills.get());
+        } finally {
+            if (before == null) {
+                System.clearProperty("seclume.queryTimeoutGraceSeconds");
+            } else {
+                System.setProperty("seclume.queryTimeoutGraceSeconds", before);
+            }
+        }
+    }
+
     @Test
     void aStatementThatEndedInTimeIsNeitherCancelledNorClosed() throws Exception {
         AtomicInteger cancelled = new AtomicInteger();
