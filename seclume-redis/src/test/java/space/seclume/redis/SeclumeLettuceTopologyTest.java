@@ -165,6 +165,37 @@ class SeclumeLettuceTopologyTest {
     }
 
     /**
+     * The cluster names a second node - in CLUSTER SLOTS, in a -MOVED - that
+     * is neither the URL's host nor in cluster-hosts: it never gets the
+     * password, whatever the key that lands on it.
+     */
+    @Test
+    void aClusterNodeTheUrlDoesNotAllowGetsNoPassword() throws Exception {
+        byte[] expectedPw = readTrimmedBytes(redisSecretFile);
+        try (FakeRedisNode node1 = FakeRedisNode.clusterNode(localhostTls, "orders", expectedPw);
+             FakeRedisNode node2 = FakeRedisNode.clusterNode(loopbackTls, "orders", expectedPw)) {
+            node1.setClusterPeers("localhost", node1.port(), "127.0.0.1", node2.port());
+            node2.setClusterPeers("localhost", node1.port(), "127.0.0.1", node2.port());
+            String url = "rediss://localhost:" + node1.port()
+                    + "?user=orders&tlsRootCert=" + slash(caPem)
+                    + "&provider=file&path=" + slash(redisSecretFile);
+            RedisClusterClient cluster = SeclumeLettuce.clusterClient(url);
+            try (StatefulRedisClusterConnection<String, String> conn = cluster.connect()) {
+                assertEquals("OK", conn.sync().set("b", "on-first-shard"));
+                // "a" lands on the node the cluster named: no login there.
+                assertThrows(Exception.class, () -> conn.sync().set("a", "on-second-shard"));
+            } finally {
+                cluster.shutdown();
+            }
+            assertTrue(node1.authenticatedCount.get() >= 1, "the URL's node got no login");
+            assertEquals(0, node2.authenticatedCount.get(),
+                    "the node only the cluster named got the password");
+        } finally {
+            java.util.Arrays.fill(expectedPw, (byte) 0);
+        }
+    }
+
+    /**
      * A node that discovery names - a forged -MOVED, a Sentinel answer - and
      * that neither the URL nor cluster-hosts allows gets the placeholder, not
      * the password: its login fails, and the password never left for it.

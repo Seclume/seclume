@@ -93,7 +93,7 @@ public final class PatroniTopology implements ClusterTopology {
      */
     public static PatroniTopology of(String option, java.util.Collection<String> urlHosts,
                                      String patroniHosts) {
-        PatroniTopology plain = of(option);
+        PatroniTopology plain = anyMember(option);
         if (plain == null) {
             return null;
         }
@@ -188,8 +188,23 @@ public final class PatroniTopology implements ClusterTopology {
         return false;
     }
 
-    /** The {@code patroni=} option, or null when there is none. */
+    /**
+     * The {@code patroni=} option, or null when there is none - admitting no
+     * member the answer names: without the URL's hosts there is nothing to
+     * hold the answer to, and it would choose where the login goes. See
+     * {@link #of(String, java.util.Collection, String)}.
+     */
     public static PatroniTopology of(String option) {
+        PatroniTopology any = anyMember(option);
+        return any == null ? null : new PatroniTopology(any.endpoints, java.util.Set.of());
+    }
+
+    /**
+     * The same, taking every member the answer names - for a test of the
+     * ordering, never for a connection: whoever writes the answer would
+     * choose where the login goes.
+     */
+    static PatroniTopology anyMember(String option) {
         if (option == null || option.isBlank()) {
             return null;
         }

@@ -316,6 +316,11 @@ All notable changes to seclume are recorded here. Versions follow
   after the grace either. A query that trickled its answer was bounded by about 11 seconds
   instead of the timeout and the grace. Cancellation and kill run on threads of their own
   now; the same query ends after 2 seconds.
+- **Discovery adds no host, also where nothing was given to hold it to.** `PatroniTopology.of(option)`
+  without the URL's hosts took every member Patroni's answer named; it takes none now (the
+  driver always passed the URL's hosts, so connections are unchanged). An Aurora instance
+  identifier with dots in the cluster's answer is no instance name and is ignored - it put
+  labels of the answer's choosing in front of the cluster's domain.
 - **R2DBC: a transaction left open at `close()` is rolled back before the close.** It was left
   to what closing means underneath - a pool's return, a driver's disconnect; now its writes
   and locks end with the connection, explicitly, before anyone else gets the session.

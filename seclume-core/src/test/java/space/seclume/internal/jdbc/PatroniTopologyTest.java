@@ -45,7 +45,7 @@ class PatroniTopologyTest {
         AtomicInteger asked = new AtomicInteger();
         try (ServerSocket patroni = serve(CLUSTER, asked)) {
             // A dead endpoint first: the next one is asked.
-            PatroniTopology cluster = PatroniTopology.of("http://127.0.0.1:1,http://127.0.0.1:"
+            PatroniTopology cluster = PatroniTopology.anyMember("http://127.0.0.1:1,http://127.0.0.1:"
                     + patroni.getLocalPort());
             assertEquals("[10.0.0.2:5433, 10.0.0.1:5432, 10.0.0.4:5432]",
                     cluster.hosts(TargetServer.PRIMARY).toString());
@@ -145,6 +145,7 @@ class PatroniTopologyTest {
     void noAnswerMeansNoMembers() {
         assertTrue(PatroniTopology.of("http://127.0.0.1:1").hosts(TargetServer.PRIMARY).isEmpty());
         assertNull(PatroniTopology.of(null));
+        assertNull(PatroniTopology.anyMember(null));
         assertNull(PatroniTopology.of(" "));
     }
 
