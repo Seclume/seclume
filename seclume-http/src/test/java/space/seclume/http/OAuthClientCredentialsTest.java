@@ -60,6 +60,25 @@ class OAuthClientCredentialsTest {
         }
     }
 
+    /**
+     * A token whose JSON escapes put a line break into it would end the
+     * Authorization header and start one of the server's choosing. Refused:
+     * no request goes out with it.
+     */
+    @Test
+    void aTokenWithALineBreakIsRefused() throws Exception {
+        try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
+             FakeHttpsServer api = api(tokens);
+             SeclumeHttp http = SeclumeHttp.of(url(api, tokens, ""))) {
+            tokens.tokenPrefix = "abc\\r\\nX-Evil: 1\\r\\n";
+            IOException refused = assertThrows(IOException.class,
+                    () -> text(http.send("GET", "/me", Map.of(), null)));
+            assertTrue(String.valueOf(refused.getMessage()).contains("control"),
+                    refused.getMessage());
+            assertTrue(api.received.isEmpty(), "a request went out: " + api.received);
+        }
+    }
+
     @Test
     void basicClientAuthAndTheTokenIsReused() throws Exception {
         try (FakeTokenServer tokens = new FakeTokenServer(pki.serverContext());
