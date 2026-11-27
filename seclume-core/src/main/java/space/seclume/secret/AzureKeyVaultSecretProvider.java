@@ -130,6 +130,10 @@ public final class AzureKeyVaultSecretProvider implements SecretProvider, Expiri
         }
     }
 
+    /** The secrets whose past expiry was said already, with the expiry: once each. */
+    private static final java.util.Set<String> PAST_EXPIRY_SAID =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /**
      * Key Vault does not enforce a secret's exp - the value is still handed
      * out, and an exp in the past is often a reminder nobody acted on. Taken
@@ -139,6 +143,14 @@ public final class AzureKeyVaultSecretProvider implements SecretProvider, Expiri
     static Instant stillMeant(Instant exp, String name) {
         if (exp == null || exp.isAfter(Instant.now())) {
             return exp;
+        }
+        // Once per secret and expiry: every login fetches the secret again, and
+        // a warning per login said the same thing a hundred times an hour.
+        if (PAST_EXPIRY_SAID.size() > 1000) {
+            PAST_EXPIRY_SAID.clear();
+        }
+        if (!PAST_EXPIRY_SAID.add(name + "@" + exp)) {
+            return null;
         }
         System.getLogger(AzureKeyVaultSecretProvider.class.getName()).log(
                 System.Logger.Level.WARNING, "seclume: the Key Vault secret " + name
