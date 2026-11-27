@@ -156,11 +156,25 @@ public final class FieldKeys implements AutoCloseable {
      * A column with {@link EncryptedColumn.Context#REQUIRED} refuses a value
      * written or read without one; the keys are the same as without it.
      */
+    public EncryptedColumn column(String name, EncryptedColumn.Mode mode,
+                                  EncryptedColumn.Context context) {
+        return column(name, mode, context, EncryptedColumn.Padding.NONE);
+    }
+
+    /**
+     * The column of this name and mode, with its context rule and its
+     * {@link EncryptedColumn.Padding}. Padding changes what is written, not
+     * the keys: the same column with and without it reads each other's values.
+     */
     public synchronized EncryptedColumn column(String name, EncryptedColumn.Mode mode,
-                                               EncryptedColumn.Context context) {
+                                               EncryptedColumn.Context context,
+                                               EncryptedColumn.Padding padding) {
         checkOpen();
         if (context == null) {
             throw new IllegalArgumentException("a column needs a context rule");
+        }
+        if (padding == null) {
+            throw new IllegalArgumentException("a column needs a padding; Padding.NONE for none");
         }
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("a column needs a name: it is part of its key");
@@ -168,8 +182,10 @@ public final class FieldKeys implements AutoCloseable {
         if (mode == null) {
             throw new IllegalArgumentException("a column needs a mode");
         }
-        return columns.computeIfAbsent(mode.name() + '\u0000' + context.name() + '\u0000' + name,
-                ignored -> new EncryptedColumn(this, name, mode, context, derive(name, mode)));
+        return columns.computeIfAbsent(mode.name() + '\u0000' + context.name() + '\u0000'
+                        + padding.code() + '\u0000' + name,
+                ignored -> new EncryptedColumn(this, name, mode, context, padding,
+                        derive(name, mode)));
     }
 
     /**

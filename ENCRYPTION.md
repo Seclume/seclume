@@ -526,7 +526,14 @@ must be found.
 ## What it does not hide, and does not do
 
 - **The length** of every value, to the byte, and whether it is NULL - SQL NULL is stored as
-  NULL.
+  NULL. A column made with a padding hides the length up to its padded size:
+  `keys.column("patients.diagnosis", Mode.RANDOMIZED, Context.OPTIONAL,
+  Padding.toMultipleOf(32))` writes every value of up to 28 bytes as 32, and
+  `Padding.toPowerOfTwo(16)` lets only the order of magnitude show, at less than twice the
+  size. The column needs room for the padded size plus the overhead. Padded and unpadded
+  values are read by every column. In a column that pads, `needsReencryption` is true for an
+  unpadded value, so a `ColumnRotation` pass pads what was written before. `plaintextLength`
+  is then the most a value holds; the length is what `decrypt` returns.
 - **Equality**, in deterministic columns.
 - **Access patterns**: which rows a query touches, how often.
 - **The application.** Whoever runs code in the application process can decrypt, as the
@@ -544,11 +551,13 @@ must be found.
 [ 1 version = 1 ][ 1 flags ][ 4 key number, big endian ][ 12 nonce ][ 32 commitment ][ ciphertext ][ 16 tag ]
 ```
 
-- **Flags:** bit 0 set for deterministic. No other bit is defined; a value with one set is
-  refused.
+- **Flags:** bit 0 set for deterministic, bit 1 set for a padded value. No other bit is
+  defined; a value with one set is refused.
+- **A padded value's plaintext:** its length as four bytes, big endian, the value, and zero
+  bytes up to the padded size - all of it encrypted, so only the padded size shows.
 - **Associated data:** the first six bytes, followed by the context if there is one.
 - **Column keys:** `HKDF-SHA-256(salt = "seclume field encryption v1", IKM = data key,
-  info = flag byte || 0x00 || UTF-8 column name)`, 64 bytes: the first 32 are the AES-GCM-SIV
+  info = mode flag (bit 0 alone) || 0x00 || UTF-8 column name)`, 64 bytes: the first 32 are the AES-GCM-SIV
   key, the last 32 the commitment key.
 - **Commitment:** `HMAC-SHA-256(commitment key, version || flags || key number || nonce)`,
   checked in constant time before anything is decrypted. AES-GCM-SIV, like every AEAD built on

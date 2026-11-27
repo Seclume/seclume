@@ -68,8 +68,14 @@ public abstract class EncryptedBytesConverter implements AttributeConverter<byte
         EncryptedColumn encrypted = column();
         byte[] plain = new byte[Math.max(0, encrypted.plaintextLength(stored))];
         try {
-            encrypted.decrypt(stored, MemorySegment.ofArray(plain));
-            return plain;
+            int length = encrypted.decrypt(stored, MemorySegment.ofArray(plain));
+            if (length == plain.length) {
+                return plain;
+            }
+            // A padded value: plaintextLength was what it holds at most.
+            byte[] exact = java.util.Arrays.copyOf(plain, length);
+            java.util.Arrays.fill(plain, (byte) 0);
+            return exact;
         } catch (FieldEncryptionException e) {
             throw new FieldEncryptionException(e.getMessage() + " (attribute converted by "
                     + getClass().getName() + ")", e);

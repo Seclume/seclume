@@ -109,7 +109,8 @@ class FieldFormatEdgesTest {
         try (FieldKeys keys = FieldKeys.builder().key(1, FieldEncryptionTest.provider(KEY)).build()) {
             EncryptedColumn column = keys.column("t.a", Mode.RANDOMIZED);
             byte[] stored = column.encrypt(text("x"));
-            for (int flags : new int[] {2, 5, 0x7f, 0x80, 0x81, 0xff}) {
+            // 2 is no longer among them: it is the padding bit (PaddingTest).
+            for (int flags : new int[] {4, 5, 0x7f, 0x80, 0x81, 0xff}) {
                 byte[] changed = stored.clone();
                 changed[1] = (byte) flags;
                 FieldEncryptionException e = assertThrows(FieldEncryptionException.class,

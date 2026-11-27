@@ -134,6 +134,87 @@ public final class EncryptedColumn {
         REQUIRED
     }
 
+    /**
+     * How a value's length is hidden. Without padding the ciphertext is the
+     * plaintext's length plus {@link #OVERHEAD}, to the byte: a column of
+     * diagnoses or salaries tells by its lengths alone more than it should.
+     * With padding the value is written as its length (four bytes), itself and
+     * zeros up to the next size the padding allows - only that size shows.
+     * The flag that says so is part of the authenticated header, and every
+     * column reads padded and unpadded values alike: switching padding on
+     * needs no migration, {@link #needsReencryption} finds what to rewrite.
+     */
+    public static final class Padding {
+
+        /** No padding: the length shows to the byte. */
+        public static final Padding NONE = new Padding(0, false);
+
+        private final int size;
+        private final boolean powerOfTwo;
+
+        private Padding(int size, boolean powerOfTwo) {
+            this.size = size;
+            this.powerOfTwo = powerOfTwo;
+        }
+
+        /**
+         * Every value padded to a multiple of {@code bytes} (2 to 65536): with
+         * 32, a value of 1 to 28 bytes looks like every other of them.
+         */
+        public static Padding toMultipleOf(int bytes) {
+            if (bytes < 2 || bytes > 65536) {
+                throw new IllegalArgumentException("padding to multiples of 2 to 65536 bytes, not "
+                        + bytes);
+            }
+            return new Padding(bytes, false);
+        }
+
+        /**
+         * Every value padded to the next power of two, at least
+         * {@code minimum} (2 to 65536): what shows is the order of magnitude,
+         * at a cost of less than double.
+         */
+        public static Padding toPowerOfTwo(int minimum) {
+            if (minimum < 2 || minimum > 65536) {
+                throw new IllegalArgumentException("padding to powers of two of at least 2 to "
+                        + "65536 bytes, not " + minimum);
+            }
+            return new Padding(minimum, true);
+        }
+
+        boolean pads() {
+            return size > 0;
+        }
+
+        /** What {@code content} bytes - the length prefix and the value - are padded to. */
+        long paddedLength(long content) {
+            if (powerOfTwo) {
+                long padded = size;
+                while (padded < content) {
+                    padded <<= 1;
+                }
+                return padded;
+            }
+            return (content + size - 1) / size * size;
+        }
+
+        /** Part of the column's identity in its ring's cache. */
+        String code() {
+            return size == 0 ? "none" : (powerOfTwo ? "pow2:" : "mul:") + size;
+        }
+
+        @Override
+        public String toString() {
+            return size == 0 ? "no padding" : powerOfTwo ? "padded to powers of two from " + size
+                    : "padded to multiples of " + size;
+        }
+    }
+
+    /** The flag bit that says a value is padded - see {@link Padding}. */
+    static final byte PADDED = 0x02;
+    /** The length prefix of a padded value. */
+    static final int LENGTH_PREFIX = 4;
+
     /** The version byte of this format. */
     public static final byte VERSION = 1;
     /** Version, flags and key number: the associated data every value starts with. */
@@ -153,16 +234,23 @@ public final class EncryptedColumn {
     private final String name;
     private final Mode mode;
     private final Context context;
+    private final Padding padding;
     /** Replaced when the ring reads its keys again after a checkpoint; see {@link FieldKeys}. */
     private volatile Map<Integer, SecretScope> keys;
 
-    EncryptedColumn(FieldKeys ring, String name, Mode mode, Context context,
+    EncryptedColumn(FieldKeys ring, String name, Mode mode, Context context, Padding padding,
                     Map<Integer, SecretScope> keys) {
         this.ring = ring;
         this.name = name;
         this.mode = mode;
         this.context = context;
+        this.padding = padding;
         this.keys = keys;
+    }
+
+    /** How this column hides the length of what it writes. */
+    public Padding padding() {
+        return padding;
     }
 
     public String name() {
@@ -212,10 +300,29 @@ public final class EncryptedColumn {
             throw new IllegalArgumentException("a field value is at most about 2 GB");
         }
         byte[] context0 = bound(context);
+        if (padding.pads()) {
+            long padded = padding.paddedLength(LENGTH_PREFIX + length);
+            if (padded > Integer.MAX_VALUE - OVERHEAD - 8) {
+                throw new IllegalArgumentException("a field value is at most about 2 GB, padded");
+            }
+            // The value with its length in front and zeros behind, in a
+            // SecretScope: it is the plaintext as much as the value itself.
+            try (SecretScope body = SecretScope.allocate((int) padded)) {
+                MemorySegment content = body.segment();
+                content.set(BE_INT, 0, (int) length);
+                MemorySegment.copy(plaintext, 0, content, LENGTH_PREFIX, length);
+                return seal(keyId, content, padded, (byte) (mode.flag() | PADDED), context0);
+            }
+        }
+        return seal(keyId, plaintext, length, mode.flag(), context0);
+    }
+
+    private byte[] seal(int keyId, MemorySegment plaintext, long length, byte flags,
+                        byte[] context0) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment value = arena.allocate(OVERHEAD + length);
             value.set(ValueLayout.JAVA_BYTE, 0, VERSION);
-            value.set(ValueLayout.JAVA_BYTE, 1, mode.flag());
+            value.set(ValueLayout.JAVA_BYTE, 1, flags);
             value.set(BE_INT, 2, keyId);
             if (mode == Mode.RANDOMIZED) {
                 Entropy.fill(value, HEADER, AesGcmSiv.NONCE);
@@ -233,10 +340,18 @@ public final class EncryptedColumn {
         }
     }
 
-    /** How many bytes {@code ciphertext} decrypts to; checks only the format. */
+    /**
+     * How many bytes {@code ciphertext} decrypts to - at most, for a padded
+     * value, whose length only the decryption reveals; checks only the format.
+     * Size a buffer with it, and take the length {@code decrypt} returns.
+     */
     public int plaintextLength(byte[] ciphertext) {
         header(ciphertext);
-        return ciphertext.length - OVERHEAD;
+        return ciphertext.length - OVERHEAD - (padded(ciphertext) ? LENGTH_PREFIX : 0);
+    }
+
+    private static boolean padded(byte[] ciphertext) {
+        return (ciphertext[1] & PADDED) != 0;
     }
 
     /** Which key {@code ciphertext} was encrypted under. */
@@ -261,6 +376,39 @@ public final class EncryptedColumn {
     public int decrypt(byte[] ciphertext, byte[] context, MemorySegment target) {
         int keyId = header(ciphertext);
         int length = ciphertext.length - OVERHEAD;
+        if (padded(ciphertext)) {
+            if (length < LENGTH_PREFIX) {
+                throw new FieldEncryptionException("a padded value of " + name + " is shorter "
+                        + "than its length prefix");
+            }
+            try (SecretScope body = SecretScope.allocate(Math.max(1, length))) {
+                open(ciphertext, keyId, length, context, body.segment());
+                int inside = body.segment().get(BE_INT, 0);
+                if (inside < 0 || inside > length - LENGTH_PREFIX) {
+                    // Authenticated, so written so: a value made by something
+                    // that is not this format, under this column's key.
+                    throw new FieldEncryptionException("a padded value of " + name + " says it "
+                            + "is " + inside + " bytes long, which does not fit its padding");
+                }
+                if (target.byteSize() < inside) {
+                    throw new FieldEncryptionException("the value of " + name + " is " + inside
+                            + " bytes and does not fit into " + target.byteSize());
+                }
+                MemorySegment.copy(body.segment(), LENGTH_PREFIX, target, 0, inside);
+                return inside;
+            }
+        }
+        if (target.byteSize() < length) {
+            throw new FieldEncryptionException("the value of " + name + " is " + length
+                    + " bytes and does not fit into " + target.byteSize());
+        }
+        open(ciphertext, keyId, length, context, target);
+        return length;
+    }
+
+    /** Authenticates {@code ciphertext} and decrypts its {@code length} bytes into {@code target}. */
+    private void open(byte[] ciphertext, int keyId, int length, byte[] context,
+                      MemorySegment target) {
         if (target.byteSize() < length) {
             throw new FieldEncryptionException("the value of " + name + " is " + length
                     + " bytes and does not fit into " + target.byteSize());
@@ -287,7 +435,6 @@ public final class EncryptedColumn {
                 throw new FieldEncryptionException("a value of " + name + " did not authenticate"
                         + " - another column's, another row's context, or altered");
             }
-            return length;
         }
     }
 
@@ -314,7 +461,10 @@ public final class EncryptedColumn {
 
     /** True when {@code ciphertext} is under another key than the primary. */
     public boolean needsReencryption(byte[] ciphertext) {
-        return header(ciphertext) != ring.primary();
+        // Under an older key - or unpadded in a column that pads now, whose
+        // length still shows. (Padded in a column without padding stays: taking
+        // it off would show the length it hides.)
+        return header(ciphertext) != ring.primary() || (padding.pads() && !padded(ciphertext));
     }
 
     /** {@link #reencrypt(byte[], byte[])} without a context. */
@@ -504,10 +654,10 @@ public final class EncryptedColumn {
             throw new FieldEncryptionException("a value of " + name + " is not in seclume's "
                     + "field encryption format version 1 - not encrypted, or written by another tool");
         }
-        if (ciphertext[1] != mode.flag()) {
+        if ((ciphertext[1] & ~PADDED) != mode.flag()) {
             throw new FieldEncryptionException("a value of " + name + " was encrypted "
-                    + (ciphertext[1] == Mode.DETERMINISTIC.flag() ? "deterministically"
-                            : ciphertext[1] == Mode.RANDOMIZED.flag() ? "randomized"
+                    + ((ciphertext[1] & ~PADDED) == Mode.DETERMINISTIC.flag() ? "deterministically"
+                            : (ciphertext[1] & ~PADDED) == Mode.RANDOMIZED.flag() ? "randomized"
                                     : "with unknown flags " + (ciphertext[1] & 0xff))
                     + ", the column is " + mode.name().toLowerCase(java.util.Locale.ROOT));
         }

@@ -143,6 +143,14 @@ All notable changes to seclume are recorded here. Versions follow
   the source-rule tests) in the run summary and labels the pull request `touches-gates`. It reads
   the file list from the API, checks nothing out, and labels only pull requests from this
   repository.
+- **Field encryption can hide the length of a value.** A ciphertext showed its plaintext's
+  length to the byte. `FieldKeys.column(name, mode, context, padding)` with
+  `Padding.toMultipleOf(n)` or `Padding.toPowerOfTwo(min)` writes the value's length, the
+  value and zeros up to the padded size, all of it encrypted. A flag bit in the authenticated
+  header marks the value padded. Every column reads padded and unpadded values. A padding
+  column reports unpadded ones as needing re-encryption, and padding is never taken off.
+  `plaintextLength` is an upper bound for a padded value. The JPA bytes converter returns the
+  exact length.
 - **`Context.REQUIRED` for an encrypted column.** `FieldKeys.column(name, mode,
   Context.REQUIRED)` refuses a value written or read without a context, which would open in
   any row. The keys and format are unchanged. Kafka and Redis use it. Elasticsearch gained
