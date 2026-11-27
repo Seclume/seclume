@@ -19,3 +19,4 @@ space.seclume.spring.SeclumeCbomAutoConfiguration
 space.seclume.spring.SeclumeAccessLogAutoConfiguration
 space.seclume.spring.SeclumeCryptoPolicyAutoConfiguration
 space.seclume.spring.SeclumeWeakenedSettingsAutoConfiguration
+space.seclume.spring.SeclumeCracAutoConfiguration

@@ -141,6 +141,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **CRaC with Spring Boot and Quarkus needs no code.** With `seclume-crac` on the class path the
+  starter registers the process's part (cached credentials and keys wiped, new secrets held back)
+  and every seclume pool in the context. The Quarkus extension registers the process's part.
+  Before, nothing loaded `SeclumeCrac` in an application without a pool, so its checkpoint image
+  kept what the process held. Registering a pool twice is now nothing, and
+  `SeclumeCrac.isRegistered(pool)` / `isProcessRegistered()` say what is registered.
 - **The security regressions run together, and none can drop out unnoticed.** A job in
   `security.yml` runs the classes listed in `.github/security-regressions.txt` (33 now, across
   13 modules) and fails when one of them did not run, or skipped all of its tests.

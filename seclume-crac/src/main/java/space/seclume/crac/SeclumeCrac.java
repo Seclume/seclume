@@ -74,8 +74,13 @@ public final class SeclumeCrac {
     }
 
     /** Makes {@code pool} give up its connections before a checkpoint and resume after. */
-    public static void register(SeclumePool pool) {
+    public static synchronized void register(SeclumePool pool) {
         Resource resource = new PoolResource(pool);
+        // Once: the Spring and Quarkus integrations register every pool, and
+        // an application that did so itself would otherwise suspend it twice.
+        if (REGISTERED.contains(resource)) {
+            return;
+        }
         REGISTERED.add(resource);
         Core.getGlobalContext().register(resource);
     }
@@ -123,6 +128,16 @@ public final class SeclumeCrac {
                 // closed for good; the application builds a new one
             }
         });
+    }
+
+    /** Whether {@code pool} gives up its connections before a checkpoint. */
+    public static boolean isRegistered(SeclumePool pool) {
+        return REGISTERED.contains(new PoolResource(pool));
+    }
+
+    /** Whether the process's part is registered - it is once this class is loaded. */
+    public static boolean isProcessRegistered() {
+        return processRegistered();
     }
 
     /** The resources registered, in order - for a test. */

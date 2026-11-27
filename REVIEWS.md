@@ -514,6 +514,7 @@ protocol text or dribble bytes.
 | 132 | R2DBC cancel leak (#63) | For SQL Server and Oracle the R2DBC connection is described on the lane. A cancel before or during that left the borrowed JDBC connection open for good. The task and the cancel now compete for it atomically, and it is closed synchronously when nobody gets it | `R2dbcCancelDescribeTest` (both cases red on the old factory) | #PR |
 | 133 | Write in doubt (#62) | An auto-commit UPDATE whose answer never comes and whose cancel is ignored gives 08007 (`TransactionResolutionUnknownException`), and the connection is not used again | `KilledWriteInDoubtTest` (MySQL) | #PR |
 | 134 | Security regressions job | The regression tests ran only in their modules' jobs, so a renamed or skipped one went unnoticed. A list file and `security-regressions.sh` run all 33 together and fail on any class that did not run | `.github/scripts/security-regressions.sh` (run locally: 33 of 33) | #PR |
+| 135 | CRaC auto-registration | No Spring or Quarkus wiring loaded `SeclumeCrac`: without a pool the process's part was never registered, and Spring pools had to be registered by hand. `SeclumeCracAutoConfiguration` (process and pools) and a Quarkus start-up bean (process); pool registration idempotent | `SeclumeCracAutoRegisterTest`, `CracRegistrationTest` | #PR |
 
 ### Mutation testing of the security paths
 

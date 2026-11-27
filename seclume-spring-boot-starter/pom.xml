@@ -97,6 +97,14 @@
       <artifactId>seclume-heapdump</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- Checkpoint and restore: with it on the class path, the process and every pool
+         are registered (SeclumeCracAutoConfiguration). -->
+    <dependency>
+      <groupId>space.seclume</groupId>
+      <artifactId>seclume-crac</artifactId>
+      <version>${project.version}</version>
+      <optional>true</optional>
+    </dependency>
     <!-- Masking secrets in log output, with seclume.logging.redact=true. -->
     <dependency>
       <groupId>space.seclume</groupId>

@@ -449,7 +449,10 @@ message names the oldest holders. Beyond that, what matters is what a connection
   with it. `maxResultBytes=0` switches the limit off. The drivers themselves keep what the URL
   says.
 
-**Checkpoint and restore (CRaC, Lambda SnapStart).** `seclume-crac` registers a pool so that it
+**Checkpoint and restore (CRaC, Lambda SnapStart).** With Spring Boot and Quarkus, putting
+`seclume-crac` on the class path is all it takes: the starter registers the process's part and
+every seclume pool in the context, and the Quarkus extension the process's part (its pool is
+Agroal). Elsewhere: `seclume-crac` registers a pool so that it
 gives up every connection before a checkpoint and logs in afresh after the restore. Without it
 CRaC refuses the checkpoint over the pool's open sockets. Any other client on seclume's TLS -
 MongoDB, HTTP, Redis - is registered the same way with `SeclumeCrac.register(Suspendable)`
