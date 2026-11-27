@@ -23,6 +23,23 @@ import space.seclume.secret.SecretScope;
  * little-endian u as it is; and the raw secret comes out reversed for both.
  */
 final class CngEcdh implements NativeEcdh.Backend {
+
+    /**
+     * Uses of the key share it; close() waits for them and frees it alone. A
+     * close while another thread signed or derived freed the native key under
+     * that call - a use after free in native code. Afterwards every use is
+     * refused rather than handed a freed key.
+     */
+    private final java.util.concurrent.locks.ReentrantReadWriteLock use =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
+    private volatile boolean closed;
+
+    private void checkOpen() {
+        if (closed) {
+            throw new IllegalStateException("this native key (" + getClass().getSimpleName()
+                    + ") was closed and its memory freed - it is not used again; make a new one");
+        }
+    }
     private static final SymbolLookup LIB = SymbolLookup.libraryLookup("bcrypt.dll", Arena.global());
     private static final MethodHandle OPEN = bind("BCryptOpenAlgorithmProvider", ADDRESS, ADDRESS, ADDRESS, JAVA_INT);
     private static final MethodHandle SET_PROPERTY = bind("BCryptSetProperty", ADDRESS, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT);
@@ -74,6 +91,16 @@ final class CngEcdh implements NativeEcdh.Backend {
 
     @Override
     public void publicKey(MemorySegment out) {
+        use.readLock().lock();
+        try {
+            checkOpen();
+            publicKeyLocked(out);
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    private void publicKeyLocked(MemorySegment out) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment blob = arena.allocate(blobSize(), 4);
             MemorySegment count = arena.allocate(JAVA_INT);
@@ -94,6 +121,16 @@ final class CngEcdh implements NativeEcdh.Backend {
 
     @Override
     public void derive(MemorySegment peer, MemorySegment out) {
+        use.readLock().lock();
+        try {
+            checkOpen();
+            deriveLocked(peer, out);
+        } finally {
+            use.readLock().unlock();
+        }
+    }
+
+    private void deriveLocked(MemorySegment peer, MemorySegment out) {
         MemorySegment peerKey = MemorySegment.NULL;
         MemorySegment secret = MemorySegment.NULL;
         int size = group.secretSize();
@@ -136,6 +173,19 @@ final class CngEcdh implements NativeEcdh.Backend {
 
     @Override
     public void close() {
+        use.writeLock().lock();
+        try {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            closeLocked();
+        } finally {
+            use.writeLock().unlock();
+        }
+    }
+
+    private void closeLocked() {
         try {
             if (!key.equals(MemorySegment.NULL)) {
                 MemorySegment old = key;
