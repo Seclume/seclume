@@ -504,6 +504,8 @@ protocol text or dribble bytes.
 | 122 | Patroni | A scheme-less endpoint went over plain http, unwarned; IP members never matched a URL of host names. https by default, explicit http warned once, other schemes refused; `patroniHosts` CIDR ranges | `PatroniTopologyTest.anEndpointWithoutASchemeIsAskedOverHttps`, `patroniHostsAdmitsMembersByTheirAddress`, `aRangeThatIsNoneIsRefused` | #PR |
 | 123 | Redis plain cluster | Over plain `redis://`, forged `CLUSTER SLOTS`/`MOVED` answers steered data to any node, with no certificate check to stop it. Refused unless `allow-plain-discovery=true` | `SeclumeLettuceTopologyTest.clusterOverTlsAndPlainVerifiesEachNodeAndRewritesOnEveryShard` | #PR |
 | 124 | Admission hostPath | With `--spiffe-host-path` any annotated pod in any namespace got a hostPath volume. `--spiffe-namespaces` is required with it and limits it; other namespaces get a warning | `InjectionTest` | #PR |
+| 125 | Placeholders unrelated (#60) | Kafka's and AWS's placeholders were a process nonce plus a counter, so one named the next. 16 random bytes each, as HTTP's | `SaslPlaceholdersTest`, `TemporaryCredentialsRefreshTest.placeholdersOfTwoGenerationsAreUnrelated` | #PR |
+| 126 | Pool schema | A borrower that set a schema on a connection that had none: the connection is closed, not lent on that tenant's schema. It was implemented, the test was missing | `CatalogAndSchemaOnReturnTest.whereNoSchemaWasChosenNoneCanBeChosenAgainAndTheConnectionGoes` | #PR |
 
 ### Mutation testing of the security paths
 

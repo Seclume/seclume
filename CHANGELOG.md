@@ -203,6 +203,10 @@ All notable changes to seclume are recorded here. Versions follow
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow
   that ran into the pool's timeout, is now `UNKNOWN`, reported from the pool's numbers. A
   server refusing connections is still `DOWN`. An answer is kept for two seconds.
+- **Kafka and AWS placeholders are random each.** They were a process nonce and a count (AWS:
+  and an identity hash), so a placeholder seen in a log named every one after it. Anybody who
+  could put text where the rewriter looks could have prepared the next login's. Each is 16
+  random bytes now, as HTTP's already were.
 - **HTTP/2: the secret goes only into a credential header, as over HTTP/1.1.** Over HTTP/2,
   every header with a placeholder got the secret, including `X-Opaque-Id`, which Elasticsearch
   writes into its logs and answers. Only `Authorization`, `Proxy-Authorization`, `X-Api-Key`,
