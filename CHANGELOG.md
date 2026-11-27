@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **A PKCS#11 module named in a URL is loaded only where the JVM allows it.**
+  `clientCertPkcs11` names a native library that is loaded and run in the process; a URL or
+  Properties - configuration some applications let others write - could name any. Such a module
+  now has to be listed in `-Dseclume.pkcs11.modules=...`, or it is refused before anything is
+  loaded. A `Pkcs11ClientIdentity` built in code is unchanged.
 - **CRaC: a checkpoint's hold no longer ends by itself.** After `seclume.crac.holdMillis` (60 s)
   the hold on new secrets used to end, though a resource notified after seclume's could still
   be running and the image not yet written - a secret made then was in it (shown on a CRaC JDK).

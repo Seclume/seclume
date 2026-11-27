@@ -77,6 +77,30 @@ public final class ClientIdentities {
     /** A PKCS#11 module whose token holds the key - see {@link Pkcs11ClientIdentity}. */
     public static final String PKCS11 = "clientCertPkcs11";
 
+    /**
+     * The PKCS#11 modules a URL or Properties may name, separated by the
+     * platform's path separator: {@code -Dseclume.pkcs11.modules=/usr/lib/softhsm/libsofthsm2.so}.
+     * Loading a module runs its code in this process; a URL comes from
+     * configuration, which some applications let others write.
+     */
+    public static final String PKCS11_MODULES_PROPERTY = "seclume.pkcs11.modules";
+
+    /** Refuses a module the JVM was not started to allow - before anything is loaded. */
+    static void allowedModule(String module) {
+        java.nio.file.Path named = Path.of(module).toAbsolutePath().normalize();
+        String allowed = System.getProperty(PKCS11_MODULES_PROPERTY, "");
+        for (String entry : allowed.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            if (!entry.isBlank()
+                    && Path.of(entry.strip()).toAbsolutePath().normalize().equals(named)) {
+                return;
+            }
+        }
+        throw new IllegalArgumentException(PKCS11 + " names the native library " + module
+                + ", which would be loaded and run in this process: a URL or Properties may name "
+                + "only modules the JVM is started to allow (-D" + PKCS11_MODULES_PROPERTY + "="
+                + named + "), or build the Pkcs11ClientIdentity in code. Nothing was loaded");
+    }
+
     /** The token's label; without it, the first token. */
     public static final String PKCS11_TOKEN = "clientCertPkcs11Token";
 
@@ -165,6 +189,7 @@ public final class ClientIdentities {
                 throw new IllegalArgumentException(PKCS11 + " names a client certificate's key, "
                         + "and so does the Windows store - one connection presents one");
             }
+            allowedModule(module);
             Map<String, String> pin = nested(settings, PIN_PREFIX);
             String certificate = settings.get(CERTIFICATE);
             String token = settings.get(PKCS11_TOKEN);

@@ -95,6 +95,47 @@ class ClientIdentitiesTest {
         return options;
     }
 
+    /**
+     * A PKCS#11 module named in a URL is native code run in this process: it
+     * is loaded only where the JVM names it in seclume.pkcs11.modules, and
+     * refused before anything is loaded otherwise.
+     */
+    @Test
+    void aPkcs11ModuleFromSettingsMustBeAllowed(@TempDir Path dir) throws Exception {
+        Path library = Files.writeString(dir.resolve("not-really.so"), "no library");
+        Map<String, String> settings = new LinkedHashMap<>();
+        settings.put(ClientIdentities.PKCS11, library.toString());
+        settings.put(ClientIdentities.PKCS11_TOKEN, "t");
+        String before = System.getProperty(ClientIdentities.PKCS11_MODULES_PROPERTY);
+        try {
+            System.clearProperty(ClientIdentities.PKCS11_MODULES_PROPERTY);
+            IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                    () -> ClientIdentities.of(settings));
+            assertTrue(refused.getMessage().contains("-D" + ClientIdentities.PKCS11_MODULES_PROPERTY),
+                    refused.getMessage());
+            assertTrue(refused.getMessage().contains("Nothing was loaded"), refused.getMessage());
+
+            // Another module allowed is not this one.
+            System.setProperty(ClientIdentities.PKCS11_MODULES_PROPERTY,
+                    dir.resolve("other.so") + java.io.File.pathSeparator + " ");
+            assertThrows(IllegalArgumentException.class, () -> ClientIdentities.of(settings));
+
+            // Allowed - by another spelling of the same path - it is tried, and
+            // what fails then is the load.
+            System.setProperty(ClientIdentities.PKCS11_MODULES_PROPERTY,
+                    dir.resolve("x").resolve("..").resolve("not-really.so").toString());
+            Exception loaded = assertThrows(Exception.class, () -> ClientIdentities.of(settings));
+            assertTrue(!String.valueOf(loaded.getMessage()).contains("Nothing was loaded"),
+                    String.valueOf(loaded.getMessage()));
+        } finally {
+            if (before == null) {
+                System.clearProperty(ClientIdentities.PKCS11_MODULES_PROPERTY);
+            } else {
+                System.setProperty(ClientIdentities.PKCS11_MODULES_PROPERTY, before);
+            }
+        }
+    }
+
     @Test
     void buildsAnIdentityFromTwoSettings(@TempDir Path dir) throws Exception {
         ClientIdentity identity = ClientIdentities.of(settings(dir));
