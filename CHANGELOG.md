@@ -7,6 +7,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **`provider=process` runs a program only where the JVM allows it.** A JDBC URL - which some
+  applications take from their users - could start any program with `provider=process`. It now
+  needs `-Dseclume.secret.process.allowed=true` (or `process` in `-Dseclume.secret.providers`);
+  a provider built in code is unchanged.
+- **A query that ignores its cancellation loses its connection.** After the query timeout and a
+  grace (`seclume.queryTimeoutGraceSeconds`), a statement the server did not stop has its
+  connection closed; a write reports `TransactionResolutionUnknownException` (08007), and the
+  pool retires the connection.
 - **`verify-full` is the default TLS mode.** A URL without `tls=` encrypted where the server
   offered it and checked no certificate (`prefer`; Oracle: no encryption at all) - so a server
   in the middle was taken for the database. Now PostgreSQL, MySQL and Oracle check the
@@ -289,6 +297,22 @@ All notable changes to seclume are recorded here. Versions follow
   seclume's TLS - and `closeBeforeCheckpoint(client)` closes one that cannot be suspended.
 
 ### Fixed
+
+- **PostgreSQL: a ReadyForQuery in place of the login is refused.** A server - or whoever stands
+  between - that answered the startup message with ReadyForQuery alone was taken as logged in,
+  so neither `requireAuth` nor SCRAM's server signature was ever checked; under `tls=prefer` a
+  server in the middle was taken for the database. It is refused with 28000 at the login now,
+  and so is an AuthenticationOk that comes before SCRAM or Kerberos has finished.
+- **Oracle: a service or host name cannot add entries to the connect descriptor.** A
+  parenthesis or an equals sign in either went into the `(DESCRIPTION=...)` as it was - another
+  `SERVICE_NAME`, another address. Only letters, digits and `_ . $ # -` pass now.
+- **MySQL: a literal beyond ASCII goes as hex.** In GBK, Big5 or SJIS - by
+  `skip-character-set-client-handshake`, `init_connect` or `SET NAMES` - a lead byte swallowed
+  the escaping backslash, and a catalog pattern became SQL. Such values go as
+  `_utf8mb4 X'...'` now. A zero byte in the user or database is refused before the login answer.
+- **R2DBC: host, port and database are checked before they go into the URL.** A database named
+  `tenant_a?user=app&sts-endpoint=...` was a query of its own: the login name, an STS endpoint
+  and any option the application did not set came from whoever chose the database.
 
 - **Deadlines compared by difference, spans clamped.** Two places compared `System.nanoTime()`
   with `<` or `>` (the pool's search for a free connection, MongoDB's SRV rescan). Such a
