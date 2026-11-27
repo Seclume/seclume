@@ -307,9 +307,13 @@ class ShamirSharesEdgesTest {
     /** A share of another format version - its magic one digit off - is named as not a share. */
     @Test
     void aShareWithAnotherMagicIsRefused() {
-        String share = line("0123456789abcdef", "2", "1", hexValue(17));
-        for (String other : new String[] {share.replace("seclume-share-1", "seclume-share-2"),
-                share.replace("seclume-share-1", "Seclume-share-1")}) {
+        // The checksum computed over the altered line: refused for its magic,
+        // not for a checksum that no longer matches.
+        for (String magic : new String[] {"seclume-share-2", "Seclume-share-1"}) {
+            String body = magic + ".0123456789abcdef.2.1." + hexValue(17);
+            CRC32 crc = new CRC32();
+            crc.update(body.getBytes(StandardCharsets.US_ASCII));
+            String other = body + "." + String.format(Locale.ROOT, "%08x", crc.getValue());
             assertTrue(refusal(other).contains("not a seclume share"), other);
         }
     }
