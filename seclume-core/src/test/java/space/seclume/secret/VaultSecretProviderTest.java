@@ -279,6 +279,29 @@ class VaultSecretProviderTest {
         }
     }
 
+    /**
+     * A leased secret follows its lease, not the KV age: with a lease of 30 s
+     * it is read again after half of it, long before the 60 s a KV secret is
+     * kept - and not before.
+     */
+    @Test
+    void aLeasedSecretFollowsItsLeaseNotTheKvAge() throws Exception {
+        String answer = "{\"lease_id\":\"database/creds/app/y\",\"renewable\":false,"
+                + "\"lease_duration\":30,"
+                + "\"data\":{\"username\":\"v-token-app-2\",\"password\":\"B2b-generated\"}}";
+        MovingClock clock = new MovingClock(Instant.parse("2026-11-07T09:00:00Z"));
+        try (FakeVault vault = new FakeVault(200, answer);
+             VaultSecretProvider provider = provider(vault, "database/creds/app", clock)) {
+            assertEquals("B2b-generated", read(provider));
+            clock.advance(Duration.ofSeconds(10));
+            assertEquals("B2b-generated", read(provider));
+            assertEquals(1, vault.served(), "read again within half the lease: " + vault.requests);
+            clock.advance(Duration.ofSeconds(6));
+            assertEquals("B2b-generated", read(provider));
+            assertEquals(2, vault.served(), "not read again after half the lease: " + vault.requests);
+        }
+    }
+
     @Test
     void aDynamicDatabaseCredentialIsReadWithItsLease() throws Exception {
         Instant now = Instant.parse("2026-09-20T12:00:00Z");
