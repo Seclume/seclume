@@ -52,6 +52,12 @@ public final class SeclumeEndpoint {
             sources.put(statistics.name(), describe(pool, statistics));
         }
         report.put("dataSources", sources);
+        // What weakens the defaults - the start-up line's list, here too, where
+        // a dashboard or a check asks rather than a log being read.
+        List<String> weakened = SeclumeWeakenedSettingsAutoConfiguration.found();
+        if (weakened != null) {
+            report.put("weakenedSettings", weakened);
+        }
         if (KeyCertificates.PRESENT) {
             report.put("certificates", KeyCertificates.describe(java.time.Instant.now()));
         }

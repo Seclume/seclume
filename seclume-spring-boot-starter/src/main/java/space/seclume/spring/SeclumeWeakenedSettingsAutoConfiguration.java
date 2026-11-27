@@ -29,6 +29,18 @@ public class SeclumeWeakenedSettingsAutoConfiguration {
     private static final System.Logger LOG =
             System.getLogger(SeclumeWeakenedSettingsAutoConfiguration.class.getName());
 
+    /** What the last start found - for {@code /actuator/seclume}; null before any start. */
+    private static volatile List<String> found;
+
+    /**
+     * The weakened settings the application started with, as the start-up
+     * line named them; empty when none, null when this auto-configuration did
+     * not run.
+     */
+    static List<String> found() {
+        return found;
+    }
+
     @Bean
     SmartInitializingSingleton seclumeWeakenedSettings(Environment environment) {
         return () -> {
@@ -37,6 +49,7 @@ public class SeclumeWeakenedSettingsAutoConfiguration {
                     .map(SeclumeWeakenedSettingsAutoConfiguration::urls)
                     .orElse(Map.of());
             List<String> weakened = weakened(environment::getProperty, System::getProperty, urls);
+            found = List.copyOf(weakened);
             if (!weakened.isEmpty()) {
                 LOG.log(System.Logger.Level.WARNING,
                         "seclume: weakened settings: " + String.join(", ", weakened));

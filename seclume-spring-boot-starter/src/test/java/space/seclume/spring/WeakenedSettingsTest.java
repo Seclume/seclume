@@ -34,6 +34,24 @@ class WeakenedSettingsTest {
                 weakened);
     }
 
+    /**
+     * The same list in {@code /actuator/seclume}: a context that starts with
+     * the secret guard off shows it there, under weakenedSettings.
+     */
+    @Test
+    void theEndpointNamesThemToo() {
+        try (org.springframework.context.annotation.AnnotationConfigApplicationContext context =
+                     new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getPropertySources().addFirst(
+                    new org.springframework.core.env.MapPropertySource("test",
+                            Map.of("seclume.secret-guard", "off")));
+            context.register(SeclumeWeakenedSettingsAutoConfiguration.class);
+            context.refresh();
+            Object shown = new SeclumeEndpoint(List.of()).report().get("weakenedSettings");
+            assertEquals(List.of("seclume.secret-guard=off"), shown);
+        }
+    }
+
     @Test
     void theDefaultsAreNothingToSay() {
         assertTrue(SeclumeWeakenedSettingsAutoConfiguration.weakened(key -> null, key -> null,

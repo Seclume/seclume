@@ -530,6 +530,7 @@ protocol text or dribble bytes.
 | 148 | heapcheck across mount namespaces, as root (#70) | The cross-namespace refusal (`unshare -m`), `--in-target` through the process's root and the dump-dir checks need Linux and root, so they skip in CI. Run as root on a Linux host with the console launcher on a real `-cp` (child JVMs inherit it): ProcessHeapTest, DumpDirNotSharedTest, HeapCheckTest, RootedFilesTest - 26 run, 0 skipped, 0 failed | the four classes, as root | #PR |
 | 149 | Server status lines in messages (T132) | `SeclumeHttp` put the status line into exceptions and `Response.reason()` unescaped; IMAP/POP3/SMTP refusals the reply line. All through `ServerText.printable` now (control characters as `\xNN`, length bounded) | `SeclumeHttpTest.theServersStatusLineReachesNoLogRaw` | #PR |
 | 150 | Access log: signing removed, another key, unvouched tail (T153-T156) | Unvouched entries and a chain without checkpoints already gave `vouched()==false` and exit 1/3 in `--audit-verify`. New: checked against a key, a log no `log.opened` of which names that key (signing `none` - removed and rehashed - or another key) is refused, naming the line; a log unsigned at first and later opened with the key is unaffected | `AccessLogTest` (4 cases), `AccessLogRestartTest` | #PR |
+| 151 | Weakened settings in the actuator (T219) | Only the start-up WARN named them. `SeclumeEndpoint` reports `weakenedSettings` (the same list) | `WeakenedSettingsTest.theEndpointNamesThemToo` | #PR |
 
 ### Mutation testing of the security paths
 

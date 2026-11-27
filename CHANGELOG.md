@@ -7,6 +7,10 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **`/actuator/seclume` lists the weakened settings.** What the start-up line names - a data
+  source off `verify-full`, the secret guard off, a lowered SCRAM floor, an opt-out such as
+  `seclume.crac.holdExpiry=release` - is the endpoint's `weakenedSettings` too, for a dashboard
+  or a check that asks rather than reads the log.
 - **The access log check names a log never opened with the key it is checked against.** A
   log whose `log.opened` says it was unsigned - its signing taken out and the chain hashed
   again - or names another key, without a checkpoint to show it, passed as a chain that merely
