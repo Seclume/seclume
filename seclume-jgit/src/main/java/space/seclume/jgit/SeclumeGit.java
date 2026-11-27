@@ -103,6 +103,9 @@ public final class SeclumeGit {
      * the URL names none. Any other server - a submodule's host, a redirect's
      * - gets the placeholder, and refuses it. A remote on another host needs
      * a credentials provider of its own.
+     *
+     * <p>Make it once per remote and keep it: each call registers a
+     * placeholder that stays until the process ends.
      */
     public static CredentialsProvider credentials(String user, String secretSpec,
                                                   String remoteUrl) {

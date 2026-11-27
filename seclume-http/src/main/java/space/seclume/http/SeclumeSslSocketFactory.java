@@ -110,6 +110,10 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
      * redirect's, a URL someone else chose - it goes as the placeholder, and
      * that server refuses it. For a secret that several servers take, see
      * {@link #placeholder(String, Collection)}.
+     *
+     * <p><b>Make it once and keep it.</b> A placeholder stays registered -
+     * it may still be in a client's hands - until {@link #forget(String)}
+     * takes it back; one made per request grows the registry without end.
      */
     public static String placeholder(String spec) {
         return placeholder(spec, java.util.List.of());
@@ -131,6 +135,18 @@ public final class SeclumeSslSocketFactory extends SSLSocketFactory {
             options.put("max-length", "16384");           // a JWT - a Kubernetes token - is kilobytes
         }
         return CredentialPlaceholders.register(SecretProviders.of(options), servers);
+    }
+
+    /**
+     * Takes back a placeholder this class handed out: a request that still
+     * carries it is refused from then on, and its secret provider is closed.
+     * For a client that is done - a short-lived job, a test - not for each
+     * request.
+     *
+     * @return whether it was one handed out here and not yet taken back
+     */
+    public static boolean forget(String placeholder) {
+        return CredentialPlaceholders.forget(placeholder);
     }
 
     /** For clients that ask: accepts the hostnames seclume's TLS already checked. */

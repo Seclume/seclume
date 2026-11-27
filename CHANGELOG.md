@@ -222,6 +222,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **A credential placeholder can be taken back.** `SeclumeSslSocketFactory.forget(placeholder)`
+  removes it - a request still carrying it is refused from then on - and closes its secret
+  provider. For a client that is done, not for each request: placeholders are meant to be made
+  once and kept, as the Javadoc of `placeholder`, `SeclumeGit.credentials` and
+  `SeclumeGrpc.bearer` now says.
 - **A transport says where it comes from, and can be kept to the ones meant.** The first
   connection over a transport other than `socket` logs, once, the class and the jar that
   carry it. `-Dseclume.transport.allowed=a,b` limits what a `transport=` URL option or

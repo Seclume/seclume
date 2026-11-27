@@ -53,6 +53,9 @@ public final class SeclumeGrpc {
      * provider options {@code spec}, sent to {@code server} only - the
      * {@code host:port} of the channel. On a channel to another server the
      * call carries the placeholder, which that server refuses.
+     *
+     * <p>Make it once per channel and keep it: each call of this registers a
+     * placeholder that stays until the process ends.
      */
     public static CallCredentials bearer(String spec, String server) {
         return header(AUTHORIZATION, "Bearer ", spec, server);

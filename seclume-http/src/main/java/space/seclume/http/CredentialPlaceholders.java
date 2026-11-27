@@ -104,6 +104,31 @@ final class CredentialPlaceholders {
         return placeholder;
     }
 
+    /**
+     * Takes {@code placeholder} back: from now on it is one this process did
+     * not hand out - a request still carrying it is refused - and its
+     * provider is closed.
+     *
+     * @return whether it was one of ours
+     */
+    static boolean forget(String placeholder) {
+        Registration gone = placeholder == null ? null : PROVIDERS.remove(placeholder);
+        if (gone == null) {
+            return false;
+        }
+        try {
+            gone.provider().close();
+        } catch (RuntimeException closing) {
+            // taken back all the same; the provider's own trouble
+        }
+        return true;
+    }
+
+    /** How many placeholders are registered - for a test of forget. */
+    static int registered() {
+        return PROVIDERS.size();
+    }
+
     /** A placeholder nobody here handed out: the request it was in goes no further. */
     static final class PlaceholderRefused extends IOException {
 
