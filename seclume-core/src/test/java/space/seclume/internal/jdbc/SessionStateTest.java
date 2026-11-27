@@ -74,6 +74,23 @@ class SessionStateTest {
         assertFalse(state.irreversible());
     }
 
+    /**
+     * The pre-filters skip the expression for most statements; at their edges
+     * they must still let through what sets something - a temporary table by
+     * '#', a user variable by ':=' - and nothing else.
+     */
+    @Test
+    void thePreFiltersLetThroughWhatSetsSomethingAtTheirEdges() {
+        for (String sql : new String[] {"select 1 into #kept", "SELECT a INTO #t FROM b",
+            "select @x := 1", "select @total:=@total+1 from t", "create table #t (a int)"}) {
+            assertTrue(SessionState.sets(sql), sql);
+        }
+        for (String sql : new String[] {"select '#'", "select a from b where c = '#1'",
+            "select @x", "select a := 1", "select 'a:=b'", "select 1 # a comment"}) {
+            assertFalse(SessionState.sets(sql), sql);
+        }
+    }
+
     /** SQL Server's changes of identity, which its reset answers by killing the session. */
     @Test
     void impersonationIsNotedApart() {

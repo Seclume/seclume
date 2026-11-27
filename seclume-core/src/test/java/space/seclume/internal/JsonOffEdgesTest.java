@@ -100,6 +100,20 @@ class JsonOffEdgesTest {
         }
     }
 
+    /** A length beyond the segment, or zero: refused, never read past the memory given. */
+    @Test
+    void aLengthBeyondTheSegmentOrZeroIsRefused() {
+        try (Arena arena = Arena.ofConfined()) {
+            String text = "{\"a\":\"xy\"}";
+            MemorySegment in = json(arena, text);
+            MemorySegment out = arena.allocate(16);
+            assertThrows(RuntimeException.class,
+                    () -> JsonOff.string(in, (int) in.byteSize() + 8, out, "a"));
+            assertThrows(RuntimeException.class, () -> JsonOff.string(in, 0, out, "a"));
+            assertThrows(RuntimeException.class, () -> JsonOff.number(in, 0, "a"));
+        }
+    }
+
     /** A length that cuts a string value: the string is not read past it. */
     @Test
     void aLengthThatCutsTheStringIsRefused() {
