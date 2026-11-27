@@ -411,6 +411,12 @@ message names the oldest holders. Beyond that, what matters is what a connection
   thread is an event loop or a thread of the pool's, so the tenant comes from the Reactor
   context instead: `SeclumeConnectionFactory.withSessionContext(...)`, or a
   `ReactiveSessionContext` bean in Spring.
+  **A convenience, not a boundary, on PostgreSQL and MySQL:** the tenant is a session variable
+  there (`app.tenant_id`, `@tenant_id`), and any statement of the borrow - an SQL injection
+  among them - can set it to another tenant's. SQL Server's is set read-only
+  (`sp_set_session_context ..., @read_only = 1`) and cannot be changed within the borrow; Oracle's
+  is the client identifier, which a statement can change too. Where a policy must hold against
+  the application's own SQL, give each tenant its own database role and log in as it.
 - **Another vendor's driver gets a reset of the configuration's choosing.** seclume's drivers
   reset a used session on return; a foreign driver has no such reset, and one borrower's
   `SET ROLE`, settings and temporary tables went to the next. `PoolSettings.setResetSql(...)`

@@ -64,7 +64,11 @@ dumps. So a value in a JFR event would be worse than one on the heap, not better
 The fingerprint replaces literals of every quoting form each dialect has, numbers, and every
 placeholder spelling. `in (?, ?, ?)` collapses to `in (?)`, so one query stays one entry. Where
 a dialect makes it ambiguous whether something is an identifier or a string (`"x"` in MySQL),
-the fingerprint gives up the identifier rather than risk the value.
+the fingerprint gives up the identifier rather than risk the value. The same goes for a MySQL
+string with a backslash before its quote: whether it ends there depends on the server's
+`NO_BACKSLASH_ESCAPES`, which the fingerprint cannot know, so the rest of the statement is
+masked. Such statements are grouped more coarsely - two that differ only after that point share
+one fingerprint.
 
 **MongoDB** records each command the same way, by its shape - seclume's own driver directly,
 the official driver through a command listener `SeclumeMongo` installs:

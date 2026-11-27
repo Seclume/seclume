@@ -46,6 +46,16 @@ import java.sql.SQLException;
  * open then. That is the same contract a {@code byte[]} parameter has always
  * had; it is written down here because a closed arena fails louder than a
  * mutated array.
+ *
+ * <h2>What the server says back</h2>
+ *
+ * <p>A server may quote a value in its error - PostgreSQL's {@code Key (...)=(...)
+ * already exists} and {@code Failing row contains (...)}, MySQL's
+ * {@code Duplicate entry '...'}, SQL Server's duplicate-key message. PostgreSQL,
+ * MySQL and SQL Server mask a sensitive value in the receive buffer before the
+ * error becomes a String. Oracle quotes no bound value in its errors (ORA-00001
+ * names the constraint, ORA-12899 the lengths), so there is nothing to mask. A
+ * value of fewer than four bytes is not looked for: it would be found anywhere.
  */
 public interface SensitiveParameters {
 

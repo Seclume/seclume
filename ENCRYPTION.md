@@ -246,6 +246,12 @@ and wipes the cached ring: the subject's values stay wherever they were copied -
 indexes, replicas, exports, logs - and open nothing ever again. Deterministic columns stay
 searchable within a subject.
 
+**Other instances find out within a minute.** `shred` wipes this instance's cached ring at once.
+Another instance of the application keeps the subject's ring it had cached until it is older
+than `seclume.subjectKeys.maxAgeSeconds` (60 s), and can still open the subject's values until
+then. Where erasure has to hold everywhere at the same moment, lower that age, or stop the
+other instances' work on the subject before shredding; nothing broadcasts a shred.
+
 **Backups.** A backup of the *key table* still holds the wrapped key, and the ring still opens
 it - so a restored backup brings a shredded subject back as long as the ring key that wrapped it
 exists. Rotate the ring regularly - `ColumnRotation` over the key table with
@@ -509,6 +515,13 @@ with `keys.column("orders.note", Mode.RANDOMIZED, Context.REQUIRED)`: `encrypt`,
 throw `IllegalArgumentException`. The keys and the format are those of the same column without
 the rule, so a column can be switched to it without rewriting what it holds. The Kafka and
 Redis integrations use it: every value they write is bound to its topic or codec name.
+
+**What a context does not stop: replay.** A context binds a value to *where* it is, not to
+*when* it was written. An older ciphertext of the same row - from a backup, a log, a copy taken
+before an update - written back into that row opens there, and the row has its old value
+again. Neither the format nor the keys can tell; where a value must not go back, keep a version
+in the row (a counter, an `updated_at`) and put it into the context, so that an old ciphertext
+names an old version and fails, or detect the write-back in the application.
 
 ## What stays off the heap
 
