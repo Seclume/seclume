@@ -48,4 +48,20 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <!-- A refused checkpoint waits seclume.crac.quiesceMillis for open secrets to
+             close - 10 s by default. The tests that drive a refusal through the
+             context need a wait, not that one. -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <seclume.crac.quiesceMillis>1000</seclume.crac.quiesceMillis>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>
