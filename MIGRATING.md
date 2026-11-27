@@ -6,6 +6,12 @@ Start with the tool: it translates the configuration you have and names what was
 java -jar seclume-verify.jar --migrate application.properties
 ```
 
+It exits with 0 when the translation is clean, 1 when it named an unsafe setting, and 2 when it
+wrote nothing: an input it cannot read, or a translation that did not read back as meant. Every
+URL it writes is parsed again the way the driver parses it, and its options and database must
+come back exactly as translated. A pool value that is not a number or a duration, and a host,
+user name or TNS alias holding a line break or a URL delimiter, are reported instead of copied.
+
 Then the part people search for: the errors that stop happening. Each row names the test that
 shows it, run against real servers. Where seclume does not make the error impossible but warns
 earlier or says more, the row says that instead. Everything else is in

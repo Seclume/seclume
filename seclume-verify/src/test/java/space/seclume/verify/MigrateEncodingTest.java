@@ -47,4 +47,61 @@ class MigrateEncodingTest {
         assertTrue(options.containsValue(awkward), translated + " -> " + options);
         assertEquals("verify-full", options.get("tls"), translated);
     }
+
+    /**
+     * A pool setting's value went into its properties line as it stood: a line
+     * break started another property, a backslash was Properties.load's. Only
+     * what has the setting's shape is written now; the rest is reported.
+     */
+    @Test
+    void aPoolValueOfTheWrongShapeIsReportedNotWritten() {
+        Map<String, String> config = new java.util.LinkedHashMap<>();
+        config.put("spring.datasource.url", "jdbc:postgresql://db/app?sslmode=verify-full");
+        config.put("spring.datasource.hikari.maximum-pool-size", "10\nseclume.secret-guard=off");
+        config.put("spring.datasource.hikari.idle-timeout", "30000\\u000a");
+        config.put("spring.datasource.hikari.max-lifetime", "1800000");
+        Migrate.Result result = Migrate.translate(config);
+        String lines = String.join("\n", result.properties());
+        assertTrue(!lines.contains("secret-guard") && !lines.contains("maximum-pool-size")
+                && !lines.contains("idle-timeout"), lines);
+        assertTrue(lines.contains("pool.max-lifetime=1800000ms"), lines);
+        assertTrue(result.findings().stream().anyMatch(f -> f.text().contains("not a number")),
+                result.findings().toString());
+    }
+
+    @Test
+    void aTnsAliasThatWouldStartSomethingElseIsRefused() {
+        for (String alias : new String[] {"orders\nseclume.secret-guard=off", "orders#x",
+                "orders=x"}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> Migrate.translateUrl("jdbc:oracle:thin:@" + alias), alias);
+        }
+    }
+
+    /** sslpassword is the client key's password in the configuration - not "handled", unsafe. */
+    @Test
+    void sslpasswordIsUnsafeAndDropped() {
+        Migrate.Result result = Migrate.translateUrl(
+                "jdbc:postgresql://db/app?sslmode=verify-full&sslpassword=x");
+        assertTrue(result.findings().stream().anyMatch(f -> f.level() == Migrate.Level.UNSAFE
+                && f.text().startsWith("sslpassword")), result.findings().toString());
+        assertTrue(result.properties().stream().noneMatch(p -> p.contains("sslpassword")));
+    }
+
+    /**
+     * The URL written is read back as the driver reads it; one whose options
+     * came back otherwise than meant is refused - and the tool exits with 2.
+     */
+    @Test
+    void aUrlThatDoesNotReadBackAsMeantIsRefused() {
+        Map<String, String> meant = Map.of("tls", "verify-full");
+        Migrate.readsBack("jdbc:seclume:postgresql://db/app?tls=verify-full", "postgresql", null,
+                "app", meant);
+        assertThrows(IllegalArgumentException.class, () -> Migrate.readsBack(
+                "jdbc:seclume:postgresql://db/app?tls=verify-full&tls=off", "postgresql", null,
+                "app", meant));
+        assertThrows(IllegalArgumentException.class, () -> Migrate.readsBack(
+                "jdbc:seclume:postgresql://db/other?tls=verify-full", "postgresql", null, "app",
+                meant));
+    }
 }

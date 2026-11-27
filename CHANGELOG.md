@@ -129,6 +129,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **`--migrate` writes only what reads back as meant.** Every URL it writes is parsed again as
+  the driver parses it; one whose options or database came back otherwise is refused with exit
+  code 2. Pool values that are not a number or a duration are reported, not copied into a
+  properties line, and a TNS alias is checked like a host. `sslpassword` was listed as "handled
+  by seclume"; it is the client key's password in the configuration, and is now reported as
+  unsafe, with `clientKey-provider` as the way to give the key.
 - **R2DBC: the driver's threads inherit no thread locals.** A lane's thread, started for one
   subscriber's task, serves the ones after it - and took the first one's
   `InheritableThreadLocal`s, a tenant or a principal, along to theirs. They start with none now.
