@@ -60,6 +60,22 @@ jobs:
           "$RUNNER_TEMP/zizmor/bin/pip" install --quiet --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/zizmor.txt"
           "$RUNNER_TEMP/zizmor/bin/zizmor" --offline --min-severity medium .github/workflows
 
+  # The security regressions together - one list, .github/security-regressions.txt,
+  # and a run that fails when a class on it did not run at all.
+  security-regressions:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - run: sh .github/scripts/security-regressions.sh
+
   semgrep:
     runs-on: ubuntu-26.04
     timeout-minutes: 20

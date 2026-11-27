@@ -1,0 +1,48 @@
+# The security regressions, run together by security.yml's security-regressions job.
+# One test class per line, as module:Class. Each must run - a class that is not
+# found, or whose tests are all skipped, fails the job rather than passing it.
+
+# secrets on the heap, masking, redaction
+seclume-logging:SecretMaskerRefreshTest
+seclume-logging:RestoreOffTheLogThreadTest
+seclume-logging:LinearMaskingTest
+seclume-spring-boot-starter:RedactionSecretsTest
+
+# pools: sessions, budgets, deadlines, errors
+seclume-pool:SessionContextFailureTest
+seclume-pool:DribblingLoginTest
+seclume-pool:CredentialDeadlineClockTest
+seclume-pool:ErrorPathsTest
+seclume-pool:CatalogAndSchemaOnReturnTest
+seclume-core:LoginBudgetTest
+seclume-core:LoginBudgetRaceTest
+seclume-core:DeadlineKillTest
+seclume-core:DeadlinesTest
+
+# credentials and placeholders
+seclume-core:VaultSecretProviderTest
+seclume-aws:TemporaryCredentialsCheckpointTest
+seclume-aws:TemporaryCredentialsRefreshTest
+seclume-http:CredentialPlaceholdersTest
+seclume-http:PlaceholderServerTest
+seclume-kafka:SaslPlaceholdersTest
+seclume-kafka:SaslAuthenticateRewriterTest
+
+# TLS and the wire
+seclume-core:NoTrustIsRefusedTest
+seclume-core:ServerFlightStrictnessTest
+seclume-core:AesGcmCipherTest
+seclume-core:WireBufferTextTest
+seclume-spring-boot-starter:SeclumeAssessmentTest
+
+# drivers
+seclume-postgresql:LoginBudgetMessageTest
+seclume-mysql:LoginBudgetMessageTest
+seclume-sqlserver:LoginBudgetMessageTest
+seclume-oracle:LoginBudgetMessageTest
+seclume-mysql:KilledWriteInDoubtTest
+seclume-r2dbc:R2dbcCancelDescribeTest
+
+# configuration translated
+seclume-verify:VerifyRegressionTest
+seclume-verify:MigrateEncodingTest

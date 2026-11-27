@@ -141,6 +141,9 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **The security regressions run together, and none can drop out unnoticed.** A job in
+  `security.yml` runs the classes listed in `.github/security-regressions.txt` (33 now, across
+  13 modules) and fails when one of them did not run, or skipped all of its tests.
 - **The workflows are linted with zizmor.** `security.yml` runs zizmor 1.32.0, installed by
   hash, over `.github/workflows` and fails on a medium or high finding. Its first run found 50
   checkouts that left the GitHub token in `.git/config` (all set `persist-credentials: false`
