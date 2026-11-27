@@ -59,6 +59,15 @@ final class FakeMySqlServer implements AutoCloseable {
     private String errorMessage;
     /** Whether to refuse the login itself - see {@link #rejectLogin()}. */
     private volatile boolean rejectLogin;
+
+    /** HandshakeResponses received - see {@link #loginAnswers()}. */
+    private final java.util.concurrent.atomic.AtomicInteger loginAnswers =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** How many login answers (HandshakeResponse41) reached this server. */
+    public int loginAnswers() {
+        return loginAnswers.get();
+    }
     private volatile boolean stopped;
     /** Whether to switch the login to MariaDB's Kerberos plugin - see {@link #switchToKerberos()}. */
     private volatile boolean kerberos;
@@ -307,6 +316,7 @@ final class FakeMySqlServer implements AutoCloseable {
              OutputStream out = socket.getOutputStream()) {
             sendHandshake(out);
             byte[] login = readPacket(in);
+            loginAnswers.incrementAndGet();
             if (switchBack) {
                 firstAnswerPlugin = pluginOf(login);
                 ByteArrayOutputStream request = new ByteArrayOutputStream();
