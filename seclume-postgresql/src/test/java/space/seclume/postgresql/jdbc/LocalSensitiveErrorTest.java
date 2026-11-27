@@ -87,6 +87,29 @@ class LocalSensitiveErrorTest {
                     }
                 }
             }
+            // A check violation: DETAIL: Failing row contains (7, <value>, null).
+            try (Statement ddl = connection.createStatement()) {
+                ddl.execute("create temporary table webhooks (id int, signing_key text, "
+                        + "note text, check (note is not null))");
+            }
+            try (PreparedStatement insert = connection.prepareStatement(
+                    "insert into webhooks values (7, ?, null)")) {
+                insert.unwrap(SensitiveParameters.class).setSensitive(1, value);
+                SQLException failing = assertThrows(SQLException.class, insert::executeUpdate);
+                StringWriter everything = new StringWriter();
+                failing.printStackTrace(new PrintWriter(everything));
+                assertFalse(everything.toString().contains(SECRET),
+                        "the sensitive value is in the exception: " + everything);
+                boolean sawDetail = false;
+                for (Throwable t = failing; t != null; t = t.getCause()) {
+                    if (t instanceof space.seclume.postgresql.PgException pg && pg.detail() != null) {
+                        sawDetail = true;
+                        assertTrue(pg.detail().contains("Failing row contains (7, "), pg.detail());
+                        assertFalse(pg.detail().contains(SECRET), "in DETAIL: " + pg.detail());
+                    }
+                }
+                assertTrue(sawDetail, "no DETAIL came - the test would prove nothing");
+            }
         }
     }
 }
