@@ -74,6 +74,26 @@ class SessionStateTest {
         assertFalse(state.irreversible());
     }
 
+    /** SQL Server's changes of identity, which its reset answers by killing the session. */
+    @Test
+    void impersonationIsNotedApart() {
+        for (String sql : new String[] {"execute as user = 'guest'", "EXEC AS LOGIN = 'x'",
+            "select 1; execute as user = 'guest'", "setuser 'guest'",
+            "exec sp_setapprole 'r', 'p'"}) {
+            SessionState state = new SessionState();
+            state.note(sql);
+            assertTrue(state.impersonated(), sql);
+            state.clear();
+            assertFalse(state.impersonated(), sql);
+        }
+        for (String sql : new String[] {"set nocount on", "exec sp_set_session_context 'a', 'b'",
+            "select executed_as from t"}) {
+            SessionState state = new SessionState();
+            state.note(sql);
+            assertFalse(state.impersonated(), sql);
+        }
+    }
+
     /**
      * A text judged harmless is not judged again when the same String comes
      * back - a prepared statement run over and over. What sets something is

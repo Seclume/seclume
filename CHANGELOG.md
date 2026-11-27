@@ -141,6 +141,14 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **A SQL Server session that impersonated is closed on return, not lent dead.** After
+  `EXECUTE AS` without `REVERT`, `SETUSER` or `sp_setapprole` without a cookie, SQL Server answers
+  the reset by killing the session - and the reset rides on the next request, so the next
+  borrower got error 596 on its first statement. The driver now refuses the reset for such a
+  session and the pool closes it. Nothing leaked before (the server refused), but a borrower
+  failed. Impersonation hidden in dynamic SQL or a procedure is not seen in the text and still
+  ends that way - fail closed. Found by the new live tests, which also show that an open
+  transaction left on return is rolled back on all four databases.
 - **CRaC with Spring Boot and Quarkus needs no code.** With `seclume-crac` on the class path the
   starter registers the process's part (cached credentials and keys wiped, new secrets held back)
   and every seclume pool in the context. The Quarkus extension registers the process's part.

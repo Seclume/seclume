@@ -178,6 +178,90 @@ class SessionResetTest {
         }
     }
 
+    /**
+     * A transaction left open on return is rolled back, on every database: the
+     * next borrower neither sees the row nor runs inside the transaction.
+     * SQL Server's reset (RESETCONNECTION) is the case the review asked about.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("databases")
+    void anOpenTransactionIsRolledBackOnReturn(Db db) throws Exception {
+        String table = db.name().equals("SQL Server") ? "dbo.seclume_open_tx" : "seclume_open_tx";
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            try (Connection c = pool.getConnection()) {
+                try {
+                    execute(c, "drop table " + table);
+                } catch (SQLException absent) {
+                    // not there yet
+                }
+                execute(c, "create table " + table + " (id int)");
+            }
+            try (Connection c = pool.getConnection()) {
+                c.setAutoCommit(false);
+                execute(c, "insert into " + table + " values (1)");
+                // returned without commit or rollback
+            }
+            try (Connection c = pool.getConnection()) {
+                assertTrue(c.getAutoCommit(), "the next borrower got auto-commit off");
+                assertEquals("0", ask(c, "select count(*) from " + table),
+                        "the uncommitted row survived the return");
+                if (db.name().equals("SQL Server")) {
+                    assertEquals("0", ask(c, "select @@trancount"),
+                            "the next borrower runs inside the open transaction");
+                }
+                execute(c, "drop table " + table);
+            }
+        }
+    }
+
+    /**
+     * SQL Server: EXECUTE AS without REVERT must not hand the next borrower
+     * the impersonated user, and an application role set without a cookie -
+     * which no reset can undo - must not either.
+     */
+    @Test
+    void sqlServerImpersonationDoesNotReachTheNextBorrower() throws Exception {
+        Db db = databases().get(2);
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            String self;
+            try (Connection c = pool.getConnection()) {
+                self = ask(c, "select user_name()");
+                execute(c, "execute as user = 'guest'");
+                assertEquals("guest", ask(c, "select user_name()"));
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals(self, ask(c, "select user_name()"),
+                        "the next borrower runs as the impersonated user");
+            }
+        }
+    }
+
+    @Test
+    void sqlServerApplicationRoleDoesNotReachTheNextBorrower() throws Exception {
+        Db db = databases().get(2);
+        // A throwaway role in a throwaway database: its password is no secret.
+        String role = "seclume_approle";
+        String secret = "Ap9-" + java.util.UUID.randomUUID();
+        try (SeclumePool pool = new SeclumePool(new UrlSource(url(db)), settings())) {
+            String self;
+            try (Connection c = pool.getConnection()) {
+                execute(c, "if database_principal_id('" + role + "') is not null "
+                        + "drop application role " + role);
+                execute(c, "create application role " + role + " with password = '" + secret + "'");
+            }
+            try (Connection c = pool.getConnection()) {
+                self = ask(c, "select user_name()");
+                execute(c, "exec sp_setapprole '" + role + "', '" + secret + "'");
+                assertEquals(role, ask(c, "select user_name()"));
+            }
+            try (Connection c = pool.getConnection()) {
+                assertEquals(self, ask(c, "select user_name()"),
+                        "the next borrower runs as the application role");
+                execute(c, "drop application role " + role);
+            }
+        }
+    }
+
     private static int pooledDefault(Db db) {
         return db.name().equals("MySQL") ? Connection.TRANSACTION_REPEATABLE_READ
                 : Connection.TRANSACTION_READ_COMMITTED;

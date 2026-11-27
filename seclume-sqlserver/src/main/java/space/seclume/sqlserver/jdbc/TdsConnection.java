@@ -151,6 +151,12 @@ public final class TdsConnection implements Connection, space.seclume.internal.j
         if (!autoCommit) {
             return false;
         }
+        // An identity taken on - EXECUTE AS without REVERT, an application
+        // role set without a cookie - the server answers the reset by killing
+        // the session, on the next borrower's first request. Closed instead.
+        if (sessionState.impersonated()) {
+            return false;
+        }
         session.dropPendingContext();
         session.resetBeforeNextRequest();
         sessionState.clear();
