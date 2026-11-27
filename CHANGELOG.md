@@ -222,6 +222,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **A transport says where it comes from, and can be kept to the ones meant.** The first
+  connection over a transport other than `socket` logs, once, the class and the jar that
+  carry it. `-Dseclume.transport.allowed=a,b` limits what a `transport=` URL option or
+  `seclume.transport` may name - for URLs that come from further away than the class path;
+  a name it does not list opens nothing. Unset, any provider on the class path may be named,
+  as before: a URL picks among code that is already there, it cannot load any.
 - **`heapcheck --in-target`: a hostile application cannot lead the check out of its file
   system.** The check, usually root, walked the application's links itself and opened the path
   afterwards; in between the application could swap a directory for an absolute link, which

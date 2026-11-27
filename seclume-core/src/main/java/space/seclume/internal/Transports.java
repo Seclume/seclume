@@ -36,6 +36,20 @@ public final class Transports {
 
     private static final String IF_AVAILABLE = "-if-available";
 
+    /**
+     * The transports a URL or the property may name, comma-separated - unset,
+     * any provider on the class path. A provider is code the class path
+     * already runs, and a URL only picks among them; where URLs come from
+     * further away than the class path, this keeps them to the ones meant.
+     * {@code socket} is always allowed.
+     */
+    public static final String ALLOWED = "seclume.transport.allowed";
+
+    private static final System.Logger LOG = System.getLogger(Transports.class.getName());
+
+    /** The names whose provider was named in the log already: once each. */
+    private static final java.util.Set<String> SAID = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** The URL option, and the connection property, that name a transport. */
     public static final String OPTION = "transport";
 
@@ -259,6 +273,21 @@ public final class Transports {
         return found;
     }
 
+    /** Refuses a name {@link #ALLOWED} does not list, where it is set. */
+    static void allowed(String name) throws IOException {
+        String list = System.getProperty(ALLOWED);
+        if (list == null || list.isBlank() || DEFAULT.equals(name)) {
+            return;
+        }
+        for (String allowed : list.split(",")) {
+            if (allowed.trim().equalsIgnoreCase(name)) {
+                return;
+            }
+        }
+        throw new IOException("the transport '" + name + "' is not one " + ALLOWED
+                + " allows (" + list.trim() + ") - nothing was opened");
+    }
+
     private static String where(TransportProvider provider) {
         java.security.CodeSource source = provider.getClass().getProtectionDomain()
                 .getCodeSource();
@@ -281,8 +310,13 @@ public final class Transports {
         if (DEFAULT.equals(name)) {
             return SocketTransport.connect(host, port, connectTimeoutMillis);
         }
+        allowed(name);
         TransportProvider provider = only(name, ServiceLoader.load(TransportProvider.class));
         if (provider != null) {
+            if (SAID.add(name)) {
+                LOG.log(System.Logger.Level.INFO, "seclume: connections with transport '" + name
+                        + "' go through " + where(provider));
+            }
             if (orSocket && !provider.available()) {
                 return SocketTransport.connect(host, port, connectTimeoutMillis);
             }
