@@ -147,6 +147,42 @@ class QuiesceTest {
         }
     }
 
+    /**
+     * The pool's own part, as its CRaC resource runs it: suspended, and a
+     * connection kept past the wait refuses the checkpoint - the pool then
+     * lends again, and a connection given back in time lets it go ahead.
+     */
+    @Test
+    void thePoolsPartRefusesWhileAConnectionIsKeptAndResumesThePool() throws Exception {
+        try (SeclumePool pool = pool()) {
+            Connection kept = pool.getConnection();
+            IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> SeclumeCrac.quiescePool(pool, 100));
+            assertTrue(refused.getMessage().contains("1 connection(s) are still borrowed"),
+                    refused.getMessage());
+            kept.close();
+            pool.getConnection().close();                // resumed: it lends again
+            SeclumeCrac.quiescePool(pool, 2000);
+            assertEquals(0, pool.activeCount());
+            pool.resume();
+        }
+    }
+
+    /** The resource register() gives CRaC: before the checkpoint the pool's part, after it the pool again. */
+    @Test
+    void thePoolsResourceSuspendsBeforeAndResumesAfter() throws Exception {
+        Class<?> type = Class.forName(SeclumeCrac.class.getName() + "$PoolResource");
+        java.lang.reflect.Constructor<?> make = type.getDeclaredConstructor(SeclumePool.class);
+        make.setAccessible(true);
+        try (SeclumePool pool = pool()) {
+            org.crac.Resource resource = (org.crac.Resource) make.newInstance(pool);
+            resource.beforeCheckpoint(null);
+            assertEquals(0, pool.activeCount());
+            resource.afterRestore(null);
+            pool.getConnection().close();                // lends again after the restore
+        }
+    }
+
     @Test
     void aConnectionThatNeverComesBackRefusesTheCheckpoint() throws Exception {
         try (SeclumePool pool = pool()) {

@@ -61,6 +61,26 @@
             <seclume.crac.quiesceMillis>1000</seclume.crac.quiesceMillis>
           </systemPropertyVariables>
         </configuration>
+        <executions>
+          <!-- The process's part once more, as it behaves with the hold opted out
+               (seclume.crac.holdSecrets=false) and with open secrets traced to where they
+               were opened (seclume.debug.scopes=true): both are read once per JVM. -->
+          <execution>
+            <id>opted-out-and-traced</id>
+            <goals>
+              <goal>test</goal>
+            </goals>
+            <configuration>
+              <includes>
+                <include>**/ProcessQuiesceTest.java</include>
+              </includes>
+              <systemPropertyVariables>
+                <seclume.crac.holdSecrets>false</seclume.crac.holdSecrets>
+                <seclume.debug.scopes>true</seclume.debug.scopes>
+              </systemPropertyVariables>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

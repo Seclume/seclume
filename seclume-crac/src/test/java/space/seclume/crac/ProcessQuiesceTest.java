@@ -35,6 +35,22 @@ class ProcessQuiesceTest {
         assertFalse(Checkpoint.holding(), "a refused checkpoint holds nothing");
     }
 
+    /** A key that cannot be read again refuses the process's part too, naming who made it. */
+    @Test
+    void withoutAPoolAHeldPrivateKeyRefusesTheCheckpoint() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                space.seclume.crypto.PrivateSigningKey.available(), "neither OpenSSL 3 nor CNG here");
+        try (space.seclume.crypto.PrivateSigningKey generated =
+                     space.seclume.crypto.PrivateSigningKey.generateP256()) {
+            assertTrue(generated.publicKey().length > 0);
+            IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> SeclumeCrac.quiesceProcess(200));
+            assertTrue(refused.getMessage().contains("1 private key(s) held"),
+                    refused.getMessage());
+        }
+        assertFalse(Checkpoint.holding(), "a refused checkpoint holds nothing");
+    }
+
     @Test
     void aQuietProcessIsHeldUntilTheRestoreAndReleasedAfter() throws Exception {
         SeclumeCrac.quiesceProcess(2000);

@@ -1,6 +1,7 @@
 package space.seclume.grpc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -122,6 +123,16 @@ class GrpcTest {
      */
     @Test
     void credentialsForAnotherServerSendNoToken() {
+        // The deprecated forms, which name no server, still make credentials:
+        // bound to whichever server they are first written for.
+        @SuppressWarnings("removal")
+        CallCredentials unnamedBearer = SeclumeGrpc.bearer("provider=file&path="
+                + directory.resolve("token"));
+        @SuppressWarnings("removal")
+        CallCredentials unnamedHeader = SeclumeGrpc.header("x-api-key", "provider=file&path="
+                + directory.resolve("token"));
+        assertNotNull(unnamedBearer);
+        assertNotNull(unnamedHeader);
         CallCredentials elsewhere = SeclumeGrpc.bearer("provider=file&path="
                 + directory.resolve("token"), "api.example.com:443");
         StatusRuntimeException refused = assertThrows(StatusRuntimeException.class,
