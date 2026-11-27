@@ -20,6 +20,9 @@ import org.junit.jupiter.api.Timeout;
  * permit - for as long as it liked.
  */
 @Timeout(30)
+// Sets seclume.loginBudgetFactor for the JVM: SecretFetchTimeoutTest, beside it,
+// computed its budget with the factor 1 instead of 3 (CI, linux-arm64).
+@org.junit.jupiter.api.parallel.Isolated
 class LoginBudgetTest {
 
     /** Accepts, then sends one byte every 200 ms for a minute. */

@@ -26,6 +26,10 @@ import space.seclume.secret.SecretProvider;
  * account with a SHA-2 hash logs in as before.
  */
 @Timeout(30)
+// The refusal is the default; a job that opts its whole JVM out (MariaDB 11.4
+// in CI) must not turn this test's refusal into a login. Isolated, because the
+// opt-out is taken away for its duration.
+@org.junit.jupiter.api.parallel.Isolated
 class LegacyHashOverUnverifiedTlsTest {
 
     private static final String USER = "seclume_test";
@@ -47,6 +51,17 @@ class LegacyHashOverUnverifiedTlsTest {
 
     @Test
     void aSwitchToNativeOverAnUnverifiedLineIsRefusedAndNothingIsSent() throws Exception {
+        String optedOut = System.clearProperty(MySession.Settings.LEGACY_HASH_PROPERTY);
+        try {
+            refusedAndNothingSent();
+        } finally {
+            if (optedOut != null) {
+                System.setProperty(MySession.Settings.LEGACY_HASH_PROPERTY, optedOut);
+            }
+        }
+    }
+
+    private static void refusedAndNothingSent() throws Exception {
         try (FakeMySqlServer server = new FakeMySqlServer(USER, PASSWORD).switchBackToNative()
                 .start()) {
             SQLException refused = assertThrows(SQLException.class,
