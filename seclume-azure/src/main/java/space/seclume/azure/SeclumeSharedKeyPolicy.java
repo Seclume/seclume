@@ -6,7 +6,9 @@ import java.lang.foreign.ValueLayout;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.text.Collator;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -99,12 +101,31 @@ final class SeclumeSharedKeyPolicy extends HttpPipelineSyncPolicy {
         return value == null ? "" : value;
     }
 
+    /**
+     * The order the service sorts names in, as the Azure SDK's credential
+     * does: a collation in which a hyphen counts for little and an underscore
+     * sorts before a digit - not the code point order. Two names it holds
+     * equal are told apart by their code points, so none is lost.
+     */
+    private static final Comparator<String> ORDER = new Comparator<>() {
+        private final Collator collator = Collator.getInstance(Locale.ROOT);
+
+        @Override
+        public int compare(String a, String b) {
+            int order;
+            synchronized (collator) {
+                order = collator.compare(a, b);
+            }
+            return order != 0 ? order : a.compareTo(b);
+        }
+    };
+
     private static String canonicalHeaders(HttpHeaders headers) {
-        TreeMap<String, String> msHeaders = new TreeMap<>();
+        TreeMap<String, String> msHeaders = new TreeMap<>(ORDER);
         for (HttpHeader header : headers) {
             String name = header.getName().toLowerCase(Locale.ROOT);
             if (name.startsWith("x-ms-") && header.getValue() != null) {
-                msHeaders.put(name, header.getValue());
+                msHeaders.put(name, signable(name, header.getValue()));
             }
         }
         StringBuilder text = new StringBuilder();
@@ -113,11 +134,28 @@ final class SeclumeSharedKeyPolicy extends HttpPipelineSyncPolicy {
         return text.toString();
     }
 
+    /**
+     * A value signed as it stands, as the SDK signs it - except one with a
+     * line break or another control character in it, whose canonical form is
+     * the HTTP stack's to decide: a signature over it is refused rather than
+     * guessed.
+     */
+    private static String signable(String name, String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c < 0x20 || c == 0x7f) {
+                throw new IllegalArgumentException("the header " + name + " holds a control "
+                        + "character - not signed");
+            }
+        }
+        return value;
+    }
+
     private String canonicalResource(URL url) {
         String path = url.getPath() == null || url.getPath().isEmpty() ? "/" : url.getPath();
         StringBuilder text = new StringBuilder("/").append(account).append(path);
         if (url.getQuery() != null) {
-            TreeMap<String, List<String>> parameters = new TreeMap<>();
+            TreeMap<String, List<String>> parameters = new TreeMap<>(ORDER);
             for (String pair : url.getQuery().split("&")) {
                 if (pair.isEmpty()) {
                     continue;

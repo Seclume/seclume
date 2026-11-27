@@ -129,6 +129,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Azure SharedKey: names sorted as the service sorts them.** `x-ms-*` headers and query
+  parameters were sorted by code point; the service and the Azure SDK use a collation in which
+  a hyphen counts for little and an underscore sorts before a digit. Metadata such as
+  `x-ms-meta-a-b` next to `x-ms-meta-a1` got a signature the service rejected. A header value
+  with a line break or another control character is now refused instead of signed. Values are
+  otherwise signed as they stand, as the SDK signs them.
 - **`--migrate` writes only what reads back as meant.** Every URL it writes is parsed again as
   the driver parses it; one whose options or database came back otherwise is refused with exit
   code 2. Pool values that are not a number or a duration are reported, not copied into a

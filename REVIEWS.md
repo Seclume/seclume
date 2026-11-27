@@ -475,6 +475,7 @@ protocol text or dribble bytes.
 | 93 | Log masker | A match overlapping one found before was dropped, so the part of a second secret beyond the first stayed in the line. Only matches wholly inside a found one are skipped now; the mask takes the union. | low | #PR |
 | 94 | R2DBC threads | The driver's lane and borrow threads were started for one subscriber's task and inherited its `InheritableThreadLocal`s, which then went with every later task they ran. They inherit none now (`LaneTest`). | low | #PR |
 | 95 | Migration output | `--migrate` copied pool values and the TNS alias into its output unchecked, listed `sslpassword` as handled, and never checked that the URL it wrote parsed back as meant. Pool values must have their setting's shape, the alias is checked like a host, `sslpassword` is unsafe, and every URL is re-parsed and compared (exit 2 on a mismatch) | `MigrateEncodingTest` | #PR |
+| 96 | Azure SharedKey | The finding asked for header values to be trimmed and their whitespace folded, as the REST documentation describes. The Azure SDK's credential, the reference that works against the service, does neither, so neither do we. Comparing with it showed a real defect instead: names were sorted by code point, the SDK and service use a `Collator`, so metadata names with `-` or `_` produced a rejected signature. Sorted as the SDK sorts now; a value with a control character is refused | `SharedKeyEquivalenceTest` | #PR |
 
 ### Mutation testing of the security paths
 
