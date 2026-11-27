@@ -20,29 +20,43 @@ public final class DribblingServer implements AutoCloseable {
     private final ServerSocket listener;
 
     public DribblingServer(byte[] prefix) throws IOException {
-        listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        listener = new ServerSocket(0, 16, InetAddress.getLoopbackAddress());
+        // Every client that comes, each on a thread of its own: a pool opens
+        // several logins at once.
         Thread.ofVirtual().start(() -> {
-            try (Socket client = listener.accept()) {
-                InputStream in = client.getInputStream();
-                Thread.ofVirtual().start(() -> {
-                    try {
-                        in.transferTo(OutputStream.nullOutputStream());
-                    } catch (IOException gone) {
-                        // the client went
-                    }
-                });
-                OutputStream out = client.getOutputStream();
-                out.write(prefix);
-                out.flush();
-                for (int i = 0; i < 400; i++) {
-                    out.write(0);
-                    out.flush();
-                    Thread.sleep(150);
+            while (!listener.isClosed()) {
+                Socket client;
+                try {
+                    client = listener.accept();
+                } catch (IOException closed) {
+                    return;
                 }
-            } catch (IOException | InterruptedException gone) {
-                // closed by the budget - what a test wants
+                Thread.ofVirtual().start(() -> dribble(client, prefix));
             }
         });
+    }
+
+    private static void dribble(Socket client, byte[] prefix) {
+        try (client) {
+            InputStream in = client.getInputStream();
+            Thread.ofVirtual().start(() -> {
+                try {
+                    in.transferTo(OutputStream.nullOutputStream());
+                } catch (IOException gone) {
+                    // the client went
+                }
+            });
+            OutputStream out = client.getOutputStream();
+            out.write(prefix);
+            out.flush();
+            for (int i = 0; i < 400; i++) {
+                out.write(0);
+                out.flush();
+                Thread.sleep(150);
+            }
+        } catch (IOException | InterruptedException gone) {
+            // closed by the budget - what a test wants
+        }
     }
 
     public int port() {
