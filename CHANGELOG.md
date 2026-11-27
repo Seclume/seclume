@@ -7,6 +7,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Upgrading: what changes behaviour
 
+- **The access log check names a log never opened with the key it is checked against.** A
+  log whose `log.opened` says it was unsigned - its signing taken out and the chain hashed
+  again - or names another key, without a checkpoint to show it, passed as a chain that merely
+  was not vouched for. Checked against a key, it is now refused, naming the line. A log
+  unsigned at first and opened with the key later still holds.
 - **A server's status or reply line reaches no log raw.** `SeclumeHttp`'s messages and
   `Response.reason()`, and the IMAP, POP3 and SMTP refusals, carried the server's line as it
   came - an ESC sequence or a bare CR in it went on to the log and the terminal showing it. It

@@ -106,6 +106,8 @@ public final class AccessLogVerifier {
                 return new Result(0, 0, 0, 0, AccessLog.ZERO, List.copyOf(problems));
             }
         }
+        boolean openedWithTheKey = false;
+        String firstOtherOpening = null;
         String prev = AccessLog.ZERO;
         long expectedSeq = 0;
         long entries = 0;
@@ -159,6 +161,18 @@ public final class AccessLogVerifier {
                 problems.add("line " + number + ": entry " + seq
                         + " does not follow the entry before it - one was removed or slipped in");
             }
+            if ("log.opened".equals(fields.get("event")) && expectedKey != null) {
+                String signing = fields.getOrDefault("signing", "none");
+                if (signing.endsWith(" " + expectedKey)) {
+                    openedWithTheKey = true;
+                } else if (firstOtherOpening == null) {
+                    firstOtherOpening = "line " + number + ": " + (signing.equals("none")
+                            ? "the log was opened without a signing key, and it is checked "
+                                    + "against one - its signing may have been removed"
+                            : "the log was opened with another signing key (" + signing
+                                    + ") than the one it is checked against (" + expectedKey + ")");
+                }
+            }
             if ("log.opened".equals(fields.get("event")) && expectedKey != null
                     && fields.containsKey("vouched")
                     && fields.getOrDefault("signing", "").endsWith(" " + expectedKey)) {
@@ -183,6 +197,13 @@ public final class AccessLogVerifier {
                 }
             }
             prev = hash;
+        }
+        // Checked against a key, a log never once opened with it: its signing
+        // was taken out and the chain written again, or it is another log.
+        // (A log unsigned at first and opened with the key later is fine: its
+        // first checkpoint signs over what came before.)
+        if (expectedKey != null && !openedWithTheKey && firstOtherOpening != null) {
+            problems.add(firstOtherOpening);
         }
         return new Result(first, entries, checkpoints, signedUpTo, prev, List.copyOf(problems));
     }

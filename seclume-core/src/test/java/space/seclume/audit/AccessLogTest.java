@@ -259,7 +259,77 @@ class AccessLogTest {
             Path file = signedLog(key, 2);
             AccessLogVerifier.Result result = AccessLogVerifier.verify(file, other.publicKey());
             assertFalse(result.holds());
-            assertTrue(result.problems().get(0).contains("signed by another key"), result.problems().toString());
+            assertTrue(result.problems().stream().anyMatch(p -> p.contains("signed by another key")),
+                    result.problems().toString());
+        }
+    }
+
+    /** Entries after the last checkpoint: the chain holds, the key vouches for none of them. */
+    @Test
+    void entriesAfterTheLastCheckpointAreNotVouchedFor() throws IOException {
+        try (PrivateSigningKey key = key()) {
+            Path file = signedLog(key, 6);
+            List<String> lines = lines(file);
+            lines.remove(lines.size() - 1);            // the closing checkpoint
+            write(file, lines);
+            int after = 0;
+            for (int i = lines.size() - 1; !lines.get(i).contains("\"event\":\"checkpoint\""); i--) {
+                after++;
+            }
+            AccessLogVerifier.Result result = AccessLogVerifier.verify(file, key.publicKey());
+            assertTrue(result.holds(), result.problems().toString());
+            assertTrue(after > 0, "the test would prove nothing");
+            assertEquals(after, result.unsigned());
+            assertFalse(result.vouched(), "entries after the last checkpoint were vouched for");
+        }
+    }
+
+    /**
+     * The log names the key it was opened with. Checked against another and
+     * without a checkpoint to show it, that is said - not passed over.
+     */
+    @Test
+    void aLogOpenedWithAnotherKeyIsSaidSoWithoutACheckpoint() throws IOException {
+        try (PrivateSigningKey key = key(); PrivateSigningKey other = key()) {
+            Path file = signedLog(key, 4);
+            List<String> chain = new ArrayList<>();
+            for (String line : lines(file)) {
+                if (line.contains("\"event\":\"checkpoint\"")) {
+                    break;
+                }
+                chain.add(line);
+            }
+            write(file, chain);
+            AccessLogVerifier.Result result = AccessLogVerifier.verify(file, other.publicKey());
+            assertFalse(result.holds());
+            assertTrue(result.problems().stream().anyMatch(p -> p.contains("another signing key")),
+                    result.problems().toString());
+        }
+    }
+
+    /**
+     * Signing taken out: log.opened rewritten to "none", the checkpoints
+     * dropped, the chain hashed again. It holds as a chain; checked against
+     * the key, it is refused for having been opened without one.
+     */
+    @Test
+    void aLogWhoseSigningWasRemovedIsRefusedAgainstTheKey() throws IOException {
+        try (PrivateSigningKey key = key()) {
+            Path file = signedLog(key, 4);
+            List<String> forged = new ArrayList<>();
+            for (String line : lines(file)) {
+                if (line.contains("\"event\":\"checkpoint\"")) {
+                    break;                          // the chain up to the first checkpoint
+                }
+                forged.add(line.contains("\"event\":\"log.opened\"")
+                        ? line.replaceFirst("\"signing\":\"[^\"]*\"", "\"signing\":\"none\"") : line);
+            }
+            write(file, rehash(forged));
+            assertTrue(AccessLogVerifier.verify(file, null).holds(), "the forged chain holds");
+            AccessLogVerifier.Result result = AccessLogVerifier.verify(file, key.publicKey());
+            assertFalse(result.holds());
+            assertTrue(result.problems().stream().anyMatch(p -> p.contains("signing may have been removed")),
+                    result.problems().toString());
         }
     }
 
