@@ -123,6 +123,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **Pull requests that change the security gate are named.** A new workflow, `gates.yml`, lists
+  the changed files the gate is made of (workflows, build files, Maven wrapper, `SECURITY.md`,
+  the source-rule tests) in the run summary and labels the pull request `touches-gates`. It reads
+  the file list from the API, checks nothing out, and labels only pull requests from this
+  repository.
 - **`Context.REQUIRED` for an encrypted column.** `FieldKeys.column(name, mode,
   Context.REQUIRED)` refuses a value written or read without a context, which would open in
   any row. The keys and format are unchanged. Kafka and Redis use it. Elasticsearch gained
@@ -133,6 +138,19 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Deadlines compared by difference, spans clamped.** Two places compared `System.nanoTime()`
+  with `<` or `>` (the pool's search for a free connection, MongoDB's SRV rescan). Such a
+  comparison is wrong wherever the clock, whose origin is arbitrary, stands near the end of its
+  range. Configured millisecond waits (CRaC quiesce, the Unix-socket provider) were multiplied
+  without a bound, so a huge value wrapped into the past. `space.seclume.internal.Deadlines`
+  does it once and right. A source rule refuses both direct comparisons and the wall clock in
+  production code, except where `SSLSession.getCreationTime` requires it.
+- **TLS traffic keys live in `SecretScope`, and SQL Server connections wipe theirs.** The own
+  stack's traffic secrets, IVs and nonces were in a plain native arena. They are in a
+  `SecretScope` now: locked, out of core dumps, counted and wiped. A KeyUpdate's next secret is
+  wiped once the new key holds it (a scratch arena was freed with it inside). Counting them
+  showed that closing a SQL Server connection closed the socket but never the TLS layer under
+  it, so its keys stayed in memory that was never freed. The layer is closed now.
 - **Log masking after a restore reads the secrets off the logging thread.** The first line
   after a CRaC restore read every secret inside the masker's lock, so a slow vault held every
   thread that logged. They are read on a thread of their own now. A line waits up to 2 s for
