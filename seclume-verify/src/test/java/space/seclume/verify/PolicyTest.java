@@ -106,6 +106,22 @@ class PolicyTest {
         assertTrue(connected[0]);
     }
 
+    /** A CBOM past the limit is refused by its size, before a byte of it is read. */
+    @Test
+    void aCbomBeyondTheLimitIsNotRead() throws Exception {
+        Path huge = directory.resolve("huge.json");
+        try (java.nio.channels.FileChannel file = java.nio.channels.FileChannel.open(huge,
+                java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.SPARSE)) {
+            file.position(Policy.MAX_CBOM_BYTES);
+            file.write(java.nio.ByteBuffer.wrap(new byte[] {'}'}));
+        }
+        assertEquals(2, Policy.quantum(List.of(huge.toString()), out(), err(),
+                PolicyTest::noConnection));
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("nothing was read"),
+                err.toString(StandardCharsets.UTF_8));
+    }
+
     @Test
     void wrongCallsAndUnreadableInputAreTwo() throws Exception {
         assertEquals(2, Policy.policy(List.of("only-one"), out(), err(), PolicyTest::noConnection));
