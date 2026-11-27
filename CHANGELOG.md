@@ -317,7 +317,9 @@ All notable changes to seclume are recorded here. Versions follow
   log of the exception. The answer after the password is now masked in native memory before it
   becomes text (PostgreSQL: every error and notice of the login; MySQL: every refusal of the
   login, the secret read again for it; LDAP: the bytes after the bind, read through native
-  memory before JNDI sees them). Mail and Redis did this already.
+  memory before JNDI sees them; Kafka: the broker's answer after a SaslAuthenticate request that
+  carried a secret, decrypted into native memory and masked before Kafka's buffer gets it). Mail
+  and Redis did this already.
 - **A blocking cancellation no longer holds up every other query timeout.** The deadlines of
   all connections of a process shared one scheduler thread, and the cancellation ran on it.
   MySQL's cancellation is a login and a `KILL QUERY`; against a busy server that login took

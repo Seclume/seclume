@@ -62,6 +62,43 @@ class SaslAuthenticateRewriterTest {
         client.dispose();
     }
 
+    /**
+     * A broker that answers the login with the password in its error message
+     * would put it into a String of Kafka's, and into every log of the
+     * failure. After the rewritten request the answer is masked before Kafka
+     * reads it - and once the guard's bytes are through, nothing is kept.
+     */
+    @Test
+    void theBrokersAnswerIsMaskedBeforeKafkaReadsIt() throws Exception {
+        String password = "Kafka-echo-7d1e0b";
+        SaslClient client = new PlainClient("orders", file(password));
+        byte[] message = client.evaluateChallenge(new byte[0]);
+        SaslAuthenticateRewriter rewriter = new SaslAuthenticateRewriter();
+        assertFalse(rewriter.guarding(), "guarding before any secret went out");
+        try (SecretScope out = rewriter.next(frame(message, (short) 2, "producer-1"))
+                .replacement()) {
+            assertNotNull(out);
+        }
+        assertTrue(rewriter.guarding(), "nothing guards the broker's answer");
+        byte[] answer = ("Authentication failed: invalid password " + password + " for orders")
+                .getBytes(StandardCharsets.US_ASCII);
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment plain = arena.allocate(answer.length);
+            java.lang.foreign.MemorySegment.copy(answer, 0, plain,
+                    java.lang.foreign.ValueLayout.JAVA_BYTE, 0, answer.length);
+            rewriter.mask(plain, answer.length);
+            String seen = new String(plain.toArray(java.lang.foreign.ValueLayout.JAVA_BYTE),
+                    StandardCharsets.US_ASCII);
+            assertFalse(seen.contains(password) || seen.contains("echo-7d1e"), seen);
+            assertTrue(seen.startsWith("Authentication failed"), seen);
+            java.lang.foreign.MemorySegment rest = arena.allocate(
+                    SaslAuthenticateRewriter.ECHO_GUARD_BYTES);
+            rewriter.mask(rest, SaslAuthenticateRewriter.ECHO_GUARD_BYTES);
+        }
+        assertFalse(rewriter.guarding(), "the copy of the secret was kept past its guard");
+        client.dispose();
+    }
+
     @Test
     void aLongTokenMovesTheVarintAcrossItsBoundary() throws Exception {
         // 127 bytes and more take a second varint byte, and every length after moves.

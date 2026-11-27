@@ -26,9 +26,58 @@ import space.seclume.secret.SecretScope;
  * SaslAuthenticate v2 on the tagged fields - then the auth bytes, an int32
  * length before v2 and an unsigned varint of length + 1 after.
  */
-final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
+final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing,
+        SeclumeSslEngine.Incoming {
 
     static final short SASL_AUTHENTICATE = 36;
+
+    /** The bytes after a secret went out that are masked before Kafka reads them. */
+    static final int ECHO_GUARD_BYTES = 65_536;
+
+    /**
+     * The secret just written, kept in native memory while the broker's answer
+     * to it arrives: a broker that repeats it in its error message would put
+     * it into a String of Kafka's, and into every log of the failure.
+     */
+    private SecretScope echoed;
+    private long echoLeft;
+
+    @Override
+    public synchronized boolean guarding() {
+        return echoed != null;
+    }
+
+    /** Wipes the kept copy - before a checkpoint, so that no image holds it. */
+    private synchronized void forgetEcho() {
+        if (echoed != null) {
+            echoed.close();
+            echoed = null;
+        }
+    }
+
+    @Override
+    public synchronized void mask(MemorySegment plain, int length) {
+        if (echoed == null) {
+            return;
+        }
+        space.seclume.internal.EchoMask.mask(plain, length, echoed.segment(), echoed.length());
+        echoLeft -= length;
+        if (echoLeft <= 0) {
+            echoed.close();
+            echoed = null;
+        }
+    }
+
+    /** A copy of {@code secret}, kept while the broker's answer to it arrives. */
+    private synchronized void keepForTheAnswer(SecretScope secret) {
+        if (echoed != null) {
+            echoed.close();
+        }
+        echoed = SecretScope.allocate(secret.length());
+        MemorySegment.copy(secret.segment(), 0, echoed.segment(), 0, secret.length());
+        echoed.length(secret.length());
+        echoLeft = ECHO_GUARD_BYTES;
+    }
 
     /** Bytes of the current request not yet passed on; 0 at the start of the next. */
     private long remaining;
@@ -49,6 +98,7 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
     SaslAuthenticateRewriter(String where, String refusal) {
         this.where = where;
         this.refusal = refusal;
+        space.seclume.internal.Checkpoint.register(this, SaslAuthenticateRewriter::forgetEcho);
     }
 
     /** The start of a request that arrived in pieces: its size and API key, six bytes. */
@@ -190,6 +240,7 @@ final class SaslAuthenticateRewriter implements SeclumeSslEngine.Outgoing {
                 MemorySegment.copy(source, placeholderEnd, o, w, end - placeholderEnd);
                 w += end - placeholderEnd;
                 out.length((int) w);
+                keepForTheAnswer(secret);
             } catch (RuntimeException e) {
                 out.close();
                 throw e;

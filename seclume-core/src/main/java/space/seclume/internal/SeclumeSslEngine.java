@@ -91,6 +91,21 @@ public final class SeclumeSslEngine extends SSLEngine {
         Step next(ByteBuffer plain) throws IOException;
     }
 
+    /**
+     * Looks at the plaintext that arrives, in native memory, before the
+     * caller's buffer gets it - for an {@link Outgoing} that wrote a secret
+     * out and has to keep a server's echo of it off the heap. An Outgoing
+     * that is one of these too is asked about every record that arrives.
+     */
+    public interface Incoming {
+
+        /** Whether the next bytes are to pass through {@link #mask} first. */
+        boolean guarding();
+
+        /** Overwrites, in place, what in the first {@code length} bytes must not go on. */
+        void mask(java.lang.foreign.MemorySegment plain, int length);
+    }
+
     private final TrustChoice.Choice trust;
     private final Outgoing outgoing;
     private final EnginePipe pipe = new EnginePipe();
@@ -337,7 +352,8 @@ public final class SeclumeSslEngine extends SSLEngine {
         }
         int produced = 0;
         try {
-            int read = layer.read(dst);
+            int read = outgoing instanceof Incoming guard && guard.guarding()
+                    ? readGuarded(dst, guard) : layer.read(dst);
             if (read < 0) {
                 inboundDone = true;
                 return new SSLEngineResult(Status.CLOSED, HandshakeStatus.NOT_HANDSHAKING,
@@ -352,6 +368,24 @@ public final class SeclumeSslEngine extends SSLEngine {
         }
         return new SSLEngineResult(Status.OK, pipe.pendingOut() > 0 ? HandshakeStatus.NEED_WRAP
                 : HandshakeStatus.NOT_HANDSHAKING, consumed, produced);
+    }
+
+    /**
+     * A record decrypted into native memory, masked by {@code guard}, and only
+     * then put into the caller's buffer - which may be an array on the heap.
+     */
+    private int readGuarded(ByteBuffer dst, Incoming guard) throws IOException {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment landing = arena.allocate(Math.max(1, dst.remaining()));
+            ByteBuffer into = landing.asByteBuffer();
+            int read = layer.read(into);
+            if (read > 0) {
+                guard.mask(landing, read);
+                dst.put(landing.asSlice(0, read).asByteBuffer());
+            }
+            landing.fill((byte) 0);
+            return read;
+        }
     }
 
     private static ByteBuffer firstWithRemaining(ByteBuffer[] buffers, int offset, int length) {
