@@ -1,0 +1,67 @@
+name: Gate files
+
+# A pull request that changes what the security gate is made of - the
+# workflows, the build, the scans that refuse forbidden APIs and outward
+# messages - can switch a check off while every check stays green. This job
+# names those files in the run's summary and labels the pull request
+# "touches-gates", so that a reviewer sees it before reading the diff.
+#
+# It reads the list of changed files from the API and checks nothing out: no
+# code of the pull request runs here. The label is set only for pull requests
+# from this repository; a fork's token cannot write, and its summary says so.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 5
+    steps:
+      - name: Name the gate files this pull request changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[].filename' > changed.txt
+          # What the gate is made of. Kept in step with .github/CODEOWNERS.
+          pattern='^(\.github/|\.mvn/|mvnw$|mvnw\.cmd$|pom\.xml$|[^/]+/pom\.xml$|SECURITY\.md$'
+          pattern+='|.*/(ForbiddenApiTest|ErrorMessageTest|OutwardMessageTest|CheckpointCoverageGateTest)\.java$)'
+          grep -E "$pattern" changed.txt > gates.txt || true
+          {
+            echo "## Gate files"
+            if [ -s gates.txt ]; then
+              echo
+              echo "This pull request changes $(wc -l < gates.txt) file(s) the security gate is made of:"
+              echo
+              echo "| File |"
+              echo "|---|"
+              # File names are the pull request author's: shown as code, with
+              # the characters that would end the cell or the code replaced.
+              sed -e 's/[|`]/_/g' -e 's/^/| `/' -e 's/$/` |/' gates.txt
+            else
+              echo
+              echo "None changed."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SAME_REPO" != "true" ]; then
+            echo "A fork's pull request: not labelled (its token cannot write)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -s gates.txt ]; then
+            gh label create touches-gates --repo "$REPO" --color B60205 \
+              --description "Changes a file the security gate is made of" 2>/dev/null || true
+            gh pr edit "$NUMBER" --repo "$REPO" --add-label touches-gates
+          else
+            gh pr edit "$NUMBER" --repo "$REPO" --remove-label touches-gates 2>/dev/null || true
+          fi
