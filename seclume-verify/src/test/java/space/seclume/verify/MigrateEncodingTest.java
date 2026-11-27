@@ -49,6 +49,37 @@ class MigrateEncodingTest {
     }
 
     /**
+     * An application name with an encoded line break and an equals sign: it
+     * would end its line in the properties written, and its field in the
+     * login. It is refused - nothing is written that could carry it.
+     */
+    @Test
+    void aLineBreakInAValueIsRefusedNotWritten() {
+        Map<String, String> config = new java.util.LinkedHashMap<>();
+        config.put("spring.datasource.url",
+                "jdbc:postgresql://db/app?sslmode=verify-full&ApplicationName=x%0Ay%3Dz");
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> Migrate.translate(config));
+        assertTrue(refused.getMessage().contains("control character"), refused.getMessage());
+    }
+
+    /**
+     * SQL Server's braces quote a value: {a&tls=off} is one application name,
+     * not an application name and a tls option. The translation writes one
+     * applicationName, and the tls the source's encrypt settings give.
+     */
+    @Test
+    void aBracedValueStaysOneOption() throws Exception {
+        Migrate.Result result = Migrate.translateUrl("jdbc:sqlserver://db:1433;databaseName=app;"
+                + "applicationName={a&tls=off};encrypt=true");
+        String translated = url(result);
+        Map<String, String> options = JdbcUrl.parse(translated, new java.util.Properties(),
+                "jdbc:seclume:sqlserver:", 1433).options();
+        assertEquals("a&tls=off", options.get("applicationName"), translated + " -> " + options);
+        assertTrue(!"off".equals(options.get("tls")), "the braced value set tls: " + translated);
+    }
+
+    /**
      * A pool setting's value went into its properties line as it stood: a line
      * break started another property, a backslash was Properties.load's. Only
      * what has the setting's shape is written now; the rest is reported.
