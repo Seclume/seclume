@@ -61,7 +61,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
+          # No cache: a rebuild that vouches for a release starts from nothing
+          # another run could have left behind.
       - name: Build the tag as the release is built
         # -Prelease adds sources and javadoc; the signature is the
         # maintainer's and is not made here.

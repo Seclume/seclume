@@ -141,6 +141,11 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Added
 
+- **The workflows are linted with zizmor.** `security.yml` runs zizmor 1.32.0, installed by
+  hash, over `.github/workflows` and fails on a medium or high finding. Its first run found 50
+  checkouts that left the GitHub token in `.git/config` (all set `persist-credentials: false`
+  now) and a Maven cache in the release rebuild, through which another run could have fed the
+  attested build (removed).
 - **Downloaded artifacts are checked against a checked-in SHA-256 lock.** `--strict-checksums`
   only compared a download with the repository's own checksum, which a compromised repository
   or cache serves along with the file. `.mvn/checksums` now holds the SHA-256 of every

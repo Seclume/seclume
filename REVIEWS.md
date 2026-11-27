@@ -510,6 +510,7 @@ protocol text or dribble bytes.
 | 128 | Pool tests the audit asked for | A wall-clock jump after the open moves no credential deadline; logins that dribble free both slots and name the budget | `CredentialDeadlineClockTest`, `DribblingLoginTest` | #PR |
 | 129 | AES-GCM close race | `OpenSslAesGcm`/`CngAesGcm` freed the native context in `close()` while another thread's `encrypt` still used it (use after free). Encrypt, decrypt and close are synchronized per key; CNG checks for a closed key | `AesGcmCipherTest.aCloseDuringEncryptionIsSafe` | #PR |
 | 130 | TLS tests the audit asked for | ALPN selected that was not offered; application data before the server's Finished; TLS 1.2 records retyped on the way (CCS as handshake, Finished as data); a TLS 1.2 CertificateRequest without the key's scheme named; SubjectKeys shred under eight concurrent readers | `ServerFlightStrictnessTest`, `HandshakeFragmentationTest.aTls12RecordWithAnotherTypeIsRefused`, `MutualTlsTest.aTls12RequestWithoutTheKeysSchemeIsNamed`, `SubjectKeysTest.noReadThatBeginsAfterTheShredOpensAValueWrittenBeforeIt` | #PR |
+| 131 | Workflow lint | No linter looked at the workflows. zizmor (hash-pinned) runs in `security.yml`; it found 50 checkouts persisting the token and a cache-poisoning path into the release rebuild, all fixed, 0 findings left | zizmor 1.32.0 run on the changed workflows | #PR |
 
 ### Mutation testing of the security paths
 
