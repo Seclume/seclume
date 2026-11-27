@@ -500,7 +500,12 @@ its tag.
   per message pays for it on every line.
 - **Which secrets:** every data source's password and `seclume.heapdump.secrets.<label>.*` -
   the same the heap dump redaction looks for. Read again once every bean is made, and then every
-  `seclume.logging.refresh-interval`.
+  `seclume.logging.refresh-interval` - every 5 seconds instead while one of them could not be
+  read, so a vault that was not reachable at start is not missing from the masks for minutes.
+- **After a CRaC restore:** the masker's key and fingerprints were wiped before the checkpoint.
+  The secrets are read again on a thread of their own, not on the thread that logs. A line waits
+  up to 2 seconds for that; one that cannot be checked by then is written as
+  `[seclume: line withheld - ...]` instead of unmasked.
 - **Other loggers:** `SecretMasker.maskInstalled(text)` is the whole of it - a Log4j2 rewrite
   policy or a JUL formatter can call it; `new SecretMasker(providers)` works without Spring.
 

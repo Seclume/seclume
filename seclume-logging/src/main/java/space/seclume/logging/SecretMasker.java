@@ -198,14 +198,70 @@ public final class SecretMasker implements AutoCloseable {
         forgotten = true;
     }
 
-    /** After a restore: a new key, and the secrets read again. */
-    private synchronized void restore() {
+    /** How long a line waits for the secrets to be read again after a restore. */
+    static final long RESTORE_WAIT_MILLIS = 2000;
+
+    /** What a line is written as that the masker cannot check yet. */
+    static final String WITHHELD = "[seclume: line withheld - the secrets to mask it with are "
+            + "still being read after a restore]";
+
+    /** The reading started after a restore, until it is done. */
+    private java.util.concurrent.CompletableFuture<Void> restoring;
+
+    /**
+     * After a restore: a new key, and the secrets read again - on a thread of
+     * its own. It used to be the logging thread's, inside this lock: a vault
+     * that took its time held every thread that logged.
+     */
+    private synchronized java.util.concurrent.CompletableFuture<Void> restore() {
+        if (restoring != null) {
+            return restoring;
+        }
         if (!forgotten || closed) {
-            return;
+            return null;
         }
         key = newKey();
-        forgotten = false;
-        refresh();
+        java.util.concurrent.CompletableFuture<Void> done = new java.util.concurrent.CompletableFuture<>();
+        restoring = done;
+        Thread.ofVirtual().name("seclume-log-restore").start(() -> {
+            try {
+                read();
+            } catch (RuntimeException | Error e) {
+                LOG.log(System.Logger.Level.WARNING, "seclume: the secrets could not be read "
+                        + "again after a restore; lines are masked for what could be read: "
+                        + e.getMessage());
+                incomplete = true;
+            } finally {
+                synchronized (this) {
+                    forgotten = false;
+                    restoring = null;
+                }
+                done.complete(null);
+            }
+        });
+        return done;
+    }
+
+    /**
+     * Waits a bounded while for the reading after a restore; false when it is
+     * not done by then - the line is then withheld, not written unmasked.
+     */
+    private boolean restored() {
+        java.util.concurrent.CompletableFuture<Void> pending = restore();
+        if (pending == null) {
+            return true;
+        }
+        try {
+            pending.get(RESTORE_WAIT_MILLIS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return true;
+        } catch (java.util.concurrent.TimeoutException notYet) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (java.util.concurrent.ExecutionException cannot) {
+            return true;
+        }
     }
 
     /** Makes {@code masker} the one {@link #maskInstalled} and the Logback converters use. */
@@ -224,8 +280,20 @@ public final class SecretMasker implements AutoCloseable {
         return index.forms().size();
     }
 
-    /** Reads every secret again and keeps its fingerprints instead of the old ones. */
+    /**
+     * Reads every secret again and keeps its fingerprints instead of the old
+     * ones. After a checkpoint, before the first line, it starts the reading
+     * a restore needs instead - the key it would fingerprint with is wiped.
+     */
     public synchronized void refresh() {
+        if (forgotten) {
+            restore();
+            return;
+        }
+        read();
+    }
+
+    private synchronized void read() {
         List<Form> next = new ArrayList<>();
         Map<String, List<Form>> kept = new LinkedHashMap<>();
         boolean missing = false;
@@ -484,8 +552,8 @@ public final class SecretMasker implements AutoCloseable {
      * {@code [redacted:<label>]} - the same instance when there is none.
      */
     public String mask(String text) {
-        if (forgotten && text != null && !closed) {
-            restore();
+        if (forgotten && text != null && !closed && !restored()) {
+            return WITHHELD;
         }
         Index scanned = index;
         List<Form> now = scanned.forms();

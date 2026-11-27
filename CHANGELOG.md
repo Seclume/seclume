@@ -133,6 +133,12 @@ All notable changes to seclume are recorded here. Versions follow
 
 ### Fixed
 
+- **Log masking after a restore reads the secrets off the logging thread.** The first line
+  after a CRaC restore read every secret inside the masker's lock, so a slow vault held every
+  thread that logged. They are read on a thread of their own now. A line waits up to 2 s for
+  that, and one that cannot be checked by then is withheld rather than written unmasked. While
+  a secret cannot be read, the reading is tried again every 5 s instead of every refresh
+  interval (5 minutes). A refresh that throws no longer ends the schedule.
 - **The pool health check does not borrow from a busy pool.** With threads waiting or every
   connection handed out, the probe waited the pool's whole timeout, took a connection a request
   needed, and reported `DOWN`, taking a busy instance out of service. Such a pool, and a borrow

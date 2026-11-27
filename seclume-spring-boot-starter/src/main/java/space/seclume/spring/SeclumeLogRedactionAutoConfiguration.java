@@ -99,13 +99,22 @@ public class SeclumeLogRedactionAutoConfiguration {
     /** The installed masker, refreshed on a schedule; closing it uninstalls it. */
     public static final class LogRedaction implements SmartInitializingSingleton, AutoCloseable {
 
+        /**
+         * How soon a reading that left a secret out is tried again: a vault
+         * not yet reachable at start, or after a restore, left its lines
+         * unmasked for the whole refresh interval - five minutes.
+         */
+        static final Duration RETRY = Duration.ofSeconds(5);
+
         private final SecretMasker masker;
         private final ScheduledExecutorService refresher;
         private final boolean strict;
+        private final Duration interval;
 
         LogRedaction(java.util.function.Supplier<Map<String, space.seclume.secret.SecretProvider>>
                 providers, Duration interval, boolean strict) {
             this.strict = strict;
+            this.interval = interval;
             this.masker = new SecretMasker(providers);
             SecretMasker.install(masker);
             this.refresher = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -113,8 +122,29 @@ public class SeclumeLogRedactionAutoConfiguration {
                 thread.setDaemon(true);
                 return thread;
             });
-            refresher.scheduleWithFixedDelay(masker::refresh, interval.toMillis(),
-                    interval.toMillis(), TimeUnit.MILLISECONDS);
+            plan();
+        }
+
+        /** The next reading: soon while a secret is missing, else after the interval. */
+        private void plan() {
+            Duration next = masker.complete() || RETRY.compareTo(interval) > 0 ? interval : RETRY;
+            try {
+                refresher.schedule(this::refreshAndPlan, next.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException closed) {
+                // closed: nothing more to read
+            }
+        }
+
+        private void refreshAndPlan() {
+            try {
+                masker.refresh();
+            } catch (RuntimeException e) {
+                // A reading that fails must not end the schedule: a fixed-delay
+                // task that throws is never run again.
+                System.getLogger(LogRedaction.class.getName()).log(System.Logger.Level.WARNING,
+                        "seclume: reading the secrets to mask failed: " + e.getMessage());
+            }
+            plan();
         }
 
         /** The masker in use. */

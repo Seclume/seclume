@@ -483,6 +483,7 @@ protocol text or dribble bytes.
 | 101 | Login budget message | A login the budget stopped was reported as the broken read. The budget now notes the login's thread, and each driver's `openOne` reports a transient 08001 naming the budget, the factor and the connect timeout | `LoginBudgetMessageTest` in all four drivers (`DribblingServer`) | #PR |
 | 102 | heapcheck dump-dir | A `--dump-dir` not shared with the process gave a generic missing-file error and deleted the dump there without a word. It now names the cause and the fix, and says the dump was deleted | `DumpDirNotSharedTest` | #PR |
 | 103 | Pool health | Every probe borrowed with the pool's full timeout, on a saturated pool too, and reported a busy pool as `DOWN`. A saturated pool is not borrowed from, a pool timeout without a cause is `UNKNOWN`, and the answer is cached for 2 s | `PoolMetricsAndHealthTest` | #PR |
+| 104 | Log masker restore | After a restore the secrets were read on the logging thread inside the lock, and a secret missing at start stayed unmasked for the 5-minute interval. Reading runs on its own thread with a 2 s bounded wait (the line is withheld after it), missing secrets are retried every 5 s, and a throwing refresh no longer stops the schedule | `RestoreOffTheLogThreadTest`, `LogRedactionRetryTest` | #PR |
 
 ### Mutation testing of the security paths
 
