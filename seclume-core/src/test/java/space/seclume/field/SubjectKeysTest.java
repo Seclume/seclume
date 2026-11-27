@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -435,6 +436,65 @@ class SubjectKeysTest {
                 one.column("b", "c", Mode.RANDOMIZED);
                 assertEquals("first", read(one.existingColumn("a", "c", Mode.RANDOMIZED), a),
                         "a ring that left the cache is made again from its key in the store");
+            }
+        }
+    }
+
+    /**
+     * Under load: eight readers keep opening values written before the shred
+     * while it happens. A read that began after shred() returned and still
+     * opened a value is the failure - a key kept by a ring in a reader's hands
+     * past the shred.
+     */
+    @Test
+    void noReadThatBeginsAfterTheShredOpensAValueWrittenBeforeIt() throws Exception {
+        for (int round = 0; round < 10; round++) {
+            try (FieldKeys master = ring(1, MASTER1);
+                 SubjectKeys subjects = SubjectKeys.of(master, SubjectKeyStore.inMemory())) {
+                List<byte[]> before = new ArrayList<>();
+                for (int i = 0; i < 16; i++) {
+                    before.add(subjects.column("alice", "order.address", Mode.RANDOMIZED)
+                            .encrypt(text("street " + i)));
+                }
+                java.util.concurrent.atomic.AtomicLong shredDone =
+                        new java.util.concurrent.atomic.AtomicLong(Long.MAX_VALUE);
+                java.util.concurrent.atomic.AtomicReference<String> violation =
+                        new java.util.concurrent.atomic.AtomicReference<>();
+                java.util.concurrent.atomic.AtomicBoolean stop =
+                        new java.util.concurrent.atomic.AtomicBoolean();
+                java.util.concurrent.CountDownLatch going = new java.util.concurrent.CountDownLatch(8);
+                List<Thread> readers = new ArrayList<>();
+                for (int r = 0; r < 8; r++) {
+                    int offset = r;
+                    readers.add(Thread.ofPlatform().start(() -> {
+                        going.countDown();
+                        int i = offset;
+                        while (!stop.get()) {
+                            long began = System.nanoTime();
+                            try {
+                                read(subjects.existingColumn("alice", "order.address",
+                                        Mode.RANDOMIZED), before.get(i++ % before.size()));
+                                if (began - shredDone.get() > 0) {
+                                    violation.compareAndSet(null, "a read begun "
+                                            + (began - shredDone.get()) / 1000 + " us after the "
+                                            + "shred opened a value written before it");
+                                }
+                            } catch (RuntimeException refused) {
+                                // after the shred, as it should be
+                            }
+                        }
+                    }));
+                }
+                going.await();
+                Thread.sleep(2);
+                assertTrue(subjects.shred("alice"));
+                shredDone.set(System.nanoTime());
+                Thread.sleep(20);
+                stop.set(true);
+                for (Thread reader : readers) {
+                    reader.join();
+                }
+                assertNull(violation.get(), violation.get());
             }
         }
     }
