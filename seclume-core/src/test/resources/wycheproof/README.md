@@ -16,6 +16,11 @@ are here:
 | `pbkdf2_hmacsha{1,256,384,512}_test.json` | `Pbkdf2` |
 | `ecdh_secp256r1_ecpoint_test.json` | `NativeP256`: peer points off the curve, on the twist, compressed or malformed |
 
+Not here: `ed25519_test.json`. Its groups are `EddsaVerify` - public keys, messages and
+signatures for a verifier - and seclume's `Ed25519` only signs (MariaDB's `client_ed25519`).
+The signer is held to all four Ed25519 vectors of RFC 8032 and to the JDK's signatures for many
+keys and messages (`Ed25519Test`, `Ed25519AgainstJdkTest`).
+
 To update: copy the newer files over these, change the commit above, run
 `./mvnw -pl seclume-core test -Dtest=WycheproofTest`, and adjust the counts in
 `WycheproofTest.coverage()` to what the new files contain.
