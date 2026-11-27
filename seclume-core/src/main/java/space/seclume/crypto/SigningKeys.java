@@ -30,6 +30,12 @@ final class SigningKeys {
     }
 
     static PrivateSigningKey p256() {
+        return p256(PrivateSigningKey::decode);
+    }
+
+    /** The same, decoded by {@code decode} - a test that has to have the CNG key on Windows. */
+    static PrivateSigningKey p256(
+            java.util.function.BiFunction<MemorySegment, Integer, PrivateSigningKey> decode) {
         try (NativeP256 generated = NativeP256.generate();
              SecretScope der = SecretScope.allocate(SEC1_P256_LENGTH)) {
             MemorySegment out = der.segment();
@@ -39,7 +45,7 @@ final class SigningKeys {
                     SCALAR_AT + NativeP256.SECRET_SIZE, MIDDLE.length);
             generated.publicKey(out.asSlice(POINT_AT, NativeP256.PUBLIC_SIZE));
             der.length(SEC1_P256_LENGTH);
-            return PrivateSigningKey.decode(out, SEC1_P256_LENGTH);
+            return decode.apply(out, SEC1_P256_LENGTH);
         }
     }
 }

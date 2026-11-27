@@ -21,8 +21,34 @@ class SigningKeyCloseTest {
     @Test
     void closingWhileAnotherThreadSignsIsSafe() throws Exception {
         assumeTrue(PrivateSigningKey.available(), "no OpenSSL 3 or CNG to sign with");
+        closeUnderASigner(PrivateSigningKey::generateP256);
+    }
+
+    /**
+     * The CNG key itself, on Windows: generateP256 takes OpenSSL wherever it
+     * is there, so the CNG key's close was untried on a machine with both.
+     */
+    @Test
+    @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.WINDOWS)
+    void closingACngKeyWhileAnotherThreadSignsIsSafe() throws Exception {
+        assumeTrue(CngSigningKey.available(), "no CNG");
+        closeUnderASigner(() -> {
+            PrivateSigningKey key = SigningKeys.p256(CngSigningKey::decode);
+            org.junit.jupiter.api.Assertions.assertInstanceOf(CngSigningKey.class, key);
+            return key;
+        });
+        PrivateSigningKey key = SigningKeys.p256(CngSigningKey::decode);
+        key.close();
+        try (Arena arena = Arena.ofConfined()) {
+            assertThrows(IllegalStateException.class, () -> key.sign("SHA256", false,
+                    arena.allocate(64), 64, arena.allocate(256)));
+        }
+    }
+
+    private static void closeUnderASigner(java.util.function.Supplier<PrivateSigningKey> make)
+            throws Exception {
         for (int round = 0; round < 2000; round++) {
-            PrivateSigningKey key = PrivateSigningKey.generateP256();
+            PrivateSigningKey key = make.get();
             CountDownLatch signing = new CountDownLatch(1);
             Thread signer = Thread.ofPlatform().start(() -> {
                 try (Arena arena = Arena.ofConfined()) {
